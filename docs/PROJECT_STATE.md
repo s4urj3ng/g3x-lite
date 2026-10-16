@@ -1,7 +1,8 @@
 # Project state
-Updated: 2026-10-16
+Updated: 2026-10-17
+Canonical repository: `/Users/avp/project/g3x-lite` (`origin`: `https://github.com/s4urj3ng/g3x-lite`; `/Users/avp/Downloads/g3x-lite` is a retired read-only backup)
 Phase: 0D — Port Readiness Audit & Phase 1 S1 Dump Safety Review (Phase 1 NOT started)
-Status: Physical target confirmed (`GM1.10C`, `0x32A8`); Canon Basic ROM dumper primary source recovered, audited line-by-line, and pre-execution checklist prepared in `docs/FIRMWARE_ACQUISITION_PLAN.md`. Stopped at owner approval gate (`Approval A3` / `Approval A2`).
+Status: All 11 Phase 0A–0D research documents integrated into canonical repository `/Users/avp/project/g3x-lite` and pushed to `origin/main`. Physical target confirmed (`GM1.10C`, `0x32A8`); Canon Basic ROM dumper primary source recovered, audited line-by-line, and pre-execution checklist prepared in `docs/FIRMWARE_ACQUISITION_PLAN.md`. Stopped at owner approval gate (`Approval A3` / `Approval A2`).
 Host target: MacBook Pro 16-inch 2019 Intel macOS (environment not inspected).
 Agents: Codex, Claude Code, Gemini CLI (interchangeable per AGENTS.md protocol).
 Reverse tooling: REA/Ghidra intentionally NOT installed or configured.
@@ -12,6 +13,7 @@ Hardware tests: NONE authorized or executed.
 
 ## Decisions
 
+- Standardized `/Users/avp/project/g3x-lite` (tracking `https://github.com/s4urj3ng/g3x-lite`) as the single source of truth; `/Users/avp/Downloads/g3x-lite` is preserved untouched as a read-only backup and must not be used for future work.
 - Remain in Phase 0D; do not execute scripts on the camera, generate SD payloads, or start Phase 1 binary analysis without explicit owner approval.
 - Recorded owner-confirmed hardware target: `Canon PowerShot G3 X`, internal build `GM1.10C`, public version `1.1.0.0`, `PLATFORMID = 0x32A8` (`12968`), `PAL D` (E037); camera serial number is never stored.
 - Documented that public firmware `1.1.0.0` encompasses at least two distinct internal builds (`GM1.10C` on the owner's camera vs `GM1.10E` in `ranma`'s forum thread, C011). Therefore `GM1.10C` (`sub/110c`) requires independent symbol and task extraction from the owner's `GM1.10C` `PRIMARY.BIN`.
