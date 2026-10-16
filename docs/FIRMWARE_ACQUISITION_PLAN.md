@@ -267,7 +267,7 @@ end sub
      shasum -a 256 /Volumes/CANON_DC/script.req /Volumes/CANON_DC/extend.m
      ```
      Expected:
-     - `script.req`: `17` bytes, SHA-256 `ef1fbfe9ac98f2fd2f88c2fdc8c6aa8472dc0dd2fafce7be3c3a8d89bd9c1733`
+     - `script.req`: `17` bytes, SHA-256 `60e6a567e9c0731d95415e0fb2c687efd2d6309f766edee17d127d77597d1767` (**E041**, **C012**)
      - `extend.m` (Candidate A, LF): `2,689` bytes, SHA-256 `3ca970ba22c2e9b50cf84bfc1f63074c84b01808129e0f1fbf6af25e4b362da5`
 3. **Back up the partition boot sector, write `"SCRIPT"` at offset `0x1F0` (`496`), and verify readback**:
    - Unmount (do not eject) the FAT partition:
@@ -310,7 +310,7 @@ Insert the SD card into the Mac and run:
 1. **Preserve read-only copies under `private/firmware/g3x/110c/`** (ignored by `.gitignore`, **E036**):
    ```sh
    mkdir -p private/firmware/g3x/110c
-   cp /Volumes/CANON_DC/CBDUMPER.LOG /Volumes/CANON_DC/PRIMARY.BIN private/firmware/g3x/110c/
+   cp /Volumes/G3X_DUMP/CBDUMPER.LOG /Volumes/G3X_DUMP/PRIMARY.BIN private/firmware/g3x/110c/
    chmod a-w private/firmware/g3x/110c/CBDUMPER.LOG private/firmware/g3x/110c/PRIMARY.BIN
    ```
 2. **Inspect `CBDUMPER.LOG`**:
@@ -338,11 +338,25 @@ Insert the SD card into the Mac and run:
 ### Unresolved risks
 1. **Unverified on `GM1.10C` specifically (`RISK-01`)**: While proven on G3 X `1.00C` (**E029**) and `1.10E` (`ranma` Canon Basic script, **E034**), Candidate A has not yet been executed on `GM1.10C`. If reading `0xFFC00004` triggers a data abort on `GM1.10C`, the camera will halt/shut down harmlessly and Candidate B (§3.2) should be used instead.
 2. **Touchscreen / lever trigger fallback (`RISK-02`)**: CHDK `Canon_Basic` docs note that `FUNC./SET` starts `extend.m` in Playback mode on standard cameras, while some touchscreen models without a traditional `FUNC./SET` trigger via the zoom lever (**E038**). G3 X has a physical `SET` button, and `Nippey`/`ranma`/`chengdulittlea` ran Canon Basic scripts on G3 X, but if pressing `SET` in Playback mode does not create `CBDUMPER.LOG`, the zoom-lever fallback is documented in `Canon_Basic` (**E038**).
-3. **macOS raw-disk operator error (`RISK-03`)**: Running `sudo dd` against the wrong `/dev/diskN` device or against the MBR (`/dev/diskN`) instead of the partition VBR (`/dev/diskNs1`) can corrupt a disk partition table. Always verify `diskutil list` and inspect `private/card-backup/vbr.bak` before writing.
+3. **macOS raw-disk operator error (`RISK-03`)**: Running `sudo dd` against the wrong `/dev/diskN` device or against the MBR (`/dev/diskN`) instead of the partition VBR (`/dev/diskNs1`) can corrupt a disk partition table. Always verify `diskutil list` and inspect `bootsector-original.bin` before writing.
+4. **64 GB SDXC card formatted as MBR + FAT32 (`RISK-04`, **E041**)**: `/Volumes/G3X_DUMP` (`/dev/disk3s1`) is a 63.9 GB SDXC card formatted on macOS as MBR + MS-DOS FAT32 (`BSD  4.4`, 512 B sectors, 64 sectors/cluster = 32 KiB clusters). Because it has a genuine FAT32 VBR at partition offset `1,048,576` B (`2,048` blocks) with zeros across `0x0AC–0x1FD`, the FAT32 `"SCRIPT"` offset `0x1F0` applies cleanly. **Do NOT format this 64 GB card in-camera prior to dumping**, as Canon firmware formats >32 GB SDXC media as `exFAT` (which removes the FAT32 VBR). In addition, if DryOS's script-disk check rejects a 64 GB FAT32 volume or macOS-formatted BPB, fallback is a ≤32 GB SDHC card formatted in-camera.
 
 ### Explicit Owner Approval Checklist (STOP GATE)
 
 Before any agent or owner action moves past Phase 0D preparation, the owner must explicitly reply to approve:
 
 - [ ] **Approval A2 (Phase 1 Entry)**: Authorize transitioning from Phase 0D to Phase 1 once the `GM1.10C` dump is acquired.
-- [ ] **Approval A3 (On-Camera Canon Basic Dump Execution)**: Authorize preparing the dedicated SD card with Candidate A (§3.1, SHA-256 `3ca970ba22c2e9b50cf84bfc1f63074c84b01808129e0f1fbf6af25e4b362da5`) and running it on the owner's `GM1.10C` camera per §4, **or** state that the owner will run §4 independently and supply the resulting `PRIMARY.BIN` + `CBDUMPER.LOG` in `private/firmware/g3x/110c/`.
+- [ ] **Approval A3 (On-Camera Canon Basic Dump Execution)**: Authorize copying `firmware/tools/extend.m` (`3ca970ba22c2e9b50cf84bfc1f63074c84b01808129e0f1fbf6af25e4b362da5`) to `/Volumes/G3X_DUMP/extend.m`, writing `"SCRIPT"` at offset `0x1F0` of `/dev/rdisk3s1`, and running it on the owner's `GM1.10C` camera per §4.
+
+---
+
+## 6. Preflight verification report (2026-10-17, **E041**)
+
+| Check item | Path / Target | Observed result | Verdict |
+|---|---|---|---|
+| **1. Candidate A source file** | [`firmware/tools/extend.m`](file:///Users/avp/project/g3x-lite/firmware/tools/extend.m) | `123` lines, `2,689` bytes (LF), `0` non-ASCII bytes, SHA-256: `3ca970ba22c2e9b50cf84bfc1f63074c84b01808129e0f1fbf6af25e4b362da5` | **PASS (Ready for owner review)** |
+| **2. SD volume & partition** | `/Volumes/G3X_DUMP` (`/dev/disk3s1`, part of `/dev/disk3`) | Mounted `MS-DOS FAT32` (`DOS_FAT_32`), partition offset `1,048,576` B (LBA `2048`), total size `63,863,521,280` B (`124,733,440` × 512 B blocks), read-write (`Media Read-Only: No`) | **PASS (with 64 GB FAT32 note `RISK-04`)** |
+| **3. Request file on SD card** | `/Volumes/G3X_DUMP/script.req` | `17` bytes, hex `666f 7220 4443 5f73 6372 6970 7464 6973 6b` (`for DC_scriptdisk`), SHA-256: `60e6a567e9c0731d95415e0fb2c687efd2d6309f766edee17d127d77597d1767` | **PASS (Exact 17-byte match)** |
+| **4. Existing boot-sector backup** | `/Users/avp/Downloads/g3x-sd-backup/bootsector-original.bin` | `512` bytes, SHA-256: `16947123219f03af103e9faa5da4992464e8c878c65a4f09354b495a430b6364`; valid FAT32 VBR (`OEM = "BSD  4.4"`, label `"G3X_DUMP   "`, `FAT32   `, `BPB_TotSec32 = 0x076f4800 = 124,733,440`, signature `55 aa` at `0x1FE–0x1FF`) | **PASS (Verified 512-byte FAT32 VBR backup)** |
+| **5. VBR `0x1F0–0x1F5` region** | `bootsector-original.bin` (`0x1F0–0x1F5`) / `/dev/disk3s1` | `0x1F0–0x1F5` in `bootsector-original.bin` (captured by `root` 112 seconds after formatting `/Volumes/G3X_DUMP`) is `00 00 00 00 00 00` (`0x0AC–0x1FD` all zero). Live non-root read of `/dev/disk3s1` is blocked by macOS device permissions (`brw-r----- root:operator`). Zero raw writes have been performed. | **PASS (Unmodified `00 00 00 00 00 00` in backup; no raw writes performed)** |
+| **6. `extend.m` on SD card** | `/Volumes/G3X_DUMP/extend.m` | Not present (`ls -la /Volumes/G3X_DUMP` shows only `script.req`, `.Spotlight-V100`, `.fseventsd`). | **PASS (Not copied prior to owner review)** |

@@ -4,6 +4,8 @@
 !.env.example
 firmware/*
 !firmware/README.md
+!firmware/tools/
+!firmware/tools/**
 *.bin
 *.fir
 *.fi2
