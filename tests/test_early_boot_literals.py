@@ -3,31 +3,46 @@
 
 Verifies the ten early-boot literals in GM1.10C boot_prototype.c (sub_fc05b558_my):
 - Tier 1: Clean checkout / zero-dependency source tests.
+  Fails closed if tracked boot_prototype.c is missing (repository source invariant).
   Asserts presence of the ten ROM-verified literals and absence of the stale +4 literals.
   Verifies preservation of control flow, register conventions, and error call targets.
   Runs anywhere with standard Python 3.
 - Tier 2: Static ROM byte assertions against owner's GM1.10C dump (PRIMARY.BIN).
-  Verifies literal pool words, string contents, and instruction encodings directly from ROM.
+  Strictly bounded to the approved PORT-5D evidence range: 0xFC05B558..0xFC05B67F (296 bytes).
+  Reads only the 296-byte slice with seek/read and verifies its authentic SHA-256.
+  Rejects any access outside the approved bounded range.
   Cleanly skipped with diagnostic when PRIMARY.BIN is absent.
-- Tier 3: Skip regression check.
-  Verifies Tier 2 cleanly skips without failure when PRIMARY.BIN is simulated missing.
+- Tier 3: Subprocess skip regression test.
+  Genuinely executes unittest in an isolated subprocess with a missing-ROM fixture.
+  Verifies that unittest reports all Tier 2 tests skipped with zero failures.
 
 Read-only: never modifies candidate_port2a/ or production firmware files.
 """
 
+import hashlib
 import os
 import re
 import struct
+import subprocess
+import sys
 import unittest
-from unittest.mock import patch
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-ROM_PATH = os.path.join(REPO_ROOT, "firmware", "dumps", "GM1.10C", "PRIMARY.BIN")
+ROM_PATH = os.environ.get(
+    "GM110C_ROM_PATH",
+    os.path.join(REPO_ROOT, "firmware", "dumps", "GM1.10C", "PRIMARY.BIN"),
+)
 BOOT_PROTO_C = os.path.join(
     REPO_ROOT, "chdk-port", "platform", "g3x", "sub", "110c", "boot_prototype.c"
 )
 
 ROM_BASE = 0xFC000000
+
+# Bounded ROM evidence range (PORT-5D: 0xFC05B558..0xFC05B67F, 296 bytes)
+ROM_SLICE_START = 0xFC05B558
+ROM_SLICE_END = 0xFC05B67F
+ROM_SLICE_SIZE = ROM_SLICE_END - ROM_SLICE_START + 1  # 296 bytes
+ROM_SLICE_SHA256 = "3266baee803e10a8db949f25994c424e1bb692d0f7e0104e6e6065a82fadcbc2"
 
 # The 10 ROM-verified literals for sub_fc05b558_my (PORT-5D / PORT-5E)
 VERIFIED_LITERALS = [
@@ -57,7 +72,7 @@ STALE_PLUS4_LITERALS = [
     "0xfc05b678",
 ]
 
-# ROM byte and word assertions for 0xFC05B558..0xFC05B67F
+# ROM byte and word assertions strictly within 0xFC05B558..0xFC05B67F
 ROM_BYTES = [
     (0xFC05B55A, "29a4", "adr r4, 0xFC05B600 ('/_term')"),
     (0xFC05B560, "2948", "ldr r0, [pc, #0xA4] -> 0xFC05B608 (0x000080EC)"),
@@ -108,14 +123,14 @@ class TestEarlyBootLiteralsSource(unittest.TestCase):
     """Tier 1: Static source assertions on boot_prototype.c.
 
     Requires ZERO external tools, ZERO ARM toolchain, and ZERO proprietary ROM dumps.
-    Always executes and must 100% PASS on any clean git clone.
+    Fails closed if tracked source is absent. Must 100% PASS on any clean git clone.
     """
 
     @classmethod
     def setUpClass(cls):
         self_path = BOOT_PROTO_C
         if not os.path.exists(self_path):
-            raise unittest.SkipTest(f"boot_prototype.c not found at {self_path}")
+            raise AssertionError(f"Required tracked prototype source missing: {self_path}")
         with open(self_path, "r", encoding="utf-8") as f:
             cls.content = f.read()
 
@@ -125,8 +140,15 @@ class TestEarlyBootLiteralsSource(unittest.TestCase):
             cls.content,
         )
         if not match:
-            raise ValueError("Could not locate sub_fc05b558_my in boot_prototype.c")
+            raise AssertionError("Could not locate sub_fc05b558_my in boot_prototype.c")
         cls.stage4_body = match.group(1)
+
+    def test_tracked_boot_prototype_source_exists(self):
+        """Repository invariant: boot_prototype.c must exist on clean checkout."""
+        self.assertTrue(
+            os.path.exists(BOOT_PROTO_C),
+            f"Tracked prototype source missing: {BOOT_PROTO_C}",
+        )
 
     def test_ten_rom_verified_literals_present(self):
         """All ten ROM-verified literals must be present in sub_fc05b558_my."""
@@ -183,19 +205,41 @@ class TestEarlyBootLiteralsSource(unittest.TestCase):
 
 # ==============================================================================
 # Tier 2: Static ROM Evidence Tests (Requires Private PRIMARY.BIN)
+# Strictly bounded to approved PORT-5D range: 0xFC05B558..0xFC05B67F (296 bytes)
 # ==============================================================================
-@unittest.skipUnless(os.path.exists(ROM_PATH), "GM1.10C ROM dump not present")
 class TestEarlyBootLiteralsRomEvidence(unittest.TestCase):
     """Tier 2: Static ROM byte, word, and string assertions against GM1.10C dump."""
 
     @classmethod
     def setUpClass(cls):
+        if not os.path.exists(ROM_PATH):
+            raise unittest.SkipTest("GM1.10C ROM dump not present")
+
+        # Bounded read: seek directly to 0x5B558 and read only the 296-byte approved slice
         with open(ROM_PATH, "rb") as f:
-            cls.rom = f.read()
+            f.seek(_rom_offset(ROM_SLICE_START))
+            cls.rom_slice = f.read(ROM_SLICE_SIZE)
+
+        if len(cls.rom_slice) != ROM_SLICE_SIZE:
+            raise ValueError(
+                f"Incomplete ROM slice read: expected {ROM_SLICE_SIZE} bytes, got {len(cls.rom_slice)}"
+            )
+
+        # Verify ROM evidence slice identity (PORT-5D proof)
+        slice_hash = hashlib.sha256(cls.rom_slice).hexdigest()
+        if slice_hash != ROM_SLICE_SHA256:
+            raise ValueError(
+                f"ROM slice SHA-256 mismatch: expected {ROM_SLICE_SHA256}, got {slice_hash}"
+            )
 
     def _bytes(self, addr, n):
-        off = _rom_offset(addr)
-        return self.rom[off : off + n]
+        if not (ROM_SLICE_START <= addr and addr + n <= ROM_SLICE_END + 1):
+            raise ValueError(
+                f"Address 0x{addr:08X} (len {n}) outside approved bounded range "
+                f"0x{ROM_SLICE_START:08X}..0x{ROM_SLICE_END:08X}"
+            )
+        offset = addr - ROM_SLICE_START
+        return self.rom_slice[offset : offset + n]
 
     def _word(self, addr):
         return struct.unpack("<I", self._bytes(addr, 4))[0]
@@ -236,17 +280,48 @@ class TestEarlyBootLiteralsRomEvidence(unittest.TestCase):
 
 
 # ==============================================================================
-# Tier 3: Skip Regression Test
+# Tier 3: Subprocess Skip Regression Test
 # ==============================================================================
 class TestEarlyBootLiteralsSkipRegression(unittest.TestCase):
-    """Tier 3: Skip regression check ensuring clean skip when ROM is absent."""
+    """Tier 3: Subprocess skip regression genuinely verifying unittest skip behavior."""
 
     def test_tier2_skips_cleanly_when_rom_missing(self):
-        """Verify TestEarlyBootLiteralsRomEvidence is skipped when ROM_PATH does not exist."""
-        with patch("os.path.exists", return_value=False):
-            # Evaluate the skip condition
-            should_skip = not os.path.exists(ROM_PATH)
-            self.assertTrue(should_skip, "Tier 2 must evaluate to skip when ROM is missing")
+        """Verify TestEarlyBootLiteralsRomEvidence is genuinely skipped by unittest when ROM is absent."""
+        env = dict(os.environ)
+        env["GM110C_ROM_PATH"] = os.path.join(REPO_ROOT, "firmware", "dumps", "NONEXISTENT", "PRIMARY.BIN")
+        env["PYTHONPATH"] = REPO_ROOT + (os.pathsep + env["PYTHONPATH"] if "PYTHONPATH" in env else "")
+
+        cmd = [
+            sys.executable,
+            "-m",
+            "unittest",
+            "tests.test_early_boot_literals.TestEarlyBootLiteralsRomEvidence",
+            "-v",
+        ]
+        result = subprocess.run(
+            cmd,
+            cwd=REPO_ROOT,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        combined_output = result.stderr + "\n" + result.stdout
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"Unittest runner must return exit code 0 when skipping missing ROM; output:\n{combined_output}",
+        )
+        self.assertIn(
+            "skipped 'GM1.10C ROM dump not present'",
+            combined_output,
+            f"Expected unittest skip message missing from runner output:\n{combined_output}",
+        )
+        self.assertNotIn(
+            "FAILED",
+            combined_output,
+            f"Test runner output must not contain failure:\n{combined_output}",
+        )
 
 
 if __name__ == "__main__":

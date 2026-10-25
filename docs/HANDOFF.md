@@ -9,7 +9,7 @@ Updated: 2026-10-25
   - Check word 1: `0x000080f0` -> `0x000080ec` (`[0x80EC]`, heap size)
   - Check word 2: `0x00008078` -> `0x00008074` (`[0x8074]`, `0x80000`)
   - Error strings: 7 diagnostic strings corrected from +4 to ROM addresses (`0xfc05b610`..`0xfc05b674`).
-- Verification: 3-tier suite `tests/test_early_boot_literals.py` passes 7/7 tests (clean checkout assertions, static ROM bytes/words/strings, skip logic). Full existing test suite passes (`test_restart_sd_audit.py`, `test_restart_irq_audit.py`, `test_validate_chdk_g3x.py`, `test_validate_witness_inspector.py`).
+- Verification: 3-tier suite `tests/test_early_boot_literals.py` passes 8/8 tests (clean checkout assertions, fail-closed on missing tracked source, bounded 296-byte ROM slice SHA-256 verification, and isolated subprocess skip regression). Full existing test suite passes (`test_restart_sd_audit.py`, `test_restart_irq_audit.py`, `test_validate_chdk_g3x.py`, `test_validate_witness_inspector.py`).
 - Candidate Staleness: `candidate_port2a/` artifacts are strictly PRE-CORRECTION artifacts; not regenerated or modified.
 - Blocker Status: F3 is resolved; F2 (power-on check in `sub_fc1284ac`), `sub_fc05b5ea` failure semantics, warm restart IRQ/SD blockers, and native residency (G1-G14) remain open blockers.
 - Status: Dedicated branch `fix/port5e-early-boot-literals` created from `main`, pushed to `origin`, and Draft PR opened targeting `main`. Ready for remote review.
