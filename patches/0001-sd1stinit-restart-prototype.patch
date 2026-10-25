@@ -1,0 +1,58 @@
+# Patch: G3 X GM1.10C CHDK Restart Prototype - SD1stInit Task Creation
+# Author: Gemini / Antigravity CLI
+# Date: 2026-10-25
+# Target: Canon PowerShot G3 X (Firmware GM1.10C)
+# Upstream Provenance: CHDK SVN r5491 / Git commit 21b9a14eb2043aeffdd2cb141081e7dcfe75f7e6
+# Upstream Remote: https://github.com/01luna/CHDK.git
+# Subsystem: platform/g3x/sub/110c (boot_prototype.c, stubs_prototype.S)
+#
+# Description:
+# Replicates stock StartDiskboot (0xFC05BBEA) SD1stInit creator call in task_Startup_my.
+# Stock StartDiskboot executes:
+#   fc05bbf4: movs r0, #0
+#   fc05bbf6: bl   0xFC05C4E0  (tests MMIO 0xD20B0538 bit 16 == 0)
+#   fc05bbfa: lsls r0, r0, #31
+#   fc05bbfc: bne  exit
+#   fc05bbfe: blx  0xFC31B1F4  (ARM veneer -> 0x010E17E1 -> CreateTask("SD1stInit"))
+#
+# Omitting StartDiskboot prevents infinite reload loop of DISKBOOT.BIN, but previously
+# left SD1stInit unspawned. This patch replicates the gate and invokes the creator veneer,
+# matching sister DIGIC 6 DryOS 57 reference ports (G5 X sub_010e1746, G7 X sub_010e638b).
+#
+--- a/platform/g3x/sub/110c/stubs_prototype.S
++++ b/platform/g3x/sub/110c/stubs_prototype.S
+@@ -46,6 +46,7 @@
+ STUB(fc33319a)
+ STUB(fc0bb6fe)
++STUB(fc05c4e0)
+ STUB(fc0d0126)
+ 
+ // ARM Vector Routines (called via blx from Thumb-2)
+@@ -53,3 +54,4 @@
+ STUB2(fc31b408)
+ STUB2(fc31b460)
+ STUB2(fc31bbc4)
++STUB2(fc31b1f4)
+--- a/platform/g3x/sub/110c/boot_prototype.c
++++ b/platform/g3x/sub/110c/boot_prototype.c
+@@ -385,8 +385,16 @@
+         "    bl      sub_fc418eec\n"
+ 
+         // ---------------------------------------------------------------------
+-        // CRITICAL OMISSION:
+-        // Stock firmware executes: bl sub_fc05bbea (StartDiskboot)
+-        // In CHDK, this call is omitted to prevent an infinite reload loop.
++        // RESTART-SD-1: SD1stInit Task Creation (replicates StartDiskboot gate)
++        // Stock StartDiskboot (0xFC05BBEA) spawns "SD1stInit" via veneer 0xFC31B1F4
++        // before loading DISKBOOT.BIN. Omitting StartDiskboot prevents reload loop,
++        // but previously left SD1stInit unspawned.
++        // Replicate stock gate (sub_fc05c4e0(0) bit 0 == 0) and call creator veneer.
+         // ---------------------------------------------------------------------
++        "    movs    r0, #0\n"
++        "    bl      sub_fc05c4e0\n"
++        "    lsls    r0, r0, #31\n"
++        "    bne     1f\n"
++        "    blx     sub_fc31b1f4\n"
++        "1:\n"
+ 
+         "    bl      sub_fc0bba02\n"

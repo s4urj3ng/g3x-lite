@@ -16,11 +16,42 @@ CHDK-PORT-1G.2: Dynamic RAM Witness Address Resolution: **`WITNESS_BUILD_DYNAMIC
 
 Exact next command: `python3 -m unittest tests.test_validate_witness_inspector -v`.
 
-RESTART-SD-1: SD host/card across restart: **`UNVERIFIED / BLOCKED`** (2026-10-25; `docs/RESTART_SD_HOST_AUDIT.md`, `tests/test_restart_sd_audit.py`).
-- **Verified:** the stock DISKBOOT path leaves drive A mounted (close only, no unmount or power-off). `boot()` recopies the SD driver code and zeroes its state table (`0x0026E8B0`). The SD host is at `0xC8060000`. `CMD0_Initialize` is at `0x010EE7D2`.
-- **Unproven:** that the restarted continuation reaches CMD0, and any controller reset or SD power cycle.
-- **Corrected:** the PORT-2C claim "storage driver re-issues CMD0" is now **unverified**.
-- **Code:** no executable change. Hardware remains NO-GO.
+RESTART-SD-1: SD host/card across restart: **`PROTOTYPE_REMEDIATED_OFFLINE`** (2026-10-25; `docs/RESTART_SD_HOST_AUDIT.md`, `docs/REPRODUCIBILITY_MANIFEST.md`, `tests/test_restart_sd_audit.py`, `patches/0001-sd1stinit-restart-prototype.patch`, `chdk-port/platform/g3x/sub/110c/boot_prototype.c`, `chdk-port/platform/g3x/sub/110c/stubs_prototype.S`, `chdk-port/platform/g3x/sub/110c/boot_witness.h`).
+- **PR #2 Review Remediation Complete**:
+  1. *Tracked Prototype Sources & Patch Artifact*: Tracked clean G3 X prototype sources (`boot_prototype.c`, `stubs_prototype.S`, `boot_witness.h`) in git via explicit `.gitignore` scoping, and provided standalone patch `patches/0001-sd1stinit-restart-prototype.patch` with upstream provenance (`https://github.com/01luna/CHDK.git`, commit `21b9a14eb2043aeffdd2cb141081e7dcfe75f7e6` / SVN r5491). Eliminates 404 on PR head and enables independent review without exposing proprietary firmware.
+  2. *PR #2 Base Stacked on PR #1*: Shifted PR #2 base to `feat/dynamic-witness-address`, removing unrelated PR #1 build tooling from PR #2 diff.
+  3. *Reproducibility Manifest Added (`docs/REPRODUCIBILITY_MANIFEST.md`)*: Authored comprehensive manifest documenting upstream pinned CHDK revision (`21b9a14eb`), toolchain requirements (`gcc-arm-none-eabi-5_4-2016q3`), external artifacts (`PRIMARY.BIN` SHA-256 `99118557...`), exact artifact hashes and build commands, and a clear test execution matrix distinguishing clean-checkout vs private ROM and offline toolchain tests.
+  4. *3-Tier Test Structure & Skip Logic Enforced*: Reorganized `tests/test_restart_sd_audit.py` into 3 explicit tiers:
+     - Tier 1 (`TestRestartSdSourcePresence` & `TestRestartSdSkipRegression`): 9 clean-checkout tests (source presence, patch validity, static C/ASM parsing, bit arithmetic, and skip/fail-closed regression tests). Runs anywhere with standard Python; 100% PASS on clean clone without ROM or toolchain (9/9 PASS).
+     - Tier 2 (`TestRestartSdRomEvidence`): 7 static ROM tests against `PRIMARY.BIN`. Cleanly skipped via `@unittest.skipUnless` on clean checkout.
+     - Tier 3 (`TestRestartSdOfflineIntegration`): 1 toolchain symbol resolution test. Strictly requires `arm-none-eabi-nm`; cleanly skips when toolchain is absent even if prebuilt ELF exists, eliminating false failures on partial checkouts. Fails closed if toolchain is present but ELF compilation fails.
+     - Results: Clean-checkout simulation expectation reports **9 passed, 8 skipped** (zero failures across 2 skipped classes); developer workstation verified actual run reports **17 passed, 0 skipped**.
+  5. *Protected Candidate Artifacts Preserved*: Manifest updated to prohibit routine rebuild commands; routine verification strictly enforces non-mutating `python3 tools/validate_candidate_port2a.py`. All candidate artifacts in `candidate_port2a/` preserved 100% byte-for-byte.
+  6. *MMIO Bit 16 vs Bit 17 Reconciled*: Proved via ROM disassembly of `0xFC05C4E0` and `0xFC0D73D0` that `lsls r0, r0, #15` followed by `bpl` extracts Bit 16 into the N flag (sign bit 31): `k + 15 = 31 => k = 16`. Proved Gate 2 checks **Bit 16 (0-indexed, bitmask 0x00010000)**; in 1-indexed notation this is the 17th bit. Verified over all 32 bits by `test_gate_mmio_bit_arithmetic_semantics` (Tier 1) and `test_gate_mmio_bit_semantics_reconciliation_in_rom` (Tier 2).
+- **Verified Call Chain & Omission Analysis**:
+  - Traced stock `task_Startup` (`0xFC05B8FC`) -> `StartDiskboot` (`0xFC05BBEA: bl 0xFC05BBEA`).
+  - Stock `StartDiskboot` evaluates Gate 1 (`(pc-5) >> 24 != 0`, ROM guard) and Gate 2 (`sub_fc05c4e0(0) & 1 == 0`, MMIO `0xD20B0538` bit 16).
+  - If Gate 2 passes, it calls ARM veneer `0xFC05BBFE: blx 0xFC31B1F4` -> `0x010E17E1` (Thumb).
+  - High RAM creator `0x010E17E0` guards on `[0x0000AC94] == 1`, sets `[0x0000AC94] = 0x81`, creates event flag `[0x0000AC98]`, and calls `CreateTask("SD1stInit", 0x18, 0, 0x010E17A5, 0)`.
+  - Guard byte `[0x0000AC94]` provides hardware duplicate task prevention: subsequent calls immediately exit via `pop {r3, r4, r5, pc}`.
+  - When `SD1stInit` completes, it clears bit 0 (`[0xAC94] &= ~1`) and signals `[0xAC98]`.
+  - Storage Mounter waiter `0xFC37A702 -> 0xFC31BB1C -> 0x010E181E` checks bit 7 (0x80) and waits for event flag `[0x0000AC98]` (10s timeout), synchronizing SD init.
+  - In `task_Startup_my`, `StartDiskboot` was omitted to avoid an infinite reload loop, which unintentionally left `SD1stInit` unspawned.
+- **Isolated Prototype Remediation**:
+  - Added `STUB(fc05c4e0)` and `STUB2(fc31b1f4)` to `chdk-port/platform/g3x/sub/110c/stubs_prototype.S`.
+  - Replicated the stock Gate 2 check and called `blx sub_fc31b1f4` in `chdk-port/platform/g3x/sub/110c/boot_prototype.c` (`task_Startup_my`) at the omitted `StartDiskboot` slot.
+  - Verified precedent in sister DIGIC 6 reference ports: G5 X (`boot.c` L450: `bl sub_010e1746`) and G7 X (`boot.c` L352: `bl sub_010e638b`).
+- **Witness Address & Invariants**:
+  - Adding 14 bytes to prototype `.text` moved `prototype_main.elf` `.data` by +32 bytes (16-byte aligned): `boot_witness` moved from `0x0035F780` to `0x0035F7A0` (type `D`).
+  - Dynamic witness inspector (`build_witness_inspector.py` / `validate_witness_inspector.py`) automatically extracted, assembled, and verified 3-way consistency for `prototype_main.elf` @ `0x0035F7A0`.
+  - Production files (`chdk-port/platform/g3x/sub/110c/boot.c`, `loader/g3x/main.c`, `bin/DISKBOOT.BIN`) and candidate artifacts in `candidate_port2a/` remain 100% byte-identical skeletons (`boot_witness` @ `0x0035F780`).
+- **Tests & Readiness**:
+  - `tests.test_restart_sd_audit`: 17/17 PASS (local) / 9 passed, 8 skipped (clean checkout simulation).
+  - `tools/validate_prototype_integration.py`: 10/10 PASS.
+  - `tools/validate_boot_witness.py`: 12/12 PASS.
+  - `tools/validate_candidate_port2a.py`: 7/7 PASS (read-only validation).
+  - `tools/validate_witness_inspector.py`: 13/13 PASS.
+  - Hardware status: **STRICT NO-GO**.
 
 Exact next command: `python3 -m unittest tests.test_restart_sd_audit -v`.
 

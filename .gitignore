@@ -34,3 +34,17 @@ node_modules/
 private/
 analysis-workspace/
 toolchains/
+
+# CHDK port tracking rules: only track G3X prototype sources, ignore everything else
+chdk-port/*
+!chdk-port/platform/
+chdk-port/platform/*
+!chdk-port/platform/g3x/
+chdk-port/platform/g3x/*
+!chdk-port/platform/g3x/sub/
+chdk-port/platform/g3x/sub/*
+!chdk-port/platform/g3x/sub/110c/
+chdk-port/platform/g3x/sub/110c/*
+!chdk-port/platform/g3x/sub/110c/boot_prototype.c
+!chdk-port/platform/g3x/sub/110c/stubs_prototype.S
+!chdk-port/platform/g3x/sub/110c/boot_witness.h
