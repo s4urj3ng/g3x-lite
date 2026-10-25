@@ -5,9 +5,14 @@ CHDK-PORT-1G.2: Dynamic RAM Witness Address Resolution: **`WITNESS_BUILD_DYNAMIC
 - **Dynamic Address Extraction**: Removed hardcoded `0x0035F780` dependency from offline build tooling. Symbol address for `boot_witness` is resolved dynamically from `candidate_main.elf` (or configured ELF) using the ARM toolchain (`arm-none-eabi-nm`).
 - **Dynamic Payload Assembly**: `witness_inspector_payload.S` loads `boot_witness` via `:lower16:BOOT_WITNESS_ADDR` and `:upper16:BOOT_WITNESS_ADDR`, passed via `-DBOOT_WITNESS_ADDR=0x...` from `build_witness_inspector.py`.
 - **Address Metadata Generation & 3-Way Consistency**: `build_witness_inspector.py` emits `witness_inspector_metadata.json`. `validate_witness_inspector.py` enforces strict 3-way consistency between ELF symbol, inspector binary, and address metadata, rejecting any mismatch.
+- **Review Remediation (Finding 1-4)**:
+  1. *Raw .bin MOVW/MOVT opcode decoding*: Direct opcode extraction from raw binary bytes proves `r7` loading matches symbol, and verifies `.text == .bin` bit-for-bit with negative raw-binary mutation test.
+  2. *Fail-closed policy*: Eliminated silent fallback from `candidate_main.elf` to prototype ELFs; validator strictly requires candidate ELF and metadata.
+  3. *Elimination of address pinning*: General unit tests dynamically derive expected address from active candidate ELF rather than hardcoding `0x0035F780`.
+  4. *PR scope clarity*: Verified no proprietary code or firmware binaries are committed.
 - **Linker Output & Code Movement Verification (Scope 5 & 6)**: Implemented tests proving that adding code within an aligned block does not necessarily move `.data` (verified via linker output `NM`), while layout changes do shift `.data`. Proved end-to-end dynamic resolution and cross-mismatch rejection under simulated address change.
 - **Candidate & Production Invariance**: `candidate_port2a/` artifacts and canonical production boot files (`boot.c`, `main.c`, `DISKBOOT.BIN`) remain 100% byte-identical and unmodified.
-- **Tests**: Full test suite **262 / 262 tests PASS** (7.48s). Hardware readiness remains **STRICT NO-GO**.
+- **Tests**: Full test suite **264 / 264 tests PASS** (7.78s). Hardware readiness remains **STRICT NO-GO**.
 
 Exact next command: `python3 -m unittest tests.test_validate_witness_inspector -v`.
 

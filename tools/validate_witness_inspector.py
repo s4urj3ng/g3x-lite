@@ -16,6 +16,8 @@ Validates:
 2. Candidate native Thumb-2 inspector payload:
    - firmware/tools/witness_inspector_payload.bin and .o
    - Exact binary size and alignment (bin_size % 4 == 0, <= 512)
+   - Direct opcode decoding of MOVW/MOVT from raw .bin bytes
+   - Bit-for-bit equivalence between object .text and raw .bin
    - All string literals and their null terminators strictly reside within loaded buffer
    - AAPCS 8-byte stack alignment at all BLX call sites
    - Dynamic boot_witness target address matching candidate_main.elf symbol and metadata
@@ -24,10 +26,12 @@ Validates:
    - Strict absence of Color 2 (Green) in payload color assignments
    - Strict absence of BOOT_SUCCESS or CONTINUATION_CONFIRMED in string literals
 3. Address Metadata & ELF Consistency Invariants:
+   - Fail-closed enforcement: candidate ELF and metadata required by default
    - Rejection of mismatched ELF symbol vs inspector binary
    - Rejection of mismatched address metadata vs inspector binary
    - Rejection of mismatched ELF symbol vs address metadata
    - Rejection of missing/corrupt metadata or symbols
+   - Direct raw .bin opcode verification vs ELF and metadata
 4. Inspector State & Freshness Negative Test Suite (PORT-1G.1):
    - Valid monotonic progression (0x01 -> 0x03 -> 0x07)
    - Rejection of matching fixed constant nonce as proof of freshness
@@ -44,6 +48,7 @@ import re
 import struct
 import subprocess
 import sys
+import tempfile
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 LOADER_SCRIPT = os.path.join(REPO_ROOT, "firmware", "tools", "witness_inspector_gm110c.m")
@@ -51,13 +56,11 @@ PAYLOAD_BIN = os.path.join(REPO_ROOT, "firmware", "tools", "witness_inspector_pa
 PAYLOAD_ELF = os.path.join(REPO_ROOT, "firmware", "tools", "witness_inspector_payload.o")
 METADATA_JSON = os.path.join(REPO_ROOT, "firmware", "tools", "witness_inspector_metadata.json")
 DEFAULT_CANDIDATE_ELF = os.path.join(REPO_ROOT, "candidate_port2a", "candidate_main.elf")
-FALLBACK_PROTOTYPE_ELF = os.path.join(
-    REPO_ROOT, "chdk-port", "platform", "g3x", "sub", "110c", "prototype_main.elf"
-)
 
 TOOLCHAIN_BIN = os.path.join(REPO_ROOT, "toolchains", "gcc-arm-none-eabi-5_4-2016q3", "bin")
 NM = os.path.join(TOOLCHAIN_BIN, "arm-none-eabi-nm")
 OBJDUMP = os.path.join(TOOLCHAIN_BIN, "arm-none-eabi-objdump")
+OBJCOPY = os.path.join(TOOLCHAIN_BIN, "arm-none-eabi-objcopy")
 
 BOOT_WITNESS_MAGIC = 0x5749544E
 BOOT_WITNESS_VERSION = 0x00010001
@@ -105,23 +108,97 @@ def extract_witness_addr_from_elf(elf_path, nm_tool=NM):
     return witness_addr
 
 
-def extract_witness_addr_from_payload(payload_elf, objdump_tool=OBJDUMP):
-    """Extract loaded boot_witness address from disassembled inspector object/binary."""
-    if not os.path.exists(payload_elf):
-        raise FileNotFoundError(f"Payload file not found: {payload_elf}")
-    if payload_elf.endswith(".bin"):
-        cmd = [objdump_tool, "-b", "binary", "-marm", "-Mforce-thumb", "-D", payload_elf]
+def extract_witness_addr_from_binary_bytes(bin_path):
+    """Directly decode MOVW/MOVT r7 instructions from raw .bin bytes.
+    
+    Instruction sequence in witness_inspector_payload.bin:
+      Offset 0x0A: movw r7, #:lower16:BOOT_WITNESS_ADDR
+      Offset 0x0E: movt r7, #:upper16:BOOT_WITNESS_ADDR
+    """
+    if not os.path.exists(bin_path):
+        raise FileNotFoundError(f"Binary file not found: {bin_path}")
+    with open(bin_path, "rb") as f:
+        data = f.read()
+
+    if len(data) < 0x12:
+        raise ValueError(f"Binary file {bin_path} too small ({len(data)} B) to contain MOVW/MOVT sequence")
+
+    # Decode movw r7 at offset 0x0A
+    hw1 = data[0x0a] | (data[0x0b] << 8)
+    hw2 = data[0x0c] | (data[0x0d] << 8)
+    if (hw1 & 0xFBF0) != 0xF240:
+        raise ValueError(f"Expected movw instruction at offset 0x0A, got halfword 0x{hw1:04X}")
+    rd_w = (hw2 >> 8) & 0xF
+    if rd_w != 7:
+        raise ValueError(f"Expected target register r7 for movw at offset 0x0A, got r{rd_w}")
+    i_w = (hw1 >> 10) & 1
+    imm4_w = hw1 & 0xF
+    imm3_w = (hw2 >> 12) & 0x7
+    imm8_w = hw2 & 0xFF
+    lo = (imm4_w << 12) | (i_w << 11) | (imm3_w << 8) | imm8_w
+
+    # Decode movt r7 at offset 0x0E
+    hw3 = data[0x0e] | (data[0x0f] << 8)
+    hw4 = data[0x10] | (data[0x11] << 8)
+    if (hw3 & 0xFBF0) != 0xF2C0:
+        raise ValueError(f"Expected movt instruction at offset 0x0E, got halfword 0x{hw3:04X}")
+    rd_t = (hw4 >> 8) & 0xF
+    if rd_t != 7:
+        raise ValueError(f"Expected target register r7 for movt at offset 0x0E, got r{rd_t}")
+    i_t = (hw3 >> 10) & 1
+    imm4_t = hw3 & 0xF
+    imm3_t = (hw4 >> 12) & 0x7
+    imm8_t = hw4 & 0xFF
+    hi = (imm4_t << 12) | (i_t << 11) | (imm3_t << 8) | imm8_t
+
+    return (hi << 16) | lo
+
+
+def extract_witness_addr_from_payload(payload_path, objdump_tool=OBJDUMP):
+    """Extract loaded boot_witness address from disassembled inspector object (.o) or raw binary (.bin)."""
+    if not os.path.exists(payload_path):
+        raise FileNotFoundError(f"Payload file not found: {payload_path}")
+
+    if payload_path.endswith(".bin"):
+        cmd = [objdump_tool, "-b", "binary", "-marm", "-Mforce-thumb", "-D", payload_path]
     else:
-        cmd = [objdump_tool, "-d", payload_elf]
+        cmd = [objdump_tool, "-d", payload_path]
+
     res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
     dump = res.stdout.decode()
     m_w = re.search(r"movw\s+r7,\s*#(\d+)(?:\s*;\s*0x([0-9a-fA-F]+))?", dump)
     m_t = re.search(r"movt\s+r7,\s*#(\d+)(?:\s*;\s*0x([0-9a-fA-F]+))?", dump)
     if not m_w or not m_t:
-        raise ValueError(f"Could not find movw/movt r7 instructions in {payload_elf}")
+        raise ValueError(f"Could not find movw/movt r7 instructions in {payload_path}")
     lo = int(m_w.group(2), 16) if m_w.group(2) else int(m_w.group(1), 10)
     hi = int(m_t.group(2), 16) if m_t.group(2) else int(m_t.group(1), 10)
     return (hi << 16) | lo
+
+
+def verify_object_text_matches_binary(payload_elf, payload_bin, objcopy_tool=OBJCOPY):
+    """Extract .text from object file and prove bit-for-bit identity with raw .bin."""
+    if not os.path.exists(payload_elf):
+        raise FileNotFoundError(f"Object file not found: {payload_elf}")
+    if not os.path.exists(payload_bin):
+        raise FileNotFoundError(f"Binary file not found: {payload_bin}")
+
+    with tempfile.TemporaryDirectory() as td:
+        txt_bin = os.path.join(td, "extracted_text.bin")
+        cmd = [objcopy_tool, "-O", "binary", "-j", ".text", payload_elf, txt_bin]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if res.returncode != 0:
+            raise RuntimeError(f"Failed to extract .text from {payload_elf}:\n{res.stderr.decode()}")
+
+        with open(txt_bin, "rb") as f:
+            o_text_bytes = f.read()
+        with open(payload_bin, "rb") as f:
+            raw_bin_bytes = f.read()
+
+        if o_text_bytes != raw_bin_bytes:
+            raise AssertionError(
+                f"Object .text ({len(o_text_bytes)} B) does not match raw binary ({len(raw_bin_bytes)} B) bit-for-bit!"
+            )
+    return True
 
 
 def read_address_metadata(metadata_path):
@@ -139,11 +216,7 @@ def read_address_metadata(metadata_path):
 
 
 def emulate_inspector_parse(buf, expected_nonce=0):
-    """Python reference emulation of witness_inspector_payload.S logic (PORT-1G.1).
-    
-    Returns:
-        (sentinel, title_str, status_str, title_color, status_color)
-    """
+    """Python reference emulation of witness_inspector_payload.S logic (PORT-1G.1)."""
     if len(buf) < 32:
         return SENTINEL_INVALID, "WITNESS_INVALID", "INVALID / CORRUPT", 3, 3
 
@@ -232,13 +305,15 @@ def validate_payload_binary(
     payload_bin=PAYLOAD_BIN,
     payload_elf=PAYLOAD_ELF,
     elf_path=None,
-    metadata_path=METADATA_JSON,
+    metadata_path=None,
     expected_witness_addr=None,
+    fail_closed=True,
 ):
     print(f"Validating {os.path.basename(payload_bin)} and {os.path.basename(payload_elf)}:")
-    if not os.path.exists(payload_bin) or not os.path.exists(payload_elf):
-        print(f"[FAIL] Missing payload binary or ELF")
-        return False
+    if not os.path.exists(payload_bin):
+        raise FileNotFoundError(f"Missing payload binary: {payload_bin}")
+    if not os.path.exists(payload_elf):
+        raise FileNotFoundError(f"Missing payload ELF/object: {payload_elf}")
 
     bin_size = os.path.getsize(payload_bin)
     assert bin_size <= 512, f"Payload size {bin_size} exceeds 512 bytes"
@@ -279,30 +354,49 @@ def validate_payload_binary(
     assert "ldmia.w\tsp!, {r4, r5, r6, r7, r8, pc}" in dump, "Must pop 6 registers"
     assert "push\t{r1, r2}" in dump, "Render must push 2 registers (8 bytes) to maintain 8-byte SP alignment"
 
-    # Dynamic boot witness target address resolution & validation
-    bin_witness_addr = extract_witness_addr_from_payload(payload_elf)
+    # 4. Prove object .text == raw .bin bit-for-bit
+    verify_object_text_matches_binary(payload_elf, payload_bin)
 
-    # Resolve candidate ELF if not passed
+    # 5. Direct opcode decoding of MOVW/MOVT from raw .bin bytes
+    raw_bin_addr = extract_witness_addr_from_binary_bytes(payload_bin)
+    obj_witness_addr = extract_witness_addr_from_payload(payload_elf)
+    assert raw_bin_addr == obj_witness_addr, (
+        f"Raw .bin decoded address (0x{raw_bin_addr:08X}) does not match object address (0x{obj_witness_addr:08X})!"
+    )
+
+    # 6. Fail-closed candidate ELF and metadata resolution
     if elf_path is None:
-        if os.path.exists(DEFAULT_CANDIDATE_ELF):
+        if fail_closed:
+            if not os.path.exists(DEFAULT_CANDIDATE_ELF):
+                raise FileNotFoundError(
+                    f"Candidate ELF not found: {DEFAULT_CANDIDATE_ELF}. "
+                    "Fail-closed policy rejects missing candidate artifacts."
+                )
             elf_path = DEFAULT_CANDIDATE_ELF
-        elif os.path.exists(FALLBACK_PROTOTYPE_ELF):
-            elf_path = FALLBACK_PROTOTYPE_ELF
+
+    if metadata_path is None:
+        if fail_closed:
+            if not os.path.exists(METADATA_JSON):
+                raise FileNotFoundError(
+                    f"Address metadata not found: {METADATA_JSON}. "
+                    "Fail-closed policy rejects missing address metadata."
+                )
+            metadata_path = METADATA_JSON
 
     elf_witness_addr = None
-    if elf_path and os.path.exists(elf_path):
+    if elf_path is not None:
         elf_witness_addr = extract_witness_addr_from_elf(elf_path)
-        assert elf_witness_addr == bin_witness_addr, (
+        assert elf_witness_addr == raw_bin_addr, (
             f"Mismatched ELF symbol: candidate ELF symbol has 0x{elf_witness_addr:08X}, "
-            f"but inspector binary loads 0x{bin_witness_addr:08X}!"
+            f"but inspector binary loads 0x{raw_bin_addr:08X}!"
         )
 
     meta_witness_addr = None
-    if metadata_path and os.path.exists(metadata_path):
+    if metadata_path is not None:
         meta_witness_addr, meta = read_address_metadata(metadata_path)
-        assert meta_witness_addr == bin_witness_addr, (
+        assert meta_witness_addr == raw_bin_addr, (
             f"Mismatched address metadata: metadata specifies 0x{meta_witness_addr:08X}, "
-            f"but inspector binary loads 0x{bin_witness_addr:08X}!"
+            f"but inspector binary loads 0x{raw_bin_addr:08X}!"
         )
         assert meta.get("payload_size") == bin_size, (
             f"Metadata payload size mismatch: {meta.get('payload_size')} vs actual {bin_size}"
@@ -314,11 +408,12 @@ def validate_payload_binary(
             )
 
     if expected_witness_addr is not None:
-        assert bin_witness_addr == expected_witness_addr, (
-            f"Inspector address 0x{bin_witness_addr:08X} does not match expected 0x{expected_witness_addr:08X}"
+        assert raw_bin_addr == expected_witness_addr, (
+            f"Inspector address 0x{raw_bin_addr:08X} does not match expected 0x{expected_witness_addr:08X}"
         )
 
-    print(f"  [OK] Witness target address 0x{bin_witness_addr:08X} verified consistent with ELF & metadata.")
+    print(f"  [OK] Witness target address 0x{raw_bin_addr:08X} verified consistent with ELF & metadata.")
+    print("  [OK] Raw .bin MOVW/MOVT opcodes verified identical to object .text bit-for-bit.")
 
     # Native call targets
     assert "0x973d" in dump and "0xfc0c" in dump, "Must call LCDMsg_SetStr_native (0xFC0C973D)"
@@ -412,6 +507,7 @@ def validate_all(
     metadata_json=METADATA_JSON,
     elf_path=None,
     expected_witness_addr=None,
+    fail_closed=True,
 ):
     bin_size = validate_payload_binary(
         payload_bin=payload_bin,
@@ -419,6 +515,7 @@ def validate_all(
         elf_path=elf_path,
         metadata_path=metadata_json,
         expected_witness_addr=expected_witness_addr,
+        fail_closed=fail_closed,
     )
     if not bin_size:
         return False
@@ -432,8 +529,9 @@ def main():
     parser.add_argument("--payload-bin", default=PAYLOAD_BIN, help="Payload .bin path")
     parser.add_argument("--payload-elf", default=PAYLOAD_ELF, help="Payload .o path")
     parser.add_argument("--loader-script", default=LOADER_SCRIPT, help="Loader script .m path")
-    parser.add_argument("--metadata", default=METADATA_JSON, help="Address metadata .json path")
+    parser.add_argument("--metadata", default=None, help="Address metadata .json path")
     parser.add_argument("--expected-addr", default=None, help="Expected witness address (hex)")
+    parser.add_argument("--no-fail-closed", action="store_true", help="Allow running without candidate artifacts")
     args = parser.parse_args()
 
     exp_addr = int(args.expected_addr, 16) if args.expected_addr else None
@@ -445,6 +543,7 @@ def main():
             metadata_json=args.metadata,
             elf_path=args.elf,
             expected_witness_addr=exp_addr,
+            fail_closed=not args.no_fail_closed,
         )
         if ok:
             print("\nALL CANON BASIC WITNESS INSPECTOR CHECKS PASSED (PORT-1G.1 OFFLINE ONLY).")

@@ -7,6 +7,7 @@ Toolchain: ARM GNU-RM 5.4.1 (2016q3)
 Automatically resolves boot_witness RAM symbol address from candidate_main.elf
 using the ARM toolchain (arm-none-eabi-nm) and injects it into the inspector
 payload assembly. Emits address metadata and enforces 3-way consistency.
+Fails closed: silent fallbacks to prototype ELFs are strictly prohibited.
 """
 
 import argparse
@@ -33,9 +34,6 @@ LOADER_SCRIPT = os.path.join(FIRMWARE_TOOLS, "witness_inspector_gm110c.m")
 METADATA_JSON = os.path.join(FIRMWARE_TOOLS, "witness_inspector_metadata.json")
 
 DEFAULT_CANDIDATE_ELF = os.path.join(REPO_ROOT, "candidate_port2a", "candidate_main.elf")
-FALLBACK_PROTOTYPE_ELF = os.path.join(
-    REPO_ROOT, "chdk-port", "platform", "g3x", "sub", "110c", "prototype_main.elf"
-)
 
 
 def extract_witness_addr_from_elf(elf_path, nm_tool=NM):
@@ -151,19 +149,20 @@ def build_witness_inspector(
     nm=NM,
     objdump=OBJDUMP,
 ):
-    """Build the Canon Basic witness inspector payload with dynamic witness address."""
+    """Build the Canon Basic witness inspector payload with dynamic witness address.
+    
+    Fails closed: if elf_path is None, DEFAULT_CANDIDATE_ELF must exist.
+    """
     if not os.path.exists(cc) or not os.path.exists(objcopy) or not os.path.exists(nm):
         raise RuntimeError("Required ARM toolchain binaries (gcc, objcopy, nm) not found")
 
     if elf_path is None:
-        if os.path.exists(DEFAULT_CANDIDATE_ELF):
-            elf_path = DEFAULT_CANDIDATE_ELF
-        elif os.path.exists(FALLBACK_PROTOTYPE_ELF):
-            elf_path = FALLBACK_PROTOTYPE_ELF
-        else:
+        if not os.path.exists(DEFAULT_CANDIDATE_ELF):
             raise FileNotFoundError(
-                f"Candidate ELF not found. Expected {DEFAULT_CANDIDATE_ELF} or {FALLBACK_PROTOTYPE_ELF}"
+                f"Candidate ELF not found: {DEFAULT_CANDIDATE_ELF}. "
+                "Silent fallback to prototype ELFs is prohibited. Build fails closed."
             )
+        elf_path = DEFAULT_CANDIDATE_ELF
 
     witness_addr = extract_witness_addr_from_elf(elf_path, nm_tool=nm)
     print(f"Resolved boot_witness symbol address from {elf_path}: 0x{witness_addr:08X}")
