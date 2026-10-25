@@ -1,26 +1,40 @@
 # Agent handoff
 Updated: 2026-10-25
 
-## PORT-3C: Restart Readiness & Blocker Consolidation: MATRIX_CONSOLIDATED / NOT_PROVEN_SAFE (Gemini, 2026-10-25)
+## Codex independent adversarial restart review (2026-10-25)
 
-- **Docs:** `docs/PORT3A_RESTART_IRQ_AUDIT.md`, `docs/PORT3B_IRQ_REGISTER_SEMANTICS.md`, `docs/PORT3C_RESTART_READINESS_MATRIX.md`.
-- **Verdict:** **`NOT_PROVEN_SAFE / BLOCKED`** on physical camera hardware. Hardware status: **STRICT NO-GO**.
+- Deliverable: `docs/CODEX_INDEPENDENT_RESTART_REVIEW.md`. Verdict: **INSUFFICIENT EVIDENCE**; hardware **NOT READY / STRICT NO-GO**. No safe boot claimed.
+- Source/ROM evidence supports handler-table reset and a conditional illegal-interrupt panic path; hardware effects of bank `+0xC` and auxiliary writes remain UNKNOWN. Neither guaranteed IRQ failure nor safe restart follows.
+- Corrected timing from existing evidence: helper entry `0xFC267BE6`, effective CPSR write `0xFC267BF2`; first wrapper unmask precedes initial bootstrap task entry and later Startup creation.
+- PORT-3C's clean-mount/CMD0 narrative exceeds the conditional task-body and waiter/timeout evidence. Stage 3 is a pre-branch witness with fixed tick sentinel; no independent fresh downstream continuation is demonstrated.
+- Verification: ROM hash/size matched; all 65 existing IRQ/SD byte/word pins matched via inert literal comparisons, without importing/running suites. Relevant suite sources can invoke builds and were not executed. No executable/test changes, builds, camera/SD-card operations, MMIO probing, flashing, commits, pushes or PRs.
+- Classifier boundary respected: PORT-3B records classifier stops for IRQ caller/line enumeration and SD write-site enumeration. Neither was retried; they remain excluded.
+- Next bounded milestone: a documentation-only applicability review asking whether vetted controller semantics prove the already recorded initialization prevents IRQ delivery to unregistered slots. Record exact source/revision/guarantee or `NO_APPLICABLE_SOURCE / UNKNOWN`; no new enumeration or guessed mitigation. SD recovery/card response and fresh artifact-bound downstream observation remain blockers.
+- Existing dirty/untracked material is intentionally preserved. This review adds only the requested report and state/handoff entries; no phase transition.
+- Exact next command: `cat docs/PORT3C_RESTART_READINESS_MATRIX.md`.
+
+## PORT-3C: Restart Readiness & Blocker Consolidation: MATRIX_REVISED / NOT_PROVEN_SAFE (Gemini / Claude / Codex, 2026-10-25)
+
+- **Docs:** `docs/PORT3A_RESTART_IRQ_AUDIT.md`, `docs/PORT3B_IRQ_REGISTER_SEMANTICS.md`, `docs/PORT3C_RESTART_READINESS_MATRIX.md`, `docs/CODEX_INDEPENDENT_RESTART_REVIEW.md`.
+- **Verdict:** **`NOT_PROVEN_SAFE / INSUFFICIENT EVIDENCE`** on physical camera hardware. Hardware status: **STRICT NO-GO**.
 - **Role:** Independent verification and documentation engineer.
 - **Objectives Delivered:**
-  1. *Master Precondition Matrix*: Consolidated 20 preconditions (P01–P20) spanning CPU state, memory/MPU, task scheduler, SD host, interrupts, and observability.
-  2. *Evidence Separation*: Categorized all data into ROM-Proven Facts vs Inferred Hardware Behavior vs Hardware Unknowns.
-  3. *Temporal Hazard Window Analysis*: Detailed post-restart execution trace to the first interrupt unmask at `0xFC267BE6`. Proved that handler table at `0x0003F4F4` (zeroed in BSS) contains only timer tick `0x1B` (`0xFC05C65E`); any unregistered peripheral line asserting in this window triggers `DRYOS PANIC: Illegal inter` -> infinite hang (`0xFC084BBC: b .`).
-  4. *Audit Contradiction Ledger*: Resolved 7 historical discrepancies across prior audit documents (proprietary `0xD401xxxx` controller vs ARM GIC; handler table zeroed vs pre-populated; kernel init mask semantics unproven; MMIO writes during boot; SD card in `TRAN` mode; Gate 2 bit index reconciled; Canon warm-restart `0xFC0D03E8` reachability).
-  5. *Evidence Boundaries*: Identified questions answerable from existing ROM evidence vs those requiring external silicon docs or approved hardware observation.
-  6. *Integrated Dependency Graph*: Generated Mermaid and ASCII dependency trees linking safe restart preconditions.
-  7. *Prioritized Blockers*: Ranked blockers 1 to 4:
+  1. *Tri-Agent Review Integration*: Consolidated findings from Claude Code (PORT-3A/3B), Gemini (PORT-3C initial draft), Codex (`CODEX_INDEPENDENT_RESTART_REVIEW.md`), and PR #3 adversarial review.
+  2. *Master Precondition Matrix (P01–P20)*: Unified 20 preconditions, strictly separating ROM code existence from physical hardware readiness. Preconditions P11, P12, P13, P16, P17, P18, P20 marked unresolved blockers.
+  3. *Evidence Separation*: Categorized all data into ROM-Proven Facts vs Inferred Hardware Behavior vs Hardware Unknowns.
+  4. *Temporal Hazard Window Analysis*: Detailed post-restart execution trace to the earliest interrupt unmask at `0xFC267BF2` (initial bootstrap task wrapper). Proved handler table at `0x0003F4F4` (zeroed in BSS) contains only timer tick `0x1B` (`0xFC05C65E`); any unregistered peripheral line asserting in this window triggers `DRYOS PANIC: Illegal inter` -> infinite hang (`0xFC084BBC: b .`).
+  5. *SD Host & Mount Path Reconciliation*: Corrected previous clean-mount claims; proved `SD1stInit` execution is conditional (`0x010E1774() == 1`), waiter has a 10s timeout, and clean storage mount after restart is UNKNOWN.
+  6. *Witness Stage 3 Observability Clarification*: Clarified that Stage 3 records reaching the pre-branch recorder before branching to `sub_fc0d0126`, uses a hardcoded tick sentinel (`0x0014F200`), and does NOT prove downstream execution or continuation.
+  7. *Audit Contradiction Ledger*: Resolved 10 discrepancies across prior audit documents and agent reviews (C01–C10).
+  8. *Evidence Boundaries & Retraction of PORT-3D*: Retracted the proposed pre-DISKBOOT driver IRQ caller enumeration due to safety classifier boundary and flawed coverage premise. Proposed bounded applicability review of external vetted controller documentation.
+  9. *Prioritized Blockers*: Ranked blockers 1 to 5:
      - Rank 1: Retained interrupt line assertion in vulnerable unmask window (CRITICAL / UNKNOWN).
      - Rank 2: SD host controller `0xC8060000` hardware state across restart (HIGH / UNKNOWN).
-     - Rank 3: Physical SD card response to CMD0 from `TRAN` state (HIGH / PLAUSIBLE).
-     - Rank 4: Canon warm-restart path reachability `0xFC0D03E8` (MEDIUM / UNKNOWN).
-  8. *Proposed Next Offline Task (PORT-3D)*: Bounded Pre-DISKBOOT Driver IRQ Call-Tree Audit of 4 routines before `StartDiskboot` (`0xFC0D0150`, `0xFC05BA34`, `0xFC05BB94`, `0xFC418EEC`) and Mounter helpers (`0xFC37AE78/A6/D4`). If none registers peripheral lines, Rank 1 blocker is resolved completely offline.
+     - Rank 3: Physical SD card response to CMD0 from retained state (HIGH / PLAUSIBLE to UNKNOWN).
+     - Rank 4: Fresh artifact-bound downstream continuation evidence (HIGH / EVIDENCE BLOCKER / UNKNOWN).
+     - Rank 5: Equivalence of inherited CPU/bus/cold-only state (MEDIUM / UNKNOWN).
 - **Constraints Maintained:**
-  - Zero modifications to boot, loader, stubs, candidate, or production firmware.
+  - Strictly documentation-only changes. Zero modifications to boot, loader, stubs, candidate, tests, or production firmware.
   - No hardware, SD-card, flashing, or deployment operations.
   - Zero bypass of safeguards; hardware status locked at STRICT NO-GO.
 - **Exact next command:**
