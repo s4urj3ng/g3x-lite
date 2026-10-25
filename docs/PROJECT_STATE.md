@@ -1,6 +1,17 @@
 # Project state
 Updated: 2026-10-25
 
+PORT-3C: Restart Readiness & Blocker Consolidation: **`MATRIX_CONSOLIDATED / NOT_PROVEN_SAFE`** (2026-10-25; `docs/PORT3A_RESTART_IRQ_AUDIT.md`, `docs/PORT3B_IRQ_REGISTER_SEMANTICS.md`, `docs/PORT3C_RESTART_READINESS_MATRIX.md`).
+- **Precondition & Dependency Consolidation**: Unified 20 critical restart preconditions (P01–P20) across CPU state, memory/MPU, task scheduler, SD host, interrupts, and observability into a single master dependency matrix.
+- **Evidence Separation (ROM Facts vs Silicon Unknowns)**: Strictly separated ROM-proven facts (exact instructions, addresses, BSS bounds, context switch CPSR `0x000000F3`, SD1stInit call chain) from inferred hardware behavior (controller register response, SD card UHS-I state response to CMD0).
+- **Temporal Hazard Window Traced**: Traced post-restart execution to the first CPU interrupt unmask at `0xFC267BE6` (`task_Startup_my` task wrapper). Proved handler table at `0x0003F4F4` contains strictly one registered entry (timer tick `0x1B`). If any peripheral interrupt enabled during first boot asserts before its driver re-registers, DryOS enters `DRYOS PANIC: Illegal inter` (`0xFC084BBC: b .`).
+- **Audit Contradiction Reconciliation**: Resolved 7 historical discrepancies across PORT-2C, PORT-3A, PORT-3B, and RESTART-SD-1 (controller is Canon proprietary `0xD401xxxx`, not ARM GIC; DryOS handler table is zeroed, not pre-populated; kernel init mask behavior on peripheral enables is unproven; MMIO writes occur during boot; SD card left in `TRAN` mode; Gate 2 bit index is Bit 16 0-indexed / 17th bit; Canon warm-restart `0xFC0D03E8` has no proven non-7 caller).
+- **Evidence Boundary & Blocker Ranking**: Categorized analytical questions into offline ROM-solvable vs requiring external silicon docs or hardware observation. Ranked unresolved blockers: Rank 1 (Retained IRQ assertion in unmask window - CRITICAL/UNKNOWN), Rank 2 (SD host controller MMIO state across restart - HIGH/UNKNOWN), Rank 3 (SD card CMD0 response from `TRAN` state - HIGH/PLAUSIBLE), Rank 4 (Canon warm-restart path reachability - MEDIUM/UNKNOWN).
+- **Proposed Next Offline Research (PORT-3D)**: Proposed Bounded Pre-DISKBOOT Driver IRQ Call-Tree Audit auditing the four routines before `StartDiskboot` (`0xFC0D0150`, `0xFC05BA34`, `0xFC05BB94`, `0xFC418EEC`) and Mounter helpers (`0xFC37AE78/A6/D4`). If none registers peripheral IRQs, Rank 1 blocker is completely resolved offline.
+- **Hardware Readiness**: **STRICT NO-GO**. Zero physical camera, flashing, or SD operations.
+
+Exact next command: `cat docs/PORT3C_RESTART_READINESS_MATRIX.md`.
+
 CHDK-PORT-1G.2: Dynamic RAM Witness Address Resolution: **`WITNESS_BUILD_DYNAMIC_COMPLETE`** (2026-10-25; `firmware/tools/witness_inspector_payload.S`, `firmware/tools/witness_inspector_metadata.json`, `tools/build_witness_inspector.py`, `tools/validate_witness_inspector.py`, `tests/test_validate_witness_inspector.py`).
 - **Dynamic Address Extraction**: Removed hardcoded `0x0035F780` dependency from offline build tooling. Symbol address for `boot_witness` is resolved dynamically from `candidate_main.elf` (or configured ELF) using the ARM toolchain (`arm-none-eabi-nm`).
 - **Dynamic Payload Assembly**: `witness_inspector_payload.S` loads `boot_witness` via `:lower16:BOOT_WITNESS_ADDR` and `:upper16:BOOT_WITNESS_ADDR`, passed via `-DBOOT_WITNESS_ADDR=0x...` from `build_witness_inspector.py`.

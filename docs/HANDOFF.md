@@ -1,6 +1,33 @@
 # Agent handoff
 Updated: 2026-10-25
 
+## PORT-3C: Restart Readiness & Blocker Consolidation: MATRIX_CONSOLIDATED / NOT_PROVEN_SAFE (Gemini, 2026-10-25)
+
+- **Docs:** `docs/PORT3A_RESTART_IRQ_AUDIT.md`, `docs/PORT3B_IRQ_REGISTER_SEMANTICS.md`, `docs/PORT3C_RESTART_READINESS_MATRIX.md`.
+- **Verdict:** **`NOT_PROVEN_SAFE / BLOCKED`** on physical camera hardware. Hardware status: **STRICT NO-GO**.
+- **Role:** Independent verification and documentation engineer.
+- **Objectives Delivered:**
+  1. *Master Precondition Matrix*: Consolidated 20 preconditions (P01–P20) spanning CPU state, memory/MPU, task scheduler, SD host, interrupts, and observability.
+  2. *Evidence Separation*: Categorized all data into ROM-Proven Facts vs Inferred Hardware Behavior vs Hardware Unknowns.
+  3. *Temporal Hazard Window Analysis*: Detailed post-restart execution trace to the first interrupt unmask at `0xFC267BE6`. Proved that handler table at `0x0003F4F4` (zeroed in BSS) contains only timer tick `0x1B` (`0xFC05C65E`); any unregistered peripheral line asserting in this window triggers `DRYOS PANIC: Illegal inter` -> infinite hang (`0xFC084BBC: b .`).
+  4. *Audit Contradiction Ledger*: Resolved 7 historical discrepancies across prior audit documents (proprietary `0xD401xxxx` controller vs ARM GIC; handler table zeroed vs pre-populated; kernel init mask semantics unproven; MMIO writes during boot; SD card in `TRAN` mode; Gate 2 bit index reconciled; Canon warm-restart `0xFC0D03E8` reachability).
+  5. *Evidence Boundaries*: Identified questions answerable from existing ROM evidence vs those requiring external silicon docs or approved hardware observation.
+  6. *Integrated Dependency Graph*: Generated Mermaid and ASCII dependency trees linking safe restart preconditions.
+  7. *Prioritized Blockers*: Ranked blockers 1 to 4:
+     - Rank 1: Retained interrupt line assertion in vulnerable unmask window (CRITICAL / UNKNOWN).
+     - Rank 2: SD host controller `0xC8060000` hardware state across restart (HIGH / UNKNOWN).
+     - Rank 3: Physical SD card response to CMD0 from `TRAN` state (HIGH / PLAUSIBLE).
+     - Rank 4: Canon warm-restart path reachability `0xFC0D03E8` (MEDIUM / UNKNOWN).
+  8. *Proposed Next Offline Task (PORT-3D)*: Bounded Pre-DISKBOOT Driver IRQ Call-Tree Audit of 4 routines before `StartDiskboot` (`0xFC0D0150`, `0xFC05BA34`, `0xFC05BB94`, `0xFC418EEC`) and Mounter helpers (`0xFC37AE78/A6/D4`). If none registers peripheral lines, Rank 1 blocker is resolved completely offline.
+- **Constraints Maintained:**
+  - Zero modifications to boot, loader, stubs, candidate, or production firmware.
+  - No hardware, SD-card, flashing, or deployment operations.
+  - Zero bypass of safeguards; hardware status locked at STRICT NO-GO.
+- **Exact next command:**
+  ```sh
+  cat docs/PORT3C_RESTART_READINESS_MATRIX.md
+  ```
+
 ## CHDK-PORT-1G.2: Dynamic RAM Witness Address Resolution: WITNESS_BUILD_DYNAMIC_COMPLETE (Gemini, 2026-10-25)
 
 - **Status**: **`WITNESS_BUILD_DYNAMIC_COMPLETE`** (`firmware/tools/witness_inspector_payload.S`, `firmware/tools/witness_inspector_metadata.json`, `tools/build_witness_inspector.py`, `tools/validate_witness_inspector.py`, `tests/test_validate_witness_inspector.py`).
