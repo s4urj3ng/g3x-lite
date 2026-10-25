@@ -1,6 +1,26 @@
 # Project state
 Updated: 2026-10-25
 
+Codex independent adversarial restart review (2026-10-25): **`INSUFFICIENT EVIDENCE / HARDWARE NOT READY`** — `docs/CODEX_INDEPENDENT_RESTART_REVIEW.md`.
+- Supersedes initial readiness assumptions and the proposed PORT-3D caller enumeration: classifier-stopped IRQ caller enumeration and SD register-write enumeration are formally excluded and not retried.
+- Strongest gap: BSS clears the IRQ handler table (`0x0003F4F4`), while the already documented controller initialization has UNKNOWN enable/pending/reset effects. A conditional panic path is supported; neither inevitable failure nor safe restart is established.
+- Timing correction: `0xFC267BE6` is the helper entry; the CPSR write is `0xFC267BF2`. The existing bootstrap trace places first unmask before the initial bootstrap task (`sub_fc05b558_my`), which later creates `task_Startup_my`.
+- Contradiction resolution: PORT-3C's clean-mount/CMD0 timeline was an intended static call path, not a verified runtime outcome. Task creation is not execution/completion. Witness stage 3 precedes continuation and uses a fixed tick sentinel (`0x0014F200`).
+- Independent verification: local ROM identity matched; 25+12 existing IRQ and 19+9 SD byte/word pins matched (65 comparisons). No suites/builds executed. No executable/test/firmware changes, hardware/SD operations, commits, pushes or PR actions.
+- Next bounded milestone: vet applicable controller documentation for the invariant that the already recorded initialization prevents delivery to unregistered slots; document UNKNOWN if no applicable source exists. SD recovery and fresh downstream observation remain separate blockers. Existing uncommitted work is preserved.
+
+PORT-3C: Restart Readiness & Blocker Consolidation: **`MATRIX_REVISED / NOT_PROVEN_SAFE`** (2026-10-25; `docs/PORT3A_RESTART_IRQ_AUDIT.md`, `docs/PORT3B_IRQ_REGISTER_SEMANTICS.md`, `docs/PORT3C_RESTART_READINESS_MATRIX.md`, `docs/CODEX_INDEPENDENT_RESTART_REVIEW.md`).
+- **Tri-Agent Unified Consensus**: Claude Code (PORT-3A/3B), Gemini (PORT-3C), Codex (`CODEX_INDEPENDENT_RESTART_REVIEW.md`), and PR #3 reviewer agree: warm restart on physical hardware remains **NOT_PROVEN_SAFE / STRICT NO-GO**.
+- **Precondition & Dependency Consolidation**: Unified 20 critical restart preconditions (P01–P20) across CPU state, memory/MPU, task scheduler, SD host, interrupts, and observability into a single master dependency matrix. Separated existence of ROM code from physical hardware readiness (P11, P12, P13, P16, P17, P18, P20 marked unresolved blockers).
+- **Evidence Separation (ROM Facts vs Silicon Unknowns)**: Strictly separated ROM-proven facts (exact instructions, addresses, BSS bounds, context switch CPSR `0x000000F3`, SD1stInit conditional call chain) from inferred hardware behavior (controller register response, SD card UHS-I state response to CMD0).
+- **Temporal Hazard Window Traced**: Post-restart execution traced to the earliest CPU interrupt unmask at `0xFC267BF2` (initial bootstrap task wrapper). Documented initialization confirms tick `0x1B` registration in zeroed handler table `0x0003F4F4`, while complete handler-table inventory at earliest dispatch is PLAUSIBLE (Codex E06) but not independently established. If any peripheral interrupt enabled during first boot asserts before its driver re-registers, DryOS enters `DRYOS PANIC: Illegal inter` (`0xFC084BBC: b .`).
+- **Audit Contradiction Reconciliation**: Formally reconciled 10 discrepancies (C01–C10) across prior audits and agent reviews (SD1stInit conditional path; bootstrap task attribution; unmask instruction `0xFC267BF2`; P14/P16 blocker classification; retraction of classifier-blocked enumeration; proprietary `0xD401xxxx` controller vs ARM GIC; SD card `TRAN` state as plausible hypothesis; candidate vs prototype artifacts; witness address divergence; witness Stage 3 pre-branch placement).
+- **Evidence Boundary & Blocker Ranking**: Categorized analytical questions into offline ROM-solvable vs requiring external silicon docs or hardware observation. Ranked unresolved blockers: Rank 1 (Retained IRQ assertion in unmask window - CRITICAL/UNKNOWN), Rank 2 (SD host controller MMIO state across restart - HIGH/UNKNOWN), Rank 3 (SD card CMD0 response from `TRAN` state - HIGH/PLAUSIBLE to UNKNOWN), Rank 4 (Fresh downstream continuation evidence - HIGH/EVIDENCE BLOCKER/UNKNOWN), Rank 5 (Cold-only boot init skipped - MEDIUM/UNKNOWN).
+- **Retraction of PORT-3D & Authorized Next Milestone**: Formally retracted the proposed pre-DISKBOOT driver IRQ caller enumeration (PORT-3D) due to safety classifier boundary and invalid coverage premise. Authorized next milestone: applicability review of external vetted controller documentation for `0xD401xxxx` register semantics.
+- **Hardware Readiness**: **STRICT NO-GO**. Zero physical camera, flashing, or SD operations.
+
+Exact next command: `cat docs/PORT3C_RESTART_READINESS_MATRIX.md`.
+
 CHDK-PORT-1G.2: Dynamic RAM Witness Address Resolution: **`WITNESS_BUILD_DYNAMIC_COMPLETE`** (2026-10-25; `firmware/tools/witness_inspector_payload.S`, `firmware/tools/witness_inspector_metadata.json`, `tools/build_witness_inspector.py`, `tools/validate_witness_inspector.py`, `tests/test_validate_witness_inspector.py`).
 - **Dynamic Address Extraction**: Removed hardcoded `0x0035F780` dependency from offline build tooling. Symbol address for `boot_witness` is resolved dynamically from `candidate_main.elf` (or configured ELF) using the ARM toolchain (`arm-none-eabi-nm`).
 - **Dynamic Payload Assembly**: `witness_inspector_payload.S` loads `boot_witness` via `:lower16:BOOT_WITNESS_ADDR` and `:upper16:BOOT_WITNESS_ADDR`, passed via `-DBOOT_WITNESS_ADDR=0x...` from `build_witness_inspector.py`.
@@ -33,7 +53,7 @@ RESTART-SD-1: SD host/card across restart: **`PROTOTYPE_REMEDIATED_OFFLINE`** (2
   - Stock `StartDiskboot` evaluates Gate 1 (`(pc-5) >> 24 != 0`, ROM guard) and Gate 2 (`sub_fc05c4e0(0) & 1 == 0`, MMIO `0xD20B0538` bit 16).
   - If Gate 2 passes, it calls ARM veneer `0xFC05BBFE: blx 0xFC31B1F4` -> `0x010E17E1` (Thumb).
   - High RAM creator `0x010E17E0` guards on `[0x0000AC94] == 1`, sets `[0x0000AC94] = 0x81`, creates event flag `[0x0000AC98]`, and calls `CreateTask("SD1stInit", 0x18, 0, 0x010E17A5, 0)`.
-  - Guard byte `[0x0000AC94]` provides hardware duplicate task prevention: subsequent calls immediately exit via `pop {r3, r4, r5, pc}`.
+  - Guard byte `[0x0000AC94]` provides software duplicate task prevention: subsequent calls immediately exit via `pop {r3, r4, r5, pc}`.
   - When `SD1stInit` completes, it clears bit 0 (`[0xAC94] &= ~1`) and signals `[0xAC98]`.
   - Storage Mounter waiter `0xFC37A702 -> 0xFC31BB1C -> 0x010E181E` checks bit 7 (0x80) and waits for event flag `[0x0000AC98]` (10s timeout), synchronizing SD init.
   - In `task_Startup_my`, `StartDiskboot` was omitted to avoid an infinite reload loop, which unintentionally left `SD1stInit` unspawned.
