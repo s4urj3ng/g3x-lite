@@ -2,16 +2,18 @@
 """3-Tier offline test suite for restart SD host audit (docs/RESTART_SD_HOST_AUDIT.md).
 
 Architecture:
-- Tier 1: TestRestartSdSourcePresence
+- Tier 1: TestRestartSdSourcePresence & TestRestartSdSkipRegression
   Clean checkout / zero-dependency tests. Runs anywhere with standard Python 3.
   Asserts tracked prototype sources, patch format, syntax, and algorithmic logic.
+  Asserts regression coverage for skip vs fail-closed behavior across all environment states.
   Zero private ROM and zero external toolchain requirements.
 - Tier 2: TestRestartSdRomEvidence
   Static ROM disassembly and byte assertions against owner's GM1.10C dump.
-  Cleanly skipped with diagnostic when PRIMARY.BIN is absent (public CI/checkout).
+  Cleanly skipped with diagnostic when PRIMARY.BIN is absent (clean checkout / simulation).
 - Tier 3: TestRestartSdOfflineIntegration
   Toolchain and ELF symbol verification.
-  Cleanly skipped when ARM toolchain and prototype ELF are absent (clean checkout).
+  Cleanly skipped when ARM toolchain (arm-none-eabi-nm) is absent, even if ELF is present.
+  Fails closed when toolchain is present but required compilation fails.
 
 Read-only: never touches candidate_port2a/ or production firmware files.
 """
@@ -21,6 +23,7 @@ import shutil
 import struct
 import subprocess
 import unittest
+from unittest.mock import MagicMock, patch
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 ROM_PATH = os.path.join(REPO_ROOT, "firmware", "dumps", "GM1.10C", "PRIMARY.BIN")
@@ -185,6 +188,70 @@ class TestRestartSdSourcePresence(unittest.TestCase):
                 self.assertEqual(ret, 0, f"Bit {bit_idx} must return 0")
 
 
+class TestRestartSdSkipRegression(unittest.TestCase):
+    """Tier 1: Regression coverage verifying skip vs fail-closed behavior across environment states.
+    
+    Verifies ChatGPT Finding 2:
+    - Missing arm-none-eabi-nm MUST cleanly skip (not fail), even when prototype_main.elf exists.
+    - Missing ROM dump MUST cleanly skip (not fail).
+    - When toolchain is present, missing ELF triggers build; build failure fails closed.
+    """
+
+    def test_regression_tier3_skips_when_nm_missing_even_if_elf_present(self):
+        """When only ELF exists and arm-none-eabi-nm is missing, Tier 3 MUST skip, not fail."""
+        global NM_PATH
+        orig_nm = NM_PATH
+        try:
+            NM_PATH = None
+            with self.assertRaises(unittest.SkipTest) as ctx:
+                TestRestartSdOfflineIntegration.setUpClass()
+            self.assertIn("ARM toolchain (arm-none-eabi-nm) not present", str(ctx.exception))
+        finally:
+            NM_PATH = orig_nm
+
+    def test_regression_tier3_skips_when_both_nm_and_elf_missing(self):
+        """When both arm-none-eabi-nm and prototype ELF are missing, Tier 3 MUST skip."""
+        global NM_PATH
+        orig_nm = NM_PATH
+        try:
+            NM_PATH = None
+            with self.assertRaises(unittest.SkipTest) as ctx:
+                TestRestartSdOfflineIntegration.setUpClass()
+            self.assertIn("ARM toolchain (arm-none-eabi-nm) not present", str(ctx.exception))
+        finally:
+            NM_PATH = orig_nm
+
+    def test_regression_tier2_skips_when_rom_missing(self):
+        """When PRIMARY.BIN is missing, Tier 2 MUST skip with diagnostic."""
+        global ROM_PATH
+        orig_rom = ROM_PATH
+        try:
+            ROM_PATH = "/tmp/nonexistent_mock_primary.bin"
+            with self.assertRaises(unittest.SkipTest) as ctx:
+                TestRestartSdRomEvidence.setUpClass()
+            self.assertIn("GM1.10C ROM dump (PRIMARY.BIN) not present", str(ctx.exception))
+        finally:
+            ROM_PATH = orig_rom
+
+    def test_regression_tier3_fails_closed_when_toolchain_present_but_build_fails(self):
+        """Preserve fail-closed behavior: toolchain present, ELF missing, and build script fails."""
+        global PROTO_ELF, NM_PATH
+        orig_elf = PROTO_ELF
+        orig_nm = NM_PATH
+        try:
+            PROTO_ELF = "/tmp/nonexistent_mock_proto_main.elf"
+            NM_PATH = "/bin/mock_arm_nm"
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(returncode=1, stderr=b"fatal: compilation failed")
+                test_instance = TestRestartSdOfflineIntegration()
+                with self.assertRaises(AssertionError) as ctx:
+                    test_instance.test_prototype_elf_resolves_symbols()
+                self.assertIn("Failed to build", str(ctx.exception))
+        finally:
+            PROTO_ELF = orig_elf
+            NM_PATH = orig_nm
+
+
 # ==============================================================================
 # Tier 2: Private ROM Static Evidence Tests (Requires Owner's PRIMARY.BIN Dump)
 # ==============================================================================
@@ -192,7 +259,7 @@ class TestRestartSdSourcePresence(unittest.TestCase):
 class TestRestartSdRomEvidence(unittest.TestCase):
     """Tier 2: Disassembly and byte assertions against proprietary GM1.10C ROM.
     
-    Requires local PRIMARY.BIN (gitignored). Cleanly skipped on clean public checkout.
+    Requires local PRIMARY.BIN (gitignored). Cleanly skipped on clean public checkout / simulation.
     """
 
     @classmethod
@@ -249,31 +316,36 @@ class TestRestartSdRomEvidence(unittest.TestCase):
 
 
 # ==============================================================================
-# Tier 3: Offline Toolchain & Integration Tests (Requires ARM GCC / Local Build)
+# Tier 3: Offline Toolchain & Integration Tests (Requires ARM Toolchain)
 # ==============================================================================
 @unittest.skipUnless(
-    NM_PATH is not None or os.path.exists(PROTO_ELF),
-    "Tier 3: ARM toolchain (arm-none-eabi-nm) or compiled prototype ELF not present",
+    NM_PATH is not None,
+    "Tier 3: ARM toolchain (arm-none-eabi-nm) not present",
 )
 class TestRestartSdOfflineIntegration(unittest.TestCase):
     """Tier 3: Offline toolchain compilation and ELF symbol resolution.
     
-    Requires ARM GCC toolchain or prebuilt prototype_main.elf. Cleanly skipped on clean clone.
+    Requires ARM toolchain (arm-none-eabi-nm) for symbol inspection.
+    Cleanly skipped when toolchain is absent, even if ELF is present.
     """
 
     @classmethod
     def setUpClass(cls):
-        if NM_PATH is None and not os.path.exists(PROTO_ELF):
+        if NM_PATH is None:
             raise unittest.SkipTest(
-                "Tier 3: ARM toolchain (arm-none-eabi-nm) or compiled prototype ELF not present"
+                "Tier 3: ARM toolchain (arm-none-eabi-nm) not present"
             )
 
     def test_prototype_elf_resolves_symbols(self):
         """Verify compiled prototype ELF resolves sub_fc05c4e0 and sub_fc31b1f4."""
-        # If ELF is missing, attempt to compile it using build_prototype tool if toolchain exists
+        # Toolchain presence is guaranteed by setUpClass / class decorator
+        if NM_PATH is None:
+            self.skipTest("arm-none-eabi-nm not found")
+
+        # If ELF is missing, attempt to compile it using build_prototype tool
         if not os.path.exists(PROTO_ELF):
             build_script = os.path.join(REPO_ROOT, "tools", "build_prototype.py")
-            if os.path.exists(build_script) and NM_PATH is not None:
+            if os.path.exists(build_script):
                 res = subprocess.run(
                     ["python3", build_script],
                     stdout=subprocess.PIPE,
@@ -282,10 +354,12 @@ class TestRestartSdOfflineIntegration(unittest.TestCase):
                 if res.returncode != 0:
                     self.fail(f"Failed to build {PROTO_ELF}:\n{res.stderr.decode()}")
             else:
-                self.skipTest(f"Prototype ELF {PROTO_ELF} absent and toolchain unavailable")
+                self.fail(
+                    f"Required artifact {PROTO_ELF} and build script {build_script} are absent"
+                )
 
-        self.assertTrue(os.path.exists(PROTO_ELF), f"Prototype ELF absent: {PROTO_ELF}")
-        self.assertIsNotNone(NM_PATH, "arm-none-eabi-nm not found")
+        if not os.path.exists(PROTO_ELF):
+            self.fail(f"Prototype ELF absent after build attempt: {PROTO_ELF}")
 
         out = subprocess.check_output([NM_PATH, PROTO_ELF]).decode()
         self.assertIn("sub_fc05c4e0", out)

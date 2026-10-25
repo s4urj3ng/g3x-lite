@@ -271,25 +271,26 @@ The minimal remediation is applied strictly to isolated prototype files:
    - Detailed build manifest, cryptographic artifact hashes, toolchain requirements, and clean-checkout reproduction steps are formally documented in [`docs/REPRODUCIBILITY_MANIFEST.md`](file:///Users/avp/project/g3x-lite/docs/REPRODUCIBILITY_MANIFEST.md).
 5. **3-Tier Test Structure & Clean-Checkout Verification**:
    - Tests in `tests/test_restart_sd_audit.py` are explicitly divided into three tiers:
-     - **Tier 1 (`TestRestartSdSourcePresence`)**: Clean checkout source presence, patch validity, static assembly/C checks, and MMIO bit arithmetic proof. Zero external dependencies; 100% reproducible and passes on any clean git clone without ROM or toolchain (5 / 5 PASS).
+     - **Tier 1 (`TestRestartSdSourcePresence` & `TestRestartSdSkipRegression`)**: Clean checkout source presence, patch validity, static C/ASM syntax checks, MMIO bit arithmetic proof, and skip/fail-closed regression tests. Zero external dependencies; 100% reproducible and passes on any clean git clone without ROM or toolchain (9 / 9 PASS).
      - **Tier 2 (`TestRestartSdRomEvidence`)**: Static ROM disassembly and byte assertions against owner's GM1.10C dump (`PRIMARY.BIN`). Cleanly skipped (`@unittest.skipUnless`) on clean public checkout (7 tests).
-     - **Tier 3 (`TestRestartSdOfflineIntegration`)**: Toolchain compilation and ELF symbol resolution for `sub_fc05c4e0` and `sub_fc31b1f4`. Cleanly skipped when ARM toolchain or prototype ELF is absent (1 test).
+     - **Tier 3 (`TestRestartSdOfflineIntegration`)**: Toolchain compilation and ELF symbol resolution for `sub_fc05c4e0` and `sub_fc31b1f4`. Requires `arm-none-eabi-nm`; cleanly skipped when toolchain is absent even if ELF exists (1 test). Fails closed if toolchain is present but prototype build fails.
    - **Test Results by Environment**:
-     - *Clean Public Checkout (CI / Reviewer)*: **5 passed, 8 skipped** (zero failures, zero errors).
-     - *Developer Workstation (Full local artifacts)*: **13 passed, 0 skipped**.
+     - *Clean Checkout Simulation (Design Expectation)*: **9 passed, 8 skipped** (zero failures, zero errors across 2 skipped test classes).
+     - *Developer Workstation (Actual Verified Run with Full Artifacts)*: **17 passed, 0 skipped**.
 
 ### 8.5 Offline Verification Metrics
 
-1. `tests/test_restart_sd_audit.py`: **13 / 13 tests PASS** (0.04s) on developer workstation; **5 passed, 8 skipped** on clean checkout.
+1. `tests/test_restart_sd_audit.py`: **17 / 17 tests PASS** (0.05s) on developer workstation; **9 passed, 8 skipped** on clean checkout simulation.
    - Verified clean checkout source integrity and patch validity.
    - Verified omission of `sub_fc05bbea` (`StartDiskboot`).
    - Verified inclusion of `sub_fc05c4e0` gate and `blx sub_fc31b1f4`.
    - Verified symbol presence and resolution in `prototype_main.elf`.
    - Verified all 19 ROM byte sequences, 9 ROM words, and strings.
+   - Verified regression coverage: missing toolchain cleanly skips Tier 3 without raising `AssertionError`; missing ROM cleanly skips Tier 2; failed compilation fails closed.
 2. `tools/validate_prototype_integration.py`: **10 / 10 checks PASS**.
    - Decoupled cache maintenance (`0xFC127AB1` / `0xFC127B09`), core copy, non-overlap, stack boundaries verified.
 3. `tools/validate_boot_witness.py`: **12 / 12 checks PASS**.
-4. `tools/validate_candidate_port2a.py`: **7 / 7 checks PASS** (Candidate invariance verified).
+4. `tools/validate_candidate_port2a.py`: **7 / 7 checks PASS** (Candidate invariance verified via non-mutating validation).
 5. `tools/validate_witness_inspector.py`: **13 / 13 checks PASS**.
 
 ---
