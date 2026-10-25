@@ -5,14 +5,14 @@ CHDK-PORT-1G.2: Dynamic RAM Witness Address Resolution: **`WITNESS_BUILD_DYNAMIC
 - **Dynamic Address Extraction**: Removed hardcoded `0x0035F780` dependency from offline build tooling. Symbol address for `boot_witness` is resolved dynamically from `candidate_main.elf` (or configured ELF) using the ARM toolchain (`arm-none-eabi-nm`).
 - **Dynamic Payload Assembly**: `witness_inspector_payload.S` loads `boot_witness` via `:lower16:BOOT_WITNESS_ADDR` and `:upper16:BOOT_WITNESS_ADDR`, passed via `-DBOOT_WITNESS_ADDR=0x...` from `build_witness_inspector.py`.
 - **Address Metadata Generation & 3-Way Consistency**: `build_witness_inspector.py` emits `witness_inspector_metadata.json`. `validate_witness_inspector.py` enforces strict 3-way consistency between ELF symbol, inspector binary, and address metadata, rejecting any mismatch.
-- **Review Remediation (Finding 1-4)**:
-  1. *Raw .bin MOVW/MOVT opcode decoding*: Direct opcode extraction from raw binary bytes proves `r7` loading matches symbol, and verifies `.text == .bin` bit-for-bit with negative raw-binary mutation test.
-  2. *Fail-closed policy*: Eliminated silent fallback from `candidate_main.elf` to prototype ELFs; validator strictly requires candidate ELF and metadata.
-  3. *Elimination of address pinning*: General unit tests dynamically derive expected address from active candidate ELF rather than hardcoding `0x0035F780`.
-  4. *PR scope clarity*: Verified no proprietary code or firmware binaries are committed.
+- **Review Remediation (Findings 1-4 Complete)**:
+  1. *Raw .bin MOVW/MOVT opcode decoding & Bit-for-bit Text Verification (Finding 1)*: Direct opcode extraction from raw binary bytes proves `r7` loading matches symbol, and verifies `.text == .bin` bit-for-bit. Added negative tests for raw-binary bit flips, binary-only code corruption, binary-only string corruption, truncation, and extension.
+  2. *Fail-closed policy (Finding 2)*: Eliminated silent fallback from `candidate_main.elf` to prototype ELFs. Validator and builder strictly fail closed on missing candidate ELF, missing metadata, missing payload binary, missing object, missing script, or missing assembly source. Added negative tests covering all missing artifact modes.
+  3. *Elimination of address pinning (Finding 3)*: General unit tests and mismatch tests dynamically derive expected and mismatched addresses from active candidate ELF or simulated ELFs rather than asserting hardcoded address literals.
+  4. *PR scope clarification (Finding 4)*: Delineated baseline inspector additions (`witness_inspector_payload.S`, `witness_inspector_gm110c.m`, 444 B binary `witness_inspector_payload.bin`) from dynamic resolution tooling (`build_witness_inspector.py`, `validate_witness_inspector.py`, `witness_inspector_metadata.json`, `test_validate_witness_inspector.py`). Verified `.gitignore` prevents intermediate `*.o` and accidental firmware exposure.
 - **Linker Output & Code Movement Verification (Scope 5 & 6)**: Implemented tests proving that adding code within an aligned block does not necessarily move `.data` (verified via linker output `NM`), while layout changes do shift `.data`. Proved end-to-end dynamic resolution and cross-mismatch rejection under simulated address change.
 - **Candidate & Production Invariance**: `candidate_port2a/` artifacts and canonical production boot files (`boot.c`, `main.c`, `DISKBOOT.BIN`) remain 100% byte-identical and unmodified.
-- **Tests**: Full test suite **264 / 264 tests PASS** (7.78s). Hardware readiness remains **STRICT NO-GO**.
+- **Tests**: Witness inspector unit tests **13 / 13 tests PASS** (1.04s); repository tracked unit tests **33 / 33 tests PASS** (1.15s). Hardware readiness remains **STRICT NO-GO**.
 
 Exact next command: `python3 -m unittest tests.test_validate_witness_inspector -v`.
 

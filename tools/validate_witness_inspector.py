@@ -249,9 +249,11 @@ def emulate_inspector_parse(buf, expected_nonce=0):
         return SENTINEL_INVALID, "WITNESS_INVALID", "INVALID / CORRUPT", 3, 3
 
 
-def validate_loader_script(loader_script_path, bin_size):
+def validate_loader_script(loader_script_path, bin_size, fail_closed=True):
     print(f"Validating {os.path.basename(loader_script_path)}:")
     if not os.path.exists(loader_script_path):
+        if fail_closed:
+            raise FileNotFoundError(f"Loader script not found: {loader_script_path}")
         print(f"[FAIL] Missing {loader_script_path}")
         return False
     with open(loader_script_path, "r", encoding="utf-8") as f:
@@ -373,6 +375,11 @@ def validate_payload_binary(
                     "Fail-closed policy rejects missing candidate artifacts."
                 )
             elf_path = DEFAULT_CANDIDATE_ELF
+    elif fail_closed and not os.path.exists(elf_path):
+        raise FileNotFoundError(
+            f"Candidate ELF not found: {elf_path}. "
+            "Fail-closed policy rejects missing candidate artifacts."
+        )
 
     if metadata_path is None:
         if fail_closed:
@@ -382,6 +389,11 @@ def validate_payload_binary(
                     "Fail-closed policy rejects missing address metadata."
                 )
             metadata_path = METADATA_JSON
+    elif fail_closed and not os.path.exists(metadata_path):
+        raise FileNotFoundError(
+            f"Address metadata not found: {metadata_path}. "
+            "Fail-closed policy rejects missing address metadata."
+        )
 
     elf_witness_addr = None
     if elf_path is not None:
@@ -406,6 +418,12 @@ def validate_payload_binary(
                 f"Mismatched ELF and metadata: ELF has 0x{elf_witness_addr:08X}, "
                 f"metadata has 0x{meta_witness_addr:08X}!"
             )
+
+    if fail_closed:
+        if elf_witness_addr is None:
+            raise ValueError("Candidate ELF validation required under fail-closed policy (elf_witness_addr is None)")
+        if meta_witness_addr is None:
+            raise ValueError("Address metadata validation required under fail-closed policy (meta_witness_addr is None)")
 
     if expected_witness_addr is not None:
         assert raw_bin_addr == expected_witness_addr, (
@@ -519,7 +537,10 @@ def validate_all(
     )
     if not bin_size:
         return False
-    ok = validate_loader_script(loader_script, bin_size) and run_inspector_parser_tests()
+    ok = (
+        validate_loader_script(loader_script, bin_size, fail_closed=fail_closed)
+        and run_inspector_parser_tests()
+    )
     return ok
 
 

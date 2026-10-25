@@ -83,9 +83,43 @@ class TestG3XWitnessInspector(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             bwi.build_witness_inspector(elf_path=non_existent_elf)
 
+        with self.assertRaises(FileNotFoundError):
+            bwi.extract_witness_addr_from_elf(non_existent_elf)
+
+        with self.assertRaises(FileNotFoundError):
+            vwi.extract_witness_addr_from_elf(non_existent_elf)
+
+        with self.assertRaises(FileNotFoundError):
+            vwi.validate_payload_binary(elf_path=non_existent_elf, fail_closed=True)
+
         non_existent_meta = os.path.join(REPO_ROOT, "firmware", "tools", "does_not_exist.json")
         with self.assertRaises(FileNotFoundError):
             vwi.validate_payload_binary(metadata_path=non_existent_meta, fail_closed=True)
+
+        with self.assertRaises(FileNotFoundError):
+            vwi.read_address_metadata(non_existent_meta)
+
+        # Missing payload binary and ELF / object files fail closed
+        non_existent_bin = os.path.join(REPO_ROOT, "firmware", "tools", "does_not_exist.bin")
+        non_existent_o = os.path.join(REPO_ROOT, "firmware", "tools", "does_not_exist.o")
+        with self.assertRaises(FileNotFoundError):
+            vwi.validate_payload_binary(payload_bin=non_existent_bin, fail_closed=True)
+        with self.assertRaises(FileNotFoundError):
+            vwi.validate_payload_binary(payload_elf=non_existent_o, fail_closed=True)
+        with self.assertRaises(FileNotFoundError):
+            vwi.verify_object_text_matches_binary(non_existent_o, vwi.PAYLOAD_BIN)
+        with self.assertRaises(FileNotFoundError):
+            vwi.verify_object_text_matches_binary(vwi.PAYLOAD_ELF, non_existent_bin)
+
+        # Missing loader script fails closed
+        non_existent_script = os.path.join(REPO_ROOT, "firmware", "tools", "does_not_exist.m")
+        with self.assertRaises(FileNotFoundError):
+            vwi.validate_loader_script(non_existent_script, bin_size=444, fail_closed=True)
+
+        # Missing build source fails closed
+        non_existent_s = os.path.join(REPO_ROOT, "firmware", "tools", "does_not_exist.S")
+        with self.assertRaises(FileNotFoundError):
+            bwi.build_witness_inspector(payload_s=non_existent_s)
 
     def test_rejection_of_raw_binary_mutation(self):
         """Reject mutation of only .bin bytes, verifying opcode decode & text-matching integrity (Finding 1)."""
@@ -113,6 +147,100 @@ class TestG3XWitnessInspector(unittest.TestCase):
                     metadata_path=vwi.METADATA_JSON,
                 )
 
+    def test_rejection_of_binary_only_code_corruption(self):
+        """Reject mutation of binary code bytes where MOVW/MOVT address is unchanged (Finding 1)."""
+        expected_addr = bwi.extract_witness_addr_from_elf(CANDIDATE_MAIN_ELF)
+        with tempfile.TemporaryDirectory() as td:
+            mut_bin = os.path.join(td, "code_corrupt_payload.bin")
+            with open(vwi.PAYLOAD_BIN, "rb") as f:
+                data = bytearray(f.read())
+
+            # Corrupt byte 0x00 (push instruction) - address at 0x0A/0x0E is completely untouched
+            data[0x00] ^= 0x5A
+            with open(mut_bin, "w+b") as f:
+                f.write(data)
+
+            # 1. Decoded witness address from raw .bin remains completely identical
+            raw_addr = vwi.extract_witness_addr_from_binary_bytes(mut_bin)
+            self.assertEqual(raw_addr, expected_addr)
+
+            # 2. But object .text == raw .bin bit-for-bit check strictly catches corruption
+            with self.assertRaises(AssertionError) as ctx:
+                vwi.verify_object_text_matches_binary(vwi.PAYLOAD_ELF, mut_bin)
+            self.assertIn("does not match raw binary", str(ctx.exception))
+
+            # 3. Overall validation strictly rejects corrupted binary
+            with self.assertRaises(AssertionError):
+                vwi.validate_payload_binary(
+                    payload_bin=mut_bin,
+                    payload_elf=vwi.PAYLOAD_ELF,
+                    elf_path=CANDIDATE_MAIN_ELF,
+                    metadata_path=vwi.METADATA_JSON,
+                )
+
+    def test_rejection_of_binary_only_string_corruption(self):
+        """Reject corruption in binary string literals where MOVW/MOVT address is unchanged (Finding 1)."""
+        expected_addr = bwi.extract_witness_addr_from_elf(CANDIDATE_MAIN_ELF)
+        with tempfile.TemporaryDirectory() as td:
+            mut_bin = os.path.join(td, "string_corrupt_payload.bin")
+            with open(vwi.PAYLOAD_BIN, "rb") as f:
+                data = bytearray(f.read())
+
+            # Find and corrupt a byte in 'FRESHNESS_UNVERIFIED' string literal
+            str_off = data.find(b"FRESHNESS_UNVERIFIED")
+            self.assertGreaterEqual(str_off, 0)
+            data[str_off] ^= 0x20  # flip case
+            with open(mut_bin, "w+b") as f:
+                f.write(data)
+
+            # Decoded address is unaffected
+            raw_addr = vwi.extract_witness_addr_from_binary_bytes(mut_bin)
+            self.assertEqual(raw_addr, expected_addr)
+
+            # Bit-for-bit text check and string checks reject corruption
+            with self.assertRaises(AssertionError):
+                vwi.verify_object_text_matches_binary(vwi.PAYLOAD_ELF, mut_bin)
+
+            with self.assertRaises(AssertionError):
+                vwi.validate_payload_binary(
+                    payload_bin=mut_bin,
+                    payload_elf=vwi.PAYLOAD_ELF,
+                    elf_path=CANDIDATE_MAIN_ELF,
+                    metadata_path=vwi.METADATA_JSON,
+                )
+
+    def test_rejection_of_binary_truncation_and_extension(self):
+        """Reject binary size mutations: short/truncated files and oversized extensions (Finding 1)."""
+        with tempfile.TemporaryDirectory() as td:
+            with open(vwi.PAYLOAD_BIN, "rb") as f:
+                data = f.read()
+
+            # Truncated by 4 bytes (440 bytes instead of 444 bytes)
+            trunc_bin = os.path.join(td, "trunc_payload.bin")
+            with open(trunc_bin, "wb") as f:
+                f.write(data[:-4])
+
+            with self.assertRaises(AssertionError):
+                vwi.validate_payload_binary(
+                    payload_bin=trunc_bin,
+                    payload_elf=vwi.PAYLOAD_ELF,
+                    elf_path=CANDIDATE_MAIN_ELF,
+                    metadata_path=vwi.METADATA_JSON,
+                )
+
+            # Extended by 4 bytes (448 bytes)
+            ext_bin = os.path.join(td, "ext_payload.bin")
+            with open(ext_bin, "wb") as f:
+                f.write(data + b"\x00\x00\x00\x00")
+
+            with self.assertRaises(AssertionError):
+                vwi.validate_payload_binary(
+                    payload_bin=ext_bin,
+                    payload_elf=vwi.PAYLOAD_ELF,
+                    elf_path=CANDIDATE_MAIN_ELF,
+                    metadata_path=vwi.METADATA_JSON,
+                )
+
     def test_rejection_of_mismatched_elf(self):
         """Reject mismatched ELF where boot_witness address differs from inspector binary."""
         expected_addr = bwi.extract_witness_addr_from_elf(CANDIDATE_MAIN_ELF)
@@ -135,7 +263,9 @@ class TestG3XWitnessInspector(unittest.TestCase):
             self.assertIn("Mismatched ELF symbol", str(ctx.exception))
 
     def test_rejection_of_mismatched_metadata(self):
-        """Reject mismatched address metadata where address differs from inspector binary."""
+        """Reject mismatched address metadata where address differs from inspector binary (Finding 3)."""
+        expected_addr = bwi.extract_witness_addr_from_elf(CANDIDATE_MAIN_ELF)
+        wrong_addr = (expected_addr + 0x1000) & 0xFFFFFFFF
         with tempfile.TemporaryDirectory() as td:
             bad_meta = os.path.join(td, "bad_metadata.json")
             with open(bad_meta, "w") as f:
@@ -143,8 +273,8 @@ class TestG3XWitnessInspector(unittest.TestCase):
                     {
                         "target": "Canon PowerShot G3 X (GM1.10C)",
                         "symbol": "boot_witness",
-                        "witness_address": "0x0035F990",
-                        "witness_address_int": 0x0035F990,
+                        "witness_address": f"0x{wrong_addr:08X}",
+                        "witness_address_int": wrong_addr,
                         "elf_file": "candidate_port2a/candidate_main.elf",
                         "payload_bin": "firmware/tools/witness_inspector_payload.bin",
                         "payload_size": 444,
@@ -156,7 +286,9 @@ class TestG3XWitnessInspector(unittest.TestCase):
             self.assertIn("Mismatched address metadata", str(ctx.exception))
 
     def test_rejection_of_mismatched_binary(self):
-        """Reject inspector binary that loads an address different from ELF/metadata."""
+        """Reject inspector binary that loads an address different from ELF/metadata (Finding 3)."""
+        expected_addr = bwi.extract_witness_addr_from_elf(CANDIDATE_MAIN_ELF)
+        wrong_addr = (expected_addr + 0x1000) & 0xFFFFFFFF
         with tempfile.TemporaryDirectory() as td:
             bad_s = os.path.join(td, "bad.S")
             with open(vwi.PAYLOAD_ELF.replace(".o", ".S")) as f:
@@ -166,9 +298,9 @@ class TestG3XWitnessInspector(unittest.TestCase):
 
             bad_o = os.path.join(td, "bad.o")
             bad_bin = os.path.join(td, "bad.bin")
-            # Assemble with wrong address 0x00359990
+            # Assemble with dynamically derived mismatched address
             subprocess.run(
-                [CC, "-mcpu=cortex-r4", "-mthumb", "-DBOOT_WITNESS_ADDR=0x00359990", "-c", bad_s, "-o", bad_o],
+                [CC, "-mcpu=cortex-r4", "-mthumb", f"-DBOOT_WITNESS_ADDR=0x{wrong_addr:08X}", "-c", bad_s, "-o", bad_o],
                 check=True,
             )
             subprocess.run([bwi.OBJCOPY, "-O", "binary", bad_o, bad_bin], check=True)

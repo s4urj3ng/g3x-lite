@@ -156,6 +156,11 @@ def build_witness_inspector(
     if not os.path.exists(cc) or not os.path.exists(objcopy) or not os.path.exists(nm):
         raise RuntimeError("Required ARM toolchain binaries (gcc, objcopy, nm) not found")
 
+    if not os.path.exists(payload_s):
+        raise FileNotFoundError(f"Payload assembly source not found: {payload_s}")
+    if loader_script is not None and not os.path.exists(loader_script):
+        raise FileNotFoundError(f"Loader script not found: {loader_script}")
+
     if elf_path is None:
         if not os.path.exists(DEFAULT_CANDIDATE_ELF):
             raise FileNotFoundError(
