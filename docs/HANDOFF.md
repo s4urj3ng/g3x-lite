@@ -19,12 +19,32 @@ Updated: 2026-10-25
   python3 -m unittest tests.test_validate_witness_inspector -v
   ```
 
-## RESTART-SD-1: SD host/card across restart: UNVERIFIED / BLOCKED (Claude Code, 2026-10-25)
+## RESTART-SD-1: SD host/card across restart: PROTOTYPE_REMEDIATED_OFFLINE (Gemini, 2026-10-25)
 
-- **Doc:** `docs/RESTART_SD_HOST_AUDIT.md`. **Tests:** `tests/test_restart_sd_audit.py`.
-- **Verified:** `StartDiskboot` closes `DISKBOOT.BIN` but does not unmount or power down SD before the jump. The SD driver code and state are restored and zeroed by `boot()`. The host is at `0xC8060000`. A CMD0 routine exists at `0x010EE7D2`.
-- **Unknown:** whether the continuation actually reaches CMD0, and whether any host reset or power cycle occurs.
-- **Code:** no executable change.
+- **Doc:** `docs/RESTART_SD_HOST_AUDIT.md`. **Tests:** `tests/test_restart_sd_audit.py` (9/9 PASS).
+- **Verified Call Chain & Gates:**
+  - Stock `task_Startup` calls `StartDiskboot` (`0xFC05B90E: bl 0xFC05BBEA`).
+  - `StartDiskboot` evaluates Gate 1 (`(pc-5) >> 24 != 0`, ROM guard) and Gate 2 (`sub_fc05c4e0(0) & 1 == 0`, MMIO `0xD20B0538` bit 16).
+  - If Gate 2 passes, it calls ARM veneer `0xFC05BBFE: blx 0xFC31B1F4`, jumping to `0x010E17E1` (Thumb).
+  - High RAM creator `0x010E17E0` guards on `[0x0000AC94] == 1`, sets `[0x0000AC94] = 0x81`, creates event flag `[0x0000AC98]`, and spawns `CreateTask("SD1stInit", 0x18, 0, 0x010E17A5, 0)`.
+  - Guard byte `[0x0000AC94]` provides strict duplicate task prevention: subsequent invocations immediately exit via `pop {r3, r4, r5, pc}`.
+  - When `SD1stInit` completes, it clears bit 0 (`[0xAC94] &= ~1`) and signals `[0xAC98]`.
+  - Storage Mounter waiter `0xFC37A702 -> 0xFC31BB1C -> 0x010E181E` checks bit 7 (0x80) and waits for event flag `[0x0000AC98]` (10s timeout), synchronizing SD init.
+- **Isolated Prototype Remediation:**
+  - In `chdk-port/platform/g3x/sub/110c/stubs_prototype.S`: added `STUB(fc05c4e0)` and `STUB2(fc31b1f4)`.
+  - In `chdk-port/platform/g3x/sub/110c/boot_prototype.c` (`task_Startup_my`): replicated the stock Gate 2 check and called `blx sub_fc31b1f4` at the omitted `StartDiskboot` slot.
+  - Precedent verified in sister DIGIC 6 DryOS 57 reference ports: G5 X (`boot.c` L450: `bl sub_010e1746`) and G7 X (`boot.c` L352: `bl sub_010e638b`).
+- **Witness Address & Invariants:**
+  - Adding 14 bytes to prototype `.text` moved `prototype_main.elf` `.data` by +32 bytes (16-byte aligned): `boot_witness` moved from `0x0035F780` to `0x0035F7A0` (type `D`).
+  - Dynamic witness inspector (`build_witness_inspector.py` / `validate_witness_inspector.py`) automatically extracted, assembled, and verified 3-way consistency for `prototype_main.elf` @ `0x0035F7A0`.
+  - Production files (`chdk-port/platform/g3x/sub/110c/boot.c`, `loader/g3x/main.c`, `bin/DISKBOOT.BIN`) and candidate artifacts in `candidate_port2a/` remain 100% byte-identical and unaltered.
+- **Test Metrics:**
+  - `tests.test_restart_sd_audit`: 9/9 PASS.
+  - `tools/validate_prototype_integration.py`: 10/10 PASS.
+  - `tools/validate_boot_witness.py`: 12/12 PASS.
+  - `tools/validate_candidate_port2a.py`: 7/7 PASS.
+  - `tools/validate_witness_inspector.py`: 13/13 PASS.
+  - Hardware status: **STRICT NO-GO**.
 - **Exact next command:**
   ```sh
   python3 -m unittest tests.test_restart_sd_audit -v
