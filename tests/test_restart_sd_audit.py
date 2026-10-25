@@ -1,11 +1,25 @@
 #!/usr/bin/env python3
-"""Offline ROM pins for the restart SD host audit (docs/RESTART_SD_HOST_AUDIT.md).
+"""3-Tier offline test suite for restart SD host audit (docs/RESTART_SD_HOST_AUDIT.md).
 
-Read-only: never builds, never touches candidate_port2a/ or production files.
+Architecture:
+- Tier 1: TestRestartSdSourcePresence
+  Clean checkout / zero-dependency tests. Runs anywhere with standard Python 3.
+  Asserts tracked prototype sources, patch format, syntax, and algorithmic logic.
+  Zero private ROM and zero external toolchain requirements.
+- Tier 2: TestRestartSdRomEvidence
+  Static ROM disassembly and byte assertions against owner's GM1.10C dump.
+  Cleanly skipped with diagnostic when PRIMARY.BIN is absent (public CI/checkout).
+- Tier 3: TestRestartSdOfflineIntegration
+  Toolchain and ELF symbol verification.
+  Cleanly skipped when ARM toolchain and prototype ELF are absent (clean checkout).
+
+Read-only: never touches candidate_port2a/ or production firmware files.
 """
 
 import os
+import shutil
 import struct
+import subprocess
 import unittest
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -32,6 +46,14 @@ PATCH_FILE = os.path.join(
 PROTO_ELF = os.path.join(
     REPO_ROOT, "chdk-port", "platform", "g3x", "sub", "110c", "prototype_main.elf"
 )
+
+# Toolchain detection (local tree or system path)
+LOCAL_TOOLCHAIN_BIN = os.path.join(
+    REPO_ROOT, "toolchains", "gcc-arm-none-eabi-5_4-2016q3", "bin"
+)
+LOCAL_NM = os.path.join(LOCAL_TOOLCHAIN_BIN, "arm-none-eabi-nm")
+SYSTEM_NM = shutil.which("arm-none-eabi-nm")
+NM_PATH = LOCAL_NM if os.path.exists(LOCAL_NM) else SYSTEM_NM
 
 ROM_BYTES = [
     (0xFC05BC12, "1ff331f9", "StartDiskboot: bl 0xFC37AE78(0)"),
@@ -78,10 +100,105 @@ def _rom_offset(addr):
     raise ValueError(f"address 0x{addr:08X} not mapped to ROM")
 
 
-@unittest.skipUnless(os.path.exists(ROM_PATH), "GM1.10C ROM dump not present")
+# ==============================================================================
+# Tier 1: Clean Checkout / Zero-Dependency Tests (Runs Anywhere)
+# ==============================================================================
+class TestRestartSdSourcePresence(unittest.TestCase):
+    """Tier 1: Source presence, patch validity, and static code assertions.
+    
+    Requires ZERO external tools, ZERO ARM toolchain, and ZERO proprietary ROM dumps.
+    Always executes and must 100% PASS on any clean git clone.
+    """
+
+    def test_clean_checkout_source_integrity(self):
+        """Clean checkout reproducibility: fail closed if required prototype sources are absent."""
+        required_sources = [
+            ("boot_prototype.c", BOOT_PROTO_C),
+            ("stubs_prototype.S", PROTO_STUBS_S),
+            ("boot_witness.h", BOOT_WITNESS_H),
+            ("patch file", PATCH_FILE),
+        ]
+        for name, path in required_sources:
+            self.assertTrue(
+                os.path.exists(path),
+                f"FAIL: Clean checkout missing required {name} at {path}. "
+                f"Repository must track this file for independent reviewability.",
+            )
+
+    def test_clean_checkout_patch_validity(self):
+        """Validate standalone patch artifact header, pinned upstream commit, and diff contents."""
+        self.assertTrue(os.path.exists(PATCH_FILE), f"Missing patch file: {PATCH_FILE}")
+        with open(PATCH_FILE, "r") as f:
+            patch_text = f.read()
+        self.assertIn("21b9a14eb2043aeffdd2cb141081e7dcfe75f7e6", patch_text)
+        self.assertIn("https://github.com/01luna/CHDK.git", patch_text)
+        self.assertIn("platform/g3x/sub/110c/stubs_prototype.S", patch_text)
+        self.assertIn("platform/g3x/sub/110c/boot_prototype.c", patch_text)
+        self.assertIn("STUB2(fc31b1f4)", patch_text)
+        self.assertIn("blx     sub_fc31b1f4", patch_text)
+
+    def test_task_startup_my_omits_startdiskboot_and_calls_sd1stinit_veneer(self):
+        """Static analysis of boot_prototype.c: confirms StartDiskboot omitted and creator called."""
+        self.assertTrue(
+            os.path.exists(BOOT_PROTO_C),
+            f"Missing required prototype source: {BOOT_PROTO_C}",
+        )
+        with open(BOOT_PROTO_C) as f:
+            src = f.read()
+        body = src[src.index("void __attribute__((naked,noinline)) task_Startup_my(void)"):]
+        code = "\n".join(line.split("//", 1)[0] for line in body.splitlines()).lower()
+
+        # StartDiskboot must remain omitted to prevent infinite reload loop
+        self.assertNotIn("sub_fc05bbea", code)
+
+        # Gate check sub_fc05c4e0 and creator veneer sub_fc31b1f4 must be called
+        self.assertIn("sub_fc05c4e0", code)
+        self.assertIn("sub_fc31b1f4", code)
+        self.assertIn("blx     sub_fc31b1f4", code)
+
+    def test_prototype_stubs_include_sd1stinit_symbols(self):
+        """Static analysis of stubs_prototype.S: confirms gate and veneer stubs are defined."""
+        self.assertTrue(
+            os.path.exists(PROTO_STUBS_S),
+            f"Missing required prototype stubs: {PROTO_STUBS_S}",
+        )
+        with open(PROTO_STUBS_S) as f:
+            stubs_src = f.read()
+        self.assertIn("STUB(fc05c4e0)", stubs_src)
+        self.assertIn("STUB2(fc31b1f4)", stubs_src)
+
+    def test_gate_mmio_bit_arithmetic_semantics(self):
+        """Algorithmic proof: LSL #15 + BPL extracts Bit 16 (0-indexed) into sign bit N (bit 31).
+
+        Resolves conflicting Bit 16 vs Bit 17 claims mathematically:
+        - 0-indexed: Bit 16 (0x00010000).
+        - 1-indexed: 17th bit (clarifying why some descriptions label it 'bit 17').
+        """
+        for bit_idx in range(32):
+            val = 1 << bit_idx
+            shifted = (val << 15) & 0xFFFFFFFF
+            n_flag = 1 if (shifted & 0x80000000) else 0
+            ret = 1 if n_flag else 0
+            if bit_idx == 16:
+                self.assertEqual(ret, 1, "Bit 16 (0-indexed) MUST return 1")
+            else:
+                self.assertEqual(ret, 0, f"Bit {bit_idx} must return 0")
+
+
+# ==============================================================================
+# Tier 2: Private ROM Static Evidence Tests (Requires Owner's PRIMARY.BIN Dump)
+# ==============================================================================
+@unittest.skipUnless(os.path.exists(ROM_PATH), "Tier 2: GM1.10C ROM dump (PRIMARY.BIN) not present")
 class TestRestartSdRomEvidence(unittest.TestCase):
+    """Tier 2: Disassembly and byte assertions against proprietary GM1.10C ROM.
+    
+    Requires local PRIMARY.BIN (gitignored). Cleanly skipped on clean public checkout.
+    """
+
     @classmethod
     def setUpClass(cls):
+        if not os.path.exists(ROM_PATH):
+            raise unittest.SkipTest("Tier 2: GM1.10C ROM dump (PRIMARY.BIN) not present")
         with open(ROM_PATH, "rb") as f:
             cls.rom = f.read()
 
@@ -116,113 +233,61 @@ class TestRestartSdRomEvidence(unittest.TestCase):
     def test_driver_table_in_zeroed_bss(self):
         self.assertTrue(0x0003F4F4 <= 0x0026E8B0 < 0x003489B4)
 
-    def test_gate_mmio_bit_semantics_reconciliation(self):
-        """ROM evidence reconciliation: sub_fc05c4e0(0) tests MMIO 0xD20B0538 Bit 16 (0-indexed).
-
-        Resolves conflicting Bit 16 vs Bit 17 claims:
-        - 0xFC05C4E6: movw r0, #0x14E (offset 334 in table 0xD20B0000 -> MMIO 0xD20B0538)
-        - 0xFC0D73D6: lsls r0, r0, #15
-        - 0xFC0D73D8: bpl.n 0xFC0D73DE (branches to return 0 if N flag == 0)
-        - 0xFC0D73DA: movs r0, #1; bx lr (returns 1 if N flag == 1)
-
-        Arithmetic proof:
-        In a 32-bit word, bit k shifted left by 15 occupies bit (k + 15).
-        The sign/negative flag N is bit 31 of the result: k + 15 = 31 => k = 16.
-        - 0-indexed: strictly Bit 16 (value 0x00010000).
-        - 1-indexed: 17th bit (clarifying the source of the 'bit 17' claim).
+    def test_gate_mmio_bit_semantics_reconciliation_in_rom(self):
+        """Verify Gate 2 instructions directly from ROM bytes:
+        - 0xFC05C4E0: movw r0, #0x14E (offset 334 in table 0xD20B0000 -> MMIO 0xD20B0538)
+        - 0xFC0D73D0: lsls r0, r0, #15; bpl.n 0xFC0D73DE
         """
-        # 1. Verify ROM instructions at 0xFC05C4E0 (Gate wrapper)
+        # 1. Gate wrapper at 0xFC05C4E0: movw r0, #0x14E is 40 f2 4e 10
         fc05c4e0_bytes = self._bytes(0xFC05C4E0, 16)
-        # movw r0, #0x14E is 40 f2 4e 10 (halfwords 0xf240 0x104e)
         self.assertEqual(fc05c4e0_bytes[6:10], bytes.fromhex("40f24e10"))
 
-        # 2. Verify ROM instructions at 0xFC0D73D0 (Property reader)
+        # 2. Hardware MMIO reader at 0xFC0D73D0: lsls r0, r0, #15 (c0 03), bpl.n (01 d5)
         fc0d73d0_bytes = self._bytes(0xFC0D73D0, 16)
-        # lsls r0, r0, #15 is c0 03 at offset 6
         self.assertEqual(fc0d73d0_bytes[6:8], bytes.fromhex("c003"))
-        # bpl.n 0xfc0d73de is 01 d5 at offset 8
         self.assertEqual(fc0d73d0_bytes[8:10], bytes.fromhex("01d5"))
 
-        # 3. Mathematical proof simulation over all 32 bits
-        for bit_idx in range(32):
-            val = 1 << bit_idx
-            shifted = (val << 15) & 0xFFFFFFFF
-            n_flag = 1 if (shifted & 0x80000000) else 0
-            ret = 1 if n_flag else 0
-            if bit_idx == 16:
-                self.assertEqual(ret, 1, "Bit 16 (0-indexed) MUST return 1")
-            else:
-                self.assertEqual(ret, 0, f"Bit {bit_idx} must return 0")
 
+# ==============================================================================
+# Tier 3: Offline Toolchain & Integration Tests (Requires ARM GCC / Local Build)
+# ==============================================================================
+@unittest.skipUnless(
+    NM_PATH is not None or os.path.exists(PROTO_ELF),
+    "Tier 3: ARM toolchain (arm-none-eabi-nm) or compiled prototype ELF not present",
+)
+class TestRestartSdOfflineIntegration(unittest.TestCase):
+    """Tier 3: Offline toolchain compilation and ELF symbol resolution.
+    
+    Requires ARM GCC toolchain or prebuilt prototype_main.elf. Cleanly skipped on clean clone.
+    """
 
-class TestRestartSdPrototypeImplementation(unittest.TestCase):
-    """Verifies the reviewed minimal prototype fix for RESTART-SD-1."""
-
-    def test_clean_checkout_source_integrity(self):
-        """Clean checkout reproducibility: fail closed if required prototype sources are absent."""
-        required_sources = [
-            ("boot_prototype.c", BOOT_PROTO_C),
-            ("stubs_prototype.S", PROTO_STUBS_S),
-            ("boot_witness.h", BOOT_WITNESS_H),
-            ("patch file", PATCH_FILE),
-        ]
-        for name, path in required_sources:
-            self.assertTrue(
-                os.path.exists(path),
-                f"FAIL: Clean checkout missing required {name} at {path}. "
-                f"Repository must track this file for independent reviewability.",
+    @classmethod
+    def setUpClass(cls):
+        if NM_PATH is None and not os.path.exists(PROTO_ELF):
+            raise unittest.SkipTest(
+                "Tier 3: ARM toolchain (arm-none-eabi-nm) or compiled prototype ELF not present"
             )
 
-    def test_task_startup_my_omits_startdiskboot_and_calls_sd1stinit_veneer(self):
-        self.assertTrue(
-            os.path.exists(BOOT_PROTO_C),
-            f"Missing required prototype source: {BOOT_PROTO_C}",
-        )
-        with open(BOOT_PROTO_C) as f:
-            src = f.read()
-        body = src[src.index("void __attribute__((naked,noinline)) task_Startup_my(void)"):]
-        code = "\n".join(line.split("//", 1)[0] for line in body.splitlines()).lower()
-
-        # StartDiskboot must remain omitted to prevent infinite reload loop
-        self.assertNotIn("sub_fc05bbea", code)
-
-        # Gate check sub_fc05c4e0 and creator veneer sub_fc31b1f4 must be called
-        self.assertIn("sub_fc05c4e0", code)
-        self.assertIn("sub_fc31b1f4", code)
-        self.assertIn("blx     sub_fc31b1f4", code)
-
-    def test_prototype_stubs_include_sd1stinit_symbols(self):
-        self.assertTrue(
-            os.path.exists(PROTO_STUBS_S),
-            f"Missing required prototype stubs: {PROTO_STUBS_S}",
-        )
-        with open(PROTO_STUBS_S) as f:
-            stubs_src = f.read()
-        self.assertIn("STUB(fc05c4e0)", stubs_src)
-        self.assertIn("STUB2(fc31b1f4)", stubs_src)
-
     def test_prototype_elf_resolves_symbols(self):
-        toolchain_bin = os.path.join(
-            REPO_ROOT, "toolchains", "gcc-arm-none-eabi-5_4-2016q3", "bin"
-        )
-        nm = os.path.join(toolchain_bin, "arm-none-eabi-nm")
-
-        # If ELF is missing, attempt to compile it using build_prototype tool
+        """Verify compiled prototype ELF resolves sub_fc05c4e0 and sub_fc31b1f4."""
+        # If ELF is missing, attempt to compile it using build_prototype tool if toolchain exists
         if not os.path.exists(PROTO_ELF):
             build_script = os.path.join(REPO_ROOT, "tools", "build_prototype.py")
-            if os.path.exists(build_script) and os.path.exists(nm):
-                import subprocess
-                res = subprocess.run(["python3", build_script], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if os.path.exists(build_script) and NM_PATH is not None:
+                res = subprocess.run(
+                    ["python3", build_script],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
                 if res.returncode != 0:
                     self.fail(f"Failed to build {PROTO_ELF}:\n{res.stderr.decode()}")
             else:
-                self.fail(
-                    f"Required artifact {PROTO_ELF} is absent and cannot be built. "
-                    f"Ensure prototype is built with: python3 tools/build_prototype.py"
-                )
+                self.skipTest(f"Prototype ELF {PROTO_ELF} absent and toolchain unavailable")
 
-        import subprocess
-        out = subprocess.check_output([nm, PROTO_ELF]).decode()
+        self.assertTrue(os.path.exists(PROTO_ELF), f"Prototype ELF absent: {PROTO_ELF}")
+        self.assertIsNotNone(NM_PATH, "arm-none-eabi-nm not found")
+
+        out = subprocess.check_output([NM_PATH, PROTO_ELF]).decode()
         self.assertIn("sub_fc05c4e0", out)
         self.assertIn("sub_fc31b1f4", out)
 
