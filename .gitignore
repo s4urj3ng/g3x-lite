@@ -7,6 +7,14 @@ firmware/*
 !firmware/tools/
 !firmware/tools/**
 *.bin
+!firmware/tools/boot001a_payload.bin
+!firmware/tools/boot001b_payload.bin
+!firmware/tools/ui001a_payload.bin
+!firmware/tools/ui001b0_payload.bin
+!firmware/tools/ui001b1_payload.bin
+!firmware/tools/video001a0_payload.bin
+!firmware/tools/witness_inspector_payload.bin
+*.o
 *.fir
 *.fi2
 *.rom
@@ -25,3 +33,4 @@ __pycache__/
 node_modules/
 private/
 analysis-workspace/
+toolchains/
