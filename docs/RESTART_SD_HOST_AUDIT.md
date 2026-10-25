@@ -109,14 +109,65 @@ Stock `StartDiskboot` executes two gates prior to invoking the `SD1stInit` creat
    fc05bbf2: beq.n 0xfc05bc34
    ```
    Checks whether execution is residing in ROM (`PC >> 24 != 0`). In stock ROM cold boot, `PC = 0xFC05BBF4`, `PC >> 24 = 0xFC != 0` (passes). In CHDK, `task_Startup_my` executes from RAM (`0x0034xxxx`), where `PC >> 24 == 0`. Canon implemented this check to prevent RAM-loaded upgrader payloads from recursing into `StartDiskboot`.
-2. **Gate 2 (Hardware MMIO Bit Guard)**:
+2. **Gate 2 (Hardware MMIO Bit Guard & Bit 16 vs Bit 17 Reconciliation)**:
    ```arm
    fc05bbf4: movs r0, #0
    fc05bbf6: bl   0xfc05c4e0
    fc05bbfa: lsls r0, r0, #31
    fc05bbfc: d11a bne.n 0xfc05bc34
    ```
-   Calls `0xFC05C4E0(0)`, which loads word offset `0x14E` from table `0xD20B0000` (MMIO register `0xD20B0538`). If bit 16 is 0, returns 0; if bit 16 is 1, returns 1. The branch `lsls r0, #31; bne exit` requires `sub_fc05c4e0(0) & 1 == 0` to proceed.
+   Calls `0xFC05C4E0(0)` and tests bit 0 of the returned value (`lsls r0, #31; bne exit`).
+   
+   #### Detailed ROM Disassembly and Hardware MMIO Mapping:
+   Subroutine `0xFC05C4E0`:
+   ```arm
+   fc05c4e0: push    {r4, lr}
+   fc05c4e2: movs    r4, #0
+   fc05c4e4: cbnz    r0, loc_fc05c4ec
+   fc05c4e6: movw    r0, #334            ; 0x14E (property offset for boot mode)
+   fc05c4ea: b.n     loc_fc05c4f4
+   loc_fc05c4ec:
+   fc05c4ec: cmp     r0, #1
+   fc05c4ee: bne.n   loc_fc05c4fc        ; Panics/asserts if r0 != 0 and r0 != 1
+   fc05c4f0: movw    r0, #335            ; 0x14F (property offset for SD lock)
+   loc_fc05c4f4:
+   fc05c4f4: bl      sub_fc0d73d0        ; Hardware MMIO reader
+   fc05c4f8: mov     r4, r0
+   fc05c4fa: b.n     loc_fc05c506
+   ...
+   fc05c506: mov     r0, r4
+   fc05c508: pop     {r4, pc}
+   ```
+   
+   Hardware reader `0xFC0D73D0`:
+   ```arm
+   fc0d73d0: ldr     r1, [pc, #16]       ; literal at 0xFC0D73E4 -> 0xD20B0000
+   fc0d73d2: ldr.w   r0, [r1, r0, lsl #2]; reads MMIO [0xD20B0000 + (r0 << 2)]
+   fc0d73d6: lsls    r0, r0, #15         ; Logical shift left by 15, setting flags
+   fc0d73d8: bpl.n   loc_fc0d73de        ; Branch if positive / plus (N flag == 0)
+   fc0d73da: movs    r0, #1              ; If N flag == 1, return 1
+   fc0d73dc: bx      lr
+   loc_fc0d73de:
+   fc0d73de: movs    r0, #0              ; If N flag == 0, return 0
+   fc0d73e0: bx      lr
+   ```
+
+   #### Mathematical Proof: Bit 16 (0-indexed) vs "Bit 17" Reconciliation:
+   - When called with `r0 = 0`, property index `0x14E` (334) is loaded.
+   - Address calculation: `0xD20B0000 + (0x14E << 2) = 0xD20B0000 + 0x538 = 0xD20B0538`.
+   - Let 32-bit register `R` contain the MMIO word read from `0xD20B0538`, with bit positions `0..31` (0-indexed, where bit 0 is LSB and bit 31 is MSB).
+   - `LSLS R, #15` computes `R' = (R << 15) & 0xFFFFFFFF`.
+   - In the ARM architecture, the `N` (Negative) condition flag is set equal to bit 31 (the MSB / sign bit) of the result `R'`.
+   - Bit `j` of `R'` receives bit `(j - 15)` of `R`.
+   - For bit 31 of `R'`: `31 - 15 = 16`.
+   - **Therefore, `N == (R >> 16) & 1`**.
+   - If bit 16 of `R` is 0: `N = 0`, `BPL` is taken, returning `r0 = 0`.
+   - If bit 16 of `R` is 1: `N = 1`, `BPL` is NOT taken, returning `r0 = 1`.
+   - In `StartDiskboot`: `lsls r0, #31; bne exit` aborts if `r0 == 1`. Thus, `SD1stInit` creation proceeds **if and only if bit 16 of MMIO 0xD20B0538 is 0**.
+   - **Resolution of "Bit 17" claim**:
+     1. In **1-indexed bit numbering** (bits 1 to 32), Bit 0 is the 1st bit, and Bit 16 is the **17th bit**.
+     2. Alternatively, calculating `32 - 15 = 17` mistakes the total bit width (32) for the maximum 0-indexed bit position (31), where `31 - 15 = 16`.
+     3. The exact hardware bit is proven in ROM: **Bit 16 (0-indexed, bitmask `0x00010000`)**. Tested and verified across all 32 bits by `test_gate_mmio_bit_semantics_reconciliation` in `tests/test_restart_sd_audit.py`.
 3. **Creator Call**:
    ```arm
    fc05bbfe: blx  0xfc31b1f4
@@ -201,7 +252,25 @@ The minimal remediation is applied strictly to isolated prototype files:
   - `tools/validate_witness_inspector.py` verifies 3-way consistency across ELF, `.bin`, and metadata.
   - `candidate_port2a/` witness address remains pinned at `0x0035F780` and passes candidate validation.
 
-### 8.3 Offline Verification Results
+### 8.4 Source Provenance, Patch Artifact & Clean-Checkout Reproducibility
+
+1. **Third-Party Upstream Provenance**:
+   - `chdk-port` is based on upstream CHDK SVN r5491 (Git commit `21b9a14eb2043aeffdd2cb141081e7dcfe75f7e6` from `https://github.com/01luna/CHDK.git`).
+   - Upstream CHDK contains 250+ MB of third-party camera ports and object files, and local build scratch trees containing dumps (e.g. `platform/g5x/sub/100c/PRIMARY.BIN`).
+   - To strictly comply with Phase 0 safety rules (never commit proprietary firmware dumps or multi-hundred-MB third-party trees), `chdk-port` is kept as a local build tree with `.gitignore` explicitly scoping tracking.
+2. **Tracked Prototype Files**:
+   - `.gitignore` explicitly un-ignores and tracks only the clean, non-proprietary G3 X prototype sources:
+     - `chdk-port/platform/g3x/sub/110c/boot_prototype.c`
+     - `chdk-port/platform/g3x/sub/110c/stubs_prototype.S`
+     - `chdk-port/platform/g3x/sub/110c/boot_witness.h`
+   - All three files are tracked directly in git on the PR head, eliminating 404 errors and allowing independent review directly in the GitHub PR interface.
+3. **Standalone Patch Artifact**:
+   - A standalone unified patch is provided at `patches/0001-sd1stinit-restart-prototype.patch`.
+   - The patch records upstream provenance, commit SHA `21b9a14eb`, and the clean unified diff for `boot_prototype.c` and `stubs_prototype.S`.
+4. **Clean-Checkout Reproducibility & Fail-Closed Test Enforcement**:
+   - `test_clean_checkout_source_integrity` in `tests/test_restart_sd_audit.py` enforces that `boot_prototype.c`, `stubs_prototype.S`, `boot_witness.h`, and `patches/0001-sd1stinit-restart-prototype.patch` exist on any clean git clone.
+   - If any required prototype file is absent, tests fail closed with an explicit assertion error rather than silently skipping.
+   - `test_prototype_elf_resolves_symbols` automatically builds the prototype artifact if absent or fails explicitly if toolchain/build prerequisites are unmet.
 
 1. `tests/test_restart_sd_audit.py`: **9 / 9 tests PASS** (0.04s).
    - Verified omission of `sub_fc05bbea` (`StartDiskboot`).
