@@ -1,0 +1,9 @@
+{
+  "target": "Canon PowerShot G3 X (GM1.10C)",
+  "symbol": "boot_witness",
+  "witness_address": "0x0035F780",
+  "witness_address_int": 3536768,
+  "elf_file": "candidate_port2a/candidate_main.elf",
+  "payload_bin": "firmware/tools/witness_inspector_payload.bin",
+  "payload_size": 444
+}
