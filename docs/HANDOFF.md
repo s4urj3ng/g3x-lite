@@ -1,6 +1,55 @@
 # Agent handoff
 Updated: 2026-10-25
 
+## PORT-5E — ROM-Verified Early Boot Literal Correction (2026-10-25)
+
+- Deliverables: isolated correction in `chdk-port/platform/g3x/sub/110c/boot_prototype.c` (`sub_fc05b558_my`), regression test `tests/test_early_boot_literals.py`, documentation corrections in `docs/CHDK_PORT1C1_CRITICAL_AUDIT.md`, `docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md`, `docs/PORT5C_EARLY_BOOT_CONSISTENCY_AUDIT.md`, `docs/REPRODUCIBILITY_MANIFEST.md`.
+- Changes proposed: 10 literals in `sub_fc05b558_my` corrected from +4 offset to ROM-verified values:
+  - `r4` device string: `0xfc05b604` -> `0xfc05b600` (`"/_term"`)
+  - Check word 1: `0x000080f0` -> `0x000080ec` (`[0x80EC]`, heap size)
+  - Check word 2: `0x00008078` -> `0x00008074` (`[0x8074]`, `0x80000`)
+  - Error strings: 7 diagnostic strings corrected from +4 to ROM addresses (`0xfc05b610`..`0xfc05b674`).
+- Verification: 3-tier suite `tests/test_early_boot_literals.py` passes 7/7 tests (clean checkout assertions, static ROM bytes/words/strings, skip logic). Full existing test suite passes (`test_restart_sd_audit.py`, `test_restart_irq_audit.py`, `test_validate_chdk_g3x.py`, `test_validate_witness_inspector.py`).
+- Candidate Staleness: `candidate_port2a/` artifacts are strictly PRE-CORRECTION artifacts; not regenerated or modified.
+- Blocker Status: F3 is resolved; F2 (power-on check in `sub_fc1284ac`), `sub_fc05b5ea` failure semantics, warm restart IRQ/SD blockers, and native residency (G1-G14) remain open blockers.
+- Status: Dedicated branch `fix/port5e-early-boot-literals` created from `main`, pushed to `origin`, and Draft PR opened targeting `main`. Ready for remote review.
+- Hardware Status: STRICT NO-GO.
+- Exact next command: `python3 -m unittest tests/test_early_boot_literals.py -v`
+
+## PORT-5D — GM1.10C early boot check-word ROM verification (Claude Code, 2026-10-25)
+
+- Deliverable: `docs/PORT5D_EARLY_BOOT_ROM_VERIFICATION.md`. Read only 296 ROM bytes `0xFC05B558–0xFC05B67F`; no call-tree expansion.
+- Result: ROM uses `[0x80EC]`/`[0x8074]`; prototype stage 4 is +4 on all 10 constants (incl. `"/_term"` passed to termDeviceCreate/stdioSetup). PORT-5C confirmed.
+- Pending owner decisions: apply PORT5D §7 ten-literal correction (would stale `candidate_port2a/` hashes); annotate PORT-1C1 Issue 3 as CONTESTED; forward notes in PORT-5B F3 / PORT-5C §3.
+- Open: `sub_fc05b5ea` semantics; other prototype stages not ROM-verified; power-on path (PORT-5C B) unresolved.
+- Hardware: STRICT NO-GO.
+- Exact next command: `cat docs/PORT5D_EARLY_BOOT_ROM_VERIFICATION.md`
+
+## PORT-5C — GM1.10C early boot consistency audit (Claude Code, 2026-10-25)
+
+- Deliverable: `docs/PORT5C_EARLY_BOOT_CONSISTENCY_AUDIT.md` (existing evidence only; no ROM reads).
+- A: check-word pair CONTRADICTED at doc level (X1 string `0xFC05B600` vs prototype `0xfc05b604`; `0x80F0` has no documented writer). B: power-on retention UNRESOLVED; halt branch reachable.
+- ROM ranges needing separate authorisation: `0xFC05B558–0xFC05B5E9`, `0xFC05B5EA–0xFC05B67F` (recommended first, 296 B); optional `0xFC05B962–0xFC05B9A7`, `0xFC1284AC–0xFC1285FF` (stop at first return), `0xFC05BA56–0xFC05BA67`.
+- Owner decisions: authorise PORT-5D; approve annotating PORT-1C1 Issue 3 and PORT-1C "halts safely" wording.
+- Hardware: STRICT NO-GO.
+- Exact next command: `cat docs/PORT5C_EARLY_BOOT_CONSISTENCY_AUDIT.md`
+
+## PORT-5B — Ranma G3 X historical boot comparison (Claude Code, 2026-10-25)
+
+- Deliverable: `docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md` (documentation-only; patch not applied/built; no ROM disassembly).
+- Input: `g3x_110e.patch` at repo root (untracked), SHA-256 verified; base r5480.
+- Top findings: F1 core-residency model differs (ranma `0x00C80000`, no heap shift); F2 stock power-on handler bypassed by ranma; F3 unverified stage-4 check-word discrepancy in `boot_prototype.c`.
+- Blockers unchanged: PORT-3C/4B restart, PORT-4C/4D G6, hardware NO-GO.
+- Next: PORT-5C — reconcile F3/F2 from existing GM1.10C evidence; owner approval needed for any bounded ROM read; owner to decide relocating the patch to `historical/ranma_g3x_110e/`.
+- Exact next command: `cat docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md`
+
+## PORT-5A — Ranma G3 X CHDK port archaeology (Claude Code, 2026-10-25)
+
+- Deliverable: `docs/PORT5A_RANMA_PORT_RECOVERY.md`. Result: **NOT_FOUND** for `g3x_110e.patch` bytes; provenance re-verified.
+- Blocker: forum guest download returns 403 `permission_denied`; not bypassed. No archive/mirror copy (Wayback, `01luna/CHDK` master `92208bf`, GitHub `ranma`).
+- Next: owner decides whether to fetch the `.patch` only via own forum account or ask ranma (user 31560); then follow PATCH_AUDIT_110E verification procedure under a historical-reference directory. No ZIPs.
+- Exact next command: `cat docs/PORT5A_RANMA_PORT_RECOVERY.md`
+
 ## Codex independent adversarial restart review (2026-10-25)
 
 - Deliverable: `docs/CODEX_INDEPENDENT_RESTART_REVIEW.md`. Verdict: **INSUFFICIENT EVIDENCE**; hardware **NOT READY / STRICT NO-GO**. No safe boot claimed.

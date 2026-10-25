@@ -67,6 +67,10 @@ To run Tier 2 static ROM byte and word assertions:
 
 The repository maintains strict isolation between First-Boot Candidate artifacts (`candidate_port2a/`) and isolated prototype artifacts (`chdk-port/`):
 
+> [!IMPORTANT]
+> **PRE-CORRECTION ARTIFACT STATUS (PORT-5E)**:
+> All `candidate_port2a/` artifacts (`candidate_loader.bin`, `candidate_main.bin`, `candidate_main.elf`, `DISKBOOT.BIN`) and their associated manifest `candidate_manifest.json` are **PRE-CORRECTION** artifacts. They were built prior to the PR #2 `SD1stInit` addition and prior to the PORT-5E early boot literal corrections (`0x80EC`/`0x8074` check words and corrected string addresses). Under strict Phase 0 safety invariants, these candidate artifacts are **NOT** regenerated, overwritten, or claimed to represent the corrected prototype source.
+
 | Artifact | Relative Path | Size (Bytes) | SHA-256 Hash | Role / Invariant |
 |---|---|---|---|---|
 | **Candidate Loader Binary** | `candidate_port2a/candidate_loader.bin` | 117,968 | `bac0431c2e896cb5e9a761f66d4aaaad0676af11a28335c602367539574c72bf` | Unmodified first-boot candidate loader (`boot_witness` @ `0x0035F780`). Protected artifact. |
