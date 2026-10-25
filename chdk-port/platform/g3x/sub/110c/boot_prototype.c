@@ -265,16 +265,16 @@ void __attribute__((naked,noinline)) sub_fc05b558_my(void)
 {
     asm volatile (
         "    push    {r4, lr}\n"
-        "    ldr     r4, =0xfc05b604\n"        // ROM literal string "/_term"
+        "    ldr     r4, =0xfc05b600\n"        // ROM literal string "/_term" (adr @0xFC05B55A, PORT-5D)
         "    bl      sub_fc05c5bc\n"
-        "    ldr     r0, =0x000080f0\n"
+        "    ldr     r0, =0x000080ec\n"        // literal @0xFC05B608: [0x80ec] heap size
         "    ldr     r1, [r0]\n"
-        "    ldr     r0, =0x00008078\n"
+        "    ldr     r0, =0x00008074\n"        // literal @0xFC05B60C: [0x8074] 0x80000 bound
         "    ldr     r0, [r0]\n"
         "    adds    r0, #0x10\n"
         "    cmp     r1, r0\n"
         "    bhs     loc_fc05b574\n"
-        "    ldr     r0, =0xfc05b614\n"        // ROM literal string "USER_MEM size checking"
+        "    ldr     r0, =0xfc05b610\n"        // ROM literal string "USER_MEM size checking" (adr @0xFC05B56E)
         "    bl      sub_fc05b5ea\n"
         "loc_fc05b574:\n"
         "    bl      sub_fc127b3c\n"
@@ -289,39 +289,39 @@ void __attribute__((naked,noinline)) sub_fc05b558_my(void)
         "    bl      sub_fc418738\n"           // dmSetup
         "    cmp     r0, #0\n"
         "    bge     loc_fc05b598\n"
-        "    ldr     r0, =0xfc05b634\n"        // ROM literal string "dmSetup"
+        "    ldr     r0, =0xfc05b630\n"        // ROM literal string "dmSetup" (adr @0xFC05B592)
         "    bl      sub_fc05b5ea\n"
         "loc_fc05b598:\n"
         "    bl      sub_fc05c7d4\n"           // termDriverInit
         "    cmp     r0, #0\n"
         "    bge     loc_fc05b5a6\n"
-        "    ldr     r0, =0xfc05b63c\n"        // ROM literal string "termDriverInit"
+        "    ldr     r0, =0xfc05b638\n"        // ROM literal string "termDriverInit" (adr @0xFC05B5A0)
         "    bl      sub_fc05b5ea\n"
         "loc_fc05b5a6:\n"
         "    mov     r0, r4\n"
         "    bl      sub_fc05c862\n"           // termDeviceCreate
         "    cmp     r0, #0\n"
         "    bge     loc_fc05b5b6\n"
-        "    ldr     r0, =0xfc05b64c\n"        // ROM literal string "termDeviceCreate"
+        "    ldr     r0, =0xfc05b648\n"        // ROM literal string "termDeviceCreate" (adr @0xFC05B5B0)
         "    bl      sub_fc05b5ea\n"
         "loc_fc05b5b6:\n"
         "    mov     r0, r4\n"
         "    bl      sub_fc05b794\n"           // stdioSetup
         "    cmp     r0, #0\n"
         "    bge     loc_fc05b5c6\n"
-        "    ldr     r0, =0xfc05b660\n"        // ROM literal string "stdioSetup"
+        "    ldr     r0, =0xfc05b65c\n"        // ROM literal string "stdioSetup" (adr @0xFC05B5C0)
         "    bl      sub_fc05b5ea\n"
         "loc_fc05b5c6:\n"
         "    bl      sub_fc05b8d8\n"           // stdlibSetup
         "    cmp     r0, #0\n"
         "    bge     loc_fc05b5d4\n"
-        "    ldr     r0, =0xfc05b66c\n"        // ROM literal string "stdlibSetup"
+        "    ldr     r0, =0xfc05b668\n"        // ROM literal string "stdlibSetup" (adr @0xFC05B5CE)
         "    bl      sub_fc05b5ea\n"
         "loc_fc05b5d4:\n"
         "    bl      sub_fc05e910\n"           // extlib_setup
         "    cmp     r0, #0\n"
         "    bge     loc_fc05b5e2\n"
-        "    ldr     r0, =0xfc05b678\n"        // ROM literal string "extlib_setup"
+        "    ldr     r0, =0xfc05b674\n"        // ROM literal string "extlib_setup" (adr @0xFC05B5DC)
         "    bl      sub_fc05b5ea\n"
         "loc_fc05b5e2:\n"
         "    pop.w   {r4, lr}\n"

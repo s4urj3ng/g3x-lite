@@ -1,6 +1,27 @@
 # Project state
 Updated: 2026-10-25
 
+PORT-5E ROM-verified early boot literal correction (2026-10-25; `chdk-port/platform/g3x/sub/110c/boot_prototype.c`, `tests/test_early_boot_literals.py`):
+- **Isolated Correction**: Corrected the ten stage-4 literals in `sub_fc05b558_my` to match ROM evidence verified in PORT-5D: `"/_term"` @ `0xFC05B600`, check-word pair `[0x80EC]` vs `[0x8074] + 0x10`, and seven error strings (`0xFC05B610`, `0xFC05B630`, `0xFC05B638`, `0xFC05B648`, `0xFC05B65C`, `0xFC05B668`, `0xFC05B674`). Eliminates the systematic +4 transcription offset.
+- **Invariance & Isolation**: Preserved all call targets (`sub_fc05c5bc`, `sub_fc05b5ea`, `sub_fc127b3c`, `sub_fc127b4e`, `sub_fc418738`, `sub_fc05c7d4`, `sub_fc05c862`, `sub_fc05b794`, `sub_fc05b8d8`, `sub_fc05e910`), register usage, TCM fill (`0xBFE10000..0xBFE10800`), error handling, and tail-branch to `sub_fc05b962_my`.
+- **Regression Suite Added**: Created 3-tier test `tests/test_early_boot_literals.py` (8/8 tests PASS): Tier 1 fails closed if tracked prototype source is absent and asserts presence of all 10 corrected literals and absence of stale +4 literals; Tier 2 strictly bounds ROM reads to the approved 296-byte slice (`0xFC05B558..0xFC05B67F`), verifies SHA-256 slice identity, and asserts exact ROM byte encodings, literal pool words, and ASCII strings; Tier 3 genuinely verifies unittest skip behavior in an isolated subprocess with a missing-ROM fixture.
+- **Documentation Corrections**:
+  - `docs/CHDK_PORT1C1_CRITICAL_AUDIT.md`: Issue 3 annotated as CONTESTED / CORRECTED (claim of identical constants contradicted by ROM).
+  - `docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md`: F3 check-word discrepancy resolved from ROM.
+  - `docs/PORT5C_EARLY_BOOT_CONSISTENCY_AUDIT.md`: Check-word mismatch resolved from ROM.
+  - `docs/REPRODUCIBILITY_MANIFEST.md`: Explicitly marked `candidate_port2a/` artifacts as PRE-CORRECTION.
+- **Candidate Staleness**: `candidate_port2a/` artifacts and `candidate_manifest.json` are explicitly marked PRE-CORRECTION artifacts. They were built prior to PR #2 (`SD1stInit`) and PORT-5E literal corrections. Under Phase 0 safety, they are not regenerated or claimed to represent corrected source.
+- **Hardware Status**: STRICT NO-GO. Zero physical camera, SD, or deployable binary operations.
+- **Exact next command**: `python3 -m unittest tests/test_early_boot_literals.py -v`.
+
+PORT-5D early boot ROM verification (Claude Code, 2026-10-25; owner-approved read of `0xFC05B558–0xFC05B67F` only): `docs/PORT5D_EARLY_BOOT_ROM_VERIFICATION.md`. ROM VERIFIED: initial task compares `[0x80EC] >= [0x8074]+0x10` (literals @`0xFC05B608`/`0xFC05B60C`, `bcs`); `adr r4` @`0xFC05B55A` → `"/_term"` @`0xFC05B600`; all 8 string refs resolve 4 bytes below prototype values. `boot_prototype.c` stage 4 CONTRADICTED (10 constants +4); correction proposed in PORT5D §7, NOT applied. Hardware STRICT NO-GO.
+
+PORT-5C early boot consistency audit (Claude Code, 2026-10-25, documentation-only): `docs/PORT5C_EARLY_BOOT_CONSISTENCY_AUDIT.md`. (A) Prototype stage-4 check pair `[0x80F0]/[0x8078]` is unsupported by any GM1.10C doc; PORT-1A/1B document writers of `0x80EC` (heap size) and `0x8074` (0x80000), favouring the E-style pair; PORT-1C1's own quoted `adr r4,#0xa4` at `0xFC05B55A` resolves "/_term" to `0xFC05B600`, contradicting prototype `0xfc05b604` (all 8 stage-4 strings +4) → CONTRADICTED, ROM confirmation pending. (B) Stock power check `sub_fc1284ac` keeps a statically reachable `sub_fc05ba56`+halt branch; restart-time return value UNKNOWN; retention unrefuted, not justified. Hardware STRICT NO-GO. Next: owner-authorised read-only PORT-5D of `0xFC05B558–0xFC05B67F` only.
+
+PORT-5B ranma historical boot comparison (Claude Code, 2026-10-25, documentation-only): `docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md`. Owner-supplied `g3x_110e.patch` (repo root, untracked) verified: SHA-256 `55927968…1ccba`, 336,714 B; base **CHDK r5480** (SVN headers + exact preimage match; fails at r5491). Supersedes PORT-5A NOT_FOUND. Our prototype matches ranma's restart skeleton, but: (F1) ranma ran CHDK at `0x00C80000` with no Canon heap shift; (F2) ranma bypassed stock power-on check `sub_fc1284ac` as "broken"; (F3) our stage-4 USER_MEM check words (`0x80f0`/`0x8078`) differ from E (`0x80ec`/`0x8074`) and are unverified. Restart/IRQ/SD, G6 and hardware NO-GO unchanged. Next: PORT-5C reconcile F3/F2 from existing evidence.
+
+PORT-5A ranma G3 X port archaeology (Claude Code, 2026-10-25): **NOT_FOUND** (patch bytes) — `docs/PORT5A_RANMA_PORT_RECOVERY.md`. Thread/attachment metadata re-authenticated (post 143437, legacy attach 16495, UUID `51fc3fb9…`); guest download HTTP 403, no Wayback/GitHub/CHDK-trunk copy; ranma has only 7 posts, all in thread 12600. Base revision unproven (published between r5491/r5492). BLK-03 stays open; next step is owner decision (own forum account or ask ranma).
+
 Codex independent adversarial restart review (2026-10-25): **`INSUFFICIENT EVIDENCE / HARDWARE NOT READY`** — `docs/CODEX_INDEPENDENT_RESTART_REVIEW.md`.
 - Supersedes initial readiness assumptions and the proposed PORT-3D caller enumeration: classifier-stopped IRQ caller enumeration and SD register-write enumeration are formally excluded and not retried.
 - Strongest gap: BSS clears the IRQ handler table (`0x0003F4F4`), while the already documented controller initialization has UNKNOWN enable/pending/reset effects. A conditional panic path is supported; neither inevitable failure nor safe restart is established.
