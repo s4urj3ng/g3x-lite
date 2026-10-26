@@ -1,0 +1,35 @@
+# Patch: G3 X GM1.10C CHDK port - PORT-7B Playback ALT override mask correction
+# Author: Claude (Claude Code)
+# Date: 2026-10-26
+# Target: Canon PowerShot G3 X (Firmware GM1.10C)
+# Subsystem: platform/g3x (platform_kbd.h)
+# Apply from: chdk-port/ (paths are relative to the CHDK tree root, as in 0001)
+#
+# Description:
+# KEYS_MASK0 0x000433F9 -> 0x000533F9: adds only bit 16 (0x00010000, KEY_PLAYBACK),
+# an advertised ALT option (platform_camera.h CAM_ALT_BUTTON_OPTIONS) that the
+# common override (core/kbd_common.c:179) could not suppress. Power (bit 17)
+# remains excluded. Evidence: ROM physw_event_table entry 0xFC66C9B8
+# (info 0x01010210 -> word 0, bit 16, levent 0x101). Physical Playback press at
+# bit 16 is NOT hardware-sampled. See docs/PORT7B_PLAYBACK_MASK_CORRECTION.md.
+#
+# Preimage  SHA-256: 4d2594313c304ffb6598d47cfc9cd4bbffd0f3b1b64d35e734df8e8218d459b0
+# Postimage SHA-256: 4c9fd8b4df5d8f45e65827eba5588b6bb2a145765764c0ef0baa85e668f49b24
+#
+--- a/platform/g3x/platform_kbd.h
++++ b/platform/g3x/platform_kbd.h
+@@ -1,10 +1,11 @@
+ #ifndef PLATFORM_KBD_H
+ #define PLATFORM_KBD_H
+ 
+-// G3X verified key masks based on UI-001B-1 hardware observations
++// GM1.10C override mask: recorded switch bits, including Playback ALT.
+ // Port 0: bits 0 (Shoot Full), 3 (Video), 4 (Menu), 5 (Up), 6 (Down),
+-//         7 (Right), 8 (Left), 9 (Set), 12 (Disp), 13 (Phone), 18 (Shoot Half)
+-#define KEYS_MASK0 (0x000433F9)
++//         7 (Right), 8 (Left), 9 (Set), 12 (Disp), 13 (Phone),
++//         16 (Playback), 18 (Shoot Half). Power (bit 17) remains excluded.
++#define KEYS_MASK0 (0x000533F9)
+ #define KEYS_MASK1 (0x00000000)
+ #define KEYS_MASK2 (0x00000000)
+ 
