@@ -102,13 +102,19 @@ tmp=$(mktemp -d) && python3 -B tests/test_port7b_reproducibility.py --assemble "
 G3X_PLATFORM_DIR="$tmp" python3 -B -m unittest discover -s tests -p test_port7a_platform_configuration.py -v
 ```
 
-The branch is not pushed yet. Until it is, clone from the local repository path in place of the GitHub URL.
+To bring a local CHDK tree to the corrected header, the recommended route is the hash-checked bootstrap, `python3 -B tools/bootstrap_chdk_platform.py`, from PORT-8A (the PR stacked on this one). The bootstrap:
+- applies patch 0002 only to the exact recorded preimage;
+- leaves an already-corrected header alone;
+- refuses to touch a modified header.
 
-To apply the correction to a local CHDK tree, run this from the repository root. Use `patch -d`, not `git apply`: `git apply` resolves paths against the outer `g3x-lite` repository.
+If you apply the patch by hand, use `patch -N` (forward only), and run from the repository root:
 
 ```sh
-patch -p1 -d chdk-port --dry-run < patches/0002-port7b-keys-mask0.patch && patch -p1 -d chdk-port < patches/0002-port7b-keys-mask0.patch
+patch -N -p1 -d chdk-port --dry-run < patches/0002-port7b-keys-mask0.patch && patch -N -p1 -d chdk-port < patches/0002-port7b-keys-mask0.patch
 ```
+
+- **Why `-N` is required:** without it, macOS `patch` (2.0-12u11-Apple) treats a header that already has the correction as a reversed patch. It prints `Assume -R? [y]`, takes the default answer yes, exits 0, and silently restores `0x000433F9`; even `--dry-run` exits 0. With `-N` it reports `Ignoring previously applied … patch` and exits 1, so nothing is applied. VERIFIED in a scratch copy on 2026-10-26.
+- **Why `patch -d` and not `git apply`:** `git apply` resolves paths against the outer `g3x-lite` repository.
 
 ### What remains UNKNOWN
 
