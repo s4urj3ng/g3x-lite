@@ -21,6 +21,8 @@ PORT-7B applied the Playback ALT override correction (KEYS_MASK0 0x000433F9 ->
 normal test; the mask is pinned so Power (bit 17) stays excluded.
 Missing required platform sources fail closed (no skips or fallback fixtures).
 G3X_PLATFORM_DIR optionally selects a separately supplied source-only directory.
+On a clean clone (platform/g3x is Git-ignored) use test_port7b_reproducibility.py,
+or its --assemble DIR output as G3X_PLATFORM_DIR.
 """
 
 import os

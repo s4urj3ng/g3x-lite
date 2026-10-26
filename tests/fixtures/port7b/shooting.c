@@ -1,0 +1,20 @@
+// canon_mode_list 0xfca90f10 (found @0xfc07317c)
+const CapturemodeMap modemap[] = {
+    { MODE_AUTO                 ,32768 },
+    { MODE_M                    ,32770 },
+    { MODE_AV                   ,32771 },
+    { MODE_TV                   ,32772 },
+    { MODE_P                    ,32773 },
+    { MODE_CREATIVE_EFFECT      ,33299 },
+    { MODE_HYBRID_AUTO          ,33298 },
+    { MODE_VIDEO_STD             ,2643 },
+    { MODE_VIDEO_IFRAME_MOVIE    ,2650 },
+    { MODE_VIDEO_M               ,2651 },
+    { MODE_VIDEO_SHORT_CLIP      ,2652 },
+    { MODE_PORTRAIT             ,16406 },
+    { MODE_FIREWORK             ,16416 },
+    { MODE_STAR_NIGHTSCAPE      ,16453 },
+    { MODE_STAR_TRAILS          ,16454 },
+    { MODE_VIDEO_STAR_TIME_LAPSE,16459 },
+    { MODE_NIGHT_SCENE          ,16953 },
+};

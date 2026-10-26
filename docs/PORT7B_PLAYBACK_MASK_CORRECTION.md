@@ -76,6 +76,40 @@ python3 -B -m unittest discover -s tests -p test_port7a_platform_configuration.p
 - **Negative control:** the same suite, run with `G3X_PLATFORM_DIR` pointing at a scratch copy that holds the *original* `platform_kbd.h`, gives `FAILED (failures=2)`: `test_alt_options_have_override_coverage` and `test_playback_correction_is_minimal_and_excludes_power`. The tests therefore distinguish the two masks.
 - No other suite was run, because the other suites can import firmware validators or build tools. Nothing was compiled or built. No ROM, dump or binary was read. The only input outside the platform sources was the existing `physw_bits.txt` text.
 
+### Clean-checkout reproduction (added after commit `03faef1`)
+
+**There is no bootstrap that can produce `platform_kbd.h`.** `chdk-port/` is a local checkout of upstream CHDK r5491 (`chdk-port/.git_upstream` HEAD `21b9a14eb2043aeffdd2cb141081e7dcfe75f7e6`). Upstream has no `platform/g3x`: `ls-tree` lists nothing for it, and upstream status reports `?? platform/g3x/`. The directory was authored locally (CHDK-PORT-0) and `.gitignore:43` ignores it. VERIFIED.
+
+The fix below is a small offline fixture. It does not track that tree or change `.gitignore`.
+
+- `tests/fixtures/port7b/platform_kbd.h.preimage` is the complete original header, 21 lines, SHA-256 `4d259431…d459b0`. That hash equals the PORT-7A E8 hash and the preimage hash in the patch header.
+- `tests/fixtures/port7b/{kbd.c, platform_camera.h, shooting.c}` are verbatim line excerpts that contain only the constructs PORT-7A parses:
+  - `kbd.c` L29–45
+  - `platform_camera.h` L18–20 and L73–76
+  - `shooting.c` L107–126
+- `tests/test_port7b_reproducibility.py` contains three groups of checks:
+  - **Clean clone (never skipped).** It applies patch 0002 to the preimage with a strict applier that allows no fuzz, and checks both SHA-256 values recorded in the patch header. It also checks that the only non-comment change is the `KEYS_MASK0` value. It rejects re-applying the patch and rejects an altered preimage. It then runs every PORT-7A constant check, unchanged, on the patched fixture, and confirms that the unpatched preimage still shows the Playback gap.
+  - **Local workspace only (skipped when the platform sources are missing).** The live header must equal the postimage, and every excerpt must still match its line range in the live file. This catches a stale fixture.
+  - **`--assemble DIR`** writes the four inputs into `DIR`, so the unmodified PORT-7A module can run with `G3X_PLATFORM_DIR`.
+
+Clean-checkout commands:
+
+```sh
+git clone --branch fix/port7b-playback-mask https://github.com/s4urj3ng/g3x-lite.git g3x-lite-port7b
+cd g3x-lite-port7b
+python3 -B -m unittest discover -s tests -p test_port7b_reproducibility.py -v
+tmp=$(mktemp -d) && python3 -B tests/test_port7b_reproducibility.py --assemble "$tmp"
+G3X_PLATFORM_DIR="$tmp" python3 -B -m unittest discover -s tests -p test_port7a_platform_configuration.py -v
+```
+
+The branch is not pushed yet. Until it is, clone from the local repository path in place of the GitHub URL.
+
+To apply the correction to a local CHDK tree, run this from the repository root. Use `patch -d`, not `git apply`: `git apply` resolves paths against the outer `g3x-lite` repository.
+
+```sh
+patch -p1 -d chdk-port --dry-run < patches/0002-port7b-keys-mask0.patch && patch -p1 -d chdk-port < patches/0002-port7b-keys-mask0.patch
+```
+
 ### What remains UNKNOWN
 
 - Whether the physical Playback button actually toggles bit 16. It was never sampled, so a dedicated press observation is needed. That step is a hardware action and requires approval.
