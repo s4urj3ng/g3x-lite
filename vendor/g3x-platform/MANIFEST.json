@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "description": "Minimal GM1.10C platform/g3x source baseline for offline PORT-7A/PORT-7C validation. Not a build input set. See docs/PORT8A_PLATFORM_BOOTSTRAP.md.",
+  "camera": "Canon PowerShot G3 X",
+  "firmware": "GM1.10C",
+  "upstream": {
+    "project": "CHDK",
+    "revision": "r5491",
+    "commit": "21b9a14eb2043aeffdd2cb141081e7dcfe75f7e6",
+    "note": "Upstream has no platform/g3x; these files are locally authored GM1.10C sources (CHDK-PORT-0), not GM1.10E historical files."
+  },
+  "target_root": "chdk-port",
+  "files": [
+    {
+      "path": "platform/g3x/kbd.c",
+      "size": 3750,
+      "baseline_sha256": "ff4d62afd1d98cd22b6369eac0dde539b19a2dec2a44a255c9251c4272eed0ce",
+      "final_sha256": "ff4d62afd1d98cd22b6369eac0dde539b19a2dec2a44a255c9251c4272eed0ce",
+      "provenance": ["CHDK_PORT0C_CODEX_INCREMENTAL_REVIEW.md frozen-source table", "CHDK_PORT0F_TEST_INTEGRITY_REPORT.md", "PORT7A_PLATFORM_CONFIGURATION_VALIDATION.md E9"]
+    },
+    {
+      "path": "platform/g3x/lib.c",
+      "size": 2997,
+      "baseline_sha256": "1036e3452e66274010b5da755b2740f0b01b80f918009abf82e52045a0f8a1da",
+      "final_sha256": "1036e3452e66274010b5da755b2740f0b01b80f918009abf82e52045a0f8a1da",
+      "provenance": ["CHDK_PORT0C_CODEX_INCREMENTAL_REVIEW.md frozen-source table", "CHDK_PORT0F_TEST_INTEGRITY_REPORT.md"]
+    },
+    {
+      "path": "platform/g3x/platform_camera.h",
+      "size": 3885,
+      "baseline_sha256": "0fed491abe86c069166c4aadc50eceec81dd0da835943049e03b370fede9f6ac",
+      "final_sha256": "0fed491abe86c069166c4aadc50eceec81dd0da835943049e03b370fede9f6ac",
+      "provenance": ["CHDK_PORT0C_CODEX_INCREMENTAL_REVIEW.md frozen-source table", "PORT7A_PLATFORM_CONFIGURATION_VALIDATION.md E7"]
+    },
+    {
+      "path": "platform/g3x/platform_kbd.h",
+      "size": 872,
+      "baseline_sha256": "4d2594313c304ffb6598d47cfc9cd4bbffd0f3b1b64d35e734df8e8218d459b0",
+      "final_sha256": "4c9fd8b4df5d8f45e65827eba5588b6bb2a145765764c0ef0baa85e668f49b24",
+      "provenance": ["CHDK_PORT0C_CODEX_INCREMENTAL_REVIEW.md frozen-source table", "PORT7A_PLATFORM_CONFIGURATION_VALIDATION.md E8", "tests/fixtures/port7b/platform_kbd.h.preimage (byte-identical)"]
+    },
+    {
+      "path": "platform/g3x/shooting.c",
+      "size": 4581,
+      "baseline_sha256": "005eecdb840eeab16b16ef251fa8428653eabf34c8ee29a20cccb03f48af9b96",
+      "final_sha256": "005eecdb840eeab16b16ef251fa8428653eabf34c8ee29a20cccb03f48af9b96",
+      "provenance": ["CHDK_PORT0C_CODEX_INCREMENTAL_REVIEW.md frozen-source table", "PORT7A_PLATFORM_CONFIGURATION_VALIDATION.md E10"]
+    }
+  ],
+  "patches": [
+    {
+      "file": "patches/0002-port7b-keys-mask0.patch",
+      "target": "platform/g3x/platform_kbd.h",
+      "preimage_sha256": "4d2594313c304ffb6598d47cfc9cd4bbffd0f3b1b64d35e734df8e8218d459b0",
+      "postimage_sha256": "4c9fd8b4df5d8f45e65827eba5588b6bb2a145765764c0ef0baa85e668f49b24"
+    }
+  ]
+}
