@@ -1,7 +1,9 @@
 """PORT-9B: tests for tools/port9b_runtime_contract.py.
 
-Runs on any clean clone, with or without a bootstrapped chdk-port/: sources
-are rebuilt in memory from vendor/ or bootstrapped into temporary directories.
+Runs on any clean clone, with or without a bootstrapped chdk-port/: platform
+sources are rebuilt in memory from vendor/ + patches (or bootstrapped into
+temporary directories) and the tracked boot_prototype.c is verified against
+its pinned SHA-256 digest.
 Standard library only; no subprocess, ROM, binary, build or hardware access.
 
 Run:
@@ -56,11 +58,15 @@ class Positive(unittest.TestCase):
         findings = pc.check_contract(in_memory())
         self.assertEqual(pc.violations(findings), [])
         self.assertTrue(any(f.check == "C4.defaults_inert" for f in findings))
+        self.assertTrue(any(f.check == "C1.prototype_sha256" and f.ok for f in findings))
 
     def test_cli_in_memory_exit_zero(self):
         out = io.StringIO()
         self.assertEqual(pc.run(out=out), 0)
-        self.assertIn("RESULT ok", out.getvalue())
+        text = out.getvalue()
+        self.assertIn("SOURCES in-memory (vendor + patches) + tracked boot_prototype.c", text)
+        self.assertIn("recognized activation markers absent", text)
+        self.assertIn("RESULT ok", text)
 
     def test_runtime_facts_are_reported_unverified(self):
         findings = pc.check_contract(in_memory())
@@ -79,6 +85,7 @@ class Positive(unittest.TestCase):
         proto = src[pc.PROTOTYPE]
         self.assertTrue(pc.defines_function(proto, "CreateTask_spytask"))
         self.assertFalse(pc.asm_calls(proto, "CreateTask_spytask"))
+        self.assertFalse(pc.has_spytask_activation_marker(src))
         self.assertTrue(pc.asm_calls(proto, "sub_fc1283d2"))
         self.assertFalse(pc.defines_function(src[KBD_C], "mykbd_task"))
         self.assertTrue(pc.defines_function(src[KBD_C], "wrap_kbd_p1_f"))
@@ -86,6 +93,7 @@ class Positive(unittest.TestCase):
     def test_comment_only_mentions_are_not_activations(self):
         src = mutate(in_memory(), KBD_C, "long kbd_new_state",
                      "// void mykbd_task() { } core_spytask_can_start(); CreateTask_my\n"
+                     "/* bl.w CreateTask_spytask; _CreateTask(\"SpyTask\", 0, 0, spytask, 0); */\n"
                      "long kbd_new_state")
         self.assertEqual(pc.violations(pc.check_contract(src)), [])
 
@@ -102,7 +110,8 @@ class Positive(unittest.TestCase):
             self.assertEqual(by_check[f"C5.{fid}"].label, expected)
 
     def test_hypothetical_allows_matching_source_activation(self):
-        src = mutate(in_memory(), pc.PROTOTYPE, SPYTASK_OFF, SPYTASK_ON)
+        src = mutate(in_memory(), KBD_C, "int physw0_override;",
+                     'int physw0_override;\nvoid f(void) { asm volatile("bl CreateTask_spytask\\n"); }')
         findings = pc.check_contract(src, rt.HYPOTHETICAL_ALL_VERIFIED,
                                      allow_hypothetical=True)
         self.assertEqual(pc.violations(findings), [])
@@ -117,15 +126,34 @@ class PreconditionPolicy(unittest.TestCase):
         findings = pc.check_contract(in_memory(), rt.HYPOTHETICAL_ALL_VERIFIED)
         self.assertEqual(failed(findings), {"C4.preconditions"})
 
+    def test_refused_preconditions_preserve_effective_default_labels_and_inertness(self):
+        findings = pc.check_contract(in_memory(), rt.HYPOTHETICAL_ALL_VERIFIED,
+                                     allow_hypothetical=False)
+        self.assertEqual(failed(findings), {"C4.preconditions"})
+        by_check = {f.check: f for f in findings}
+        self.assertEqual(by_check["C4.preconditions"].label, pc.VERIFIED_SOURCE)
+        self.assertFalse(by_check["C4.preconditions"].ok)
+        self.assertEqual(by_check["C4.model_trace"].label, pc.VERIFIED_SOURCE)
+        self.assertTrue(by_check["C4.model_trace"].ok)
+        self.assertIn("allows nothing", by_check["C4.model_trace"].detail)
+        self.assertIn("C4.defaults_inert", by_check)
+        self.assertTrue(by_check["C4.defaults_inert"].ok)
+        self.assertEqual(by_check["C4.defaults_inert"].label, pc.VERIFIED_SOURCE)
+
     def test_single_flag_refused_by_default(self):
         for name in ("create_task_prologue_verified", "init_file_modules_entry_verified",
                      "physw_entry_verified"):
             with self.subTest(flag=name):
                 pre = rt.Preconditions(**{name: True})
-                self.assertIn("C4.preconditions", failed(pc.check_contract(in_memory(), pre)))
+                findings = pc.check_contract(in_memory(), pre)
+                self.assertEqual(failed(findings), {"C4.preconditions"})
+                by_check = {f.check: f for f in findings}
+                self.assertEqual(by_check["C4.model_trace"].label, pc.VERIFIED_SOURCE)
+                self.assertIn("C4.defaults_inert", by_check)
 
     def test_refused_preconditions_do_not_relax_source_checks(self):
-        src = mutate(in_memory(), pc.PROTOTYPE, SPYTASK_OFF, SPYTASK_ON)
+        src = mutate(in_memory(), KBD_C, "int physw0_override;",
+                     'int physw0_override;\nvoid f(void) { asm volatile("bl CreateTask_spytask\\n"); }')
         findings = pc.check_contract(src, rt.HYPOTHETICAL_ALL_VERIFIED)
         self.assertEqual(failed(findings), {"C4.preconditions", "C3.spytask"})
 
@@ -142,14 +170,67 @@ class SourceViolations(unittest.TestCase):
     def assertOnlyViolation(self, src, check):
         self.assertEqual(failed(pc.check_contract(src)), {check})
 
-    def test_enabled_spytask_creation(self):
-        self.assertOnlyViolation(mutate(in_memory(), pc.PROTOTYPE, SPYTASK_OFF, SPYTASK_ON),
-                                 "C3.spytask")
+    def assertViolations(self, src, expected_checks):
+        self.assertEqual(failed(pc.check_contract(src)), set(expected_checks))
 
-    def test_spytask_via_blx(self):
-        self.assertOnlyViolation(
+    def test_enabled_spytask_creation_in_prototype_fails_integrity_and_c3(self):
+        self.assertViolations(
+            mutate(in_memory(), pc.PROTOTYPE, SPYTASK_OFF, SPYTASK_ON),
+            {"C1.prototype_sha256", "C3.spytask"},
+        )
+
+    def test_spytask_via_blx_in_prototype(self):
+        self.assertViolations(
             mutate(in_memory(), pc.PROTOTYPE, SPYTASK_OFF, '"    blx     CreateTask_spytask\\n"'),
-            "C3.spytask")
+            {"C1.prototype_sha256", "C3.spytask"},
+        )
+
+    def test_spytask_counterexamples_rejected(self):
+        counterexamples = [
+            ("b_w", 'asm volatile("    b.w     CreateTask_spytask\\n");'),
+            ("bl_w", 'asm volatile("    bl.w    CreateTask_spytask\\n");'),
+            ("b_plain", 'asm volatile("    b       CreateTask_spytask\\n");'),
+            ("bx_plain", 'asm volatile("    bx      CreateTask_spytask\\n");'),
+            ("ldr_literal_blx", 'asm volatile("    ldr r3, =CreateTask_spytask; blx r3\\n");'),
+            ("second_insn_in_string", 'asm volatile("    nop\\n    bl CreateTask_spytask\\n");'),
+            ("semicolon_second_insn", 'asm volatile("    nop; bl CreateTask_spytask\\n");'),
+            ("label_before_call", 'asm volatile("1:  bl      CreateTask_spytask\\n");'),
+            ("asm_bl_core_spytask", 'asm volatile("    bl      core_spytask\\n");'),
+            ("asm_bl_spytask", 'asm volatile("    bl      spytask\\n");'),
+            ("c_call_create_task_spytask", "CreateTask_spytask();"),
+            ("c_call_core_spytask", "core_spytask();"),
+            ("c_call_spytask", "spytask(0, 0, 0, 0, 0, 0);"),
+            ("c_call_underscore_createtask", '_CreateTask("SpyTask", 0x19, 0x2000, spytask, 0);'),
+        ]
+        for label, snippet in counterexamples:
+            with self.subTest(case=label):
+                src = mutate(
+                    in_memory(),
+                    KBD_C,
+                    "int physw0_override;",
+                    f"int physw0_override;\nvoid trigger_{label}(void) {{ {snippet} }}",
+                )
+                self.assertOnlyViolation(src, "C3.spytask")
+                proto_src = mutate(in_memory(), pc.PROTOTYPE, SPYTASK_OFF, snippet)
+                self.assertViolations(proto_src, {"C1.prototype_sha256", "C3.spytask"})
+
+    def test_prototype_reintroducing_startdiskboot_rejected(self):
+        src = mutate(
+            in_memory(),
+            pc.PROTOTYPE,
+            '"    bl      sub_fc05bb94\\n"',
+            '"    bl      sub_fc05bb94\\n"\n        "    bl      sub_fc05bbea\\n"',
+        )
+        self.assertOnlyViolation(src, "C1.prototype_sha256")
+
+    def test_prototype_bss_bound_mutation_rejected(self):
+        src = mutate(
+            in_memory(),
+            pc.PROTOTYPE,
+            '"    ldr     r1, =0x003489b4\\n"',
+            '"    ldr     r1, =0x00400000\\n"',
+        )
+        self.assertOnlyViolation(src, "C1.prototype_sha256")
 
     def test_mykbd_task_defined(self):
         self.assertOnlyViolation(
@@ -165,13 +246,15 @@ class SourceViolations(unittest.TestCase):
 
     def test_create_task_hook_added(self):
         self.assertOnlyViolation(
-            mutate(in_memory(), pc.PROTOTYPE, PHYSW_CALL,
-                   PHYSW_CALL + '\n        "    bl      CreateTask_my\\n"'),
+            mutate(in_memory(), KBD_C, "int physw0_override;",
+                   "int physw0_override;\nvoid CreateTask_my(void) { }"),
             "C3.intercept")
 
     def test_stock_physw_creator_removed(self):
-        self.assertOnlyViolation(mutate(in_memory(), pc.PROTOTYPE, PHYSW_CALL, "// " + PHYSW_CALL),
-                                 "C3.stock_physw")
+        self.assertViolations(
+            mutate(in_memory(), pc.PROTOTYPE, PHYSW_CALL, "// " + PHYSW_CALL),
+            {"C1.prototype_sha256", "C3.stock_physw"},
+        )
 
     def test_wrong_firmware_platformsub(self):
         self.assertOnlyViolation(mutate(in_memory(), CAM_H, '"110c"', '"110e"'), "C2.platform")
@@ -293,12 +376,58 @@ class TargetTree(unittest.TestCase):
         proto.symlink_to(REPO_ROOT / "chdk-port" / pc.PROTOTYPE)
         self.assertEqual(self.run_tool()[0], 3)
 
-    def test_enabled_spytask_in_tree_is_violation(self):
+    def test_symlinked_prototype_parent_dir_is_integrity_error(self):
+        sub_dir = self.target / "platform/g3x/sub"
+        shutil.rmtree(sub_dir)
+        sub_dir.symlink_to(REPO_ROOT / "chdk-port/platform/g3x/sub")
+        code, out = self.run_tool()
+        self.assertEqual(code, 3)
+        self.assertIn("symlink", out)
+
+    def test_modified_prototype_startdiskboot_in_tree_is_integrity_error(self):
+        proto = self.target / pc.PROTOTYPE
+        proto.write_text(
+            proto.read_text().replace(
+                '"    bl      sub_fc05bb94\\n"',
+                '"    bl      sub_fc05bb94\\n"\n        "    bl      sub_fc05bbea\\n"',
+            )
+        )
+        code, out = self.run_tool()
+        self.assertEqual(code, 3)
+        self.assertIn("sha256 mismatch", out)
+
+    def test_modified_prototype_bss_bound_in_tree_is_integrity_error(self):
+        proto = self.target / pc.PROTOTYPE
+        proto.write_text(
+            proto.read_text().replace(
+                '"    ldr     r1, =0x003489b4\\n"',
+                '"    ldr     r1, =0x00400000\\n"',
+            )
+        )
+        code, out = self.run_tool()
+        self.assertEqual(code, 3)
+        self.assertIn("sha256 mismatch", out)
+
+    def test_modified_prototype_in_default_repo_root_is_integrity_error(self):
+        fake_repo = self.root / "fake_repo"
+        (fake_repo / "chdk-port" / pc.PROTOTYPE).parent.mkdir(parents=True, exist_ok=True)
+        proto = fake_repo / "chdk-port" / pc.PROTOTYPE
+        proto.write_text(
+            (REPO_ROOT / "chdk-port" / pc.PROTOTYPE).read_text().replace(
+                '"    ldr     r1, =0x003489b4\\n"',
+                '"    ldr     r1, =0x00400000\\n"',
+            )
+        )
+        shutil.copytree(REPO_ROOT / "patches", fake_repo / "patches")
+        with self.assertRaisesRegex(pc.ContractError, "sha256 mismatch"):
+            pc.load_sources(target_root=None, repo_root=fake_repo)
+
+    def test_enabled_spytask_in_tree_is_integrity_error(self):
         proto = self.target / pc.PROTOTYPE
         proto.write_text(proto.read_text().replace(SPYTASK_OFF, SPYTASK_ON))
         code, out = self.run_tool()
-        self.assertEqual(code, 1)
-        self.assertRegex(out, r"FAIL .*C3\.spytask")
+        self.assertEqual(code, 3)
+        self.assertIn("sha256 mismatch", out)
 
     def test_tampered_vendor_is_integrity_error(self):
         vendor = self.root / "vendor"
@@ -350,6 +479,10 @@ class OfflineOnly(unittest.TestCase):
             self.assertIn(sym, proto)
         self.assertEqual(re.findall(r"0x[0-9a-fA-F]{5,}", self.source.replace(
             "0x00020000", "")), [])
+
+    def test_pinned_prototype_sha256_matches_tracked_file(self):
+        proto_bytes = (REPO_ROOT / "chdk-port" / pc.PROTOTYPE).read_bytes()
+        self.assertEqual(boot.sha256(proto_bytes), pc.PROTOTYPE_SHA256)
 
     def test_port9a_model_is_unchanged_in_behaviour(self):
         m = rt.RuntimeLifecycle()

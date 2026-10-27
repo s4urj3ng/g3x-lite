@@ -5,12 +5,15 @@ Checks that the bootstrapped GM1.10C platform sources (PORT-8A) and the
 tracked boot prototype agree with the runtime lifecycle model (PORT-9A):
 
   C1 integrity  every manifest file is present and at its final SHA-256
-                (PORT-8A build_expected / MANIFEST.json);
+                (PORT-8A build_expected / MANIFEST.json), and the tracked
+                boot_prototype.c is a regular file at its pinned SHA-256;
   C2 config     configuration the runtime interfaces rely on (DryOS platform,
                 ALT button inside KEYS_MASK0, Power excluded);
-  C3 interfaces no runtime interface is active in source beyond what the
-                PORT-9A preconditions allow (source must not run ahead of
-                evidence);
+  C3 interfaces recognized activation markers for runtime interfaces are
+                absent in source unless the PORT-9A preconditions allow them
+                (source must not run ahead of evidence; regex/source scanning
+                only detects known activation markers and cannot prove the
+                absence of arbitrary runtime hooks);
   C4 policy     preconditions are the GM1.10C defaults (all unverified);
                 anything else is refused unless explicitly allowed, and is
                 then reported as HYPOTHETICAL, never VERIFIED;
@@ -20,8 +23,10 @@ Labels: VERIFIED_SOURCE = a property of the checked source text;
 UNVERIFIED_RUNTIME = a firmware runtime fact this tool cannot establish;
 HYPOTHETICAL = a result computed under preconditions that are not evidence.
 
-Without --target the sources are rebuilt in memory from vendor/ and the
-patches (nothing is written). With --target the tree is only read.
+Without --target the five platform sources are rebuilt in memory from vendor/
+and the patches, and the tracked boot_prototype.c is read and hash-verified
+from the repository tree (nothing is written). With --target the target tree
+is only read and verified against the manifest and pinned prototype digest.
 Standard library only. No subprocess, compiler, ROM, network or hardware.
 
 Exit codes: 0 contract holds, 1 contract violation, 3 integrity error.
@@ -45,6 +50,7 @@ import port9a_runtime_lifecycle as rt  # noqa: E402
 
 REPO_ROOT = boot.REPO_ROOT
 PROTOTYPE = "platform/g3x/sub/110c/boot_prototype.c"
+PROTOTYPE_SHA256 = "f7884eb2078e93a0098299e2665c1069ecbc65c7759d8993fa31e38fbb232e68"
 
 VERIFIED_SOURCE = "VERIFIED_SOURCE"
 UNVERIFIED_RUNTIME = "UNVERIFIED_RUNTIME"
@@ -129,10 +135,107 @@ def mentions(text, name):
     return re.search(r'\b' + re.escape(name) + r'\b', strip_c_comments(text)) is not None
 
 
+def function_bodies(text, name):
+    """Return active code bodies `{ ... }` of function `name` by brace matching."""
+    cleaned = strip_c_comments(text)
+    bodies = []
+    for m in re.finditer(r'\b' + re.escape(name) + r'\s*\([^;{)]*\)\s*\{', cleaned):
+        start = m.end() - 1
+        depth = 0
+        in_str = False
+        esc = False
+        for idx in range(start, len(cleaned)):
+            ch = cleaned[idx]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+            else:
+                if ch == '"':
+                    in_str = True
+                elif ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        bodies.append(cleaned[start:idx + 1])
+                        break
+    return bodies
+
+
+def strip_function_bodies(text, names):
+    """Return `text` with comments stripped and the named function bodies removed."""
+    cleaned = strip_c_comments(text)
+    for name in names:
+        for body in function_bodies(cleaned, name):
+            cleaned = cleaned.replace(body, "{ }", 1)
+    return cleaned
+
+
+def asm_strings(text):
+    """Extract concatenated string literal contents from active code."""
+    return [m.group(1) for m in re.finditer(r'"((?:\\.|[^"\\])*)"', strip_c_comments(text))]
+
+
 def asm_calls(text, target):
-    """True if active inline asm contains a branch-with-link to `target`."""
-    return re.search(r'"\s*blx?\s+' + re.escape(target) + r'\b',
-                     strip_c_comments(text)) is not None
+    """True if active inline asm invokes or references `target`.
+
+    Recognizes direct branches (`b`, `bl`, `bx`, `blx` with optional `.w`/`.n`
+    width suffixes), multiple `;`- or `\\n`-separated instructions per string,
+    optional labels before instructions, and symbol address loads/references
+    (`=target` or bare symbol reference in an asm statement).
+    Note: regex/source scanning only detects recognized activation markers;
+    it cannot prove the absence of arbitrary runtime hooks.
+    """
+    esc = re.escape(target)
+    branch_pat = (
+        r'^\s*(?:[A-Za-z_.$][A-Za-z0-9_.$]*\s*:\s*)*'
+        r'b(?:lx|l|x)?(?:\.[nw])?\s+' + esc + r'\b'
+    )
+    ref_pat = r'(?:=\s*' + esc + r'\b|\b' + esc + r'\b)'
+    for lit in asm_strings(text):
+        expanded = lit.replace(r"\n", "\n").replace(r"\t", "\t")
+        for stmt in re.split(r'[;\n]', expanded):
+            stmt_clean = re.sub(r'/\*.*?\*/|//.*|@.*', '', stmt).strip()
+            if not stmt_clean:
+                continue
+            if re.match(branch_pat, stmt_clean, flags=re.I) or re.search(ref_pat, stmt_clean):
+                return True
+    return False
+
+
+def has_spytask_activation_marker(sources):
+    """True if any source file contains a recognized SpyTask activation marker.
+
+    Checks both the prototype and all other platform sources, ignoring only the
+    dormant `spytask` and `CreateTask_spytask` helper definitions in the
+    prototype itself. Detects inline asm branches/references to
+    `CreateTask_spytask`, `spytask`, `core_spytask`, or `_CreateTask`, as well
+    as active C calls/references to those symbols or `"SpyTask"` outside the
+    dormant prototype wrapper functions.
+    """
+    for rel, text in sources.items():
+        if asm_calls(text, "CreateTask_spytask") or asm_calls(text, "spytask") or asm_calls(text, "core_spytask"):
+            return True
+        if rel == PROTOTYPE:
+            outside = strip_function_bodies(text, ("spytask", "CreateTask_spytask"))
+            # Remove forward declarations of spytask and CreateTask_spytask
+            outside_no_decl = re.sub(
+                r'\bvoid\s+(?:CreateTask_spytask|spytask)\s*\([^;]*\)\s*;',
+                '',
+                outside,
+            )
+        else:
+            outside_no_decl = strip_c_comments(text)
+        for marker in ("CreateTask_spytask", "core_spytask", "spytask", "_CreateTask", "CreateTask"):
+            if re.search(r'\b' + re.escape(marker) + r'\b', outside_no_decl):
+                return True
+        if re.search(r'"\s*SpyTask\s*"', outside_no_decl):
+            return True
+    return False
 
 
 # -- source loading ----------------------------------------------------------
@@ -142,8 +245,11 @@ def load_sources(target_root=None, manifest_path=boot.DEFAULT_MANIFEST,
     """Return ({relpath: text}, origin). Never writes.
 
     The vendored baseline and patches are always integrity-checked through
-    PORT-8A. With target_root, every manifest file there must be a regular
-    file at its final hash; without it the final bytes are taken from memory.
+    PORT-8A. Without target_root, the five platform files are rebuilt in memory
+    from vendor/ + patches and the tracked boot_prototype.c is read from the
+    repository tree. With target_root, every manifest file and boot_prototype.c
+    are read from target_root. In both modes, boot_prototype.c must be a
+    regular non-symlink file matching PROTOTYPE_SHA256.
     """
     try:
         manifest = boot.load_manifest(manifest_path)
@@ -153,7 +259,7 @@ def load_sources(target_root=None, manifest_path=boot.DEFAULT_MANIFEST,
 
     sources = {}
     if target_root is None:
-        origin = "in-memory (vendor + patches)"
+        origin = "in-memory (vendor + patches) + tracked boot_prototype.c"
         for rel, (_, final) in expected.items():
             sources[rel] = final.decode("utf-8")
         proto_root = Path(repo_root) / manifest["target_root"]
@@ -166,10 +272,25 @@ def load_sources(target_root=None, manifest_path=boot.DEFAULT_MANIFEST,
             sources[rel] = (Path(target_root) / rel).read_text(encoding="utf-8")
         proto_root = Path(target_root)
 
-    proto = proto_root / PurePosixPath(PROTOTYPE)
-    if proto.is_symlink() or not proto.is_file():
+    proto = proto_root
+    for part in PurePosixPath(PROTOTYPE).parts:
+        proto = proto / part
+        if proto.is_symlink():
+            raise ContractError(f"integrity: symlink in prototype path {proto}")
+    if not proto.is_file():
         raise ContractError(f"integrity: missing tracked prototype {proto}")
-    sources[PROTOTYPE] = proto.read_text(encoding="utf-8")
+    try:
+        proto_bytes = proto.read_bytes()
+        proto_text = proto_bytes.decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ContractError(f"integrity: cannot read prototype {proto}: {exc}") from None
+    actual_sha = boot.sha256(proto_bytes)
+    if actual_sha != PROTOTYPE_SHA256:
+        raise ContractError(
+            f"integrity: {PROTOTYPE}: sha256 mismatch "
+            f"(expected {PROTOTYPE_SHA256}, got {actual_sha})"
+        )
+    sources[PROTOTYPE] = proto_text
     return sources, origin
 
 
@@ -198,13 +319,19 @@ def check_contract(sources, preconditions=rt.GM110C_PRECONDITIONS,
     kbd_c = sources.get("platform/g3x/kbd.c", "")
     proto = sources.get(PROTOTYPE, "")
 
-    # C1: the files this contract reads must all be present.
+    # C1: the files this contract reads must all be present, and the tracked
+    # boot prototype must match its pinned SHA-256 digest.
     needed = ["platform/g3x/kbd.c", "platform/g3x/lib.c",
               "platform/g3x/platform_camera.h", "platform/g3x/platform_kbd.h",
               "platform/g3x/shooting.c", PROTOTYPE]
     missing = [rel for rel in needed if rel not in sources]
     add("C1.sources", not missing,
         "all required sources present" if not missing else f"missing: {missing}")
+    proto_sha = boot.sha256(proto.encode("utf-8")) if PROTOTYPE in sources else "missing"
+    add("C1.prototype_sha256", proto_sha == PROTOTYPE_SHA256,
+        f"{PROTOTYPE} matches pinned sha256={PROTOTYPE_SHA256}"
+        if proto_sha == PROTOTYPE_SHA256
+        else f"{PROTOTYPE} sha256 mismatch: expected {PROTOTYPE_SHA256}, got {proto_sha}")
 
     # C2: configuration the runtime interfaces depend on.
     def c2_platform():
@@ -237,21 +364,22 @@ def check_contract(sources, preconditions=rt.GM110C_PRECONDITIONS,
     guarded("C2.platform", c2_platform)
     guarded("C2.keys", c2_keys)
 
-    # C4 first: the C3 limits are derived from the accepted preconditions.
-    active = _active_preconditions(preconditions)
-    hypothetical = bool(active)
-    if hypothetical and not allow_hypothetical:
+    # C4 first: the C3 limits are derived from the effective preconditions.
+    requested_active = _active_preconditions(preconditions)
+    requested_hypothetical = bool(requested_active)
+    if requested_hypothetical and not allow_hypothetical:
         add("C4.preconditions", False,
-            f"refused: preconditions {active} are not verified for GM1.10C")
+            f"refused: preconditions {requested_active} are not verified for GM1.10C")
     else:
         add("C4.preconditions", True,
-            "GM1.10C defaults: no precondition verified" if not active
-            else f"HYPOTHETICAL run with {active} (explicitly allowed)",
-            HYPOTHETICAL if hypothetical else VERIFIED_SOURCE)
-    effective = preconditions if (not hypothetical or allow_hypothetical) \
+            "GM1.10C defaults: no precondition verified" if not requested_active
+            else f"HYPOTHETICAL run with {requested_active} (explicitly allowed)",
+            HYPOTHETICAL if requested_hypothetical else VERIFIED_SOURCE)
+    effective = preconditions if (not requested_hypothetical or allow_hypothetical) \
         else rt.GM110C_PRECONDITIONS
+    effective_hypothetical = bool(_active_preconditions(effective))
 
-    # The model under these preconditions decides what may be active.
+    # The model under effective preconditions decides what may be active.
     model = rt.RuntimeLifecycle(effective)
     model.init_core()
     model.install_intercept()
@@ -265,15 +393,17 @@ def check_contract(sources, preconditions=rt.GM110C_PRECONDITIONS,
         "gate": model.gate is rt.GateState.READY,
         "spytask": model.spytask is rt.TaskState.RUNNING,
     }
-    model_label = HYPOTHETICAL if hypothetical else VERIFIED_SOURCE
+    model_label = HYPOTHETICAL if effective_hypothetical else VERIFIED_SOURCE
     add("C4.model_trace", not rt.check_trace(model.trace),
         f"PORT-9A trace valid; allows {sorted(k for k, v in allowed.items() if v) or 'nothing'}",
         model_label)
-    if not hypothetical:
+    if not effective_hypothetical:
         add("C4.defaults_inert", not any(allowed.values()),
             "PORT-9A GM1.10C defaults activate no interface")
 
-    # C3: source must not activate an interface the model does not allow.
+    # C3: recognized activation markers in source must be absent unless the
+    # model allows the interface. Note: regex/source scanning only detects
+    # known activation markers; it cannot prove the absence of arbitrary hooks.
     def c3():
         everything = "\n".join(sources.values())
         source_active = {
@@ -281,12 +411,16 @@ def check_contract(sources, preconditions=rt.GM110C_PRECONDITIONS,
             "kbd": defines_function(everything, rt.REPLACEMENTS["PhySw"]),
             "gate": (defines_function(everything, rt.REPLACEMENTS["InitFileModules"])
                      or mentions(everything, "core_spytask_can_start")),
-            "spytask": asm_calls(proto, "CreateTask_spytask"),
+            "spytask": has_spytask_activation_marker(sources),
         }
         for name, is_active in source_active.items():
             ok = allowed[name] or not is_active
+            marker_status = (
+                "recognized activation marker present"
+                if is_active else "recognized activation markers absent"
+            )
             add(f"C3.{name}", ok,
-                f"source {'activates' if is_active else 'does not activate'} {name}; "
+                f"{name}: {marker_status} (regex scan only; not a proof against arbitrary hooks); "
                 f"model {'allows' if allowed[name] else 'forbids'} it")
         add("C3.stock_physw", asm_calls(proto, "sub_fc1283d2"),
             "prototype task_Startup_my still calls the stock PhySw creator")
@@ -338,7 +472,7 @@ def run(target_root=None, manifest_path=boot.DEFAULT_MANIFEST, out=sys.stdout):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--target", type=Path,
-                        help="bootstrapped CHDK tree to read (default: rebuild in memory)")
+                        help="bootstrapped CHDK tree to read (default: vendor + patches in memory, tracked boot_prototype.c)")
     parser.add_argument("--manifest", type=Path, default=boot.DEFAULT_MANIFEST)
     args = parser.parse_args(argv)
     return run(args.target, args.manifest)
