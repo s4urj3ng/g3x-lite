@@ -1,5 +1,57 @@
 # Agent handoff
-Updated: 2026-10-25
+Updated: 2026-10-28
+
+## PORT-9C — Milestone Consolidation & Integration Status Synchronization (Gemini, 2026-10-28)
+
+- **Status**: **`CONSOLIDATED_ON_MAIN`** (`docs/PROJECT_STATE.md`, `docs/HANDOFF.md`).
+- **Objective**: Synchronize canonical repository state and handoff documents with merged PRs #6–#11 (`PORT-7B`, `PORT-8A`, `PORT-7C`, `PORT-9A`, `AgentBridge`, and `PORT-9B`) without modifying code, validators, tests, or protected artifacts.
+- **Verified Commit & PR Ledger on `origin/main` (`4206ec5`)**:
+  1. **PR #6 (`a0a33a4`, head `42cf957`) — PORT-7B: Playback ALT Override Mask Correction**:
+     - Deliverables: `docs/PORT7B_PLAYBACK_MASK_CORRECTION.md`, `patches/0002-port7b-keys-mask0.patch`, `tests/test_port7b_reproducibility.py`, `tests/test_port7a_platform_configuration.py`, `tests/fixtures/port7b/{kbd.c,platform_camera.h,platform_kbd.h.preimage,shooting.c}`.
+     - Summary: Updated `KEYS_MASK0` from `0x000433F9` (`4d259431...`) to `0x000533F9` (`4c9fd8b4df5d8f45e65827eba5588b6bb2a145765764c0ef0baa85e668f49b24`) by adding bit 16 (`0x00010000`, `KEY_PLAYBACK`, ROM switch table entry `0xFC66C9B8`) while keeping Power bit 17 (`0x00020000`) excluded. Clean-checkout fixtures and `19/19` reproducibility tests + `18/18` PORT-7A configuration tests pass.
+  2. **PR #7 (`84573f6`, head `3cc095e`) — PORT-8A: Reproducible G3 X Platform Bootstrap**:
+     - Deliverables: `docs/PORT8A_PLATFORM_BOOTSTRAP.md`, `vendor/g3x-platform/MANIFEST.json`, `vendor/g3x-platform/platform/g3x/{kbd.c,lib.c,platform_camera.h,platform_kbd.h,shooting.c}`, `tools/bootstrap_chdk_platform.py`, `tests/test_port8a_platform_bootstrap.py`.
+     - Summary: Tracked the exact 5 camera-level GM1.10C platform files (total 16,085 B; SHA-256s: `kbd.c` `ff4d62af...`, `lib.c` `1036e345...`, `platform_camera.h` `0fed491a...`, `platform_kbd.h` preimage `4d259431...` -> final `4c9fd8b4...`, `shooting.c` `005eecdb...`). Built a standard-library, fail-closed bootstrap tool hardened with `flock`, `O_NOFOLLOW`, `linkat` (`CREATE`), and atomic rename-aside (`ADVANCE`) to materialize `chdk-port/platform/g3x/` on clean clones. Verified by `34/34` unit tests.
+  3. **PR #8 (`16b954a`, head `5f4a300`) — PORT-7C: CHDK Platform Offline Validation Framework**:
+     - Deliverables: `docs/PORT7C_PLATFORM_VALIDATION_FRAMEWORK.md`, `tests/test_port7c_platform_validation.py`.
+     - Summary: Added a 23-test offline validation suite (`23/23 PASS`) comparing GM1.10C platform configuration against Ranma's historical GM1.10E patch (`g3x_110e.patch`, r5480 base). Proved that Ranma's 6 extended ND aperture entries (`704..864` minus `288` = `{416, 448, 480, 512, 544, 576}`) follow a synthetic 1/3-EV arithmetic grid rather than physical G3 X iris calibration (`{401, 433, 465, 497, 529, 561}`), and classified the 5 historical-only key names and 15 historical-only shooting modes as `UNVERIFIED / HISTORICAL_ONLY`.
+  4. **PR #9 (`7663d01`, head `7c95d18`) — PORT-9A: Offline CHDK Runtime Integration Foundation**:
+     - Deliverables: `docs/PORT9A_RUNTIME_INTEGRATION_MAP.md`, `tools/port9a_runtime_lifecycle.py`, `tests/test_port9a_runtime_lifecycle.py`.
+     - Summary: Implemented an address-free pure-Python state machine (`32/32 PASS`) modelling I1 (`CreateTask_my` interception), I2 (`InitFileModules` readiness gate `core_spytask_can_start`), I3 (`SpyTask` startup ordering — latched readiness, fail-closed on timeout unlike upstream), and I4 (`mykbd_task` replacing `PhySw`, gating `chdk_key_handling` on both `mykbd_task` and `SpyTask` running). Default `GM110C_PRECONDITIONS` has all flags `False`, refusing interception and leaving all runtime hooks inert.
+  5. **PR #10 (`ddcdfdc`, head `52a361c`) — AgentBridge Mode**:
+     - Deliverable: `AGENTS.md` (added AgentBridge coordination rules).
+  6. **PR #11 (`4206ec5`, head `c127c4c`) — PORT-9B: Offline Runtime Integration Contract**:
+     - Deliverables: `docs/PORT9B_RUNTIME_CONTRACT.md`, `tools/port9b_runtime_contract.py`, `tests/test_port9b_runtime_contract.py`.
+     - Summary: Implemented an offline contract validator (`51/51 PASS`) verifying consistency between the PORT-8A platform sources, the tracked `chdk-port/platform/g3x/sub/110c/boot_prototype.c` (pinned at SHA-256 `f7884eb2078e93a0098299e2665c1069ecbc65c7759d8993fa31e38fbb232e68`), and the PORT-9A lifecycle model across C1 (manifest + prototype SHA-256 integrity), C2 (DryOS/ALT/keymask config), C3 (absence of recognized activation markers across inline asm and active C calls, with explicit disclosure of regex source-scanning limits), C4 (fail-closed precondition refusal and effective-precondition trace labeling), and C5 (address-free registry of U1–U4).
+- **Implemented vs. Simulated / Validated Offline Summary**:
+  - **Implemented & Hardware-Verified (One-Shot Canon Basic / `"exec"` Diagnostics Only)**:
+    - `BOOT-001A`, `BOOT-001B-DIAG`, `UI-001A`, `UI-001B-0`, `UI-001B-1` (verified DRAM execution, L1 cache sync, `LCDMsg` OSD rendering, and 8 Port 0 button bit masks via `GetKbdState`).
+  - **Implemented in Tracked Prototype (`boot_prototype.c`) & Validated Offline Only (NEVER Executed on Hardware)**:
+    - Early boot stages 1–6 (`boot`, `sub_fc05b3c8_my`, `sub_fc05b558_my` with PORT-5E 10-literal ROM corrections, `sub_fc05b962_my`, `task_Startup_my` with `SD1stInit` gate/veneer `sub_fc31b1f4` and stock `PhySw` creator `sub_fc1283d2`), dynamic RAM witness `boot_witness`, and dormant `CreateTask_spytask` helper (invocation commented out). `candidate_port2a/` binaries remain untouched **PRE-CORRECTION** artifacts.
+  - **Implemented in Bootstrapped Platform Sources (`vendor/g3x-platform` + patch `0002`) & Validated Offline Only**:
+    - Static `keymap[]` (14 keys), `KEYS_MASK0 = 0x000533F9` (Playback bit 16 included, Power bit 17 excluded), 17 capture modes, 13 physical apertures, and 720x480 / 736x480 screen/bitmap geometry.
+  - **Simulated / Modelled Offline Only (NOT Implemented in Firmware/Platform Source)**:
+    - **I1**: `CreateTask_my` / `hook_CreateTask` task-creation interception.
+    - **I2**: `init_file_modules_task` replacement and `core_spytask_can_start()` readiness signaling.
+    - **I3**: Active `SpyTask` creation and execution during boot.
+    - **I4**: `mykbd_task` replacement of `task_PhySw` and runtime key override / ALT-mode suppression.
+- **Unresolved Runtime Integration Blockers (`UNVERIFIED_RUNTIME`)**:
+  - **U1 (`create_task_prologue_verified`)**: GM1.10C `CreateTask` (`0xBFE14A3D` / `0xBFE14A3C`) prologue instructions and the literal replayed after the prologue (`docs/CHDK_PORT0B_STUBS_AUDIT.md` contradicts itself; GM1.10E value `0x8160` must not be reused).
+  - **U2 (`init_file_modules_entry_verified`)**: GM1.10C `task_InitFileModules` entry address and completion success/failure semantics.
+  - **U3 (`physw_entry_verified`)**: GM1.10C `task_PhySw` task entry address verified independently of GM1.10E, and its relationship to the stock creator call `sub_fc1283d2`.
+  - **U4 (SpyTask creation point and priority)**: GM1.10C placement and priority for `CreateTask_spytask` in `task_Startup_my`.
+  - **Warm Restart Hardware Blockers**: Unmask-window peripheral IRQ assertion (`0xFC267BF2`, `0xD401xxxx` controller vs zeroed BSS table `0x0003F4F4`) and SD host/card state across warm restart (`docs/PORT3C_RESTART_READINESS_MATRIX.md`).
+  - **Governance**: Any task/hook implementation or phase transition requires explicit human approval. Hardware remains **STRICT NO-GO**.
+- **Recommended Next Permitted Offline Investigation**:
+  - **PORT-10A — Bounded Read-Only GM1.10C ROM Verification of Runtime Hook Preconditions (U1–U3)**: With explicit owner authorization for a bounded read-only inspection of `firmware/dumps/GM1.10C/PRIMARY.BIN` (SHA-256 `99118557...`), inspect and record exact GM1.10C ROM bytes for:
+    1. **U1**: The ATCM copy source in ROM (`0xFCEEF24C..`) corresponding to `0xBFE14A3C` (`CreateTask`, targeted by veneer `0xFC31BBC4`) to establish the true prologue instructions and replayed literal on GM1.10C.
+    2. **U3**: `sub_fc1283d2` (called by `task_Startup_my`) to verify whether it is the `PhySw` creator and extract the exact `task_PhySw` entry address passed to `CreateTask` independently of GM1.10E.
+    3. **U2**: Cross-references to `"InitFileModules"` (`0xFC0BD1AC`) to identify the creator and exact entry/body of `task_InitFileModules` on GM1.10C.
+    *(Alternative zero-ROM offline maintenance task if ROM reads are not yet authorized: PORT-7C Rank 1 comment-only correction of switch-table indices in `vendor/g3x-platform/platform/g3x/kbd.c` + `MANIFEST.json` update.)*
+- **Exact Next Verification Command**:
+  ```sh
+  python3 -B tools/bootstrap_chdk_platform.py && python3 -B tools/port9b_runtime_contract.py --target chdk-port && python3 -B -m unittest discover -s tests -p 'test_port*.py' -v
+  ```
 
 ## PORT-5E — ROM-Verified Early Boot Literal Correction (2026-10-25)
 
