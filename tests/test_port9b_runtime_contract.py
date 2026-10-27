@@ -1,0 +1,362 @@
+"""PORT-9B: tests for tools/port9b_runtime_contract.py.
+
+Runs on any clean clone, with or without a bootstrapped chdk-port/: sources
+are rebuilt in memory from vendor/ or bootstrapped into temporary directories.
+Standard library only; no subprocess, ROM, binary, build or hardware access.
+
+Run:
+  python3 -B -m unittest discover -s tests -p 'test_port9b_*.py' -v
+"""
+
+import ast
+import io
+import json
+from pathlib import Path
+import re
+import shutil
+import sys
+import tempfile
+import unittest
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+TOOL_PATH = REPO_ROOT / "tools" / "port9b_runtime_contract.py"
+sys.path.insert(0, str(REPO_ROOT / "tools"))
+
+import bootstrap_chdk_platform as boot  # noqa: E402
+import port9a_runtime_lifecycle as rt  # noqa: E402
+import port9b_runtime_contract as pc  # noqa: E402
+
+KBD_C = "platform/g3x/kbd.c"
+KBD_H = "platform/g3x/platform_kbd.h"
+CAM_H = "platform/g3x/platform_camera.h"
+SPYTASK_OFF = '// "    bl      CreateTask_spytask\\n"'
+SPYTASK_ON = '"    bl      CreateTask_spytask\\n"'
+PHYSW_CALL = '"    bl      sub_fc1283d2\\n"'
+
+
+def in_memory():
+    return pc.load_sources()[0]
+
+
+def mutate(sources, rel, old, new):
+    text = sources[rel]
+    if text.count(old) != 1:
+        raise AssertionError(f"mutation anchor {old!r} not unique in {rel}")
+    changed = dict(sources)
+    changed[rel] = text.replace(old, new)
+    return changed
+
+
+def failed(findings):
+    return {f.check for f in pc.violations(findings)}
+
+
+class Positive(unittest.TestCase):
+    def test_in_memory_contract_holds(self):
+        findings = pc.check_contract(in_memory())
+        self.assertEqual(pc.violations(findings), [])
+        self.assertTrue(any(f.check == "C4.defaults_inert" for f in findings))
+
+    def test_cli_in_memory_exit_zero(self):
+        out = io.StringIO()
+        self.assertEqual(pc.run(out=out), 0)
+        self.assertIn("RESULT ok", out.getvalue())
+
+    def test_runtime_facts_are_reported_unverified(self):
+        findings = pc.check_contract(in_memory())
+        runtime = [f for f in findings if f.check in
+                   {f"C5.{fid}" for fid, _, _ in pc.UNVERIFIED_RUNTIME_FACTS}]
+        self.assertEqual(len(runtime), len(pc.UNVERIFIED_RUNTIME_FACTS))
+        for f in runtime:
+            self.assertEqual(f.label, pc.UNVERIFIED_RUNTIME)
+            self.assertIn("UNKNOWN", f.detail)
+        # No interface status is claimed as verified at runtime.
+        self.assertFalse(any(f.label == pc.VERIFIED_SOURCE and f.check.startswith("C5.U")
+                             for f in findings))
+
+    def test_source_facts_match_port9a_map(self):
+        src = in_memory()
+        proto = src[pc.PROTOTYPE]
+        self.assertTrue(pc.defines_function(proto, "CreateTask_spytask"))
+        self.assertFalse(pc.asm_calls(proto, "CreateTask_spytask"))
+        self.assertTrue(pc.asm_calls(proto, "sub_fc1283d2"))
+        self.assertFalse(pc.defines_function(src[KBD_C], "mykbd_task"))
+        self.assertTrue(pc.defines_function(src[KBD_C], "wrap_kbd_p1_f"))
+
+    def test_comment_only_mentions_are_not_activations(self):
+        src = mutate(in_memory(), KBD_C, "long kbd_new_state",
+                     "// void mykbd_task() { } core_spytask_can_start(); CreateTask_my\n"
+                     "long kbd_new_state")
+        self.assertEqual(pc.violations(pc.check_contract(src)), [])
+
+    def test_hypothetical_requires_opt_in_and_is_labelled(self):
+        findings = pc.check_contract(in_memory(), rt.HYPOTHETICAL_ALL_VERIFIED,
+                                     allow_hypothetical=True)
+        self.assertEqual(pc.violations(findings), [])
+        by_check = {f.check: f for f in findings}
+        self.assertEqual(by_check["C4.preconditions"].label, pc.HYPOTHETICAL)
+        self.assertEqual(by_check["C4.model_trace"].label, pc.HYPOTHETICAL)
+        self.assertNotIn("C4.defaults_inert", by_check)
+        for fid, flag, _ in pc.UNVERIFIED_RUNTIME_FACTS:
+            expected = pc.HYPOTHETICAL if flag else pc.UNVERIFIED_RUNTIME
+            self.assertEqual(by_check[f"C5.{fid}"].label, expected)
+
+    def test_hypothetical_allows_matching_source_activation(self):
+        src = mutate(in_memory(), pc.PROTOTYPE, SPYTASK_OFF, SPYTASK_ON)
+        findings = pc.check_contract(src, rt.HYPOTHETICAL_ALL_VERIFIED,
+                                     allow_hypothetical=True)
+        self.assertEqual(pc.violations(findings), [])
+
+
+class PreconditionPolicy(unittest.TestCase):
+    def test_default_preconditions_are_port9a_defaults(self):
+        self.assertEqual(pc.check_contract.__defaults__[0], rt.GM110C_PRECONDITIONS)
+        self.assertEqual(pc._active_preconditions(rt.GM110C_PRECONDITIONS), [])
+
+    def test_all_verified_refused_by_default(self):
+        findings = pc.check_contract(in_memory(), rt.HYPOTHETICAL_ALL_VERIFIED)
+        self.assertEqual(failed(findings), {"C4.preconditions"})
+
+    def test_single_flag_refused_by_default(self):
+        for name in ("create_task_prologue_verified", "init_file_modules_entry_verified",
+                     "physw_entry_verified"):
+            with self.subTest(flag=name):
+                pre = rt.Preconditions(**{name: True})
+                self.assertIn("C4.preconditions", failed(pc.check_contract(in_memory(), pre)))
+
+    def test_refused_preconditions_do_not_relax_source_checks(self):
+        src = mutate(in_memory(), pc.PROTOTYPE, SPYTASK_OFF, SPYTASK_ON)
+        findings = pc.check_contract(src, rt.HYPOTHETICAL_ALL_VERIFIED)
+        self.assertEqual(failed(findings), {"C4.preconditions", "C3.spytask"})
+
+    def test_partial_hypothesis_still_forbids_unrelated_interfaces(self):
+        # PhySw entry alone cannot start mykbd_task: the intercept is still refused.
+        src = mutate(in_memory(), KBD_C, "int physw0_override;",
+                     "int physw0_override;\nvoid mykbd_task(void) { }")
+        pre = rt.Preconditions(physw_entry_verified=True)
+        findings = pc.check_contract(src, pre, allow_hypothetical=True)
+        self.assertEqual(failed(findings), {"C3.kbd"})
+
+
+class SourceViolations(unittest.TestCase):
+    def assertOnlyViolation(self, src, check):
+        self.assertEqual(failed(pc.check_contract(src)), {check})
+
+    def test_enabled_spytask_creation(self):
+        self.assertOnlyViolation(mutate(in_memory(), pc.PROTOTYPE, SPYTASK_OFF, SPYTASK_ON),
+                                 "C3.spytask")
+
+    def test_spytask_via_blx(self):
+        self.assertOnlyViolation(
+            mutate(in_memory(), pc.PROTOTYPE, SPYTASK_OFF, '"    blx     CreateTask_spytask\\n"'),
+            "C3.spytask")
+
+    def test_mykbd_task_defined(self):
+        self.assertOnlyViolation(
+            mutate(in_memory(), KBD_C, "int physw0_override;",
+                   "int physw0_override;\nvoid mykbd_task(void) { }"),
+            "C3.kbd")
+
+    def test_readiness_signal_added(self):
+        self.assertOnlyViolation(
+            mutate(in_memory(), KBD_C, "int physw0_override;",
+                   "int physw0_override;\nvoid f(void) { core_spytask_can_start(); }"),
+            "C3.gate")
+
+    def test_create_task_hook_added(self):
+        self.assertOnlyViolation(
+            mutate(in_memory(), pc.PROTOTYPE, PHYSW_CALL,
+                   PHYSW_CALL + '\n        "    bl      CreateTask_my\\n"'),
+            "C3.intercept")
+
+    def test_stock_physw_creator_removed(self):
+        self.assertOnlyViolation(mutate(in_memory(), pc.PROTOTYPE, PHYSW_CALL, "// " + PHYSW_CALL),
+                                 "C3.stock_physw")
+
+    def test_wrong_firmware_platformsub(self):
+        self.assertOnlyViolation(mutate(in_memory(), CAM_H, '"110c"', '"110e"'), "C2.platform")
+
+    def test_dryos_flag_cleared(self):
+        self.assertOnlyViolation(
+            mutate(in_memory(), CAM_H, "#define CAM_DRYOS                           1",
+                   "#define CAM_DRYOS                           0"),
+            "C2.dryos")
+
+    def test_unpatched_mask_misses_playback(self):
+        # PORT-7B preimage value: Playback (an ALT option) not overridable.
+        self.assertOnlyViolation(mutate(in_memory(), KBD_H, "0x000533F9", "0x000433F9"),
+                                 "C2.alt_in_mask0")
+
+    def test_power_in_mask(self):
+        self.assertOnlyViolation(mutate(in_memory(), KBD_H, "0x000533F9", "0x000733F9"),
+                                 "C2.power_excluded")
+
+    def test_nonzero_secondary_mask(self):
+        self.assertOnlyViolation(
+            mutate(in_memory(), KBD_H, "#define KEYS_MASK1 (0x00000000)",
+                   "#define KEYS_MASK1 (0x00000001)"),
+            "C2.mask12_zero")
+
+    def test_alt_option_missing_from_keymap(self):
+        self.assertOnlyViolation(
+            mutate(in_memory(), KBD_C, "    { 0, KEY_PLAYBACK        ,0x00010000 },", ""),
+            "C2.alt_in_keymap")
+
+    def test_missing_source_fails_without_crashing(self):
+        src = in_memory()
+        del src[KBD_H]
+        bad = failed(pc.check_contract(src))
+        self.assertIn("C1.sources", bad)
+        self.assertIn("C2.keys", bad)
+
+    def test_duplicate_define_cannot_be_evaluated(self):
+        src = mutate(in_memory(), KBD_H, "#define KEYS_MASK2 (0x00000000)",
+                     "#define KEYS_MASK2 (0x00000000)\n#define KEYS_MASK0 (0x000533F9)")
+        self.assertEqual(failed(pc.check_contract(src)), {"C2.keys"})
+
+
+class RegistryViolations(unittest.TestCase):
+    def test_registry_with_address_rejected(self):
+        facts = pc.UNVERIFIED_RUNTIME_FACTS + (("U9", None, "PhySw entry 0xfc1283ad"),)
+        self.assertEqual(failed(pc.check_contract(in_memory(), runtime_facts=facts)), {"C5.U9"})
+
+    def test_registry_missing_precondition_rejected(self):
+        facts = pc.UNVERIFIED_RUNTIME_FACTS[1:]
+        self.assertEqual(failed(pc.check_contract(in_memory(), runtime_facts=facts)),
+                         {"C5.coverage"})
+
+    def test_registry_unknown_flag_rejected(self):
+        facts = pc.UNVERIFIED_RUNTIME_FACTS + (("U9", "made_up_flag", "x"),)
+        self.assertEqual(failed(pc.check_contract(in_memory(), runtime_facts=facts)),
+                         {"C5.U9", "C5.coverage"})
+
+
+class TargetTree(unittest.TestCase):
+    """Read-only validation of a PORT-8A bootstrapped tree in a temp dir."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(prefix="port9b-")
+        self.root = Path(self._tmp.name)
+        self.target = self.root / "chdk-port"
+        self.target.mkdir()
+        self.assertEqual(boot.run(self.target, out=io.StringIO()), 0)
+        proto = self.target / pc.PROTOTYPE
+        proto.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(REPO_ROOT / "chdk-port" / pc.PROTOTYPE, proto)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def run_tool(self, **kwargs):
+        out = io.StringIO()
+        return pc.run(self.target, out=out, **kwargs), out.getvalue()
+
+    def snapshot(self):
+        return {str(p): (p.read_bytes(), p.stat().st_mtime_ns)
+                for p in sorted(self.root.rglob("*")) if p.is_file()}
+
+    def test_bootstrapped_tree_holds_and_is_not_written(self):
+        before = self.snapshot()
+        code, out = self.run_tool()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_tree_matches_in_memory_sources(self):
+        self.assertEqual(pc.load_sources(self.target)[0], in_memory())
+
+    def test_pending_patch_is_integrity_error(self):
+        kbd_h = self.target / KBD_H
+        kbd_h.write_bytes((boot.DEFAULT_MANIFEST.parent / KBD_H).read_bytes())
+        code, out = self.run_tool()
+        self.assertEqual(code, 3)
+        self.assertIn("ADVANCE", out)
+
+    def test_modified_source_is_integrity_error(self):
+        (self.target / KBD_C).write_text("// edited\n")
+        code, out = self.run_tool()
+        self.assertEqual(code, 3)
+        self.assertIn("CONFLICT", out)
+
+    def test_missing_source_is_integrity_error(self):
+        (self.target / "platform/g3x/lib.c").unlink()
+        self.assertEqual(self.run_tool()[0], 3)
+
+    def test_missing_prototype_is_integrity_error(self):
+        (self.target / pc.PROTOTYPE).unlink()
+        code, out = self.run_tool()
+        self.assertEqual(code, 3)
+        self.assertIn("prototype", out)
+
+    def test_symlinked_prototype_is_integrity_error(self):
+        proto = self.target / pc.PROTOTYPE
+        proto.unlink()
+        proto.symlink_to(REPO_ROOT / "chdk-port" / pc.PROTOTYPE)
+        self.assertEqual(self.run_tool()[0], 3)
+
+    def test_enabled_spytask_in_tree_is_violation(self):
+        proto = self.target / pc.PROTOTYPE
+        proto.write_text(proto.read_text().replace(SPYTASK_OFF, SPYTASK_ON))
+        code, out = self.run_tool()
+        self.assertEqual(code, 1)
+        self.assertRegex(out, r"FAIL .*C3\.spytask")
+
+    def test_tampered_vendor_is_integrity_error(self):
+        vendor = self.root / "vendor"
+        shutil.copytree(boot.DEFAULT_MANIFEST.parent, vendor)
+        manifest = vendor / "MANIFEST.json"
+        data = json.loads(manifest.read_text())
+        data["files"][0]["final_sha256"] = "0" * 64
+        data["files"][0]["baseline_sha256"] = "0" * 64
+        manifest.write_text(json.dumps(data))
+        code, out = self.run_tool(manifest_path=manifest)
+        self.assertEqual(code, 3)
+        self.assertIn("integrity", out)
+
+
+class OfflineOnly(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.source = TOOL_PATH.read_text(encoding="utf-8")
+        cls.tree = ast.parse(cls.source)
+
+    def test_imports_are_allowlisted(self):
+        allowed = {"argparse", "dataclasses", "pathlib", "re", "sys",
+                   "bootstrap_chdk_platform", "port9a_runtime_lifecycle"}
+        for node in ast.walk(self.tree):
+            if isinstance(node, ast.Import):
+                names = {a.name.split(".")[0] for a in node.names}
+            elif isinstance(node, ast.ImportFrom):
+                names = {node.module.split(".")[0]}
+            else:
+                continue
+            self.assertLessEqual(names, allowed)
+
+    def test_no_write_or_dynamic_execution_calls(self):
+        banned = {"open", "exec", "eval", "compile", "__import__",
+                  "write_text", "write_bytes", "unlink", "mkdir", "rename", "run"}
+        for node in ast.walk(self.tree):
+            if isinstance(node, ast.Call):
+                fn = node.func
+                name = fn.id if isinstance(fn, ast.Name) else getattr(fn, "attr", None)
+                if name == "run" and isinstance(fn, ast.Name):
+                    continue  # main() -> local run()
+                self.assertNotIn(name, banned)
+
+    def test_firmware_symbols_come_from_tracked_prototype(self):
+        # Any sub_XXXXXXXX the tool names must already be in tracked source;
+        # no GM1.10E or new runtime address is introduced here.
+        proto = (REPO_ROOT / "chdk-port" / pc.PROTOTYPE).read_text()
+        for sym in set(re.findall(r"sub_[0-9a-fA-F]{8}", self.source)):
+            self.assertIn(sym, proto)
+        self.assertEqual(re.findall(r"0x[0-9a-fA-F]{5,}", self.source.replace(
+            "0x00020000", "")), [])
+
+    def test_port9a_model_is_unchanged_in_behaviour(self):
+        m = rt.RuntimeLifecycle()
+        m.init_core()
+        self.assertIs(m.install_intercept(), rt.InterceptState.REFUSED)
+        self.assertEqual(set(rt.REPLACEMENTS), {"InitFileModules", "PhySw"})
+
+
+if __name__ == "__main__":
+    unittest.main()
