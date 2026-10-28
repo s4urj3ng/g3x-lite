@@ -17,12 +17,12 @@ The objective of this reconnaissance is to determine whether there is a practica
 ### The Observability Bottleneck
 In early-boot custom firmware development, execution occurs before DryOS kernel initialization, before display framebuffer composition, and before the SD card filesystem is mounted. If early execution hangs or crashes (e.g., during MPU reconfiguration, cache invalidation, or initial interrupt unmasking), the camera displays a silent black screen. This produces zero diagnostic feedback and cannot be distinguished from a failed SD boot sequence without dedicated observation methods.
 
-### Four-Tier Analytical Framework
-To prevent conflating software code existence with physical hardware availability, this reconnaissance evaluates debug interfaces across four distinct tiers:
-1. **Tier 1 (ROM Routine Existence)**: Subroutines and strings present in the compiled firmware binary.
-2. **Tier 2 (UART Controller Initialization)**: Whether early-boot code actively configures serial controller MMIO registers.
-3. **Tier 3 (Physical PCB Routing)**: Whether the SoC serial lines are electrically routed to accessible copper test pads or connectors on the motherboard.
-4. **Tier 4 (Interactive Debug Shell Availability)**: Whether the firmware monitors input, responds to commands (e.g., TIO monitor shell), or operates solely as a passive transmit-only debug trace.
+### Four-Level Analytical Framework
+To prevent conflating software code existence with physical hardware availability, this reconnaissance evaluates debug interfaces across four distinct levels:
+1. **Level 1 (Serial-Related ROM Routines)**: Subroutines, vectors, and string literals compiled into the Flash ROM image (`#RomStarter`, `"DISKBOOT.BIN is started.\r\n"`).
+2. **Level 2 (Confirmed Software Initialization Semantics)**: Active configuration of serial controller MMIO registers by bootloader code (`bl 0xFC003004`) and kernel terminal drivers (`termDriverInit` at `0xFC05C7D4`).
+3. **Level 3 (Physical PCB TX/RX Routing)**: Whether SoC serial lines are electrically connected to accessible surface test pads, vias, or headers on the `CM2-1170` PCB (strictly **`UNKNOWN`** without physical continuity measurements).
+4. **Level 4 (Interactive Console Availability)**: Whether the firmware monitors serial RX input, responds interactively to commands (e.g. low-level monitor shell via `'#'`), or operates purely as a passive unidirectional transmit log (strictly an unverified **`HYPOTHESIS`**).
 
 ---
 
@@ -94,20 +94,20 @@ Based exclusively on existing tracked repository documentation:
 
 ---
 
-## 3. Four-Tier Classification: Confirmed Facts vs. Hypotheses
+## 3. Four-Level Classification: Confirmed Facts vs. Hypotheses
 
-### Tier 1 & Tier 2: Confirmed Facts (Tracked ROM & Documentation)
+### Level 1 & Level 2: Confirmed Facts (Tracked ROM & Documentation)
 - **FACT 1 (Mainboard ID)**: The G3 X mainboard assembly is Canon part number `CM2-1170` / `CM2-1170-000` (verified via parts cataloging and commercial listings).
 - **FACT 2 (Model Code)**: The G3 X internal model code is `EC385` (verified via ROM string `#RomStarter Ver1.00 for EC385` at `0xFC0004FC`).
-- **FACT 3 (Bootloader Serial Routine Existence)**: GM1.10C ROM contains bootloader routines that initialize a serial interface (`0xFC003004`) and reference string `"DISKBOOT.BIN is started.\r\n"` (`0xFC0030B0`).
-- **FACT 4 (Kernel Terminal Existence)**: DryOS includes serial console initialization routines (`termDriverInit` at `0xFC05C7D4`).
+- **FACT 3 (Level 1 - Serial-Related ROM Routines)**: GM1.10C ROM contains bootloader routines that reference diagnostic serial strings, including `"DISKBOOT.BIN is started.\r\n"` at `0xFC0030B0` (`docs/CHDK_PORT0B_CONSTANTS_AUDIT.md`).
+- **FACT 4 (Level 2 - Confirmed Software Initialization Semantics)**: Bootloader actively invokes UART controller setup at `0xFC003004` and loopback jig check at `0xFC000460` (`docs/CHDK_PORT1A_STARTUP_TRACE.md`); DryOS kernel terminal driver initializes via `termDriverInit` at `0xFC05C7D4` (`docs/CHDK_PORT2B1_RESTART_PRECONDITIONS.md`).
 - **FACT 5 (Standard External Ports Non-Functional for Early Debug)**: External Micro-B USB, Micro-HDMI, and 3.5mm jacks do not provide early-boot serial output. USB and HDMI require late-stage task initialization.
 
-### Tier 3 & Tier 4: Sibling Inferences & Unverified Hypotheses (NOT Established on G3 X)
-- **HYPOTHESIS 1 (PCB Pad Routing - Tier 3)**: Whether the UART TX/RX pins of the DIGIC 6 SoC are routed to accessible surface copper test pads on `CM2-1170` is **UNKNOWN**. Sibling cameras possess test pads, but continuity to G3 X pads has not been probed.
+### Level 3 & Level 4: Sibling Inferences & Unverified Hypotheses (NOT Established on G3 X)
+- **HYPOTHESIS 1 (Level 3 - Physical PCB TX/RX Routing)**: Whether the UART TX/RX pins of the DIGIC 6 SoC are routed to accessible surface copper test pads on `CM2-1170` is strictly **`UNKNOWN`**. Sibling cameras possess test pads, but physical continuity to G3 X pads has not been probed. Physical access must NOT be promoted to verified without direct empirical evidence.
 - **HYPOTHESIS 2 (Operating Voltage)**: That G3 X ICU UART logic levels are strictly **1.8V CMOS** is a **SIBLING INFERENCE** from EOS M3 / EOS 80D. It has NOT been measured on physical G3 X hardware.
 - **HYPOTHESIS 3 (Baud Rate & Framing)**: That G3 X bootloader serial operates at **115200 8N1** is a **SIBLING INFERENCE**; actual timing register divisor values in `0xFC003004` have not been verified.
-- **HYPOTHESIS 4 (TIO Shell Availability - Tier 4)**: That the G3 X bootloader responds interactively to `'#'` or provides a monitor shell is **UNKNOWN / UNVERIFIED**. It may be compile-time disabled, loopback-gated, or transmit-only.
+- **HYPOTHESIS 4 (Level 4 - Interactive Console Availability)**: That the G3 X bootloader responds interactively to `'#'` or provides a monitor shell is strictly **`UNKNOWN / UNVERIFIED`**. It may be compile-time disabled, loopback-gated, or transmit-only.
 - **HYPOTHESIS 5 (JTAG Security Configuration)**: That hardware JTAG is permanently fused off on the G3 X SoC is a **SIBLING INFERENCE** based on community findings on other DIGIC 6 models.
 
 ---
