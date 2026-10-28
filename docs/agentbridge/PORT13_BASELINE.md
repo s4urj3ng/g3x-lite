@@ -3,18 +3,22 @@
 - **Date:** 2026-10-28
 - **Host Worktree:** `/var/lib/agentbridge/worktrees/g3x-lite/port-13-offline-p13-baseline-r2`
 - **Current Branch:** `agentbridge/g3x-lite/port-13-offline/p13-baseline-r2`
-- **Task:** `p13-baseline-r2` (Replacement for p13-baseline / Task 5, scope-corrected)
-- **Status:** Baseline recorded using read-only git operations; test execution delegated to post-task AgentBridge validation suites.
+- **Task:** `p13-baseline-r2` (Replacement for p13-baseline / Task 5, scope-corrected, revision 1 / attempt 2)
+- **Status:** Baseline recorded using read-only git operations; test execution delegated to AgentBridge validation suites.
 
 ---
 
-## 1. Remote Synchronization
+## 1. Remote Synchronization and Re-verification
 
-### 1.1 Command: `git fetch`
-- **Exact Command:** `git fetch`
+### 1.1 Command: `git fetch origin`
+- **Exact Command:** `git fetch origin`
 - **Exit Code:** `0`
 - **Output:** *(empty)*
 - **Finding:** Remote tracking refs synchronized cleanly with `origin`. `[VERIFIED]`
+
+### 1.2 Re-verification of Branch Heads and Ancestry Across Attempts
+- **Exact Action:** Re-ran `git rev-parse`, `git merge-base`, and `git merge-base --is-ancestor` across `origin/main`, `origin/research/port12a-memory-ownership`, `origin/research/port12b-filesystem-u2`, and `origin/research/port12c-spytask-u4`.
+- **Finding:** None of the SHAs or command exit codes have changed since the initial baseline recording. All SHAs and ancestry relations are identical. `[VERIFIED]`
 
 ---
 
@@ -206,6 +210,15 @@
 
 ---
 
+### 4.4 Baseline Lineage and Branch Integration Relationship
+
+- **Relationship Inference:** `[INFERRED]`
+  - Explicit Note: `origin/main` HEAD equals the baseline SHA `581b1a4bb30456bf18c46dc4bcf61b0375aee251`.
+  - Consequently, the merge-base of each research branch (`origin/research/port12a-memory-ownership`, `origin/research/port12b-filesystem-u2`, and `origin/research/port12c-spytask-u4`) with `origin/main` is exactly `581b1a4bb30456bf18c46dc4bcf61b0375aee251`.
+  - All three PR branches sit directly on top of the verified baseline, and no PORT-12 work has been merged to `origin/main`. `[INFERRED]`
+
+---
+
 ## 5. (d) Worktree State Before Document Creation
 
 ### 5.1 Command: `git status --short`
@@ -265,29 +278,30 @@
 
 ## 7. Test Results and Validation Runner Citation
 
-Per task specification:
+Per task specification and review feedback:
 > "Do not run tests and do not try to install test tooling. For test results, cite the AgentBridge validation run (suites bootstrap, port_tests, audit_tests, hdmi_tests, port9_tests) that runs after this task, and mark fresh per-test counts UNKNOWN unless AgentBridge records them. Compare against the historical report (246 tests: 239 passed, 7 skipped) and label the comparison INFERRED or UNKNOWN."
+>
+> Feedback: "In the test-results section, cite the previous AgentBridge validation run for this task: all five suites (bootstrap, port_tests, audit_tests, hdmi_tests, port9_tests) PASS, with per-test counts UNKNOWN because AgentBridge did not record them in the summary. Keep the comparison against the historical 246/239/7 report labelled UNKNOWN. Make sure every command shown is exactly as run, and that no section claims test counts you did not observe. Do not run tests, and do not touch any other file."
 
 ### 7.1 Citation of AgentBridge Validation Run
-- **Execution Mode:** External AgentBridge Validation Runner (dispatched post-task upon worker completion).
-- **Validation Test Suites Scheduled:**
-  1. `bootstrap`: CHDK platform bootstrap verification (`tools/bootstrap_chdk_platform.py`)
-  2. `port_tests`: Platform configuration and validation suites (`tests/test_port7a_platform_configuration.py`, `tests/test_port7b_reproducibility.py`, `tests/test_port7c_platform_validation.py`, `tests/test_port8a_platform_bootstrap.py`)
-  3. `audit_tests`: Firmware literal and evidence validator audits (`tests/test_early_boot_literals.py`, `tests/test_port11b_adversarial.py`, `tests/test_port11c_evidence_validator.py`, `tests/test_restart_sd_audit.py`)
-  4. `hdmi_tests`: HDMI001 overlay validation (`tests/test_validate_hdmi001.py`)
-  5. `port9_tests`: Runtime integration and lifecycle contracts (`tests/test_port9a_runtime_lifecycle.py`, `tests/test_port9b_runtime_contract.py`)
+- **Execution Mode:** External AgentBridge Validation Runner.
+- **Previous AgentBridge Validation Run Results for this Task:**
+  1. `bootstrap`: PASS
+  2. `port_tests`: PASS
+  3. `audit_tests`: PASS
+  4. `hdmi_tests`: PASS
+  5. `port9_tests`: PASS
+- **Fresh Per-Test Counts:** `UNKNOWN` `[UNKNOWN]`
+  - Per-test counts are unknown because AgentBridge recorded suite-level PASS results but did not record individual test counts in the summary.
+- **Local Test Execution:** None. No tests were executed within this task session in compliance with task instructions.
 
 ### 7.2 Historical Baseline Report
 - **Historical Report Totals:** 246 tests total: 239 passed, 7 skipped, 0 failed.
-- **Historical Skip Context:** 7 tests skipped in clean-checkout environments lacking proprietary ROM dumps (`PRIMARY.BIN`) or external ARM cross-compilers (`arm-none-eabi-nm`), which are cleanly skipped via `@unittest.skipUnless` assertions in `tests/test_restart_sd_audit.py`. `[VERIFIED]`
+- **Historical Skip Context:** 7 tests skipped in clean-checkout environments lacking proprietary ROM dumps (`PRIMARY.BIN`) or external ARM cross-compilers (`arm-none-eabi-nm`), cleanly handled via `@unittest.skipUnless` assertions in `tests/test_restart_sd_audit.py`. `[VERIFIED]`
 
-### 7.3 Fresh Test Run Status
-- **Fresh per-test counts:** `UNKNOWN` `[UNKNOWN]` *(pending post-task execution and recording by the AgentBridge validation harness)*.
-
-### 7.4 Comparison Against Historical Baseline
-- **Comparison Assessment:** `UNKNOWN` / `INFERRED`
-  - Direct comparison status: `UNKNOWN` `[UNKNOWN]` *(fresh counts are not measured inside this task)*.
-  - Inferred expectation: `INFERRED` `[INFERRED]` *(given that origin/main commit 581b1a4 is a pure documentation update reconciling symbol recovery datasets without code or test alterations, the test results under the AgentBridge runner across bootstrap, port_tests, audit_tests, hdmi_tests, and port9_tests are inferred to maintain identical 239 passed, 7 skipped behavior under clean-checkout conditions)*.
+### 7.3 Comparison Against Historical Baseline
+- **Comparison Assessment:** `UNKNOWN` `[UNKNOWN]`
+  - Direct numerical comparison status is `UNKNOWN` because fresh individual per-test counts were not recorded by AgentBridge in the validation summary.
 
 ---
 
@@ -295,7 +309,8 @@ Per task specification:
 
 | Category | Claim / Assertion | Epistemic Status | Evidence / Exact Command |
 |---|---|---|---|
-| **Remote Sync** | `git fetch` completed with exit code 0 | `VERIFIED` | `git fetch` (exit code 0) |
+| **Remote Sync** | `git fetch origin` completed with exit code 0 | `VERIFIED` | `git fetch origin` (exit code 0) |
+| **Re-verification** | Re-run of all SHAs and exit codes unchanged across attempts | `VERIFIED` | Re-execution of all rev-parse / merge-base queries (exit code 0) |
 | **origin/main SHA** | `origin/main` HEAD SHA is `581b1a4bb30456bf18c46dc4bcf61b0375aee251` | `VERIFIED` | `git rev-parse origin/main` (exit code 0) |
 | **origin/main Commit** | Latest commit on `origin/main` is PR #19 symbol reconciliation | `VERIFIED` | `git log -1 origin/main` (exit code 0) |
 | **Ancestry Check** | `581b1a4bb30456bf18c46dc4bcf61b0375aee251` is an ancestor of `origin/main` | `VERIFIED` | `git merge-base --is-ancestor 581b1a4bb30456bf18c46dc4bcf61b0375aee251 origin/main` (exit code 0) |
@@ -308,8 +323,9 @@ Per task specification:
 | **PR #25 SHA** | `origin/research/port12c-spytask-u4` HEAD is `de792bd73b643e778dea3f3a80c53c8f2fdb0ead` | `VERIFIED` | `git rev-parse origin/research/port12c-spytask-u4` (exit code 0) |
 | **PR #25 Merge-Base** | Merge-base with `origin/main` is `581b1a4bb30456bf18c46dc4bcf61b0375aee251` | `VERIFIED` | `git merge-base origin/main origin/research/port12c-spytask-u4` (exit code 0) |
 | **PR #25 Ancestry** | `origin/main` is an ancestor of `port12c-spytask-u4` | `VERIFIED` | `git merge-base --is-ancestor origin/main origin/research/port12c-spytask-u4` (exit code 0) |
+| **Lineage Inference** | `origin/main` HEAD equals baseline SHA `581b1a4bb30456bf18c46dc4bcf61b0375aee251`; all three PR branches sit directly on baseline; no PORT-12 work merged to `origin/main` | `INFERRED` | Equivalence of `origin/main` SHA with baseline and merge-bases |
 | **Initial Worktree** | Worktree clean on `agentbridge/g3x-lite/port-13-offline/p13-baseline-r2` | `VERIFIED` | `git status --short`, `git status --porcelain`, `git status -sb` (exit code 0) |
-| **Validation Runner** | Suites cited: bootstrap, port_tests, audit_tests, hdmi_tests, port9_tests | `VERIFIED` | Task specification protocol |
+| **Validation Runner** | Suites cited: bootstrap, port_tests, audit_tests, hdmi_tests, port9_tests all PASS in previous AgentBridge run | `VERIFIED` | Previous AgentBridge validation run record |
 | **Historical Baseline** | 246 tests: 239 passed, 7 skipped (Tier 2 ROM skip logic) | `VERIFIED` | Historical validation reports |
-| **Fresh Test Counts** | Fresh execution counts for post-task validation | `UNKNOWN` | Awaiting external AgentBridge validation runner execution |
-| **Comparison to Baseline** | Fresh run comparison to historical 246/239/7 report | `UNKNOWN` / `INFERRED` | `UNKNOWN` direct observation; `INFERRED` identical behavior expected on 581b1a4 |
+| **Fresh Test Counts** | Fresh execution individual per-test counts | `UNKNOWN` | AgentBridge validation harness summary recorded suite PASS without individual test counts |
+| **Comparison to Baseline** | Fresh run numerical comparison to historical 246/239/7 report | `UNKNOWN` | Direct comparison unknown due to unrecorded individual fresh test counts |
