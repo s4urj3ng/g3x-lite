@@ -1,0 +1,78 @@
+{
+  "policy_version": "1.0.0",
+  "policy_authority": "Owner/Tech Lead Authorized PORT-11A Research Scope",
+  "authorization_scopes": [
+    {
+      "scope_id": "SCOPE-PORT11A-U1",
+      "firmware_revision": "GM1.10C",
+      "approved_ranges": [
+        {
+          "start_address": "0xFC020040",
+          "end_address": "0xFC0200CF",
+          "label": "S1A ATCM copy loop"
+        },
+        {
+          "start_address": "0xFC31BBC4",
+          "end_address": "0xFC31BBCB",
+          "label": "S1B j_CreateTask veneer"
+        },
+        {
+          "start_address": "0xFCEF3488",
+          "end_address": "0xFCEF36B3",
+          "label": "S1C CreateTask ATCM ROM source"
+        },
+        {
+          "start_address": "0xFC31BE8C",
+          "end_address": "0xFC31BE93",
+          "label": "S1D j_CreateTaskStrictly veneer"
+        },
+        {
+          "start_address": "0xFCEF3F34",
+          "end_address": "0xFCEF3F55",
+          "label": "S1E CreateTaskStrictly ATCM ROM source"
+        }
+      ],
+      "max_bytes_total": 1024,
+      "allowed_classifications": ["STATIC_VERIFIED", "INFERRED", "UNKNOWN"],
+      "description": "PORT-11A U1 CreateTask and CreateTaskStrictly scope"
+    },
+    {
+      "scope_id": "SCOPE-PORT11A-U2",
+      "firmware_revision": "GM1.10C",
+      "approved_ranges": [
+        {
+          "start_address": "0xFC0BD070",
+          "end_address": "0xFC0BD1BB",
+          "label": "S2A task_InitFileModules creator/entry"
+        },
+        {
+          "start_address": "0xFC0D9CCC",
+          "end_address": "0xFC0D9D25",
+          "label": "S2B sub_fc0d9ccc callees"
+        }
+      ],
+      "max_bytes_total": 512,
+      "allowed_classifications": ["STATIC_VERIFIED", "INFERRED", "UNKNOWN"],
+      "description": "PORT-11A U2 task_InitFileModules entry scope"
+    },
+    {
+      "scope_id": "SCOPE-PORT11A-U3",
+      "firmware_revision": "GM1.10C",
+      "approved_ranges": [
+        {
+          "start_address": "0xFC1283AC",
+          "end_address": "0xFC1283FF",
+          "label": "S3A task_PhySw creator/entry"
+        },
+        {
+          "start_address": "0xFC128704",
+          "end_address": "0xFC12871F",
+          "label": "S3B PhySw literal and string pool"
+        }
+      ],
+      "max_bytes_total": 256,
+      "allowed_classifications": ["STATIC_VERIFIED", "INFERRED", "UNKNOWN"],
+      "description": "PORT-11A U3 task_PhySw entry scope"
+    }
+  ]
+}

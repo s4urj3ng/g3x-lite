@@ -31,6 +31,15 @@ PORT-11C eliminates these risks by introducing a **machine-readable evidence man
 
 ---
 
+> [!CAUTION]
+> **AUTHORIZATION TRUST BOUNDARY & NON-AUTHORITY NOTICE**:
+> 1. **This utility DOES NOT and CANNOT grant permission to inspect, dump, or execute ROM/firmware.**
+> 2. Authorization to inspect firmware regions is strictly an external human governance gate. It requires explicit owner/tech lead approval recorded in repository safety documentation *before* any inspection takes place.
+> 3. **Manifest-declared scopes are self-assertions by the researcher/author.** A manifest cannot grant itself authority. When validated without an external trusted policy, the tool validates only internal self-consistency (`SELF_DECLARED_INTERNAL_ONLY`) and emits `RULE_TRUST_BOUNDARY_NOTICE`.
+> 4. To verify actual research boundary compliance, the manifest must be validated against an independent, authenticated policy file via `--trusted-scopes <policy.json>` (`TRUSTED_POLICY_VERIFIED`). Any manifest attempt to define unapproved scopes or expand approved address bounds is rejected (`RULE_SCOPE_POLICY_VIOLATION`).
+
+---
+
 ## 2. Security and Scope Invariants
 
 The first version of the harness is **manifest-only** and strictly conforms to the following safety constraints:
@@ -44,6 +53,7 @@ The first version of the harness is **manifest-only** and strictly conforms to t
 | **No Full-ROM Scans** | Manifest files are capped at 10 MiB to prevent memory exhaustion; no full-ROM byte searches. |
 | **Synthetic Byte Fixtures Only** | Test suite uses deterministic in-memory synthetic byte patterns only. |
 | **Python Standard Library Only** | Pure Python standard library (`argparse`, `dataclasses`, `enum`, `hashlib`, `json`, `pathlib`, `re`, `sys`, `typing`). |
+| **Provenance Verification vs ROM Ground Truth** | Tool validates that declared provenance structures conform to schema formats and recognized types. It does **not** authenticate that declared SHA-256 hashes correspond to real Canon ROM; verifying physical ROM bytes requires external human audit trails. |
 
 ---
 
@@ -134,8 +144,10 @@ The validator executes eight systematic checks, emitting structured diagnostic f
 | `RULE_INVALID_CLASSIFICATION` | Invalid Classification | Classification is not one of `STATIC_VERIFIED`, `INFERRED`, `UNKNOWN`. | ERROR |
 | `RULE_UNSUPPORTED_PROVENANCE` | Unsupported Provenance | Missing, empty, or unrecognized provenance category/prefix. | ERROR |
 | `RULE_MISSING_SCOPE` | Missing Scope ID | `authorization_scope_id` is missing or empty. | ERROR |
-| `RULE_UNAPPROVED_SCOPE` | Unapproved Scope | `authorization_scope_id` does not exist in `authorization_scopes`. | ERROR |
+| `RULE_UNAPPROVED_SCOPE` | Unapproved Scope | `authorization_scope_id` does not exist in active scopes. | ERROR |
 | `RULE_SCOPE_EXCEEDED` | Scope Exceeded | Range outside approved bounds, slice extends across boundary, firmware revision mismatch, disallowed classification, or total bytes exceed scope quota. | ERROR |
+| `RULE_SCOPE_POLICY_VIOLATION` | Scope Policy Violation | Manifest attempts to self-declare scopes not authorized in external trusted policy, or attempts to broaden approved ranges/quotas. | ERROR |
+| `RULE_TRUST_BOUNDARY_NOTICE` | Trust Boundary Notice | Emitted when manifest is evaluated in internal-consistency mode without an external trusted policy file. | WARN |
 | `RULE_OVERLAPPING_SLICES` | Overlapping Slices | Two slices in the same firmware revision overlap in address space (under default strict non-overlapping policy). | ERROR |
 | `RULE_INCONSISTENT_SLICES` | Inconsistent Slices | Identical address ranges claim conflicting SHA-256 or classifications; or overlapping synthetic fixtures contain conflicting byte data. | ERROR |
 | `RULE_FIXTURE_LENGTH_MISMATCH` | Fixture Length Mismatch | Provided synthetic fixture length differs from `expected_byte_count`. | ERROR |
@@ -170,14 +182,14 @@ To demonstrate how the validator protects research integrity, the nine canonical
 ### Command Line Interface
 
 ```sh
-# Validate a manifest file
+# Validate a manifest against an external trusted scope policy (Authoritative Mode)
+python3 -B tools/port11c_evidence_validator.py --manifest path/to/evidence_manifest.json --trusted-scopes path/to/trusted_policy.json
+
+# Validate a manifest file in self-declared internal consistency mode
 python3 -B tools/port11c_evidence_validator.py --manifest path/to/evidence_manifest.json
 
 # Output findings in JSON format
 python3 -B tools/port11c_evidence_validator.py --manifest path/to/evidence_manifest.json --json
-
-# Supply external authorization scopes file
-python3 -B tools/port11c_evidence_validator.py --manifest manifest.json --scopes approved_scopes.json
 
 # Allow consistent overlapping slices
 python3 -B tools/port11c_evidence_validator.py --manifest manifest.json --allow-overlap
@@ -195,14 +207,19 @@ from tools.port11c_evidence_validator import (
     EvidenceManifest,
     EvidenceValidator,
     load_manifest_file,
+    load_scopes_file,
 )
 
 manifest, err = load_manifest_file("manifest.json")
 if err:
     raise RuntimeError(err)
 
+trusted_scopes, s_err = load_scopes_file("trusted_scopes.json")
+if s_err:
+    raise RuntimeError(s_err)
+
 validator = EvidenceValidator(allow_overlapping_slices=False)
-result = validator.validate_manifest(manifest)
+result = validator.validate_manifest(manifest, trusted_scopes=trusted_scopes)
 
 if not result.is_valid:
     for finding in result.findings:
@@ -213,25 +230,26 @@ if not result.is_valid:
 
 ## 7. Verification & Test Suite
 
-The test suite in [`tests/test_port11c_evidence_validator.py`](../tests/test_port11c_evidence_validator.py) provides 38 deterministic offline unit tests:
+The test suite in [`tests/test_port11c_evidence_validator.py`](../tests/test_port11c_evidence_validator.py) provides 43 deterministic offline unit tests:
 
 1. **Manifest Parsing (6 tests)**: Valid dictionaries, JSON strings, address range syntax (`0x...0x...`), invalid JSON, non-object roots, and missing mandatory fields.
 2. **Validation Rules (17 tests)**: Inverted ranges, byte count mismatches, non-positive byte counts, duplicate IDs, unsupported provenance, empty provenance, missing scopes, unapproved scopes, address outside scope, slices extending past scope bounds, firmware revision mismatches, disallowed classifications, scope byte quotas, and strict overlapping slice rejection.
 3. **Synthetic Byte Fixtures (4 tests)**: Matching fixture verification, length mismatches, bit-flip SHA-256 corruption detection, and conflicting byte data in overlapping fixtures.
 4. **Security & Scope Enforcement (4 tests)**: Verification of zero `subprocess` imports, refusal of `.bin`/`.rom`/`.dump`/`.fir` extensions, refusal of `PRIMARY.*` files, and rejection of oversized manifests (> 10 MiB).
 5. **Real-World Case Study (2 tests)**: End-to-end verification of the 9 canonical PORT-11A slices (`1,284` B) and rejection of out-of-scope scan claims.
-6. **Command-Line Interface (5 tests)**: Exit codes 0, 1, 2, security refusal via CLI, and formatted JSON output.
+6. **Authorization Trust Boundary (5 tests)**: Enforcement of external trusted policy vs manifest declarations, rejection of unauthorized manifest-declared scopes, rejection of range expansions, trust level labeling, and CLI `--trusted-scopes` policy enforcement.
+7. **Command-Line Interface (5 tests)**: Exit codes 0, 1, 2, security refusal via CLI, and formatted JSON output.
 
 ### Test Execution Command
 ```sh
 python3 -B -m unittest tests/test_port11c_evidence_validator.py -v
-# Output: Ran 38 tests in 0.061s — OK
+# Output: Ran 43 tests in 0.054s — OK
 ```
 
 Full repository port tests also pass cleanly:
 ```sh
 python3 -B tools/bootstrap_chdk_platform.py && python3 -B tools/port9b_runtime_contract.py --target chdk-port && python3 -B -m unittest discover -s tests -p 'test_port*.py' -v
-# Output: Ran 215 tests — OK
+# Output: Ran 220 tests — OK
 ```
 
 ---

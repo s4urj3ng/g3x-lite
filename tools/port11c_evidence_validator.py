@@ -89,6 +89,8 @@ RULE_UNSUPPORTED_PROVENANCE = "RULE_UNSUPPORTED_PROVENANCE"
 RULE_MISSING_SCOPE = "RULE_MISSING_SCOPE"
 RULE_UNAPPROVED_SCOPE = "RULE_UNAPPROVED_SCOPE"
 RULE_SCOPE_EXCEEDED = "RULE_SCOPE_EXCEEDED"
+RULE_SCOPE_POLICY_VIOLATION = "RULE_SCOPE_POLICY_VIOLATION"
+RULE_TRUST_BOUNDARY_NOTICE = "RULE_TRUST_BOUNDARY_NOTICE"
 RULE_OVERLAPPING_SLICES = "RULE_OVERLAPPING_SLICES"
 RULE_INCONSISTENT_SLICES = "RULE_INCONSISTENT_SLICES"
 RULE_FIXTURE_LENGTH_MISMATCH = "RULE_FIXTURE_LENGTH_MISMATCH"
@@ -492,6 +494,11 @@ class ValidationFinding:
 class ValidationResult:
     """Complete summary of a validation run."""
     findings: List[ValidationFinding] = field(default_factory=list)
+    trust_level: str = "SELF_DECLARED_INTERNAL_ONLY"
+    evidence_verification_boundary: str = (
+        "OFFLINE_DECLARATIONS_AND_SYNTHETIC_FIXTURES_ONLY "
+        "(ROM binary bytes not accessed or authenticated by this tool)"
+    )
 
     @property
     def is_valid(self) -> bool:
@@ -542,6 +549,8 @@ class ValidationResult:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "is_valid": self.is_valid,
+            "trust_level": self.trust_level,
+            "evidence_verification_boundary": self.evidence_verification_boundary,
             "error_count": self.error_count,
             "warning_count": self.warning_count,
             "findings": [f.to_dict() for f in self.findings],
@@ -563,9 +572,35 @@ class EvidenceValidator:
         self,
         manifest: EvidenceManifest,
         fixtures: Optional[Dict[str, bytes]] = None,
+        trusted_scopes: Optional[Dict[str, AuthorizationScope]] = None,
     ) -> ValidationResult:
-        """Run all validation rules against an EvidenceManifest."""
+        """Run all validation rules against an EvidenceManifest.
+
+        If trusted_scopes is provided, it serves as the authoritative trusted policy,
+        and any manifest-declared scopes are checked against it.
+        If trusted_scopes is None, validation proceeds in self-declared internal-consistency
+        mode and emits RULE_TRUST_BOUNDARY_NOTICE.
+        """
         result = ValidationResult()
+
+        # Authorization Trust Boundary Evaluation
+        effective_scopes: Dict[str, AuthorizationScope] = {}
+        if trusted_scopes is not None:
+            result.trust_level = "TRUSTED_POLICY_VERIFIED"
+            effective_scopes = trusted_scopes
+            # Validate that manifest does not declare scopes exceeding or contradicting trusted policy
+            self._check_scope_policy_compliance(manifest.scopes, trusted_scopes, result)
+        else:
+            result.trust_level = "SELF_DECLARED_INTERNAL_ONLY"
+            effective_scopes = manifest.scopes
+            result.add_warning(
+                rule_id=RULE_TRUST_BOUNDARY_NOTICE,
+                message=(
+                    "Manifest validated against self-declared scopes only (internal consistency mode). "
+                    "Manifest-declared scopes do NOT constitute actual human authorization to inspect "
+                    "or access ROM. Supply --trusted-scopes to verify against authenticated human policy."
+                ),
+            )
 
         # 1. Duplicate ID validation
         self._check_duplicate_ids(manifest.entries, result)
@@ -578,7 +613,7 @@ class EvidenceValidator:
             self._check_provenance(manifest.entries, result)
 
         # 4. Authorization scope validation & scope bound enforcement
-        self._check_authorization_scopes(manifest.scopes, manifest.entries, result)
+        self._check_authorization_scopes(effective_scopes, manifest.entries, result)
 
         # 5. Overlap and consistency validation
         self._check_overlaps_and_consistency(manifest.entries, fixtures, result)
@@ -588,6 +623,56 @@ class EvidenceValidator:
             self._check_fixtures(manifest.entries, fixtures, result)
 
         return result
+
+    def _check_scope_policy_compliance(
+        self,
+        manifest_scopes: Dict[str, AuthorizationScope],
+        trusted_scopes: Dict[str, AuthorizationScope],
+        result: ValidationResult,
+    ) -> None:
+        """Verify that manifest does not self-declare scopes that violate or expand trusted policy."""
+        for sid, m_scope in manifest_scopes.items():
+            if sid not in trusted_scopes:
+                result.add_error(
+                    rule_id=RULE_SCOPE_POLICY_VIOLATION,
+                    message=(
+                        f"Manifest declares scope '{sid}' that is not authorized in the "
+                        f"trusted policy ({list(trusted_scopes.keys())})"
+                    ),
+                    context={"unauthorized_scope": sid},
+                )
+                continue
+
+            t_scope = trusted_scopes[sid]
+            if m_scope.firmware_revision != t_scope.firmware_revision:
+                result.add_error(
+                    rule_id=RULE_SCOPE_POLICY_VIOLATION,
+                    message=(
+                        f"Manifest scope '{sid}' targets firmware '{m_scope.firmware_revision}', "
+                        f"contradicting trusted policy revision '{t_scope.firmware_revision}'"
+                    ),
+                    context={"manifest_fw": m_scope.firmware_revision, "trusted_fw": t_scope.firmware_revision},
+                )
+
+            for r in m_scope.approved_ranges:
+                if not t_scope.authorizes_range(r.start_address, r.end_address):
+                    result.add_error(
+                        rule_id=RULE_SCOPE_POLICY_VIOLATION,
+                        message=(
+                            f"Manifest scope '{sid}' attempts to claim unapproved range "
+                            f"0x{r.start_address:08X}..0x{r.end_address:08X} not authorized in trusted policy"
+                        ),
+                    )
+
+            if t_scope.max_bytes_total is not None:
+                if m_scope.max_bytes_total is None or m_scope.max_bytes_total > t_scope.max_bytes_total:
+                    result.add_error(
+                        rule_id=RULE_SCOPE_POLICY_VIOLATION,
+                        message=(
+                            f"Manifest scope '{sid}' max_bytes_total ({m_scope.max_bytes_total}) "
+                            f"exceeds trusted policy quota ({t_scope.max_bytes_total})"
+                        ),
+                    )
 
     def _check_duplicate_ids(
         self,
@@ -941,7 +1026,12 @@ def main() -> int:
         description="PORT-11C: Offline evidence manifest validator for G3X Lite firmware research."
     )
     parser.add_argument("--manifest", required=True, help="Path to evidence manifest JSON")
-    parser.add_argument("--scopes", help="Optional path to external authorization scopes JSON")
+    parser.add_argument(
+        "--trusted-scopes",
+        "--scopes",
+        dest="trusted_scopes",
+        help="Path to external trusted authorization scopes policy JSON",
+    )
     parser.add_argument(
         "--allow-overlap",
         action="store_true",
@@ -962,9 +1052,9 @@ def main() -> int:
 
     assert manifest is not None
 
-    # Merge external scopes if provided
-    if args.scopes:
-        ext_scopes, s_err = load_scopes_file(args.scopes)
+    trusted_scopes_map: Optional[Dict[str, AuthorizationScope]] = None
+    if args.trusted_scopes:
+        ext_scopes, s_err = load_scopes_file(args.trusted_scopes)
         if s_err:
             if args.json:
                 print(json.dumps({"is_valid": False, "error": s_err}))
@@ -972,10 +1062,10 @@ def main() -> int:
                 print(f"ERROR: {s_err}", file=sys.stderr)
             return 2
         assert ext_scopes is not None
-        manifest.scopes.update(ext_scopes)
+        trusted_scopes_map = ext_scopes
 
     validator = EvidenceValidator(allow_overlapping_slices=args.allow_overlap)
-    result = validator.validate_manifest(manifest)
+    result = validator.validate_manifest(manifest, trusted_scopes=trusted_scopes_map)
 
     if args.json:
         print(json.dumps(result.to_dict(), indent=2))
@@ -983,7 +1073,7 @@ def main() -> int:
         if not args.quiet:
             print(
                 f"Evidence Manifest Validation: {len(manifest.entries)} entries, "
-                f"{len(manifest.scopes)} scopes"
+                f"Trust Level: {result.trust_level}"
             )
             print("-" * 70)
 

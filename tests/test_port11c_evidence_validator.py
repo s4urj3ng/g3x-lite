@@ -38,6 +38,8 @@ from port11c_evidence_validator import (  # noqa: E402
     RULE_MISSING_SCOPE,
     RULE_OVERLAPPING_SLICES,
     RULE_SCOPE_EXCEEDED,
+    RULE_SCOPE_POLICY_VIOLATION,
+    RULE_TRUST_BOUNDARY_NOTICE,
     RULE_UNAPPROVED_SCOPE,
     RULE_UNSUPPORTED_PROVENANCE,
 )
@@ -678,6 +680,86 @@ class TestCommandLineInterface(unittest.TestCase):
                 sys.argv = old_argv
 
 
+class TestAuthorizationTrustBoundary(unittest.TestCase):
+    """Test separation of trusted human scope policy from manifest-declared scopes."""
+
+    def test_trust_boundary_warning_emitted_when_no_trusted_scopes_passed(self):
+        manifest = EvidenceManifest.from_dict(make_valid_manifest_dict())
+        validator = EvidenceValidator()
+        result = validator.validate_manifest(manifest, trusted_scopes=None)
+        self.assertTrue(result.is_valid)  # Valid structurally
+        self.assertEqual(result.trust_level, "SELF_DECLARED_INTERNAL_ONLY")
+        rule_ids = [f.rule_id for f in result.findings]
+        self.assertIn(RULE_TRUST_BOUNDARY_NOTICE, rule_ids)
+
+    def test_trusted_policy_verified_when_scopes_passed(self):
+        d = make_valid_manifest_dict()
+        manifest = EvidenceManifest.from_dict(d)
+        trusted_scopes = {
+            s.scope_id: s for s in [AuthorizationScope.from_dict(d["authorization_scopes"][0])]
+        }
+        validator = EvidenceValidator()
+        result = validator.validate_manifest(manifest, trusted_scopes=trusted_scopes)
+        self.assertTrue(result.is_valid)
+        self.assertEqual(result.trust_level, "TRUSTED_POLICY_VERIFIED")
+        # Notice is not emitted when trusted scopes are explicitly provided
+        rule_ids = [f.rule_id for f in result.findings]
+        self.assertNotIn(RULE_TRUST_BOUNDARY_NOTICE, rule_ids)
+
+    def test_manifest_declaring_unapproved_scope_rejected_by_policy(self):
+        d = make_valid_manifest_dict()
+        # Add an unapproved scope to manifest
+        d["authorization_scopes"].append({
+            "scope_id": "SCOPE-ROGUE-UNAUTHORIZED",
+            "firmware_revision": "GM1.10C",
+            "approved_ranges": [{"start_address": "0xFC050000", "end_address": "0xFC050100"}],
+            "max_bytes_total": 256,
+        })
+        manifest = EvidenceManifest.from_dict(d)
+        trusted_scopes = {
+            s.scope_id: s for s in [AuthorizationScope.from_dict(d["authorization_scopes"][0])]
+        }
+        validator = EvidenceValidator()
+        result = validator.validate_manifest(manifest, trusted_scopes=trusted_scopes)
+        self.assertFalse(result.is_valid)
+        self.assertIn(RULE_SCOPE_POLICY_VIOLATION, [f.rule_id for f in result.findings])
+
+    def test_manifest_expanding_approved_range_rejected_by_policy(self):
+        d = make_valid_manifest_dict()
+        # Legitimate trusted policy has range 0xFC020000..0xFC0200FF
+        trusted_scopes = {
+            s.scope_id: s for s in [AuthorizationScope.from_dict(d["authorization_scopes"][0])]
+        }
+        # Manifest attempts to self-declare expanded range up to 0xFC020FFF
+        d["authorization_scopes"][0]["approved_ranges"][0]["end_address"] = "0xFC020FFF"
+        manifest = EvidenceManifest.from_dict(d)
+        validator = EvidenceValidator()
+        result = validator.validate_manifest(manifest, trusted_scopes=trusted_scopes)
+        self.assertFalse(result.is_valid)
+        self.assertIn(RULE_SCOPE_POLICY_VIOLATION, [f.rule_id for f in result.findings])
+
+    def test_cli_with_trusted_scopes_policy_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            manifest_path = Path(td) / "manifest.json"
+            policy_path = Path(td) / "trusted_policy.json"
+            d = make_valid_manifest_dict()
+            manifest_path.write_text(json.dumps(d), encoding="utf-8")
+            policy_path.write_text(json.dumps(d["authorization_scopes"]), encoding="utf-8")
+
+            old_argv = sys.argv
+            try:
+                sys.argv = [
+                    "port11c_evidence_validator.py",
+                    "--manifest", str(manifest_path),
+                    "--trusted-scopes", str(policy_path),
+                ]
+                exit_code = pev.main()
+                self.assertEqual(exit_code, 0)
+            finally:
+                sys.argv = old_argv
+
+
 if __name__ == "__main__":
     unittest.main()
+
 
