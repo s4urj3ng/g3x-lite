@@ -325,7 +325,8 @@ class RuntimeLifecycle:
         self.fs = FilesystemReadinessState(boot_generation=boot_generation)
         self.fault = None
         self.trace = []
-        self._created = []
+        self._stock_observed = []
+        self._replaced = []
 
     @property
     def hardware_execution_authorized(self):
@@ -477,17 +478,29 @@ class RuntimeLifecycle:
     def on_firmware_create_task(self, task_name, context=None):
         """Firmware asks to create `task_name`; decide which entry runs.
 
-        Semantics of returned `Action`:
-          * `Action.PASS_THROUGH` (`entry="stock"`): stock task creation proceeds
-            unmodified (used for unlisted tasks, or when intercept is not installed,
-            task entry is unverified, a fault is latched, or creator validation failed).
-          * `Action.REPLACE` (`entry=REPLACEMENTS[task_name]`): first creation of a
-            listed task under an installed intercept and valid creator context is
-            redirected to the CHDK replacement task.
-          * `Action.REJECT_DUPLICATE` (`entry="duplicate_blocked"`): a repeated
-            creation request for a listed singleton task (`InitFileModules` or
-            `PhySw`) after it was already created is rejected by the singleton
-            creation guard; NO second replacement or second stock task is created.
+        Distinguishes observed stock creation (`self._stock_observed`) from
+        intercepted CHDK singleton replacement creation (`self._replaced`):
+
+          * `Action.PASS_THROUGH` (`entry="stock"`): stock Canon firmware task
+            creation executes unmodified (`create_stock`). Returned for:
+              - unlisted tasks;
+              - any task when `intercept` is `NOT_INSTALLED` or `REFUSED`, or
+                when a fault is already latched, or when the task's firmware
+                entry is not verified (including repeated stock calls — an
+                offline model without active interception control never claims
+                to block Canon firmware);
+              - a candidate replacement call whose `CreatorCallContext` witness
+                validation failed (which latches a fault and falls back to stock
+                `create_stock` rather than claiming the task was blocked).
+          * `Action.REPLACE` (`entry=REPLACEMENTS[task_name]`): first creation
+            of a listed task under an installed intercept, with no fault and
+            valid `CreatorCallContext`, is routed to the CHDK replacement task
+            and recorded in `self._replaced`.
+          * `Action.REJECT_DUPLICATE` (`entry="duplicate_blocked"`): returned
+            ONLY when `self.intercept is InterceptState.INSTALLED` and `task_name`
+            was already replaced once (`task_name in self._replaced`), so the
+            active interception hook rejects spawning a duplicate singleton
+            replacement.
         """
         eff_context = self._default_creator_context(task_name) if context is None else context
         mechanism = (
@@ -498,37 +511,46 @@ class RuntimeLifecycle:
 
         # Unlisted tasks always pass through to stock without creator-hook validation.
         if task_name not in REPLACEMENTS:
-            self._created.append(task_name)
+            self._stock_observed.append(task_name)
             self._log("create_stock", task_name)
             return InterceptDecision(task_name, Action.PASS_THROUGH, "stock", mechanism)
 
-        # Duplicate creation of a listed singleton task is blocked; neither a
-        # second replacement task nor a second stock task is spawned.
-        if task_name in self._created:
+        # When intercept is not installed, is refused, or target entry is not
+        # verified, the model has no interception control over this task and
+        # merely observes stock creation (including repeated stock calls).
+        if (self.intercept is not InterceptState.INSTALLED
+                or not self._entry_verified(task_name)):
+            self._stock_observed.append(task_name)
+            self._log("create_stock", task_name)
+            return InterceptDecision(task_name, Action.PASS_THROUGH, "stock", mechanism)
+
+        # Duplicate rejection applies ONLY when the intercept is installed and
+        # this listed singleton task was already intercepted and replaced.
+        if task_name in self._replaced:
             self._log("duplicate_task_creation_blocked", task_name)
             return InterceptDecision(task_name, Action.REJECT_DUPLICATE, "duplicate_blocked", mechanism)
 
-        # When the intercept is not installed, a fault is already latched, or the
-        # target entry is not verified, stock creation runs unmodified without
-        # evaluating replacement creator-context assertions.
-        if (self.intercept is not InterceptState.INSTALLED
-                or self.fault is not None
-                or not self._entry_verified(task_name)):
-            self._created.append(task_name)
+        # If a fault was latched (e.g., from an earlier creator-context failure),
+        # interception falls back to stock pass-through rather than claiming to
+        # block Canon firmware creation.
+        if self.fault is not None:
+            self._stock_observed.append(task_name)
             self._log("create_stock", task_name)
             return InterceptDecision(task_name, Action.PASS_THROUGH, "stock", mechanism)
 
         # Intercept is installed and target is eligible for replacement: validate
         # the synthetic creator-context witness assertions and forwarding mechanism.
+        # On failure, _validate_creator_context latches a fault and falls back to
+        # stock creation (never recorded in self._replaced).
         if not self._validate_creator_context(task_name, eff_context):
-            self._created.append(task_name)
+            self._stock_observed.append(task_name)
             self._log("create_stock", task_name)
             return InterceptDecision(task_name, Action.PASS_THROUGH, "stock", mechanism)
 
         if eff_context.mechanism is CreationMechanism.CREATE_TASK_STRICTLY:
             self._log("create_task_strictly_forwarded", task_name)
 
-        self._created.append(task_name)
+        self._replaced.append(task_name)
         entry = REPLACEMENTS[task_name]
         self._log("create_replaced", f"{task_name}->{entry}")
         if task_name == "InitFileModules":

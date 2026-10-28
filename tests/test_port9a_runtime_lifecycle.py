@@ -474,9 +474,10 @@ class Port11bSafetyScenarios(unittest.TestCase):
                 self.assertEqual(rt.check_trace(m.trace), [])
 
     def test_b3_duplicate_init_file_modules_creation_returns_reject_duplicate(self):
-        # Blocker B3 regression: duplicate creation returns Action.REJECT_DUPLICATE
-        # ("duplicate_blocked") rather than Action.PASS_THROUGH ("stock"), so no
-        # second task (replacement or stock) is created.
+        # Blocker B3 regression: when intercept is INSTALLED and InitFileModules
+        # was already intercepted/replaced once, a second creation request returns
+        # Action.REJECT_DUPLICATE ("duplicate_blocked") rather than Action.PASS_THROUGH
+        # ("stock"), so no second task (replacement or stock) is created.
         m = booted()
         d1 = m.on_firmware_create_task("InitFileModules")
         self.assertIs(d1.action, Action.REPLACE)
@@ -488,6 +489,69 @@ class Port11bSafetyScenarios(unittest.TestCase):
         self.assertNotIn("create_stock", events)
         self.assertEqual(events.count("gate_armed"), 1)
         self.assertEqual(events.count("fs_task_created"), 1)
+        self.assertEqual(rt.check_trace(m.trace), [])
+
+    def test_b3_repeated_stock_task_calls_without_intercept_remain_pass_through(self):
+        # When intercept is NOT_INSTALLED, the offline model has no hook installed
+        # and must never claim it blocks Canon firmware on repeated stock requests.
+        m = rt.RuntimeLifecycle(
+            preconditions=rt.HYPOTHETICAL_ALL_VERIFIED,
+            static_evidence=rt.SYNTHETIC_ALL_STATIC_AND_DYNAMIC_VERIFIED,
+            hook_contract=rt.SYNTHETIC_HOOK_CONTRACT_SATISFIED,
+        )
+        m.init_core()
+        self.assertIs(m.intercept, InterceptState.NOT_INSTALLED)
+        for name in ("PhySw", "InitFileModules"):
+            d1 = m.on_firmware_create_task(name)
+            d2 = m.on_firmware_create_task(name)
+            self.assertEqual((d1.action, d1.entry), (Action.PASS_THROUGH, "stock"))
+            self.assertEqual((d2.action, d2.entry), (Action.PASS_THROUGH, "stock"))
+        events = [e for e, _ in m.trace]
+        self.assertNotIn("duplicate_task_creation_blocked", events)
+        self.assertEqual(events.count("create_stock"), 4)
+        self.assertIsNone(m.fault)
+
+    def test_b3_repeated_stock_task_calls_with_refused_intercept_remain_pass_through(self):
+        # When intercept is REFUSED (e.g. GM110C defaults), repeated stock task
+        # creation requests must both return PASS_THROUGH ("stock").
+        m = rt.RuntimeLifecycle()
+        m.init_core()
+        self.assertIs(m.install_intercept(), InterceptState.REFUSED)
+        for name in ("PhySw", "InitFileModules"):
+            d1 = m.on_firmware_create_task(name)
+            d2 = m.on_firmware_create_task(name)
+            self.assertEqual((d1.action, d1.entry), (Action.PASS_THROUGH, "stock"))
+            self.assertEqual((d2.action, d2.entry), (Action.PASS_THROUGH, "stock"))
+        events = [e for e, _ in m.trace]
+        self.assertNotIn("duplicate_task_creation_blocked", events)
+        self.assertEqual(events.count("create_stock"), 4)
+        self.assertIsNone(m.fault)
+
+    def test_b3_invalid_creator_context_falls_back_to_stock_and_never_claims_duplicate_blocked(self):
+        # When creator-context validation fails on a listed task, the model latches
+        # a fault and falls back to stock creation (PASS_THROUGH, not replaced).
+        # A subsequent request for the same or another listed task also falls back
+        # to stock PASS_THROUGH and must NEVER claim REJECT_DUPLICATE.
+        m = booted()
+        bad_ctx = CreatorCallContext(
+            mechanism=CreationMechanism.CREATE_TASK_STRICTLY,
+            predecessor_calls_preserved=False,
+        )
+        d1 = m.on_firmware_create_task("PhySw", context=bad_ctx)
+        self.assertEqual((d1.action, d1.entry), (Action.PASS_THROUGH, "stock"))
+        self.assertIsNotNone(m.fault)
+        self.assertIs(m.kbd, TaskState.NOT_CREATED)
+
+        # Second call for PhySw (which was never replaced, only fell back to stock)
+        # and a call for InitFileModules both remain PASS_THROUGH ("stock").
+        d2 = m.on_firmware_create_task("PhySw")
+        d3 = m.on_firmware_create_task("InitFileModules")
+        self.assertEqual((d2.action, d2.entry), (Action.PASS_THROUGH, "stock"))
+        self.assertEqual((d3.action, d3.entry), (Action.PASS_THROUGH, "stock"))
+        events = [e for e, _ in m.trace]
+        self.assertNotIn("duplicate_task_creation_blocked", events)
+        self.assertNotIn("create_replaced", events)
+        self.assertEqual(events.count("create_stock"), 3)
         self.assertEqual(rt.check_trace(m.trace), [])
 
     def test_b3_invalid_context_does_not_fault_stock_pass_through_paths(self):
