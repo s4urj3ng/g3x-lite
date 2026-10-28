@@ -1,4 +1,4 @@
-"""Bounded, deterministic adversarial QA of PORT-11B (reference 4e2f7929).
+"""Bounded, deterministic adversarial QA of PORT-11B against merged main (7f39946).
 
 Run: python3 -B -m unittest discover -s tests -p test_port11b_adversarial.py -v
 
@@ -6,14 +6,17 @@ Standard library only. No ROM/binary reads, subprocesses, hardware, builds or
 production-file edits. Contract tests read only tracked text through the existing
 source loader. Synthetic profiles below are scenario assertions, never evidence.
 
-Replayed from local commit 38710842 onto PR #16 head 4e2f7929. The original 21
-methods ran unchanged first: 20 passed, one failed in two trace-checker subcases.
-  KnownClaudeBlockers: K1/K2/K3 are now fixed regression controls.
-  NewTraceValidationDefect: QA-N1 remains reproducible, NON-BLOCKER; no supported
-    lifecycle sequence producing the injected illegal trace has been found.
-Assertions remain ordinary assertions, with no expectedFailure or skips. Extra
-checks below exercise the newly specified running-task invalidation, ownership,
-explicit synthetic contracts and per-field C6 checks without adding methods.
+All 21 adversarial test methods pass against current merged origin/main (7f39946).
+- KnownClaudeBlockers (K1/K2/K3): Verified fixed regression controls.
+- TraceValidationDefect (QA-N1): Fixed in PR #16 (commit dcf1b19) and verified as
+  durable negative coverage; post-fault replacement detection passes across all
+  task permutations.
+
+Historical Baseline Context:
+Originally authored against older baseline 4e2f7929 (local commit 38710842) where
+QA-N1 was first identified as a trace validation defect. In merged main 7f39946,
+tools/port9a_runtime_lifecycle.py check_trace() examines all post-fault events,
+so all 21 methods pass with zero expectedFailure, zero skips, and zero failures.
 """
 
 from dataclasses import dataclass, fields, replace
