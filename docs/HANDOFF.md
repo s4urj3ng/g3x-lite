@@ -1,6 +1,37 @@
 # Agent handoff
 Updated: 2026-10-28
 
+## PORT-11C — Offline Evidence Validation Harness (Gemini Worker 6, 2026-10-28)
+
+- **Status**: **`DELIVERED_OFFLINE`** (worktree `/Users/avp/Downloads/g3x-lite-port11c`, branch `research/port11c-evidence-harness` from `origin/main` `9c1c544`; `tools/port11c_evidence_validator.py`, `tests/test_port11c_evidence_validator.py`, `tests/fixtures/port11a_manifest.json`, `docs/PORT11C_EVIDENCE_HARNESS.md`).
+- **Objective**: Build an auditable offline evidence validation utility to prevent unsupported address claims, incorrect evidence provenance, and out-of-scope ROM inspection (such as the unauthorized Step 223 full-ROM branch scan in PORT-11A).
+- **Deliverables**:
+  1. `tools/port11c_evidence_validator.py`: Pure Python standard library manifest and scope validator. Enforces fail-closed validation of:
+     - Duplicate evidence IDs (`RULE_DUPLICATE_ID`).
+     - Malformed address ranges (`RULE_MALFORMED_RANGE`: inverted bounds, non-hex, span arithmetic mismatch `end - start + 1 != byte_count`, 32-bit overflow).
+     - Classification enforcement (`RULE_INVALID_CLASSIFICATION`: `STATIC_VERIFIED`, `INFERRED`, `UNKNOWN`).
+     - Provenance authenticity (`RULE_UNSUPPORTED_PROVENANCE`: `ROM_VERIFIED`, `SOURCE_REPO`, `HISTORICAL_CHDK`, `HARDWARE_WITNESS`, `SYNTHETIC_FIXTURE`).
+     - Scope authorization (`RULE_MISSING_SCOPE`, `RULE_UNAPPROVED_SCOPE`).
+     - Research boundary enforcement (`RULE_SCOPE_EXCEEDED`: address outside scope ranges, slices extending across boundaries, firmware revision mismatch, unapproved classification, byte count quota exceedance).
+     - Overlapping & conflicting slices (`RULE_OVERLAPPING_SLICES`, `RULE_INCONSISTENT_SLICES`).
+     - Synthetic byte fixtures verification (`RULE_FIXTURE_LENGTH_MISMATCH`, `RULE_FIXTURE_HASH_MISMATCH`, and cross-slice byte conflict detection in overlaps).
+  2. `tests/test_port11c_evidence_validator.py`: 38 deterministic unit tests (`38/38 PASS`, 0.06s). Covers all negative failure modes, synthetic fixture validations, CLI invocations, and security invariants.
+  3. `tests/fixtures/port11a_manifest.json`: Codified canonical PORT-11A manifest containing the 9 pinned ROM slices (`S1A`–`S3B`, `1,284` B total) under scopes `SCOPE-PORT11A-U1`, `SCOPE-PORT11A-U2`, `SCOPE-PORT11A-U3`. Validates cleanly (`VALID, 0 errors, 0 warnings`).
+  4. `docs/PORT11C_EVIDENCE_HARNESS.md`: Complete specification document describing motivation, security boundaries, schema reference, validation rules, CLI/API guide, and case study.
+- **Security & Safety Invariants Enforced**:
+  - Manifest-only tool; strictly zero firmware/ROM file reads, zero directory scans, zero subprocess executions, zero opcode disassemblies, zero camera hardware interactions.
+  - Refuses binary file extensions (`.bin`, `.rom`, `.dump`, `.fir`, `.fi2`, `.img`, `.gpr`, `.rep`) and `PRIMARY.*` filenames with exit code 2.
+  - Uses synthetic byte fixtures only; zero proprietary firmware in git.
+- **Verification Results**:
+  - `python3 -B -m unittest tests/test_port11c_evidence_validator.py -v`: **38/38 PASS**.
+  - `python3 -B tools/port11c_evidence_validator.py --manifest tests/fixtures/port11a_manifest.json`: **VALID (0 errors, 0 warnings)**.
+  - `python3 -B tools/port9b_runtime_contract.py --target chdk-port && python3 -B -m unittest discover -s tests -p 'test_port*.py' -v`: **215/215 PASS**.
+- **Hardware Status**: **STRICT NO-GO**.
+- **Exact next command**:
+  ```sh
+  python3 -B -m unittest tests/test_port11c_evidence_validator.py -v && python3 -B tools/port11c_evidence_validator.py --manifest tests/fixtures/port11a_manifest.json
+  ```
+
 ## PORT-9C — Milestone Consolidation & Integration Status Synchronization (Gemini, 2026-10-28)
 
 - **Status**: **`DRAFT_PR_OPEN / PENDING_MERGE`** (PR #12 on branch `docs/port9c-milestone-sync`, cut from `origin/main` `4206ec5`; `docs/PROJECT_STATE.md`, `docs/HANDOFF.md`).

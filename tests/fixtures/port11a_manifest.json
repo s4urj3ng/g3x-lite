@@ -1,0 +1,187 @@
+{
+  "manifest_version": "1.0.0",
+  "authorization_scopes": [
+    {
+      "scope_id": "SCOPE-PORT11A-U1",
+      "firmware_revision": "GM1.10C",
+      "approved_ranges": [
+        {
+          "start_address": "0xFC020040",
+          "end_address": "0xFC0200CF",
+          "label": "S1A ATCM copy loop"
+        },
+        {
+          "start_address": "0xFC31BBC4",
+          "end_address": "0xFC31BBCB",
+          "label": "S1B j_CreateTask veneer"
+        },
+        {
+          "start_address": "0xFCEF3488",
+          "end_address": "0xFCEF36B3",
+          "label": "S1C CreateTask ATCM ROM source"
+        },
+        {
+          "start_address": "0xFC31BE8C",
+          "end_address": "0xFC31BE93",
+          "label": "S1D j_CreateTaskStrictly veneer"
+        },
+        {
+          "start_address": "0xFCEF3F34",
+          "end_address": "0xFCEF3F55",
+          "label": "S1E CreateTaskStrictly ATCM ROM source"
+        }
+      ],
+      "max_bytes_total": 1024,
+      "allowed_classifications": ["STATIC_VERIFIED", "INFERRED", "UNKNOWN"],
+      "description": "PORT-11A U1 CreateTask and CreateTaskStrictly scope"
+    },
+    {
+      "scope_id": "SCOPE-PORT11A-U2",
+      "firmware_revision": "GM1.10C",
+      "approved_ranges": [
+        {
+          "start_address": "0xFC0BD070",
+          "end_address": "0xFC0BD1BB",
+          "label": "S2A task_InitFileModules creator/entry"
+        },
+        {
+          "start_address": "0xFC0D9CCC",
+          "end_address": "0xFC0D9D25",
+          "label": "S2B sub_fc0d9ccc callees"
+        }
+      ],
+      "max_bytes_total": 512,
+      "allowed_classifications": ["STATIC_VERIFIED", "INFERRED", "UNKNOWN"],
+      "description": "PORT-11A U2 task_InitFileModules entry scope"
+    },
+    {
+      "scope_id": "SCOPE-PORT11A-U3",
+      "firmware_revision": "GM1.10C",
+      "approved_ranges": [
+        {
+          "start_address": "0xFC1283AC",
+          "end_address": "0xFC1283FF",
+          "label": "S3A task_PhySw creator/entry"
+        },
+        {
+          "start_address": "0xFC128704",
+          "end_address": "0xFC12871F",
+          "label": "S3B PhySw literal and string pool"
+        }
+      ],
+      "max_bytes_total": 256,
+      "allowed_classifications": ["STATIC_VERIFIED", "INFERRED", "UNKNOWN"],
+      "description": "PORT-11A U3 task_PhySw entry scope"
+    }
+  ],
+  "evidence_entries": [
+    {
+      "evidence_id": "PORT11A-S1A",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC020040",
+      "end_address": "0xFC0200CF",
+      "expected_byte_count": 144,
+      "sha256": "a8bea578f65643701322d3ce2fc500d04485323dbb28bfab6e89a51a6344c54b",
+      "provenance_source": "ROM_VERIFIED:PRIMARY.BIN#docs/PORT11A_GM110C_ROM_EVIDENCE.md#S1A",
+      "authorization_scope_id": "SCOPE-PORT11A-U1",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Early boot ATCM copy loop & literal pool"
+    },
+    {
+      "evidence_id": "PORT11A-S1B",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC31BBC4",
+      "end_address": "0xFC31BBCB",
+      "expected_byte_count": 8,
+      "sha256": "e7f6fb4484c3a010e0db4a97edd252a10e92c529f0e75190a0cf98a479fa566d",
+      "provenance_source": "ROM_VERIFIED:PRIMARY.BIN#docs/PORT11A_GM110C_ROM_EVIDENCE.md#S1B",
+      "authorization_scope_id": "SCOPE-PORT11A-U1",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Kernel veneer j_CreateTask"
+    },
+    {
+      "evidence_id": "PORT11A-S1C",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFCEF3488",
+      "end_address": "0xFCEF36B3",
+      "expected_byte_count": 556,
+      "sha256": "409dcaec41a0e5aeba37110254919995f018aae13fcc942b832ffc244c223b36",
+      "provenance_source": "ROM_VERIFIED:PRIMARY.BIN#docs/PORT11A_GM110C_ROM_EVIDENCE.md#S1C",
+      "authorization_scope_id": "SCOPE-PORT11A-U1",
+      "classification": "STATIC_VERIFIED",
+      "notes": "CreateTask body and literal pool in ROM source"
+    },
+    {
+      "evidence_id": "PORT11A-S1D",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC31BE8C",
+      "end_address": "0xFC31BE93",
+      "expected_byte_count": 8,
+      "sha256": "f4a9356c75017083e2dbabbc309815595ae745a3787bbb5128e1e823601079b3",
+      "provenance_source": "ROM_VERIFIED:PRIMARY.BIN#docs/PORT11A_GM110C_ROM_EVIDENCE.md#S1D",
+      "authorization_scope_id": "SCOPE-PORT11A-U1",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Kernel veneer j_CreateTaskStrictly"
+    },
+    {
+      "evidence_id": "PORT11A-S1E",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFCEF3F34",
+      "end_address": "0xFCEF3F55",
+      "expected_byte_count": 34,
+      "sha256": "ce4d1016656cd6053e9808a6cf718d18e885948f0b7102a15cef88bcaacad612",
+      "provenance_source": "ROM_VERIFIED:PRIMARY.BIN#docs/PORT11A_GM110C_ROM_EVIDENCE.md#S1E",
+      "authorization_scope_id": "SCOPE-PORT11A-U1",
+      "classification": "STATIC_VERIFIED",
+      "notes": "CreateTaskStrictly body in ROM source"
+    },
+    {
+      "evidence_id": "PORT11A-S2A",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC0BD070",
+      "end_address": "0xFC0BD1BB",
+      "expected_byte_count": 332,
+      "sha256": "2c939717866f0a5c4c8df88e8f75942890347cdd7453fbe54bdcc33125020c94",
+      "provenance_source": "ROM_VERIFIED:PRIMARY.BIN#docs/PORT11A_GM110C_ROM_EVIDENCE.md#S2A",
+      "authorization_scope_id": "SCOPE-PORT11A-U2",
+      "classification": "STATIC_VERIFIED",
+      "notes": "task_InitFileModules entry, creator sub_fc0bd0b4, literal pool"
+    },
+    {
+      "evidence_id": "PORT11A-S2B",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC0D9CCC",
+      "end_address": "0xFC0D9D25",
+      "expected_byte_count": 90,
+      "sha256": "4e3f0f99e5605d08d6ba093146e86f009b28121220c632dae05f0a479e218ee8",
+      "provenance_source": "ROM_VERIFIED:PRIMARY.BIN#docs/PORT11A_GM110C_ROM_EVIDENCE.md#S2B",
+      "authorization_scope_id": "SCOPE-PORT11A-U2",
+      "classification": "STATIC_VERIFIED",
+      "notes": "task_InitFileModules callee sub_fc0d9ccc"
+    },
+    {
+      "evidence_id": "PORT11A-S3A",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC1283AC",
+      "end_address": "0xFC1283FF",
+      "expected_byte_count": 84,
+      "sha256": "8d38c2112b67283d302f77bd881ab9ccf4b2f7f1b4bfffc51bb531fd2151385a",
+      "provenance_source": "ROM_VERIFIED:PRIMARY.BIN#docs/PORT11A_GM110C_ROM_EVIDENCE.md#S3A",
+      "authorization_scope_id": "SCOPE-PORT11A-U3",
+      "classification": "STATIC_VERIFIED",
+      "notes": "task_PhySw entry and creator sub_fc1283d2"
+    },
+    {
+      "evidence_id": "PORT11A-S3B",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC128704",
+      "end_address": "0xFC12871F",
+      "expected_byte_count": 28,
+      "sha256": "fdace2c951b23e71497dab6d9e160a439a72f20f24fbcb362bbd014d3714b376",
+      "provenance_source": "ROM_VERIFIED:PRIMARY.BIN#docs/PORT11A_GM110C_ROM_EVIDENCE.md#S3B",
+      "authorization_scope_id": "SCOPE-PORT11A-U3",
+      "classification": "STATIC_VERIFIED",
+      "notes": "task_PhySw literal pool and name string"
+    }
+  ]
+}

@@ -1,6 +1,22 @@
 # Project state
 Updated: 2026-10-28
 
+PORT-11C Offline Evidence Validation Harness (2026-10-28; Worker 6, Gemini; `tools/port11c_evidence_validator.py`, `tests/test_port11c_evidence_validator.py`, `docs/PORT11C_EVIDENCE_HARNESS.md`):
+- **Objective**: Build a small, auditable offline evidence-validation utility for future G3X Lite firmware research to prevent unsupported address claims, incorrect evidence provenance, and out-of-scope ROM inspection.
+- **Deliverables**:
+  - `tools/port11c_evidence_validator.py`: Pure-Python standard library, fail-closed validation utility supporting machine-readable evidence manifests and authorization scopes.
+  - `tests/test_port11c_evidence_validator.py`: Comprehensive test suite with 38 deterministic tests verifying duplicate ID detection, malformed ranges, classification limits, provenance categories, missing/unapproved scopes, scope exceedance, slice overlap/inconsistency, synthetic byte fixture matching/corruption, and security boundaries (refusal of binary files, no subprocess).
+  - `docs/PORT11C_EVIDENCE_HARNESS.md`: Complete specification of manifest schema, authorization scopes, validation rules, CLI/API usage, and real-world case study validating the 9 canonical PORT-11A slices (`1,284` B).
+- **Security Invariants**:
+  - Manifest-only tool; strictly zero ROM/firmware file reads, zero directory scans, zero subprocess executions, zero opcode disassemblies, zero hardware operations.
+  - Refuses binary file extensions (`.bin`, `.rom`, `.dump`, `.fir`, `.fi2`, `.img`, `.gpr`, `.rep`) and `PRIMARY.*` filenames with exit code 2.
+- **Verification**: 38/38 unit tests pass (`0.06s`); full repository `test_port*.py` suite passes (`215/215 PASS`).
+- **Hardware Status**: STRICT NO-GO.
+- **Exact next command**:
+  ```sh
+  python3 -B -m unittest tests/test_port11c_evidence_validator.py -v && python3 -B tools/port11c_evidence_validator.py --manifest tests/fixtures/port11a_manifest.json 2>/dev/null || python3 -B -m unittest discover -s tests -p 'test_port*.py' -v
+  ```
+
 PORT-9C Milestone Consolidation & Integration Status Synchronization (2026-10-28; proposed in Draft PR #12 on `docs/port9c-milestone-sync` from `origin/main` `4206ec5`, `DRAFT_PR_OPEN / PENDING_MERGE`; `docs/PROJECT_STATE.md`, `docs/HANDOFF.md`):
 - **Merged Milestone Ledger on `origin/main` (`4206ec5`, PRs #6–#11)**:
   - **PR #6 (`a0a33a4`) — PORT-7B (`docs/PORT7B_PLAYBACK_MASK_CORRECTION.md`, `patches/0002-port7b-keys-mask0.patch`, `tests/test_port7b_reproducibility.py`, `tests/test_port7a_platform_configuration.py`, `tests/fixtures/port7b/*`)**: Corrected `KEYS_MASK0` in `platform_kbd.h` from `0x000433F9` to `0x000533F9` (adding bit 16 `0x00010000` for `KEY_PLAYBACK` while keeping Power bit 17 `0x00020000` excluded). Added clean-checkout fixtures and 19 reproducibility tests (`19/19 PASS`), and promoted the PORT-7A Playback override coverage test from expected failure to normal passing (`18/18 PASS`).
