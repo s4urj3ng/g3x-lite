@@ -404,36 +404,31 @@ def check_contract(sources, preconditions=rt.GM110C_PRECONDITIONS,
         "STATIC_VERIFIED ROM evidence never authorizes runtime activation; GM110C_PRECONDITIONS remains all False",
         STATIC_VERIFIED if static_evidence.static_targets_verified else VERIFIED_SOURCE)
 
-    # The model under effective preconditions decides what may be active.
-    # Only when hypothetical preconditions are explicitly allowed do we supply
-    # the synthetic static/dynamic profile and hook contract to evaluate which
-    # source interfaces would be permitted in that hypothetical scenario.
-    eff_static = (
-        rt.SYNTHETIC_ALL_STATIC_AND_DYNAMIC_VERIFIED
-        if effective_hypothetical else static_evidence
-    )
-    eff_hook = (
-        rt.SYNTHETIC_HOOK_CONTRACT_SATISFIED
-        if effective_hypothetical else hook_contract
-    )
+    # The model under effective preconditions AND the caller's actual
+    # static_evidence / hook_contract decides what may be active (PORT-11B B3:
+    # check_contract() NEVER silently substitutes SYNTHETIC_ALL_STATIC_AND_DYNAMIC_VERIFIED
+    # or SYNTHETIC_HOOK_CONTRACT_SATISFIED for caller-supplied contracts).
     model = rt.RuntimeLifecycle(
         effective,
-        static_evidence=eff_static,
-        hook_contract=eff_hook,
+        static_evidence=static_evidence,
+        hook_contract=hook_contract,
     )
     model.init_core()
     model.install_intercept()
     model.create_spytask()
     for task in rt.REPLACEMENTS:
         model.on_firmware_create_task(task)
-    if model.gate is rt.GateState.ARMED:
+    if (effective_hypothetical
+            and model.gate is rt.GateState.ARMED
+            and static_evidence is not None
+            and static_evidence.u2_sd_fat_mount_readiness is rt.EvidenceStatus.STATIC_VERIFIED):
         model.init_file_modules_started()
         model.init_file_modules_returned(0)
         model.record_mount_observation(True)
         model.record_filesystem_io_readiness(True)
         model.record_warm_restart_storage_safety(True)
         model.file_modules_finished(True)
-    else:
+    elif model.gate is not rt.GateState.ARMED:
         model.file_modules_finished(True)
     allowed = {
         "intercept": model.intercept is rt.InterceptState.INSTALLED,
@@ -484,7 +479,16 @@ def check_contract(sources, preconditions=rt.GM110C_PRECONDITIONS,
         if flag is not None and flag not in flag_names:
             add(f"C5.{fid}", False, f"unknown precondition flag {flag!r}")
             continue
-        claimed = flag is not None and getattr(effective, flag)
+        if flag is not None:
+            claimed = bool(getattr(effective, flag))
+        elif fid == "U4":
+            claimed = (
+                effective_hypothetical
+                and static_evidence is not None
+                and static_evidence.u4_spytask_creation_priority_and_dependencies is rt.EvidenceStatus.STATIC_VERIFIED
+            )
+        else:
+            claimed = False
         add(f"C5.{fid}", True,
             f"{text}: " + ("assumed (hypothetical)" if claimed else "UNKNOWN"),
             HYPOTHETICAL if claimed else UNVERIFIED_RUNTIME)
@@ -496,15 +500,32 @@ def check_contract(sources, preconditions=rt.GM110C_PRECONDITIONS,
     # C6: PORT-11B offline contract structure and selected default invariants.
     # Note: C6 verifies offline contract structure and selected default fail-closed
     # invariants; it does NOT prove hardware readiness or all state-machine paths.
-    hook_ok = (
+    # Per N1: in default (non-synthetic) validation, EVERY ONE of the four runtime
+    # safety fields in hook_contract must be UNKNOWN (runtime_prerequisites_all_unknown).
+    hook_default_ok = (
         hook_contract is not None
         and hook_contract.static_prerequisites_satisfied
+        and hook_contract.runtime_prerequisites_all_unknown
         and not hook_contract.runtime_prerequisites_satisfied
         and not hook_contract.all_satisfied
     )
+    hook_hypothetical_ok = (
+        effective_hypothetical
+        and hook_contract is not None
+        and hook_contract.static_prerequisites_satisfied
+        and hook_contract.runtime_prerequisites_satisfied
+        and hook_contract.all_satisfied
+    )
+    hook_ok = hook_default_ok or hook_hypothetical_ok
+    hook_label = (
+        HYPOTHETICAL if hook_hypothetical_ok
+        else (UNVERIFIED_RUNTIME if hook_default_ok else VERIFIED_SOURCE)
+    )
     add("C6.hook_safety_contract", hook_ok,
-        "offline hook contract structure valid: static prerequisites STATIC_VERIFIED, runtime prerequisites UNKNOWN (does not prove hardware readiness)",
-        UNVERIFIED_RUNTIME if hook_ok else VERIFIED_SOURCE)
+        "HYPOTHETICAL synthetic hook contract active (offline simulation only; does not prove hardware readiness)"
+        if hook_hypothetical_ok else
+        "offline hook contract structure valid: static prerequisites STATIC_VERIFIED, all 4 runtime prerequisites UNKNOWN (does not prove hardware readiness)",
+        hook_label)
     expected_fs_stages = (
         "task_created",
         "task_started",
@@ -514,16 +535,33 @@ def check_contract(sources, preconditions=rt.GM110C_PRECONDITIONS,
         "warm_restart_safe",
     )
     actual_fs_stages = tuple(stage for stage, _ in rt.FILESYSTEM_PROMOTION_EVIDENCE_REQUIREMENTS)
-    fs_req_ok = (
+    fs_structure_ok = (
         static_evidence is not None
+        and static_evidence.static_targets_verified
         and actual_fs_stages == expected_fs_stages
         and all(bool(desc.strip()) for _, desc in rt.FILESYSTEM_PROMOTION_EVIDENCE_REQUIREMENTS)
+    )
+    fs_default_ok = (
+        fs_structure_ok
         and static_evidence.u2_sd_fat_mount_readiness is rt.EvidenceStatus.UNKNOWN
         and static_evidence.u4_spytask_creation_priority_and_dependencies is rt.EvidenceStatus.UNKNOWN
     )
+    fs_hypothetical_ok = (
+        effective_hypothetical
+        and fs_structure_ok
+        and static_evidence.u2_sd_fat_mount_readiness is rt.EvidenceStatus.STATIC_VERIFIED
+        and static_evidence.u4_spytask_creation_priority_and_dependencies is rt.EvidenceStatus.STATIC_VERIFIED
+    )
+    fs_req_ok = fs_default_ok or fs_hypothetical_ok
+    fs_label = (
+        HYPOTHETICAL if fs_hypothetical_ok
+        else (UNVERIFIED_RUNTIME if fs_default_ok else VERIFIED_SOURCE)
+    )
     add("C6.fs_readiness_contract", fs_req_ok,
+        "HYPOTHETICAL synthetic 6-stage filesystem and U4 contract active (offline simulation only; does not prove hardware readiness)"
+        if fs_hypothetical_ok else
         "offline 6-stage filesystem contract structure valid; U2 mount readiness and U4 SpyTask gate remain UNKNOWN (does not prove hardware readiness)",
-        UNVERIFIED_RUNTIME if fs_req_ok else VERIFIED_SOURCE)
+        fs_label)
     return findings
 
 

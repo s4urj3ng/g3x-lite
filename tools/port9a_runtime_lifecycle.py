@@ -189,6 +189,18 @@ class HookSafetyContract:
         )
 
     @property
+    def runtime_prerequisites_all_unknown(self):
+        return all(
+            s is EvidenceStatus.UNKNOWN
+            for s in (
+                self.patch_execution_context_safe,
+                self.interrupt_masking_and_concurrency_safe,
+                self.icache_and_branch_predictor_coherent,
+                self.continuation_behavior_safe,
+            )
+        )
+
+    @property
     def all_satisfied(self):
         return self.static_prerequisites_satisfied and self.runtime_prerequisites_satisfied
 
@@ -333,6 +345,16 @@ class RuntimeLifecycle:
         """Offline model validation NEVER authorizes physical hardware execution."""
         return False
 
+    @property
+    def stock_owned_singletons(self):
+        """Listed singleton tasks already created as stock tasks in this boot generation."""
+        return frozenset(t for t in self._stock_observed if t in REPLACEMENTS)
+
+    @property
+    def replaced_singletons(self):
+        """Listed singleton tasks already replaced by CHDK in this boot generation."""
+        return frozenset(self._replaced)
+
     # -- helpers ---------------------------------------------------------
 
     def _log(self, event, detail=""):
@@ -368,6 +390,9 @@ class RuntimeLifecycle:
         if self.gate is not GateState.FAILED:
             self.gate = GateState.FAILED
             self._log("fs_failed", reason)
+        if self.spytask is TaskState.RUNNING:
+            self.spytask = TaskState.FAILED
+            self._log("spytask_failed", "filesystem readiness invalidated after READY")
         self.report_failure("InitFileModules", reason)
 
     # -- core ------------------------------------------------------------
@@ -485,22 +510,35 @@ class RuntimeLifecycle:
             creation executes unmodified (`create_stock`). Returned for:
               - unlisted tasks;
               - any task when `intercept` is `NOT_INSTALLED` or `REFUSED`, or
-                when a fault is already latched, or when the task's firmware
-                entry is not verified (including repeated stock calls — an
-                offline model without active interception control never claims
-                to block Canon firmware);
+                when the task's firmware entry is not verified (including
+                repeated stock calls — an offline model without active
+                interception control never claims to block Canon firmware);
+              - a listed task whose stock singleton was already created before
+                `install_intercept()` in the same `boot_generation`
+                (`task_name in self._stock_observed`): because no runtime
+                task-exit evidence exists for Canon's stock task, the model
+                refuses to spawn a parallel CHDK replacement (`Action.REPLACE`
+                forbidden), latches a fault, logs `stock_singleton_conflict` and
+                `create_stock`, and passes through without claiming to block
+                Canon's existing stock task;
+              - a non-replaced listed task when a fault is already latched;
               - a candidate replacement call whose `CreatorCallContext` witness
                 validation failed (which latches a fault and falls back to stock
                 `create_stock` rather than claiming the task was blocked).
           * `Action.REPLACE` (`entry=REPLACEMENTS[task_name]`): first creation
-            of a listed task under an installed intercept, with no fault and
-            valid `CreatorCallContext`, is routed to the CHDK replacement task
-            and recorded in `self._replaced`.
+            of a listed task under an installed intercept, with no prior stock
+            singleton in `self._stock_observed`, no fault, and valid
+            `CreatorCallContext`, is routed to the CHDK replacement task and
+            recorded in `self._replaced`.
           * `Action.REJECT_DUPLICATE` (`entry="duplicate_blocked"`): returned
-            ONLY when `self.intercept is InterceptState.INSTALLED` and `task_name`
-            was already replaced once (`task_name in self._replaced`), so the
-            active interception hook rejects spawning a duplicate singleton
-            replacement.
+            ONLY when `self.intercept is InterceptState.INSTALLED`, target entry
+            is verified, and `task_name` was already replaced once
+            (`task_name in self._replaced`). Precedence rule (N2): duplicate
+            rejection for an already-replaced singleton (`task_name in
+            self._replaced`) is evaluated BEFORE post-fault `PASS_THROUGH`
+            fallback so an active intercept hook never spawns a second instance
+            of a task that CHDK already replaced, even if a fault was latched
+            after that replacement.
         """
         eff_context = self._default_creator_context(task_name) if context is None else context
         mechanism = (
@@ -524,15 +562,33 @@ class RuntimeLifecycle:
             self._log("create_stock", task_name)
             return InterceptDecision(task_name, Action.PASS_THROUGH, "stock", mechanism)
 
-        # Duplicate rejection applies ONLY when the intercept is installed and
-        # this listed singleton task was already intercepted and replaced.
+        # Precedence 1 (N2): Duplicate rejection applies when the intercept is
+        # installed and this listed singleton task was already intercepted and
+        # replaced (checked before post-fault PASS_THROUGH fallback).
         if task_name in self._replaced:
             self._log("duplicate_task_creation_blocked", task_name)
             return InterceptDecision(task_name, Action.REJECT_DUPLICATE, "duplicate_blocked", mechanism)
 
-        # If a fault was latched (e.g., from an earlier creator-context failure),
-        # interception falls back to stock pass-through rather than claiming to
-        # block Canon firmware creation.
+        # Precedence 2 (B2): If a stock singleton of this listed task was already
+        # created before intercept installation in this boot generation, refuse
+        # to create a parallel CHDK replacement (no stock task-exit evidence)
+        # and do not claim the offline model can retroactively block stock Canon
+        # firmware. Latch a fault and pass through.
+        if task_name in self._stock_observed:
+            self.report_failure(
+                task_name,
+                f"stock {task_name} singleton already created before intercept in "
+                f"boot_generation={self.boot_generation}; replacement refused without "
+                "stock task exit evidence",
+            )
+            self._stock_observed.append(task_name)
+            self._log("stock_singleton_conflict", task_name)
+            self._log("create_stock", task_name)
+            return InterceptDecision(task_name, Action.PASS_THROUGH, "stock", mechanism)
+
+        # Precedence 3: If a fault was latched (e.g., from an earlier creator-context
+        # failure), interception falls back to stock pass-through rather than claiming
+        # to block Canon firmware creation.
         if self.fault is not None:
             self._stock_observed.append(task_name)
             self._log("create_stock", task_name)
@@ -569,12 +625,13 @@ class RuntimeLifecycle:
 
     def init_file_modules_started(self, boot_generation=None):
         """Stage 2: InitFileModules task body began executing."""
-        if self.gate is not GateState.ARMED or not self.fs.task_created or self.fs.failed:
+        if self.gate not in (GateState.ARMED, GateState.READY) or not self.fs.task_created or self.fs.failed:
             self._log("gate_stage_ignored", "init_file_modules_started")
             return self.fs.stage
         if not self._check_generation(boot_generation, "init_file_modules_started"):
             return self.fs.stage
         if not self._require_no_fault("init_file_modules_started"):
+            self._fail_filesystem("fault latched during init_file_modules_started")
             return self.fs.stage
         if not self.fs.task_started:
             self.fs = FilesystemReadinessState(
@@ -596,7 +653,7 @@ class RuntimeLifecycle:
           * Posting UI event 0x5006 is NOT independently sufficient to establish
             filesystem readiness.
         """
-        if self.gate is not GateState.ARMED or self.fs.failed:
+        if self.gate not in (GateState.ARMED, GateState.READY) or self.fs.failed:
             self._log("gate_stage_ignored", "init_file_modules_returned")
             return self.fs.stage
         if not self._check_generation(boot_generation, "init_file_modules_returned"):
@@ -608,6 +665,7 @@ class RuntimeLifecycle:
             self._fail_filesystem(f"init return status={status!r} return_code={return_code!r}")
             return self.fs.stage
         if not self._require_no_fault("init_file_modules_returned"):
+            self._fail_filesystem("fault latched during init_file_modules_returned")
             return self.fs.stage
         if not self.fs.init_returned_normally:
             self.fs = FilesystemReadinessState(
@@ -624,7 +682,7 @@ class RuntimeLifecycle:
 
     def record_mount_observation(self, observed, boot_generation=None, status="ok"):
         """Stage 4: Explicit, independent observation of SD/FAT mount completion."""
-        if self.gate is not GateState.ARMED or self.fs.failed:
+        if self.gate not in (GateState.ARMED, GateState.READY) or self.fs.failed:
             self._log("gate_stage_ignored", "record_mount_observation")
             return self.fs.stage
         if not self._check_generation(boot_generation, "record_mount_observation"):
@@ -640,6 +698,7 @@ class RuntimeLifecycle:
             self._fail_filesystem("U2 SD/FAT mount readiness evidence is UNKNOWN")
             return self.fs.stage
         if not self._require_no_fault("record_mount_observation"):
+            self._fail_filesystem("fault latched during record_mount_observation")
             return self.fs.stage
         if not self.fs.mount_observed:
             self.fs = FilesystemReadinessState(
@@ -654,7 +713,7 @@ class RuntimeLifecycle:
 
     def record_filesystem_io_readiness(self, ready, boot_generation=None, status="ok"):
         """Stage 5: Independent proof of filesystem I/O readiness."""
-        if self.gate is not GateState.ARMED or self.fs.failed:
+        if self.gate not in (GateState.ARMED, GateState.READY) or self.fs.failed:
             self._log("gate_stage_ignored", "record_filesystem_io_readiness")
             return self.fs.stage
         if not self._check_generation(boot_generation, "record_filesystem_io_readiness"):
@@ -666,6 +725,7 @@ class RuntimeLifecycle:
             self._fail_filesystem(f"filesystem I/O not ready (ready={ready!r}, status={status!r})")
             return self.fs.stage
         if not self._require_no_fault("record_filesystem_io_readiness"):
+            self._fail_filesystem("fault latched during record_filesystem_io_readiness")
             return self.fs.stage
         if not self.fs.fs_io_ready:
             self.fs = FilesystemReadinessState(
@@ -680,11 +740,15 @@ class RuntimeLifecycle:
         return self.fs.stage
 
     def record_warm_restart_storage_safety(self, safe, boot_generation=None, status="ok"):
-        """Stage 6: Warm-restart storage safety established; latches gate READY."""
-        if self.gate is GateState.READY and safe is True and status == "ok":
-            self._check_generation(boot_generation, "record_warm_restart_storage_safety")
-            return self.gate
-        if self.gate is not GateState.ARMED or self.fs.failed:
+        """Stage 6: Warm-restart storage safety established; latches gate READY.
+
+        Post-READY fail-closed rule: any subsequent call with a stale/mismatched
+        `boot_generation`, `safe is not True`, `status != "ok"`, or a latched
+        fault invalidates readiness (`GateState.FAILED`, `FilesystemStage.FAILED`).
+        Valid same-generation repeat calls (`safe is True`, `status == "ok"`)
+        remain idempotent.
+        """
+        if self.gate not in (GateState.ARMED, GateState.READY) or self.fs.failed:
             self._log("gate_stage_ignored", "record_warm_restart_storage_safety")
             return self.gate
         if not self._check_generation(boot_generation, "record_warm_restart_storage_safety"):
@@ -696,20 +760,22 @@ class RuntimeLifecycle:
             self._fail_filesystem(f"warm-restart storage safety not established (safe={safe!r}, status={status!r})")
             return self.gate
         if not self._require_no_fault("record_warm_restart_storage_safety"):
+            self._fail_filesystem("fault latched during record_warm_restart_storage_safety")
             return self.gate
-        self.fs = FilesystemReadinessState(
-            boot_generation=self.boot_generation,
-            task_created=True,
-            task_started=True,
-            init_returned_normally=True,
-            mount_observed=True,
-            fs_io_ready=True,
-            warm_restart_safe=True,
-        )
-        self.gate = GateState.READY
-        self._log("fs_warm_restart_safe")
-        self._log("fs_ready")
-        self._try_run_spytask()
+        if not self.fs.warm_restart_safe:
+            self.fs = FilesystemReadinessState(
+                boot_generation=self.boot_generation,
+                task_created=True,
+                task_started=True,
+                init_returned_normally=True,
+                mount_observed=True,
+                fs_io_ready=True,
+                warm_restart_safe=True,
+            )
+            self.gate = GateState.READY
+            self._log("fs_warm_restart_safe")
+            self._log("fs_ready")
+            self._try_run_spytask()
         return self.gate
 
     def file_modules_finished(self, success, boot_generation=None):
@@ -719,22 +785,22 @@ class RuntimeLifecycle:
           * A single `success=True` boolean NEVER synthesizes or auto-promotes
             Stages 2-6 (`task_started`, `init_returned_normally`, `mount_observed`,
             `fs_io_ready`, `warm_restart_safe`).
-          * If `success` is not `True` or a fault is latched, the gate fails closed.
+          * If `success` is not `True`, `boot_generation` mismatches, or a fault
+            is latched — even after `GateState.READY` was previously reached —
+            the gate transitions fail-closed to `GateState.FAILED` and
+            `FilesystemStage.FAILED`.
           * If `success=True` is called before all 6 stages have been explicitly
             established for `boot_generation`, the gate fails closed because
             InitFileModules returning cannot by itself prove mount, I/O, or
             warm-restart safety.
         """
-        if self.gate is GateState.READY and success is True and self.fs.is_ready:
-            self._check_generation(boot_generation, "file_modules_finished")
-            return self.gate
-        if self.gate is not GateState.ARMED:
+        if self.gate not in (GateState.ARMED, GateState.READY) or self.fs.failed:
             self._log("gate_signal_ignored", self.gate.value)
+            return self.gate
+        if not self._check_generation(boot_generation, "file_modules_finished"):
             return self.gate
         if success is not True or self.fault is not None:
             self._fail_filesystem("file modules not ready")
-            return self.gate
-        if not self._check_generation(boot_generation, "file_modules_finished"):
             return self.gate
         if not self.fs.is_ready:
             self._fail_filesystem(

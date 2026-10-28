@@ -62,14 +62,15 @@ PORT-11A proved that the first callee of `task_InitFileModules` (`sub_fc0d9ccc`)
 | **5** | `FS_IO_READY` | `record_filesystem_io_readiness(ready=True)` | Requires `MOUNT_OBSERVED`, `ready is True`, `status == "ok"`, and matching `boot_generation`. Promotion requires verified non-destructive file open/read capability on the mounted volume without contention or timeout. |
 | **6** | `WARM_RESTART_SAFE` | `record_warm_restart_storage_safety(safe=True)` | Requires `FS_IO_READY`, `safe is True`, `status == "ok"`, and matching `boot_generation`. Only when Stage 6 succeeds does `GateState` transition to `READY`. Promotion requires resolving warm-restart SD host/card preconditions (`P11`, `P12`, `P13`, `P15`). |
 
-**Strict `file_modules_finished(success)` Behavior (Blocker B1 Remediation)**:
+**Strict `file_modules_finished(success)` and Post-`READY` Fail-Closed Behavior (Blocker B1 Remediations)**:
 - `file_modules_finished(True)` **never** auto-promotes or synthesizes Stages 2–6.
 - Calling `file_modules_finished(True)` on an armed gate when `not self.fs.is_ready` immediately fails closed (`FilesystemStage.FAILED`, `GateState.FAILED`, and `SpyTask` `TaskState.FAILED`).
+- **Post-`READY` fail-closed invalidation**: Even after `GateState.READY` is reached, all six filesystem stage methods (`init_file_modules_started`, `init_file_modules_returned`, `record_mount_observation`, `record_filesystem_io_readiness`, `record_warm_restart_storage_safety`, and `file_modules_finished`) continue to validate `boot_generation`, `status == "ok"`, boolean/return-code arguments, and latched faults. Any subsequent stale generation (`boot_generation != self.boot_generation`), `False`/`None` argument, or non-`"ok"` status immediately transitions `self.gate` to `GateState.FAILED`, `self.fs` to `FilesystemStage.FAILED`, latches a fault, transitions a running `SpyTask` to `TaskState.FAILED`, and blocks any late `create_spytask()` call (`TaskState.NOT_CREATED`). Valid same-generation repeat calls with `True`/`"ok"` remain idempotent without emitting duplicate trace events.
 - Legacy unit tests that exercise downstream ordering use the explicit test-only helper `advance_all_fs_stages_for_test(m)` in `tests/test_port9a_runtime_lifecycle.py`.
 
 ---
 
-## 4. Runtime Hook Safety Contract & Task Creation Semantics (Phase 4 & Blockers B3–B4)
+## 4. Runtime Hook Safety Contract & Task Creation Semantics (Phase 4 & Blockers B2–B4, N1–N2)
 
 ### 4.1 `HookSafetyContract` (`GM110C_HOOK_CONTRACT`)
 
@@ -85,44 +86,54 @@ PORT-11A proved that the first callee of `task_InitFileModules` (`sub_fc0d9ccc`)
 | `creator_predecessors_and_guards_preserved` | **`STATIC_VERIFIED`** | Enforced via synthetic witness assertions in `CreatorCallContext`. |
 | `create_task_strictly_forwarding_safe` | **`STATIC_VERIFIED`** | PORT-11A Slices `S1D`/`S1E` (`CreateTaskStrictly` preserves `r0–r3` and `[sp]`, forwarding to `CreateTask`). |
 
-### 4.2 Unambiguous Duplicate Task Creation & Creator Context Semantics (Blockers B3 & B4)
+### 4.2 Unambiguous Duplicate Task Creation, Stock-Before-Intercept Ownership & Creator Context Semantics
 
-1. **Separate Tracking of Observed Stock Creation (`_stock_observed`) vs Intercepted Replacement (`_replaced`)**:
-   - `Action.PASS_THROUGH` (`entry="stock"`): Stock firmware task creation proceeds unmodified (`create_stock`, recorded in `_stock_observed`). Returned for unlisted tasks, or whenever `intercept` is `NOT_INSTALLED` or `REFUSED`, the target entry is unverified, a fault is latched, or candidate `CreatorCallContext` validation failed. Repeated stock calls without active interception always return `Action.PASS_THROUGH` — the offline model never claims it blocks Canon firmware.
-   - `Action.REPLACE` (`entry=REPLACEMENTS[task_name]`): First creation of a listed task under `InterceptState.INSTALLED` with no fault and valid `CreatorCallContext` is routed to the CHDK replacement task and recorded in `_replaced`.
-   - `Action.REJECT_DUPLICATE` (`entry="duplicate_blocked"`): Returned **only** when `self.intercept is InterceptState.INSTALLED` and `task_name in self._replaced` (i.e., the task was already intercepted and replaced once), so the modeled interception hook blocks spawning a second replacement singleton.
-2. **Stock Pass-Through Isolation & Post-Fault Behavior**:
-   - `_validate_creator_context` is evaluated **only** when `task_name in REPLACEMENTS`, `self.intercept is InterceptState.INSTALLED`, `self._entry_verified(task_name)` is `True`, `task_name not in self._replaced`, and `self.fault is None`.
-   - When `_validate_creator_context` fails, it latches a fault and falls back to stock creation (`Action.PASS_THROUGH`, recorded in `_stock_observed`, **not** `_replaced`). Any subsequent task creation request sees the latched fault and also falls back to `Action.PASS_THROUGH` without falsely claiming `REJECT_DUPLICATE`.
-3. **Mandatory Creation Mechanism & Synthetic Witness Framing (`EXPECTED_CREATION_MECHANISMS`)**:
+1. **Separate Tracking of Observed Stock Creation (`_stock_observed` / `stock_owned_singletons`) vs Intercepted Replacement (`_replaced` / `replaced_singletons`)**:
+   - `Action.PASS_THROUGH` (`entry="stock"`): Stock firmware task creation proceeds unmodified (`create_stock`, recorded in `_stock_observed`). Returned for unlisted tasks, or whenever `intercept` is `NOT_INSTALLED` or `REFUSED`, the target entry is unverified, a listed singleton was already created as a stock task before `install_intercept()`, a fault is latched (for an unreplaced task), or candidate `CreatorCallContext` validation failed. Repeated stock calls without active interception always return `Action.PASS_THROUGH` — the offline model never claims it blocks Canon firmware.
+   - `Action.REPLACE` (`entry=REPLACEMENTS[task_name]`): First creation of a listed task under `InterceptState.INSTALLED` with no prior stock singleton (`task_name not in self._stock_observed`), no fault, and valid `CreatorCallContext` is routed to the CHDK replacement task and recorded in `_replaced`.
+   - `Action.REJECT_DUPLICATE` (`entry="duplicate_blocked"`): Returned **only** when `self.intercept is InterceptState.INSTALLED`, target entry is verified, and `task_name in self._replaced` (i.e., the task was already intercepted and replaced once), so the modeled interception hook blocks spawning a second replacement singleton.
+2. **Stock Singleton Ownership Before Intercept Installation (Independent Review Blocker B2)**:
+   - If `"PhySw"` or `"InitFileModules"` is created without interception (`Action.PASS_THROUGH`, recorded in `self._stock_observed` / `self.stock_owned_singletons`), and `install_intercept()` is subsequently called within the same `boot_generation`, any later `on_firmware_create_task(task_name)` request for that task is **refused for replacement**: because no runtime task-exit evidence exists for Canon's stock singleton, the model never returns `Action.REPLACE` (avoiding parallel stock + CHDK singletons) and never returns `Action.REJECT_DUPLICATE` (never claiming to retroactively block Canon's stock task). Instead, it latches a fault, logs `("stock_singleton_conflict", task_name)` and `("create_stock", task_name)`, and returns `Action.PASS_THROUGH` (`"stock"`).
+   - Stock singleton ownership persists for the lifetime of that `boot_generation`; only a fresh `RuntimeLifecycle` instance for a new `boot_generation` starts with clean singleton ownership state.
+3. **Evaluation Order & Post-Fault Precedence (Independent Review N2)**:
+   - When `task_name in REPLACEMENTS`, `self.intercept is InterceptState.INSTALLED`, and `self._entry_verified(task_name)` is `True`, `on_firmware_create_task` evaluates in strict precedence order:
+     1. **`task_name in self._replaced` $\to$ `Action.REJECT_DUPLICATE` (`"duplicate_blocked"`)**: Checked **before** post-fault `PASS_THROUGH` fallback so an already-replaced singleton never spawns a second task even if a fault was latched after replacement.
+     2. **`task_name in self._stock_observed` $\to$ `Action.PASS_THROUGH` (`"stock"`) + latch fault**: Refuses replacement when a stock singleton was already created before `install_intercept()`.
+     3. **`self.fault is not None` $\to$ `Action.PASS_THROUGH` (`"stock"`)**: Unreplaced tasks fall back to stock creation when a fault is latched.
+     4. **`not self._validate_creator_context(...)` $\to$ `Action.PASS_THROUGH` (`"stock"`) + latch fault**: Invalid creator context latches a fault and falls back to stock creation (never recorded in `_replaced`).
+     5. **Otherwise $\to$ `Action.REPLACE` (`REPLACEMENTS[task_name]`)**.
+4. **Mandatory Creation Mechanism & Synthetic Witness Framing (`EXPECTED_CREATION_MECHANISMS`)**:
    - `CreatorCallContext` is explicitly documented and marked (`is_synthetic_witness_only = True`) as a synthetic witness assertion for offline scenario testing, never physical runtime proof.
    - `EXPECTED_CREATION_MECHANISMS` requires `CreationMechanism.CREATE_TASK` for `"InitFileModules"` and `CreationMechanism.CREATE_TASK_STRICTLY` for `"PhySw"`. Supplying `CREATE_TASK` for `"PhySw"` (which would otherwise skip the `CreateTaskStrictly` forwarding check) is rejected fail-closed with a fault.
 
-### 4.3 Scope of `C6` in `tools/port9b_runtime_contract.py`
+### 4.3 Scope of `C6` and No Implicit Synthetic Substitution in `tools/port9b_runtime_contract.py` (Blocker B3 & N1)
 
-`C6.hook_safety_contract` and `C6.fs_readiness_contract` verify the **offline contract structure and selected default fail-closed invariants** (that `GM110C_HOOK_CONTRACT` leaves runtime prerequisites `UNKNOWN`, `FILESYSTEM_PROMOTION_EVIDENCE_REQUIREMENTS` defines all 6 stages, and `GM110C_STATIC_EVIDENCE` leaves `U2` mount readiness and `U4` `UNKNOWN`). They do **not** prove physical hardware readiness or replace the state-machine transition tests in `tests/test_port9a_runtime_lifecycle.py`.
+- **No Silent Synthetic Contract Substitution (Independent Review Blocker B3)**: `check_contract()` passes the caller's actual `static_evidence` and `hook_contract` directly to `RuntimeLifecycle` and **never** silently substitutes `SYNTHETIC_ALL_STATIC_AND_DYNAMIC_VERIFIED` or `SYNTHETIC_HOOK_CONTRACT_SATISFIED` when `allow_hypothetical=True`. Consequently, calling `check_contract(..., preconditions=HYPOTHETICAL_ALL_VERIFIED, allow_hypothetical=True, static_evidence=UNVERIFIED_STATIC_EVIDENCE, hook_contract=GM110C_HOOK_CONTRACT)` (or with default `GM110C_STATIC_EVIDENCE` / `GM110C_HOOK_CONTRACT`) leaves all model interfaces disallowed and rejects any `core_spytask()` activation in `C3.spytask`. Only when a test explicitly passes both synthetic contracts alongside `allow_hypothetical=True` does the model evaluate the synthetic hypothetical scenario (labeling `C4`, `C5.U1..U4`, and `C6` as `HYPOTHETICAL`).
+- **Per-Field `UNKNOWN` Verification in `C6` (Independent Review N1)**: `C6.hook_safety_contract` verifies `hook_contract.runtime_prerequisites_all_unknown` in default mode, ensuring that **each** of the four runtime safety fields in `GM110C_HOOK_CONTRACT` is individually `EvidenceStatus.UNKNOWN` (promoting even 1 or 3 of the 4 fields fails `C6.hook_safety_contract`). `C6.hook_safety_contract` and `C6.fs_readiness_contract` verify offline contract structure and selected default fail-closed invariants; they do **not** prove physical hardware readiness or replace the state-machine transition tests in `tests/test_port9a_runtime_lifecycle.py`.
 
 ---
 
-## 5. Offline Test Scenarios & What They Prove (Phase 5 & B1–B4 Regressions)
+## 5. Offline Test Scenarios & What They Prove (Phase 5 & Review Regressions)
 
-All scenarios are deterministically verified in `Port11bSafetyScenarios` ([`tests/test_port9a_runtime_lifecycle.py`](../tests/test_port9a_runtime_lifecycle.py)) and `RegistryViolations` ([`tests/test_port9b_runtime_contract.py`](../tests/test_port9b_runtime_contract.py)):
+All scenarios are deterministically verified in `Port11bSafetyScenarios` ([`tests/test_port9a_runtime_lifecycle.py`](../tests/test_port9a_runtime_lifecycle.py)) and `Port9bContract` / `RegistryViolations` ([`tests/test_port9b_runtime_contract.py`](../tests/test_port9b_runtime_contract.py)):
 
 1. **Static evidence present, runtime authorization absent** (`test_static_evidence_present_but_runtime_authorization_absent`)
-2. **B1 — `file_modules_finished(True)` never auto-promotes Stages 2–6** (`test_b1_file_modules_finished_true_never_auto_promotes_stages`, `test_b1_file_modules_finished_true_at_any_partial_stage_fails_closed`)
-3. **B2 — Default or `None` `hook_contract` and `U4` `UNKNOWN` always fail closed without legacy hypothetical bypasses** (`test_b2_missing_or_default_hook_contract_refuses_intercept_even_with_hypothetical_preconditions`, `test_b2_u4_unknown_always_blocks_spytask_without_legacy_bypass`)
-4. **`InitFileModules` created but not started** (`test_init_file_modules_created_but_not_started_blocks_spytask`)
-5. **Initialization returns zero (`r0 == 0`) + event `0x5006` while mount readiness is `UNKNOWN`** (`test_init_returns_zero_and_event_5006_do_not_prove_mount_readiness`)
-6. **Mount observed without proven filesystem I/O readiness** (`test_mount_observed_without_fs_io_readiness_blocks_spytask`)
-7. **Filesystem I/O ready without warm-restart storage safety** (`test_filesystem_ready_without_warm_restart_safety_blocks_spytask`)
-8. **Stale readiness evidence from an earlier boot generation** (`test_stale_boot_generation_readiness_evidence_rejected`)
-9. **Explicit failure or ambiguous status** (`test_explicit_failure_or_ambiguous_status_blocks_spytask`)
-10. **B3 — Duplicate `InitFileModules` / `PhySw` creation returns `Action.REJECT_DUPLICATE` and invalid context does not fault stock pass-through** (`test_b3_duplicate_init_file_modules_creation_returns_reject_duplicate`, `test_b3_invalid_context_does_not_fault_stock_pass_through_paths`, `test_second_creation_of_same_task_is_rejected_not_recreated`)
-11. **B4 — `PhySw` enforces `CREATE_TASK_STRICTLY` mechanism and rejects wrong mechanism** (`test_b4_physw_creation_enforces_create_task_strictly_mechanism`)
-12. **Missing or invalid creator guard / predecessor calls** (`test_missing_or_invalid_creator_guard_or_predecessors_rejected`)
-13. **Unknown interrupt or cache safety** (`test_unknown_interrupt_or_cache_safety_blocks_hook_install`)
-14. **`SpyTask` blocked by `U4`** (`test_spytask_blocked_by_u4_when_u4_remains_unknown`)
-15. **Complete synthetic readiness scenario passing logical model while refusing hardware authorization** (`test_complete_synthetic_readiness_passes_model_but_never_authorizes_hardware`)
+2. **B1 — `file_modules_finished(True)` never auto-promotes Stages 2–6, and post-`READY` invalid observations fail closed** (`test_b1_file_modules_finished_true_never_auto_promotes_stages`, `test_b1_file_modules_finished_true_at_any_partial_stage_fails_closed`, `test_post_ready_invalid_observations_fail_closed_and_block_late_spytask`, `test_post_ready_valid_same_generation_calls_remain_idempotent`)
+3. **B2 — Default or `None` `hook_contract` and `U4` `UNKNOWN` always fail closed, and stock singleton before intercept refuses replacement** (`test_b2_missing_or_default_hook_contract_refuses_intercept_even_with_hypothetical_preconditions`, `test_b2_u4_unknown_always_blocks_spytask_without_legacy_bypass`, `test_stock_before_intercept_refuses_replacement_for_physw_and_init_file_modules`)
+4. **B3 — `check_contract()` never substitutes synthetic contracts for caller-supplied `UNKNOWN` contracts** (`test_b3_hypothetical_never_substitutes_caller_supplied_unknown_contracts`)
+5. **N1 & N2 — Per-field `UNKNOWN` verification in `C6.hook_safety_contract` and duplicate-replacement precedence after a fault** (`test_n1_partial_promotion_of_hook_runtime_fields_fails_c6`, `test_n2_duplicate_replaced_task_rejected_even_after_subsequent_fault`)
+6. **`InitFileModules` created but not started** (`test_init_file_modules_created_but_not_started_blocks_spytask`)
+7. **Initialization returns zero (`r0 == 0`) + event `0x5006` while mount readiness is `UNKNOWN`** (`test_init_returns_zero_and_event_5006_do_not_prove_mount_readiness`)
+8. **Mount observed without proven filesystem I/O readiness** (`test_mount_observed_without_fs_io_readiness_blocks_spytask`)
+9. **Filesystem I/O ready without warm-restart storage safety** (`test_filesystem_ready_without_warm_restart_safety_blocks_spytask`)
+10. **Stale readiness evidence from an earlier boot generation** (`test_stale_boot_generation_readiness_evidence_rejected`)
+11. **Explicit failure or ambiguous status** (`test_explicit_failure_or_ambiguous_status_blocks_spytask`)
+12. **Duplicate `InitFileModules` / `PhySw` creation returns `Action.REJECT_DUPLICATE` and invalid context does not fault stock pass-through** (`test_b3_duplicate_init_file_modules_creation_returns_reject_duplicate`, `test_b3_invalid_context_does_not_fault_stock_pass_through_paths`, `test_second_creation_of_same_task_is_rejected_not_recreated`)
+13. **`PhySw` enforces `CREATE_TASK_STRICTLY` mechanism and rejects wrong mechanism** (`test_b4_physw_creation_enforces_create_task_strictly_mechanism`)
+14. **Missing or invalid creator guard / predecessor calls** (`test_missing_or_invalid_creator_guard_or_predecessors_rejected`)
+15. **Unknown interrupt or cache safety** (`test_unknown_interrupt_or_cache_safety_blocks_hook_install`)
+16. **`SpyTask` blocked by `U4`** (`test_spytask_blocked_by_u4_when_u4_remains_unknown`)
+17. **Complete synthetic readiness scenario passing logical model while refusing hardware authorization** (`test_complete_synthetic_readiness_passes_model_but_never_authorizes_hardware`)
 
 ---
 

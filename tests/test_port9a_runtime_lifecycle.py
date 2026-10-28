@@ -720,6 +720,164 @@ class Port11bSafetyScenarios(unittest.TestCase):
         self.assertFalse(m.static_evidence.authorizes_runtime_activation)
         self.assertEqual(rt.GM110C_PRECONDITIONS, rt.Preconditions(False, False, False))
 
+    def test_post_ready_invalid_observations_fail_closed_and_block_late_spytask(self):
+        # Independent Review Blocker B1: once GateState.READY is reached,
+        # subsequent stale, ambiguous, or failed observations MUST fail closed
+        # and prevent a late create_spytask() from becoming RUNNING.
+        def reach_ready(boot_generation=2):
+            m = booted(boot_generation=boot_generation)
+            m.on_firmware_create_task("InitFileModules")
+            m.init_file_modules_started(boot_generation=boot_generation)
+            m.init_file_modules_returned(0, boot_generation=boot_generation)
+            m.record_mount_observation(True, boot_generation=boot_generation)
+            m.record_filesystem_io_readiness(True, boot_generation=boot_generation)
+            m.record_warm_restart_storage_safety(True, boot_generation=boot_generation)
+            self.assertIs(m.gate, GateState.READY)
+            self.assertTrue(m.fs.is_ready)
+            return m
+
+        scenarios = (
+            (
+                "stale_mount_after_ready",
+                lambda m: m.record_mount_observation(True, boot_generation=1),
+            ),
+            (
+                "ambiguous_io_after_ready",
+                lambda m: m.record_filesystem_io_readiness(True, status="ambiguous"),
+            ),
+            (
+                "failed_warm_restart_after_ready",
+                lambda m: m.record_warm_restart_storage_safety(False),
+            ),
+            (
+                "file_modules_finished_false_after_ready",
+                lambda m: m.file_modules_finished(False),
+            ),
+            (
+                "stale_started_after_ready",
+                lambda m: m.init_file_modules_started(boot_generation=1),
+            ),
+            (
+                "failed_returned_after_ready",
+                lambda m: m.init_file_modules_returned(1),
+            ),
+            (
+                "none_mount_after_ready",
+                lambda m: m.record_mount_observation(None),
+            ),
+            (
+                "none_io_after_ready",
+                lambda m: m.record_filesystem_io_readiness(None),
+            ),
+            (
+                "none_warm_restart_after_ready",
+                lambda m: m.record_warm_restart_storage_safety(None),
+            ),
+            (
+                "none_file_modules_finished_after_ready",
+                lambda m: m.file_modules_finished(None),
+            ),
+        )
+        for name, invalidate in scenarios:
+            with self.subTest(scenario=name):
+                # Subcase A: late SpyTask creation AFTER invalid post-READY observation
+                m = reach_ready(boot_generation=2)
+                invalidate(m)
+                self.assertIs(m.gate, GateState.FAILED)
+                self.assertIs(m.fs.stage, FilesystemStage.FAILED)
+                self.assertFalse(m.fs.is_ready)
+                self.assertIsNotNone(m.fault)
+                self.assertIs(m.create_spytask(), TaskState.NOT_CREATED)
+                self.assertIsNot(m.spytask, TaskState.RUNNING)
+                self.assertFalse(m.chdk_key_handling)
+                self.assertEqual(rt.check_trace(m.trace), [])
+
+                # Subcase B: SpyTask was already RUNNING at READY, then invalid observation arrives
+                m_run = reach_ready(boot_generation=2)
+                self.assertIs(m_run.create_spytask(), TaskState.RUNNING)
+                invalidate(m_run)
+                self.assertIs(m_run.gate, GateState.FAILED)
+                self.assertIs(m_run.fs.stage, FilesystemStage.FAILED)
+                self.assertIs(m_run.spytask, TaskState.FAILED)
+                self.assertFalse(m_run.chdk_key_handling)
+                self.assertEqual(rt.check_trace(m_run.trace), [])
+
+    def test_post_ready_valid_same_generation_calls_remain_idempotent(self):
+        # Valid same-generation repeat calls after READY remain idempotent without
+        # duplicating trace events.
+        m = full_boot()
+        self.assertIs(m.gate, GateState.READY)
+        self.assertIs(m.spytask, TaskState.RUNNING)
+        trace_before = list(m.trace)
+        self.assertIs(m.init_file_modules_started(), FilesystemStage.WARM_RESTART_SAFE)
+        self.assertIs(m.init_file_modules_returned(0), FilesystemStage.WARM_RESTART_SAFE)
+        self.assertIs(m.record_mount_observation(True), FilesystemStage.WARM_RESTART_SAFE)
+        self.assertIs(m.record_filesystem_io_readiness(True), FilesystemStage.WARM_RESTART_SAFE)
+        self.assertIs(m.record_warm_restart_storage_safety(True), GateState.READY)
+        self.assertIs(m.file_modules_finished(True), GateState.READY)
+        self.assertEqual(m.trace, trace_before)
+        self.assertIsNone(m.fault)
+        self.assertEqual(rt.check_trace(m.trace), [])
+
+    def test_stock_before_intercept_refuses_replacement_for_physw_and_init_file_modules(self):
+        # Independent Review Blocker B2:
+        # 1. Create stock PhySw or InitFileModules without intercept.
+        # 2. Install intercept.
+        # 3. Receive another creation request for the same task.
+        # Must NOT return Action.REPLACE (no parallel CHDK singleton while stock
+        # task may still exist) and must NOT return Action.REJECT_DUPLICATE (cannot
+        # retroactively block Canon's stock task). Must latch a fault and return
+        # Action.PASS_THROUGH ("stock").
+        for task_name in ("PhySw", "InitFileModules"):
+            with self.subTest(task=task_name):
+                m = rt.RuntimeLifecycle(
+                    preconditions=rt.HYPOTHETICAL_ALL_VERIFIED,
+                    static_evidence=rt.SYNTHETIC_ALL_STATIC_AND_DYNAMIC_VERIFIED,
+                    hook_contract=rt.SYNTHETIC_HOOK_CONTRACT_SATISFIED,
+                    boot_generation=1,
+                )
+                m.init_core()
+                d_stock = m.on_firmware_create_task(task_name)
+                self.assertEqual((d_stock.action, d_stock.entry), (Action.PASS_THROUGH, "stock"))
+                self.assertIn(task_name, m.stock_owned_singletons)
+                self.assertNotIn(task_name, m.replaced_singletons)
+
+                self.assertIs(m.install_intercept(), InterceptState.INSTALLED)
+                d_after = m.on_firmware_create_task(task_name)
+                self.assertEqual((d_after.action, d_after.entry), (Action.PASS_THROUGH, "stock"))
+                self.assertNotIn(task_name, m.replaced_singletons)
+                self.assertIsNotNone(m.fault)
+                self.assertIn(f"stock {task_name} singleton already created before intercept", m.fault)
+                self.assertIn(("stock_singleton_conflict", task_name), m.trace)
+                self.assertIs(m.kbd, TaskState.NOT_CREATED)
+                self.assertIs(m.gate, GateState.NOT_ARMED)
+                self.assertEqual(rt.check_trace(m.trace), [])
+
+        # Only a fresh RuntimeLifecycle for a new boot_generation resets singleton ownership.
+        m_gen2 = booted(boot_generation=2)
+        self.assertEqual(m_gen2.stock_owned_singletons, frozenset())
+        self.assertIs(m_gen2.on_firmware_create_task("PhySw").action, Action.REPLACE)
+        self.assertIs(m_gen2.on_firmware_create_task("InitFileModules").action, Action.REPLACE)
+
+    def test_n2_duplicate_replaced_task_rejected_even_after_subsequent_fault(self):
+        # Independent Review N2: once a listed singleton was replaced
+        # (task_name in self._replaced), a subsequent duplicate creation request
+        # for that replaced task resolves to Action.REJECT_DUPLICATE even after
+        # a later fault is latched, whereas an unreplaced task falls back to
+        # Action.PASS_THROUGH.
+        m = booted()
+        d1 = m.on_firmware_create_task("PhySw")
+        self.assertEqual((d1.action, d1.entry), (Action.REPLACE, "mykbd_task"))
+        self.assertIn("PhySw", m.replaced_singletons)
+
+        m.report_failure("External", "fault after PhySw replacement")
+        d_dup = m.on_firmware_create_task("PhySw")
+        self.assertEqual((d_dup.action, d_dup.entry), (Action.REJECT_DUPLICATE, "duplicate_blocked"))
+
+        d_other = m.on_firmware_create_task("InitFileModules")
+        self.assertEqual((d_other.action, d_other.entry), (Action.PASS_THROUGH, "stock"))
+        self.assertEqual(rt.check_trace(m.trace), [])
+
 
 class NegativeControls(unittest.TestCase):
     """The checker and the model must reject bad orderings, not pass vacuously."""
