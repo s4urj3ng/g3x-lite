@@ -499,6 +499,11 @@ class ValidationResult:
         "OFFLINE_DECLARATIONS_AND_SYNTHETIC_FIXTURES_ONLY "
         "(ROM binary bytes not accessed or authenticated by this tool)"
     )
+    rom_permission_granted: bool = False
+    rom_permission_disclaimer: str = (
+        "This tool validates offline declarations and synthetic test fixtures only; "
+        "it possesses NO authority to grant ROM-reading, firmware dumping, or camera execution permission."
+    )
 
     @property
     def is_valid(self) -> bool:
@@ -551,6 +556,8 @@ class ValidationResult:
             "is_valid": self.is_valid,
             "trust_level": self.trust_level,
             "evidence_verification_boundary": self.evidence_verification_boundary,
+            "rom_permission_granted": self.rom_permission_granted,
+            "rom_permission_disclaimer": self.rom_permission_disclaimer,
             "error_count": self.error_count,
             "warning_count": self.warning_count,
             "findings": [f.to_dict() for f in self.findings],
@@ -974,7 +981,8 @@ def load_manifest_file(file_path: Union[str, Path]) -> Tuple[Optional[EvidenceMa
     p = Path(file_path).resolve()
 
     # Security check: never open binary dumps
-    if p.suffix.lower() in FORBIDDEN_FILE_EXTENSIONS or "primary" in p.name.lower():
+    name_lower = p.name.lower()
+    if p.suffix.lower() in FORBIDDEN_FILE_EXTENSIONS or "primary" in name_lower or "rom" in name_lower:
         return None, f"Security Violation: Refusing to open forbidden binary/ROM file '{p.name}'"
 
     if not p.is_file():
@@ -996,27 +1004,40 @@ def load_manifest_file(file_path: Union[str, Path]) -> Tuple[Optional[EvidenceMa
 def load_scopes_file(file_path: Union[str, Path]) -> Tuple[Optional[Dict[str, AuthorizationScope]], Optional[str]]:
     """Load an external authorization scopes JSON file."""
     p = Path(file_path).resolve()
-    if p.suffix.lower() in FORBIDDEN_FILE_EXTENSIONS:
+    name_lower = p.name.lower()
+    if p.suffix.lower() in FORBIDDEN_FILE_EXTENSIONS or "primary" in name_lower or "rom" in name_lower:
         return None, f"Security Violation: Refusing to open forbidden binary file '{p.name}'"
 
     if not p.is_file():
         return None, f"Scopes file not found: {p}"
 
     try:
+        size = p.stat().st_size
+        if size > MAX_MANIFEST_BYTES:
+            return None, f"Scopes file size ({size} B) exceeds maximum limit ({MAX_MANIFEST_BYTES} B)"
         content = p.read_text(encoding="utf-8")
         data = json.loads(content)
+        if not isinstance(data, (dict, list)):
+            return None, "Error parsing authorization scopes: Root JSON must be an object or list"
         scopes_list: List[Dict[str, Any]] = []
         if isinstance(data, list):
             scopes_list = data
         elif isinstance(data, dict):
-            scopes_list = data.get("authorization_scopes", [])
+            raw_scopes = data.get("authorization_scopes", [])
+            if not isinstance(raw_scopes, list):
+                return None, "Error parsing authorization scopes: 'authorization_scopes' must be a list"
+            scopes_list = raw_scopes
             if not scopes_list and "scope_id" in data:
                 scopes_list = [data]
         res: Dict[str, AuthorizationScope] = {}
         for s_data in scopes_list:
+            if not isinstance(s_data, dict):
+                return None, "Error parsing authorization scopes: Scope entry must be a dictionary"
             scope = AuthorizationScope.from_dict(s_data)
             res[scope.scope_id] = scope
         return res, None
+    except json.JSONDecodeError as e:
+        return None, f"JSON syntax error in scopes file: {e}"
     except Exception as e:
         return None, f"Error parsing authorization scopes: {e}"
 

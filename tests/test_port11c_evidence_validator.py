@@ -759,6 +759,98 @@ class TestAuthorizationTrustBoundary(unittest.TestCase):
                 sys.argv = old_argv
 
 
+class TestPort11cAuditedSafetyControls(unittest.TestCase):
+    """Targeted negative and security controls added during Worker G2 post-PR #16 audit."""
+
+    def test_validator_never_grants_rom_reading_permission(self):
+        """The validator must NEVER claim to grant ROM-reading or hardware execution permission."""
+        manifest = EvidenceManifest.from_dict(make_valid_manifest_dict())
+        validator = EvidenceValidator()
+
+        # Case 1: Self-declared internal mode
+        res1 = validator.validate_manifest(manifest)
+        self.assertFalse(res1.rom_permission_granted)
+        self.assertIn("possesses NO authority to grant ROM-reading", res1.rom_permission_disclaimer)
+        dict1 = res1.to_dict()
+        self.assertFalse(dict1["rom_permission_granted"])
+        self.assertIn("rom_permission_disclaimer", dict1)
+
+        # Case 2: Trusted policy verified mode
+        trusted_scopes = {
+            s.scope_id: s for s in [AuthorizationScope.from_dict(make_valid_manifest_dict()["authorization_scopes"][0])]
+        }
+        res2 = validator.validate_manifest(manifest, trusted_scopes=trusted_scopes)
+        self.assertFalse(res2.rom_permission_granted)
+        self.assertIn("possesses NO authority to grant ROM-reading", res2.rom_permission_disclaimer)
+        dict2 = res2.to_dict()
+        self.assertFalse(dict2["rom_permission_granted"])
+
+    def test_scopes_file_rejects_forbidden_rom_or_binary_names(self):
+        """Scopes loader must refuse files with forbidden extensions or binary-like names."""
+        for bad_name in ["scopes.rom", "primary.json", "rom_scopes.txt", "scopes.bin"]:
+            with tempfile.TemporaryDirectory() as td:
+                p = Path(td) / bad_name
+                p.write_text("{}", encoding="utf-8")
+                scopes, err = pev.load_scopes_file(p)
+                self.assertIsNone(scopes)
+                self.assertIn("Security Violation: Refusing to open forbidden binary", err)
+
+    def test_scopes_file_rejects_non_dict_list_roots(self):
+        """Scopes loader must fail closed if root JSON is not a dict or list."""
+        for invalid_root in ["12345", '"string"', "true", "null"]:
+            with tempfile.TemporaryDirectory() as td:
+                p = Path(td) / "scopes.json"
+                p.write_text(invalid_root, encoding="utf-8")
+                scopes, err = pev.load_scopes_file(p)
+                self.assertIsNone(scopes)
+                self.assertIn("Error parsing authorization scopes", err)
+
+    def test_scopes_file_rejects_malformed_scopes_list(self):
+        """Scopes loader must fail closed if 'authorization_scopes' is not a list."""
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "scopes.json"
+            p.write_text(json.dumps({"authorization_scopes": "not a list"}), encoding="utf-8")
+            scopes, err = pev.load_scopes_file(p)
+            self.assertIsNone(scopes)
+            self.assertIn("must be a list", err)
+
+    def test_scopes_file_rejects_non_dict_scope_entry(self):
+        """Scopes loader must fail closed if any scope entry in the list is not a dictionary."""
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "scopes.json"
+            p.write_text(json.dumps({"authorization_scopes": [123]}), encoding="utf-8")
+            scopes, err = pev.load_scopes_file(p)
+            self.assertIsNone(scopes)
+            self.assertIn("Scope entry must be a dictionary", err)
+
+    def test_scope_cumulative_quota_boundary_enforcement(self):
+        """Verify that cumulative byte quota per scope is enforced at exact boundary."""
+        validator = EvidenceValidator()
+        d = make_valid_manifest_dict()
+        d["authorization_scopes"][0]["max_bytes_total"] = 100
+        # Set first entry to 50 bytes within approved range (0xFC020040..0xFC020071 = 50 B)
+        d["evidence_entries"][0]["start_address"] = "0xFC020040"
+        d["evidence_entries"][0]["end_address"] = "0xFC020071"
+        d["evidence_entries"][0]["expected_byte_count"] = 50
+        # Set second entry to 50 bytes within approved range (0xFC020072..0xFC0200A3 = 50 B)
+        d["evidence_entries"][1]["start_address"] = "0xFC020072"
+        d["evidence_entries"][1]["end_address"] = "0xFC0200A3"
+        d["evidence_entries"][1]["expected_byte_count"] = 50
+
+        manifest_exact = EvidenceManifest.from_dict(d)
+        res_exact = validator.validate_manifest(manifest_exact)
+        self.assertTrue(res_exact.is_valid)
+
+        # Exceeds quota by 1 byte: 50 + 51 = 101 bytes (FAIL)
+        d["evidence_entries"][1]["end_address"] = "0xFC0200A4"
+        d["evidence_entries"][1]["expected_byte_count"] = 51
+        manifest_over = EvidenceManifest.from_dict(d)
+        res_over = validator.validate_manifest(manifest_over)
+        self.assertFalse(res_over.is_valid)
+        rule_ids = [f.rule_id for f in res_over.findings]
+        self.assertIn(RULE_SCOPE_EXCEEDED, rule_ids)
+
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -254,7 +254,56 @@ python3 -B tools/bootstrap_chdk_platform.py && python3 -B tools/port9b_runtime_c
 
 ---
 
-## 8. Remaining Limitations
+---
+
+## 8. Independent Security & Trust Boundary Audit (Worker G2, Post-PR #16)
+
+Following the PR #16 merge (`7f39946`), an independent audit of the PORT-11C Evidence Harness was conducted across seven critical trust and security dimensions:
+
+### 8.1 External Trusted-Scopes Policy vs. Actual Human Authorization
+- **Audit Finding**: Supplying an external `--trusted-scopes` JSON file merely proves that the manifest entries comply syntactically with that file's declared schema boundaries.
+- **Critical Distinction**: A file on disk does **NOT** constitute authentic human authorization. In an automated multi-agent workflow, an agent could synthesize a permissive policy file.
+- **Fail-Closed Resolution**: The validator does not evaluate human identities, digital signatures, or authorization authority. It explicitly marks external policy validation as `TRUSTED_POLICY_VERIFIED` against the provided file, but includes the permanent invariant: `rom_permission_granted = False`.
+- Actual human authorization to inspect or execute firmware remains strictly an external governance gate requiring explicit Owner/Tech Lead sign-off documented in `docs/SAFETY.md`.
+
+### 8.2 Trusted Policy Fixture Merely Asserts Approval
+- **Audit Finding**: In `tests/fixtures/port11a_trusted_scopes.json`, the field `"policy_authority": "Owner/Tech Lead Authorized PORT-11A Research Scope"` is a descriptive metadata string, not cryptographic proof.
+- **Resolution**: Fixtures are classified as offline test specifications only. They cannot be used as automated authorization tokens for future phases.
+
+### 8.3 Parser Validation & Malformed-Input Fail-Closed Handling
+- **Audit Finding**: `load_scopes_file()` previously lacked an explicit file-size bound and did not strictly validate that root JSON or `authorization_scopes` structures were lists of dictionaries.
+- **Resolution**: Hardened both `load_manifest_file()` and `load_scopes_file()` with:
+  1. Strict `MAX_MANIFEST_BYTES` (10 MiB) size guard before reading content.
+  2. Root-type validation: root JSON must be a dict or list; scalar roots (`int`, `str`, `bool`, `null`) fail closed.
+  3. Schema type validation: `authorization_scopes` must be a list of dicts.
+  4. Non-positive byte count rejection: `expected_byte_count <= 0` is strictly rejected.
+
+### 8.4 Path and Binary-Access Restrictions
+- **Audit Finding**: The validator must enforce a total ban on opening raw binary firmware files.
+- **Resolution**: Hardened `FORBIDDEN_FILE_EXTENSIONS` (`.bin`, `.rom`, `.dump`, `.fir`, `.fi2`, `.img`, `.gpr`, `.rep`) with case-insensitive basename inspection rejecting any path containing `"primary"` or `"rom"` in both manifest and scopes loaders. Symlinks are resolved via `.resolve()` prior to inspection.
+
+### 8.5 Scope Boundaries & Cumulative Quota Accounting
+- **Audit Finding**: Slices must not exceed individual range bounds or aggregate scope quotas.
+- **Resolution**: Verified that `EvidenceValidator` enforces cumulative byte quota accounting per scope (`scope_byte_totals[sid] += entry.expected_byte_count`). Boundary unit tests (`test_scope_cumulative_quota_boundary_enforcement`) verify that an exact quota (e.g. 100 B) passes, while quota + 1 B fails closed with `RULE_SCOPE_EXCEEDED`.
+
+### 8.6 Manifest / Provenance Trust Assumptions
+- **Audit Finding**: Manifests declare provenance strings (e.g., `ROM_VERIFIED:PRIMARY.BIN@0xFC020040`).
+- **Resolution**: The validator checks category membership against `ProvenanceType` enums and syntax structure, but does not claim that the underlying binary bytes exist or have been read. Provenance verification is structural, not physical.
+
+### 8.7 Synthetic Fixture Test Completeness
+- **Audit Finding**: Offline tests must never require or open proprietary ROM dumps.
+- **Resolution**: All 49 unit tests operate exclusively on synthetic in-memory byte buffers and JSON fixtures. All tests execute deterministically in <= 0.05 s.
+
+### 8.8 Non-Authority Invariant: Zero ROM-Reading Permission
+- **Non-Negotiable Invariant**:
+  **The validator must NEVER claim to grant ROM-reading permission.**
+- Both internal and trusted-policy validation results guarantee `rom_permission_granted == False` and embed the canonical disclaimer:
+  > *"This tool validates offline declarations and synthetic test fixtures only; it possesses NO authority to grant ROM-reading, firmware dumping, or camera execution permission."*
+
+---
+
+## 9. Remaining Limitations
+
 
 1. **Manifest-Only Scope**: The tool validates declarations, hashes, and synthetic byte fixtures. It does not inspect physical camera hardware, execute live code, or evaluate dynamic DryOS runtime states.
 2. **Provenance Trust Boundary**: The tool verifies that declared provenance strings/objects match recognized types and valid formats, but cannot independently vouch for external human statements without cryptographic proof or tracked repository artifacts.

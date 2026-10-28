@@ -2,11 +2,11 @@
 Updated: 2026-10-28
 
 PORT-11C Offline Evidence Validation Harness (2026-10-28; Worker 6, Gemini; `tools/port11c_evidence_validator.py`, `tests/test_port11c_evidence_validator.py`, `tests/fixtures/port11a_manifest.json`, `tests/fixtures/port11a_trusted_scopes.json`, `docs/PORT11C_EVIDENCE_HARNESS.md`):
-- **Status**: **`LOCAL_BRANCH_READY / PENDING_TECH_LEAD_REVIEW`** (branch `research/port11c-evidence-harness` from `origin/main` `9c1c544`; NOT merged, NOT deployed).
+- **Status**: **`DRAFT_PR_OPEN / PENDING_TECH_LEAD_REVIEW (PR #17)`** (branch `research/port11c-evidence-harness` from `origin/main` `7f39946` (merged PR #16 baseline); NOT merged, NOT deployed).
 - **Objective**: Build a small, auditable offline evidence-validation utility for future G3X Lite firmware research to prevent unsupported address claims, incorrect evidence provenance, and out-of-scope ROM inspection.
 - **Deliverables**:
   - `tools/port11c_evidence_validator.py`: Pure-Python standard library, fail-closed validation utility supporting machine-readable evidence manifests and trusted authorization scope policies.
-  - `tests/test_port11c_evidence_validator.py`: Comprehensive test suite with 43 deterministic tests verifying duplicate ID detection, malformed ranges, classification limits, provenance categories, missing/unapproved scopes, scope exceedance, scope policy violations, slice overlap/inconsistency, synthetic byte fixture matching/corruption, and security boundaries (refusal of binary files, no subprocess).
+  - `tests/test_port11c_evidence_validator.py`: Comprehensive test suite with 49 deterministic tests verifying duplicate ID detection, malformed ranges, classification limits, provenance categories, missing/unapproved scopes, scope exceedance, scope policy violations, slice overlap/inconsistency, synthetic byte fixture matching/corruption, and security boundaries (refusal of binary files, no subprocess).
   - `tests/fixtures/port11a_manifest.json` & `tests/fixtures/port11a_trusted_scopes.json`: Codified canonical PORT-11A manifest and trusted scope policy fixtures encoding the 9 pinned ROM slices (`1,284` B).
   - `docs/PORT11C_EVIDENCE_HARNESS.md`: Complete specification of manifest schema, trusted authorization scopes, trust boundary audits, validation rules, CLI/API usage, and real-world case study.
 - **Authorization Trust Boundary Audit**:

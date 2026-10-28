@@ -3,7 +3,7 @@ Updated: 2026-10-28
 
 ## PORT-11C — Offline Evidence Validation Harness (Gemini Worker 6, 2026-10-28)
 
-- **Status**: **`LOCAL_DELIVERED / PENDING_TECH_LEAD_REVIEW`** (worktree `/Users/avp/Downloads/g3x-lite-port11c`, branch `research/port11c-evidence-harness` from `origin/main` `9c1c544`; NOT merged, NOT deployed; `tools/port11c_evidence_validator.py`, `tests/test_port11c_evidence_validator.py`, `tests/fixtures/port11a_manifest.json`, `tests/fixtures/port11a_trusted_scopes.json`, `docs/PORT11C_EVIDENCE_HARNESS.md`).
+- **Status**: **`DRAFT_PR_OPEN / PENDING_TECH_LEAD_REVIEW (PR #17)`** (worktree `/Users/avp/Downloads/g3x-lite-port11c`, branch `research/port11c-evidence-harness` from `origin/main` `7f39946` (merged PR #16 baseline); NOT merged, NOT deployed; `tools/port11c_evidence_validator.py`, `tests/test_port11c_evidence_validator.py`, `tests/fixtures/port11a_manifest.json`, `tests/fixtures/port11a_trusted_scopes.json`, `docs/PORT11C_EVIDENCE_HARNESS.md`).
 - **Objective**: Build an auditable offline evidence validation utility to prevent unsupported address claims, incorrect evidence provenance, and out-of-scope ROM inspection (such as the unauthorized Step 223 full-ROM branch scan in PORT-11A).
 - **Deliverables**:
   1. `tools/port11c_evidence_validator.py`: Pure Python standard library manifest and scope validator. Enforces fail-closed validation of:
@@ -17,7 +17,7 @@ Updated: 2026-10-28
      - Trust boundary notices (`RULE_TRUST_BOUNDARY_NOTICE`: warning emitted when validating without external trusted scopes).
      - Overlapping & conflicting slices (`RULE_OVERLAPPING_SLICES`, `RULE_INCONSISTENT_SLICES`).
      - Synthetic byte fixtures verification (`RULE_FIXTURE_LENGTH_MISMATCH`, `RULE_FIXTURE_HASH_MISMATCH`, and cross-slice byte conflict detection in overlaps).
-  2. `tests/test_port11c_evidence_validator.py`: 43 deterministic unit tests (`43/43 PASS`, 0.05s). Covers all negative failure modes, synthetic fixture validations, authorization trust boundary separation, CLI invocations, and security invariants.
+  2. `tests/test_port11c_evidence_validator.py`: 49 deterministic unit tests (`49/49 PASS`, 0.05s). Covers all negative failure modes, synthetic fixture validations, authorization trust boundary separation, CLI invocations, and security invariants.
   3. `tests/fixtures/port11a_manifest.json` & `tests/fixtures/port11a_trusted_scopes.json`: Codified canonical PORT-11A manifest and trusted scope policy fixtures containing the 9 pinned ROM slices (`S1A`–`S3B`, `1,284` B total) under scopes `SCOPE-PORT11A-U1`, `SCOPE-PORT11A-U2`, `SCOPE-PORT11A-U3`. Validates cleanly (`VALID, 0 errors, 0 warnings`).
   4. `docs/PORT11C_EVIDENCE_HARNESS.md`: Complete specification document describing motivation, security boundaries, authorization trust boundary audits, schema reference, validation rules, CLI/API guide, and case study.
 - **Authorization & Provenance Trust Boundary Audit**:
@@ -29,7 +29,7 @@ Updated: 2026-10-28
   - Refuses binary file extensions (`.bin`, `.rom`, `.dump`, `.fir`, `.fi2`, `.img`, `.gpr`, `.rep`) and `PRIMARY.*` filenames with exit code 2.
   - Uses synthetic byte fixtures only; zero proprietary firmware in git.
 - **Verification Results**:
-  - `python3 -B -m unittest tests/test_port11c_evidence_validator.py -v`: **43/43 PASS**.
+  - `python3 -B -m unittest tests/test_port11c_evidence_validator.py -v`: **49/49 PASS**.
   - `python3 -B tools/port11c_evidence_validator.py --manifest tests/fixtures/port11a_manifest.json --trusted-scopes tests/fixtures/port11a_trusted_scopes.json`: **VALID (0 errors, 0 warnings)**.
   - `python3 -B tools/port9b_runtime_contract.py --target chdk-port && python3 -B -m unittest discover -s tests -p 'test_port*.py' -v`: **220/220 PASS**.
 - **Hardware Status**: **STRICT NO-GO**.
