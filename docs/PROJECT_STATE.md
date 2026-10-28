@@ -48,6 +48,69 @@ PORT-5B ranma historical boot comparison (Claude Code, 2026-10-25, documentation
 
 PORT-5A ranma G3 X port archaeology (Claude Code, 2026-10-25): **NOT_FOUND** (patch bytes) — `docs/PORT5A_RANMA_PORT_RECOVERY.md`. Thread/attachment metadata re-authenticated (post 143437, legacy attach 16495, UUID `51fc3fb9…`); guest download HTTP 403, no Wayback/GitHub/CHDK-trunk copy; ranma has only 7 posts, all in thread 12600. Base revision unproven (published between r5491/r5492). BLK-03 stays open; next step is owner decision (own forum account or ask ranma).
 
+PORT-4: Boot Architecture & Native Integration Capability Consolidation: **INFORMATIONAL_ONLY** (2026-10-25; `docs/PORT4A_EXTERNAL_DIGIC6_IRQ_REFERENCES.md`, `docs/PORT4B_BOOT_ARCHITECTURE_DECISION.md`, `docs/PORT4C_MEMORY_OWNERSHIP_LIFETIME.md`, `docs/PORT4D_G6_ALLOCATION_OWNERSHIP_AUDIT.md`, `docs/PORT4E_SYNCHRONOUS_FEATURE_FEASIBILITY.md`, `docs/PORT4F_VERIFIED_NATIVE_CAPABILITIES.md`).
+- **Research Consolidation**: Consolidated and archived the completed 6-part PORT-4 research phase (PORT-4A through PORT-4F) establishing the evidence baseline for boot architecture and native execution.
+- **PORT-4 Overall Conclusion**: **INFORMATIONAL_ONLY**. Demonstrates limited synchronous execution and passive observation primitives; no functional setting-changing feature or persistent resident capability is demonstrated.
+- **Core Verdicts Preserved**:
+  - **Warm restart (Option A)**: **BLOCKED** (handler-table reset with unproven controller init semantics; SD recovery and downstream continuation unverified; strictly NO-GO).
+  - **Persistent native residency (Option C)**: **UNKNOWN** (critical gaps G1–G14 remain unresolved; all 5 tested packages freed code buffers immediately after synchronous `exec` return in `task_Script`; G6 script-teardown block survival stopped by safety classifier and remains UNKNOWN).
+  - **Synchronous native execution**: **VERIFIED** within documented test conditions (short native calls borrowed from `task_Script`, passive keyboard sampling, text/color output copied to Canon OSD).
+  - **AF / recording control**: **UNKNOWN** (no demonstrated native AF lock, focus-mode selection, exposure control, or recording control; G5 X focus wrappers are comparable-model only; video startup resets pre-record configuration).
+  - **Camera hardware**: **STRICT NO-GO**.
+- **Exact next command**: `cat docs/PORT4F_VERIFIED_NATIVE_CAPABILITIES.md`.
+
+PORT-4F verified native capability inventory (Codex, 2026-10-25): **INFORMATIONAL_ONLY** — `docs/PORT4F_VERIFIED_NATIVE_CAPABILITIES.md`.
+- Four distinct Canon routines are demonstrated as direct custom-payload calls: `LCDMsg_SetStr_native`, `LCDMsg_ChangeColor_native`, `GetKbdState`, `SleepTask`. BOOT-001A's leaf calls no Canon API. Loader event procedures and separate cache maintenance are inventoried without promoting them to payload feature calls.
+- Strongest evidence: native-only text plus separate return confirmation (BOOT-001B-DIAG), three static colored lines (UI-001A), and bounded input sampling/yield/resume (UI-001B-1). Static “Settings” text and movie-button reads do not demonstrate commands or recording control.
+- No demonstrated native AF lock, focus-mode, exposure or recording action. Identified feature APIs remain UNKNOWN for safe short-call invocation/effect. G6 and warm-restart blockers remain unchanged; classifier-stopped investigations remain closed.
+- Smallest potential useful function: one fixed informational message/reference reminder, then return. Next decision: accept an informational-only minimum or record that actionable control lacks evidence; no implementation or test follows.
+- Only report/state/handoff documentation changed. No ROM/source/loader/test analysis or executable changes, builds/tests, camera/SD/deployment operations, commits or pushes. Pre-existing dirty work preserved.
+
+Exact next command: `cat docs/PORT4F_VERIFIED_NATIVE_CAPABILITIES.md`.
+
+PORT-4E synchronous native feature feasibility review (Codex, 2026-10-25): **PARTIAL_POTENTIAL** — `docs/PORT4E_SYNCHRONOUS_FEATURE_FEASIBILITY.md`.
+- Existing GM1.10C owner reports demonstrate short call/return, copied static text and bounded input sampling. Canon-owned retained display data is not resident native code. Useful informational UI is plausible; no setting-changing feature is demonstrated by those packages.
+- Video extension is unsupported by the demonstrated Playback entry: recording startup reinitializes limits; no active-recording invocation/configuration contract exists. AF-lock/MF shortcuts are plausible from stock capability and static bindings, but native execution, lifetime and benefit remain UNKNOWN. AF algorithm improvement remains INSUFFICIENT EVIDENCE.
+- Warm-restart IRQ/SD blockers and G6 script-teardown/mode-lifetime uncertainty remain unchanged. No classifier-blocked investigation was reopened. Existing palette suppression is offline evidence only, not a demonstrated feature.
+- Smallest next milestone: documentation-only acceptance/evidence table for one static stock AF-lock workflow reference panel; record UNKNOWN if precise workflow or informational usefulness is unsupported. No implementation or experiment follows.
+- Documentation only; report/state/handoff additions. No firmware/source/loader/test changes, ROM analysis, builds, test suites, hardware/SD/deployment operations, commits or pushes. Pre-existing dirty work preserved.
+
+Exact next command: `cat docs/PORT4E_SYNCHRONOUS_FEATURE_FEASIBILITY.md`.
+
+PORT-4D G6 allocation ownership audit (Claude Code, 2026-10-25): **G6 UNKNOWN (allocator half resolved)** — `docs/PORT4D_G6_ALLOCATION_OWNERSHIP_AUDIT.md`.
+- VERIFIED (ROM): `AllocateMemory` `0xFC60241A` → `0xFC382C90` → `malloc 0xFC381524` → TCM heap `0xBFE1452E`. One global pool (descriptor `0x00040A94`, one semaphore). Headers hold only a size and a self-pointer. No task/owner attribution, and `free` (`0xFC38155A` → `0xBFE145EE`) performs no owner check. The event-procedure wrappers do no bookkeeping.
+- UNKNOWN: whether `task_Script`/interpreter teardown frees un-freed blocks. That analysis was stopped by a safety classifier and is not retried. Mode-transition lifetime is also UNKNOWN.
+- Next: owner decision on whether any further evidence path is appropriate. C residency remains blocked.
+
+Exact next command: `cat docs/PORT4D_G6_ALLOCATION_OWNERSHIP_AUDIT.md`.
+
+PORT-4C native integration memory ownership & lifetime review (Claude Code, 2026-10-25): **C RESIDENCY UNKNOWN — STOP** — `docs/PORT4C_MEMORY_OWNERSHIP_LIFETIME.md`.
+- Strongest verified finding: all five hardware-verified native packages (BOOT-001A, BOOT-001B-DIAG, UI-001A, UI-001B-0, UI-001B-1) free the code buffer right after the synchronous `exec` returns, inside `task_Script`. Native code residency is evidenced only for one borrowed call. Only Canon-allocated LCDMsg descriptors survived script exit and one Playback→Shooting transition.
+- Satisfied gates: DRAM executability, load-time cache sync, no-restart call/return, one Canon API from `task_Script`, a bounded `SleepTask` yield inside `task_Script`. These establish a call primitive only.
+- Critical gaps: whether an un-freed `AllocateMemory` block survives `task_Script` teardown (G6, first on the critical path); runtime heap budget; `CreateTask` legality and dispatch from `exec`; stack/TCB ownership; transitions; termination. `ExitTask` entry is CONTRADICTED across documents (`0xBFE14C1F` vs `0xBFE14A19`), and the pool upper boundary is unresolved (`0x0060E000` vs `0x00600014`).
+- Avoiding restart removes A's IRQ-table/SD-reinit obligations, not memory, scheduling, storage-context, transition or recovery hazards.
+- Next: owner review. The optional single next question is G6 only, which needs separately authorized read-only static review of `AllocateMemory`/`FreeMemory` and script teardown. Fallback (docs only): reconcile the `CreateTask`/`ExitTask` claims. No task creation, addresses, builds, hardware, commits or pushes.
+
+Exact next command: `cat docs/PORT4C_MEMORY_OWNERSHIP_LIFETIME.md`.
+
+PORT-4B independent boot architecture decision review (Codex, 2026-10-25): **ALL COMPLETE ARCHITECTURES NOT READY / FEASIBILITY INSUFFICIENTLY ESTABLISHED** — `docs/PORT4B_BOOT_ARCHITECTURE_DECISION.md`.
+- Recommendation: preserve A (warm restart) unchanged as a blocked reference; prioritize a bounded documentation review of C (existing-OS task integration); retain general B (non-restart loader/RAM coexistence) as UNKNOWN. No replacement architecture or implementation is selected.
+- Strongest evidence: A's handler-table/hardware convergence and SD recovery blockers remain open after PORT-4A; the owner-reported GM1.10C BOOT-001B-DIAG native-call/return result gives C a limited foothold but expressly proves neither task creation nor sustained residency.
+- PORT-2C's overlapping unreserved fixed layout remains incompatible with stock heap ownership. That does not exclude every B/C architecture. A's concrete artifacts justify preservation, not a safety guarantee. A simple return from the existing loader is also not established.
+- All options require memory/lifetime, runtime observability and recovery evidence. C does not inherit full CHDK capability or freedom from interrupt/storage dependencies merely by avoiding a restart.
+- Smallest next milestone: documentation-only C memory ownership/lifetime evidence table, distinguishing short calls from continuing tasks; mark missing contracts UNKNOWN and stop. No addresses, hooks, new tracing, enumerations, code/build/test/hardware/SD/deployment actions, commits or pushes.
+
+Exact next command: `cat docs/PORT4B_BOOT_ARCHITECTURE_DECISION.md`.
+
+PORT-4A external DIGIC 6 documentation review (Codex, 2026-10-25): **`PARTIAL_DOCUMENTATION_ONLY`** — `docs/PORT4A_EXTERNAL_DIGIC6_IRQ_REFERENCES.md`.
+- Public ML EOS M2 discussion explicitly documents D6 current interrupt ID at `0xD4011000`; commit-pinned ML 80D.103 annotation corroborates the interpretation on other D6 models. This does not establish a complete register map, read side effects or G3 X equivalence.
+- ML Hardware Guide documents D6 as ARMv7-R; Canon identifies G3 X as D6; Arm identifies Cortex-A9 as ARMv7-A. The prototype's Cortex-A9 annotation is inconsistent with the documented generation profile. Exact G3 X CPU/stepping/topology was not newly measured; no comments/code changed.
+- No applicable public definition found for bank `+0xC`, `0xD401010C`, `0xD4011010/18`, `0xD4011200`, or the required initialization/reset guarantee. Preserve UNKNOWN; hardware remains NOT READY / STRICT NO-GO. Forum evidence is explicitly qualified as indexed excerpts where live access failed.
+- Research stopped at the documentation boundary. No ROM reads/disassembly, enumerations, classifier retries, builds/tests, firmware/code changes, camera/SD/MMIO operations, commits, pushes or PRs. Existing dirty work preserved.
+- Next action: owner review; reopen semantics only on a new applicable specification or versioned empirical documentation, not a guessed mitigation or emulator assumption.
+
+Exact next command: `cat docs/PORT4A_EXTERNAL_DIGIC6_IRQ_REFERENCES.md`.
+
 Codex independent adversarial restart review (2026-10-25): **`INSUFFICIENT EVIDENCE / HARDWARE NOT READY`** — `docs/CODEX_INDEPENDENT_RESTART_REVIEW.md`.
 - Supersedes initial readiness assumptions and the proposed PORT-3D caller enumeration: classifier-stopped IRQ caller enumeration and SD register-write enumeration are formally excluded and not retried.
 - Strongest gap: BSS clears the IRQ handler table (`0x0003F4F4`), while the already documented controller initialization has UNKNOWN enable/pending/reset effects. A conditional panic path is supported; neither inevitable failure nor safe restart is established.
