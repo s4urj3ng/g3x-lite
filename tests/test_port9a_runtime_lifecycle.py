@@ -949,6 +949,28 @@ class NegativeControls(unittest.TestCase):
                          "kbd_running"])
         self.assertIn("kbd_running after fault", errs)
 
+    def test_checker_rejects_create_replaced_after_fault_even_if_first_was_before_fault(self):
+        # Codex Red Team QA finding regression:
+        # A trace containing create_replaced before fault and another create_replaced
+        # after fault must not evade detection by only checking the first occurrence.
+        errs_multi = self.bad([
+            "core_initialized",
+            "intercept_installed",
+            "create_replaced",
+            "fault",
+            "create_replaced",
+        ])
+        self.assertIn("create_replaced after fault", errs_multi)
+
+        # Single occurrence after fault is also rejected
+        errs_single = self.bad([
+            "core_initialized",
+            "intercept_installed",
+            "fault",
+            "create_replaced",
+        ])
+        self.assertIn("create_replaced after fault", errs_single)
+
     def test_checker_rejects_spytask_after_fs_failed(self):
         errs = self.bad([
             "core_initialized",
