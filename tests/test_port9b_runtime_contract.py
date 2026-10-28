@@ -313,6 +313,31 @@ class RegistryViolations(unittest.TestCase):
         self.assertEqual(failed(pc.check_contract(in_memory(), runtime_facts=facts)),
                          {"C5.U9", "C5.coverage"})
 
+    def test_port11b_static_vs_runtime_contract_checks_present(self):
+        findings = pc.check_contract(in_memory())
+        by_check = {f.check: f for f in findings}
+        self.assertTrue(by_check["C4.static_vs_runtime_auth"].ok)
+        self.assertEqual(by_check["C4.static_vs_runtime_auth"].label, pc.STATIC_VERIFIED)
+        self.assertTrue(by_check["C6.hook_safety_contract"].ok)
+        self.assertEqual(by_check["C6.hook_safety_contract"].label, pc.UNVERIFIED_RUNTIME)
+        self.assertTrue(by_check["C6.fs_readiness_contract"].ok)
+        self.assertEqual(by_check["C6.fs_readiness_contract"].label, pc.UNVERIFIED_RUNTIME)
+
+    def test_port11b_prematurely_claiming_hook_runtime_satisfied_fails_c6(self):
+        findings = pc.check_contract(
+            in_memory(),
+            hook_contract=rt.SYNTHETIC_HOOK_CONTRACT_SATISFIED,
+        )
+        self.assertEqual(failed(findings), {"C6.hook_safety_contract"})
+
+    def test_port11b_prematurely_claiming_u2_or_u4_verified_fails_c6(self):
+        findings = pc.check_contract(
+            in_memory(),
+            static_evidence=rt.SYNTHETIC_ALL_STATIC_AND_DYNAMIC_VERIFIED,
+        )
+        self.assertEqual(failed(findings), {"C6.fs_readiness_contract"})
+
+
 
 class TargetTree(unittest.TestCase):
     """Read-only validation of a PORT-8A bootstrapped tree in a temp dir."""
