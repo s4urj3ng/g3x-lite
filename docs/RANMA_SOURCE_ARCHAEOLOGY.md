@@ -1,6 +1,6 @@
-# Ranma G3 X Source Archaeology & Public Artifact Report
+# Ranma GM1.10E Patch Engineering Gap Analysis
 
-**Worker**: G9 (Ranma Source Archaeology)  
+**Worker**: G9 (Ranma Source Engineering Analysis)  
 **Coordinator**: Gemini Coordinator  
 **Tech Lead**: ChatGPT  
 **Date**: 2026-10-28  
@@ -9,87 +9,142 @@
 
 ---
 
-## 1. Executive Summary & Objective
+## 1. Executive Summary & Provenance Baseline
 
-The objective of Worker G9 is to establish the definitive provenance, accessibility, and artifact inventory of historical CHDK porting work conducted by contributor `ranma` on the Canon PowerShot G3 X.
+This report supersedes repetitive forum retrieval archaeology and addresses concrete engineering gaps between Ranma's historical `g3x_110e.patch` and our current GM1.10C prototype.
 
-### Core Findings
-1. **Source Patch Recovered and Authenticated**: The patch file `g3x_110e.patch` (336,714 bytes; CRLF/LF mixed unified diff; SVN base r5480) is **fully recovered, authenticated, and verified** locally with SHA-256 `55927968545338c190100db97661ed4843b74b480c199af3cb643c00ccf1ccba`.
-2. **Historical Spreadsheets Recovered**: Two 2015 historical research spreadsheets (`g3xstubs_102b.xlsx` and `20151215_g3xstubs_102b.xlsx`) are preserved byte-for-byte in the repository and cataloged by Worker G7.
-3. **Firmware Binary Artifacts Inaccessible & Excluded**: Forum attachments `g3x_110e_fw.zip` and `g3x_120a_fw.zip` remain unrecovered due to forum access controls (HTTP 403 `permission_denied`) and are not archived on Wayback Machine. In accordance with Phase 0 rules, no attempt was made to bypass authentication or acquire proprietary pre-compiled camera binaries.
-4. **No Upstream CHDK Merge**: The G3 X port was never merged into the official CHDK SVN trunk or public Git mirrors (`01luna/CHDK`). Only preliminary `finsig_thumb2` signature logic (r4437, r4438, r4444 in Feb 2016) was committed upstream.
-
----
-
-## 2. Provenance & Chronological Archaeology
-
-### 2.1 The Anchor Discussion: Thread 12600
-- **URL**: `https://chdk.setepontos.com/d/12600-g3-x-100c-fw-dump`
-- **Topic Title**: "G3 X 1.00C FW Dump"
-- **Creation Date**: 2015-09-15T07:38:39Z
-- **API Endpoint**: `https://chdk.setepontos.com/api/discussions/12600`
-- **Total Posts in Thread**: 25 posts spanning 2015 to 2020.
-
-### 2.2 Ranma's Posting Record (7 Posts Total)
-Public API enumeration (`https://chdk.setepontos.com/api/posts?filter[author]=ranma`) confirms that user `ranma` published exactly 7 posts on the entire forum, all localized within thread 12600:
-
-| Post ID | Date (UTC) | Post # | Key Contents & Claims | Attached Artifacts |
-| :---: | :---: | :---: | :--- | :--- |
-| **143399** | 2020-05-04 | #16 | States acquisition of G3 X with firmware 1.10E; mentions working on port. | None |
-| **143401** | 2020-05-04 | #17 | Discusses initial boot attempts and LED blinking. | None |
-| **143433** | 2020-05-10 | #18 | Reports successful boot to CHDK splash screen on 1.10E. | None |
-| **143436** | 2020-05-11 | #20 | Mentions keymap implementation and menu navigation working. | None |
-| **143437** | 2020-05-11 | #21 | **Releases initial patch and test build for GM1.10E.** | `g3x_110e.patch` (328.82 KB)<br>`g3x_110e_fw.zip` (174.64 KB) |
-| **143438** | 2020-05-12 | #22 | Follow-up notes on battery indicator and zoom lever handling. | None |
-| **143439** | 2020-05-12 | #23 | **Releases test build for GM1.20A.** | `g3x_120a_fw.zip` (174.83 KB) |
+### Provenance & Prior Knowledge Context
+- **Prior Recovery**: The patch `g3x_110e.patch` (336,714 B; CRLF/LF mixed unified diff; SVN base r5480) was originally retrieved, verified against post 143437 of CHDK forum thread 12600, and documented on **2026-10-25** in `docs/PORT5A_RANMA_PORT_RECOVERY.md` and `docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md`.
+- **Integrity Notice**: The SHA-256 digest (`55927968545338c190100db97661ed4843b74b480c199af3cb643c00ccf1ccba`) is an empirical local file checksum; the CHDK forum software does not provide cryptographic digests.
+- **Scope Mandate**: Phase 0 read-only. Zero boot code modification; zero firmware builds or execution.
 
 ---
 
-## 3. Artifact Verification & Accessibility Status
+## 2. Concrete Engineering Gaps Not Covered by PORT-5B
 
-| Artifact Name | Claimed Source / Location | SHA-256 Checksum | Accessibility Status | Provenance Evaluation |
-| :--- | :--- | :--- | :---: | :--- |
-| **`g3x_110e.patch`** | Forum Post 143437; local file | `55927968545338c190100db97661ed4843b74b480c199af3cb643c00ccf1ccba` | **VERIFIED ACCESSIBLE** | Authentic unified diff (SVN r5480 base, 9,277 lines). |
-| **`20151215_g3xstubs_102b.xlsx`** | Owner provided (2015 research) | `0fcd9dbf2047699256ccffe4a25e6ae62e7228efb4694b09e333b339418c666c` | **VERIFIED ACCESSIBLE** | Authentic 2015 1.00C symbol audit workbook (310 records). |
-| **`g3xstubs_102b.xlsx`** | Owner provided (2015 draft) | `5b2732e4376b8bb543237503fa6e5786d687286d26b937779188fbd592ad95c5` | **VERIFIED ACCESSIBLE** | Authentic 2015 preliminary draft workbook. |
-| **`g3x_110e_fw.zip`** | Forum Post 143437 (UUID `dc9012be...`) | *(Unknown)* | **UNRECOVERED / NOT FOUND** | Forum HTTP 403; Wayback capture absent; excluded by Phase 0. |
-| **`g3x_120a_fw.zip`** | Forum Post 143439 (UUID `5f78d11e...`) | *(Unknown)* | **UNRECOVERED / NOT FOUND** | Forum HTTP 403; Wayback capture absent; excluded by Phase 0. |
-| **`g3x_100c` source tree** | Hypothetical 2015 repository | *(N/A)* | **DOES NOT EXIST** | Never published as a standalone tree; work was in Excel stubs. |
+### 2.1 Memory Placement & Heap Relocation (`MEMISOSTART`)
+*Source References*: `platform/g3x/makefile.inc:25–38`, `platform/g3x/notes.txt:39–65`.
 
----
+1. **Rejection of Automatic Sigfinder ARAM Address**:  
+   The CHDK `finsig_thumb2` signature finder identified an apparent ARAM heap start at `0x006CE000` (size `0x22000`, 136 KiB, from `0xFC55888E`). Ranma **explicitly rejected** this automatic value:
+   ```makefile
+   ## values from sig finder
+   #ARAM_HEAP_START = 0x006ce000 # Found @0xfc5588b4
+   #ARAM_HEAP_SIZE  = 0x00022000 # Found @0xfc55888e
 
-## 4. Public Mirror & Repository Search Results
-
-An exhaustive audit of public repositories and mirrors yielded the following results:
-1. **GitHub `01luna/CHDK` (Trunk Mirror)**:
-   - Checked `platform/` tree: No `g3x` platform directory exists.
-   - Checked commit logs: Only `tools/finsig_thumb2.c` changes for G3 X were found (r4437, r4438, r4444 committed by PhilMoz in February 2016).
-2. **Assembla SVN Repository (`subversion.assembla.com/svn/chdk`)**:
-   - Access restricted (HTTP 401 Unauthorized / HTTP 403 Forbidden). No public read-only anonymous mirror accessible.
-3. **GitHub User Search (`ranma`)**:
-   - Multiple public accounts named `ranma` exist, but none host CHDK forks, Canon firmware tools, or camera-related repositories.
-4. **Wayback Machine CDX API**:
-   - Legacy attachment query for `attach=16495`, `attach=16496`, and `attach=16497` on `chdk.setepontos.com/index.php` returned zero archived snapshots (`archived_snapshots: {}`).
-
----
-
-## 5. Architectural Evaluation of `g3x_110e.patch`
-
-Inspection of the authenticated patch file (`g3x_110e.patch`) reveals:
-1. **Baseline**: Applied cleanly against CHDK SVN revision `r5480` (May 2020).
-2. **Sub-platform Structure**: Created `platform/g3x/sub/110e/` containing `boot.c`, `filewrite.c`, `stubs_entry.S`, `stubs_entry_2.S`, and `stubs_min.S`.
-3. **Hook Set**:
-   - `hook_CreateTask`: Patched at runtime in firmware RAM (`0xBFE14A40` / `0xBFE14A3C` area).
-   - `mykbd_task`: Substituted for `task_PhySw` (`0xFC1283AD`).
-   - `init_file_modules_task`: Cloned 17-instruction stock task at `0xFC0BD071`, inserting `core_spytask_can_start()`.
-   - `filewrite_task`: Intercepted for remote PTP shoot functionality.
-4. **Limitation for GM1.10C**: While the structural pattern is highly instructive, the addresses in `g3x_110e.patch` are strictly valid for **GM1.10E**. As established by Worker G8, piecewise modular shifts exist between versions, making direct application to GM1.10C unsafe without independent verification.
+   ARAM_HEAP_START = 0x00c80000
+   ARAM_HEAP_SIZE  = 0x00180000
+   override OPT_ARAM_MALLOC=1
+   override OPT_CHDK_IN_ARAM=1
+   MEMISOSTART = $(ARAM_HEAP_START) # 0x00C80000
+   ```
+2. **Engineering Rationale**:  
+   - 136 KiB at `0x006CE000` was marginal for the CHDK core binary.
+   - Crucially, `AdditionAgent.c` actively reads up to `0x22000` bytes from storage into `0x006CE000`, causing memory corruption.
+   - Ranma relocated `MEMISOSTART` to high DRAM at **`0x00C80000`** (12.5 MiB into DRAM), carving out a 1.5 MiB (`0x00180000`) isolated heap.
+3. **Relevance to GM1.10C**:  
+   Our GM1.10C prototype must not rely on `0x006CE000`. High DRAM placement (`0x00C80000` or above) provides safe isolation from stock DMA regions and heap allocators.
 
 ---
 
-## 6. Phase 0 Compliance & Strict Rules
+### 2.2 Task Hook Mechanics & Filtering Set
+*Source References*: `platform/g3x/sub/110e/boot.c:130–248`, `platform/g3x/sub/110e/stubs_entry.S`.
 
-- **Zero ROM Reads / Scans**: No proprietary firmware binaries were inspected during this archaeology.
-- **Zero Binary Execution**: No downloaded or candidate scripts were executed.
-- **No Access Control Bypasses**: No credentials, authentication tricks, or scraper exploits were used against the CHDK forum.
-- **Clear Classification**: All claims are strictly distinguished between verified accessible source files and unrecovered forum attachments.
+1. **RAM Trampoline Installation**:  
+   Ranma installed a direct Thumb-2 jump patch into firmware RAM at `hook_CreateTask` (`0xBFE14A40` / `0xBFE14A3C` area):
+   ```armasm
+   patch_CreateTask:
+       ldr.w   pc, [pc, #0]
+       .long   CreateTask_my + 1  ; Thumb entry
+   ```
+2. **Hook Filtering Logic (`CreateTask_my`)**:  
+   `CreateTask_my` intercepted calls to `CreateTask` and checked the function pointer in `r0`:
+   - `task_PhySw` (`0xFC1283AD`): Substituted with `mykbd_task` (defined in `platform/g3x/kbd.c`).
+   - `task_InitFileModules` (`0xFC0BD071`): Substituted with `init_file_modules_task_my`.
+   - `task_FileWrite` (`0xFC25F3CF`): Substituted with `task_FileWrite_my` (`platform/g3x/sub/110e/filewrite.c`) for remote PTP capture.
+   - `task_TricInitTask` (`0xFC4E4B41`): Substituted with `task_TricInitTask_my` (required for FI2 boot to avoid video core collisions).
+   - *Commented Out / Deferred*: `task_CaptSeq`, `task_ExpDrv`, `task_DvlpSeq`, `task_MovieRecord`, `task_TskCocoa0` were left stock.
+3. **Continuation**:  
+   Non-intercepted tasks continue execution by jumping to `hook_CreateTask + 8 + 1` in firmware.
+
+---
+
+### 2.3 Startup Ordering & SpyTask Insertion Point
+*Source References*: `platform/g3x/sub/110e/boot.c:403–490`.
+
+1. **Startup Task Replacement (`task_Startup_my`)**:  
+   Ranma intercepted `taskcreate_startup` (`sub_fc05b963_my`) to redirect `task_Startup` to `task_Startup_my`.
+2. **Omission of Stock DISKBOOT Loader**:  
+   In `task_Startup_my`, Ranma commented out `bl sub_fc05bbea` (`startdiskboot`). This prevented the camera from attempting a secondary diskboot cycle during warm startup.
+3. **Exact SpyTask Insertion Timing**:  
+   Rather than launching `SpyTask` immediately, Ranma permitted 19 stock subroutines to run (initializing clock, GPIOs, HWIC/OC, ADC, error logging, UI memory, `taskcreate_physw`, and battery monitoring).  
+   `CreateTask_spytask` was invoked at line 484:
+   ```c
+   CreateTask_spytask(); // _CreateTask("SpyTask", 0x19, 0x2000, spytask, 0);
+   ```
+   Immediately following `CreateTask_spytask`, `task_Startup_my` tail-branched to stock `sub_fc0d0126` (`MLHClock`).
+
+---
+
+### 2.4 Power-On Handler Failure & Workaround
+*Source References*: `platform/g3x/sub/110e/boot.c:406–428`, `platform/g3x/notes.txt:18–35`.
+
+1. **Breakage of Stock `sub_fc1284ac`**:  
+   Ranma's developer notes record:
+   ```text
+   // TODO: Find out why the default handler in sub_fc1284ac is broken.
+   // See sub_fc08ecbc
+   ```
+   In stock firmware, `sub_fc1284ac` reads GPIO registers to determine why the camera turned on (power button, playback button, USB insertion, or error condition). Ranma observed that calling this handler under custom boot triggered immediate shutdown or bootlooping.
+2. **Applied Workaround**:  
+   Ranma completely commented out three stock calls in `sub_fc05b963_my`:
+   - `// bl sub_fc079404` (`IsNormalCameraMode_FW`)
+   - `// bl sub_fc1284ac` (GPIO power-on cause evaluator)
+   - `// bl sub_fc05ba56` (sets GPIO `0x67` / `0xD20B019C`, error power-off trigger)
+3. **Invalidation of Legacy CHDK Magic Word**:  
+   Ranma explicitly noted: `"0x12345678 @ 0x4ffc trick doesn't seem to help with this model for power-on handling."` The standard DIGIC 4/5 method of setting `*(0x4FFC) = 0x12345678` to force Playback mode is ineffective on DIGIC 6 G3 X.
+4. **Documented Power GPIOs**:  
+   - `0x02` (`0xD20B0008`): Mystery power-up status register.
+   - `0x67` (`0xD20B019C`): Cleared on power-up error condition.
+   - `0x88` (`0xD20B0220`): Wi-Fi button.
+   - `0x97` (`0xD20B025C`): Power button.
+   - `0x98` (`0xD20B0260`): Play button.
+
+---
+
+### 2.5 Filesystem Readiness Handshake (`spytask_can_start`)
+*Source References*: `platform/g3x/sub/110e/boot.c:493–515`.
+
+1. **Stock Task Replacement**:  
+   `task_InitFileModules` (`0xFC0BD071`) executes a tight sequence of two initialization functions:
+   - `sub_fc0d9ccc` (lower-level storage/host driver init)
+   - `sub_fc0d9cf6` (filesystem mount completion and event dispatcher)
+2. **Synchronization Handshake**:  
+   Ranma's cloned `init_file_modules_task_my` inserted `bl core_spytask_can_start` immediately after `sub_fc0d9cf6`:
+   ```armasm
+   bl      sub_fc0d9ccc
+   bl      sub_fc0d9cf6
+   bl      core_spytask_can_start   ; Sets spytask_can_start = 1
+   ```
+3. **SpyTask Release**:  
+   `SpyTask` is created early in `task_Startup_my`, but spins waiting on `spytask_can_start`. Once `init_file_modules_task_my` reaches `core_spytask_can_start`, `SpyTask` exits its spin-wait and begins loading fonts, configs, and scripts from the SD card.
+
+---
+
+## 3. Comparative Gap Matrix: Ranma 1.10E vs GM1.10C Prototype
+
+| Domain | Ranma GM1.10E Approach | Current GM1.10C Prototype State | Engineering Action for GM1.10C |
+|---|---|---|---|
+| **Memory Placement** | Relocated to high DRAM `0x00C80000` (1.5 MiB heap); bypassed `0x006CE000` | Prototype BSS/Data currently linked in low memory; high DRAM unreserved | Adopt high DRAM placement (`0x00C80000`+) to prevent `AdditionAgent` / DMA stomping. |
+| **Power-On GPIOs** | Bypassed `sub_fc1284ac` and `sub_fc05ba56` to prevent shutdown loop | Prototype mirrors stock boot calls; GPIO error handling unmapped | Audit `sub_fc1284ac` on GM1.10C to evaluate whether power-on bypass is required. |
+| **Startup Ordering** | Disabled `startdiskboot` (`sub_fc05bbea`); deferred `SpyTask` to end of `task_Startup` | Prototype comments out `CreateTask_spytask` in `task_Startup_my` | Maintain `SpyTask` disabled until display and file modules are verified. |
+| **Filesystem Readiness** | Cloned `task_InitFileModules` inserting `core_spytask_can_start` after `sub_fc0d9cf6` | U2 entry verified (`0xFC0BD071`); completion semantics still marked `UNKNOWN` | Verify whether `sub_fc0d9cf6` return guarantees FAT32 mount readiness before signaling. |
+| **Task Interception** | Patched RAM `hook_CreateTask` with Thumb-2 `ldr.w pc, [pc, #0]` | Offline contract model verifies `check_trace()` and single-hook rules | Enforce fail-closed model; do not install RAM patches until all preconditions pass. |
+
+---
+
+## 4. Conclusion & Strict Safety Compliance
+
+- Zero code was modified in `chdk-port/platform/g3x/`.
+- No raw ROM scans were performed.
+- All findings are referenced directly to lines of `g3x_110e.patch` and existing tracked documentation.
