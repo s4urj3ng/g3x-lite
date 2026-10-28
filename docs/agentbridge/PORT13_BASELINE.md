@@ -3,7 +3,7 @@
 - **Date:** 2026-10-28
 - **Host Worktree:** `/var/lib/agentbridge/worktrees/g3x-lite/port-13-offline-p13-baseline-r2`
 - **Current Branch:** `agentbridge/g3x-lite/port-13-offline/p13-baseline-r2`
-- **Task:** `p13-baseline-r2` (Replacement for p13-baseline / Task 5, scope-corrected, revision 1 / attempt 2)
+- **Task:** `p13-baseline-r2` (Replacement for p13-baseline / Task 5, scope-corrected, revision 2 / attempt 3)
 - **Status:** Baseline recorded using read-only git operations; test execution delegated to AgentBridge validation suites.
 
 ---
@@ -297,11 +297,26 @@ Per task specification and review feedback:
 
 ### 7.2 Historical Baseline Report
 - **Historical Report Totals:** 246 tests total: 239 passed, 7 skipped, 0 failed.
-- **Historical Skip Context:** 7 tests skipped in clean-checkout environments lacking proprietary ROM dumps (`PRIMARY.BIN`) or external ARM cross-compilers (`arm-none-eabi-nm`), cleanly handled via `@unittest.skipUnless` assertions in `tests/test_restart_sd_audit.py`. `[VERIFIED]`
+  - Documented strictly as the historical report given in the task specification, not as a fresh observation in this run.
+- **Historical Skip Identities and Causes:** `UNKNOWN` `[UNKNOWN]`
+  - The exact identities of the seven tests that skipped in the historical run, and the specific reasons/dependencies causing them to skip, are `UNKNOWN`. No execution logs or per-test reports from that historical run are cited in the task to substantiate which specific tests skipped or why.
+- **Tracked Test Source Static Gating Analysis:** `[INFERRED]`
+  - Static inspection of tracked test sources reveals that [`tests/test_restart_sd_audit.py`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-13-offline-p13-baseline-r2/tests/test_restart_sd_audit.py) contains:
+    - **Seven ROM-gated tests:** defined in `TestRestartSdRomEvidence` ([`tests/test_restart_sd_audit.py:258-316`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-13-offline-p13-baseline-r2/tests/test_restart_sd_audit.py#L258-L316)), gated by `@unittest.skipUnless(os.path.exists(ROM_PATH), "Tier 2: GM1.10C ROM dump (PRIMARY.BIN) not present")` at line 258:
+      1. `test_rom_byte_sequences` ([`tests/test_restart_sd_audit.py:276`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-13-offline-p13-baseline-r2/tests/test_restart_sd_audit.py#L276))
+      2. `test_rom_words` ([`tests/test_restart_sd_audit.py:282`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-13-offline-p13-baseline-r2/tests/test_restart_sd_audit.py#L282))
+      3. `test_strings` ([`tests/test_restart_sd_audit.py:287`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-13-offline-p13-baseline-r2/tests/test_restart_sd_audit.py#L287))
+      4. `test_sd_host0_mmio_base` ([`tests/test_restart_sd_audit.py:293`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-13-offline-p13-baseline-r2/tests/test_restart_sd_audit.py#L293))
+      5. `test_sd1stinit_name` ([`tests/test_restart_sd_audit.py:297`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-13-offline-p13-baseline-r2/tests/test_restart_sd_audit.py#L297))
+      6. `test_driver_table_in_zeroed_bss` ([`tests/test_restart_sd_audit.py:300`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-13-offline-p13-baseline-r2/tests/test_restart_sd_audit.py#L300))
+      7. `test_gate_mmio_bit_semantics_reconciliation_in_rom` ([`tests/test_restart_sd_audit.py:303`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-13-offline-p13-baseline-r2/tests/test_restart_sd_audit.py#L303))
+    - **One separate toolchain-gated test:** defined in `TestRestartSdOfflineIntegration` ([`tests/test_restart_sd_audit.py:321-345`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-13-offline-p13-baseline-r2/tests/test_restart_sd_audit.py#L321-L345)), gated by `@unittest.skipUnless(NM_PATH is not None, "Tier 3: ARM toolchain (arm-none-eabi-nm) not present")` at line 321:
+      1. `test_prototype_elf_resolves_symbols` ([`tests/test_restart_sd_audit.py:339`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-13-offline-p13-baseline-r2/tests/test_restart_sd_audit.py#L339))
+  - **Explicit Static Count Limitation:** This static count of gated tests in the repository source code cannot show which tests actually skipped in the historical run.
 
 ### 7.3 Comparison Against Historical Baseline
 - **Comparison Assessment:** `UNKNOWN` `[UNKNOWN]`
-  - Direct numerical comparison status is `UNKNOWN` because fresh individual per-test counts were not recorded by AgentBridge in the validation summary.
+  - Direct numerical comparison status is `UNKNOWN` because fresh individual per-test counts were not recorded by AgentBridge in the validation summary, and the identities and causes of the historical skips are `UNKNOWN`.
 
 ---
 
@@ -326,6 +341,8 @@ Per task specification and review feedback:
 | **Lineage Inference** | `origin/main` HEAD equals baseline SHA `581b1a4bb30456bf18c46dc4bcf61b0375aee251`; all three PR branches sit directly on baseline; no PORT-12 work merged to `origin/main` | `INFERRED` | Equivalence of `origin/main` SHA with baseline and merge-bases |
 | **Initial Worktree** | Worktree clean on `agentbridge/g3x-lite/port-13-offline/p13-baseline-r2` | `VERIFIED` | `git status --short`, `git status --porcelain`, `git status -sb` (exit code 0) |
 | **Validation Runner** | Suites cited: bootstrap, port_tests, audit_tests, hdmi_tests, port9_tests all PASS in previous AgentBridge run | `VERIFIED` | Previous AgentBridge validation run record |
-| **Historical Baseline** | 246 tests: 239 passed, 7 skipped (Tier 2 ROM skip logic) | `VERIFIED` | Historical validation reports |
+| **Historical Baseline Report** | Historical report given in task specification: 246 tests (239 passed, 7 skipped, 0 failed); not a fresh observation | `UNKNOWN` | Task specification historical report; unobserved in current run |
+| **Historical Skip Causes** | Identities and specific causes of the 7 historical test skips | `UNKNOWN` | No execution log or test report cited to substantiate which tests skipped or why |
+| **Static Gated Tests** | Tracked test source has 7 ROM-gated tests (`tests/test_restart_sd_audit.py:258-316`) and 1 separate toolchain-gated test (`tests/test_restart_sd_audit.py:321-345`); static count cannot show which tests actually skipped in the historical run | `INFERRED` | Static source inspection of `tests/test_restart_sd_audit.py:258-316` and `tests/test_restart_sd_audit.py:321-345` |
 | **Fresh Test Counts** | Fresh execution individual per-test counts | `UNKNOWN` | AgentBridge validation harness summary recorded suite PASS without individual test counts |
 | **Comparison to Baseline** | Fresh run numerical comparison to historical 246/239/7 report | `UNKNOWN` | Direct comparison unknown due to unrecorded individual fresh test counts |
