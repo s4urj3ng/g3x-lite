@@ -692,7 +692,7 @@ class TestAuthorizationTrustBoundary(unittest.TestCase):
         rule_ids = [f.rule_id for f in result.findings]
         self.assertIn(RULE_TRUST_BOUNDARY_NOTICE, rule_ids)
 
-    def test_trusted_policy_verified_when_scopes_passed(self):
+    def test_external_policy_consistency_checked_when_scopes_passed(self):
         d = make_valid_manifest_dict()
         manifest = EvidenceManifest.from_dict(d)
         trusted_scopes = {
@@ -701,8 +701,8 @@ class TestAuthorizationTrustBoundary(unittest.TestCase):
         validator = EvidenceValidator()
         result = validator.validate_manifest(manifest, trusted_scopes=trusted_scopes)
         self.assertTrue(result.is_valid)
-        self.assertEqual(result.trust_level, "TRUSTED_POLICY_VERIFIED")
-        # Notice is not emitted when trusted scopes are explicitly provided
+        self.assertEqual(result.trust_level, "EXTERNAL_POLICY_CONSISTENCY_CHECKED")
+        # Notice is not emitted when external policy scopes are explicitly provided
         rule_ids = [f.rule_id for f in result.findings]
         self.assertNotIn(RULE_TRUST_BOUNDARY_NOTICE, rule_ids)
 

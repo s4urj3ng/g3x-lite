@@ -3,7 +3,7 @@
 **Date**: 2026-10-28  
 **Author**: Gemini Worker 6  
 **Tech Lead**: ChatGPT  
-**Base**: Latest Merged Main (`9c1c544`, merged PR #15)  
+**Base**: Latest Merged Main (`7f39946`, merged PR #16)  
 **Branch**: `research/port11c-evidence-harness`  
 **Tool**: [`tools/port11c_evidence_validator.py`](../tools/port11c_evidence_validator.py)  
 **Tests**: [`tests/test_port11c_evidence_validator.py`](../tests/test_port11c_evidence_validator.py)  
@@ -36,7 +36,7 @@ PORT-11C eliminates these risks by introducing a **machine-readable evidence man
 > 1. **This utility DOES NOT and CANNOT grant permission to inspect, dump, or execute ROM/firmware.**
 > 2. Authorization to inspect firmware regions is strictly an external human governance gate. It requires explicit owner/tech lead approval recorded in repository safety documentation *before* any inspection takes place.
 > 3. **Manifest-declared scopes are self-assertions by the researcher/author.** A manifest cannot grant itself authority. When validated without an external trusted policy, the tool validates only internal self-consistency (`SELF_DECLARED_INTERNAL_ONLY`) and emits `RULE_TRUST_BOUNDARY_NOTICE`.
-> 4. To verify actual research boundary compliance, the manifest must be validated against an independent, authenticated policy file via `--trusted-scopes <policy.json>` (`TRUSTED_POLICY_VERIFIED`). Any manifest attempt to define unapproved scopes or expand approved address bounds is rejected (`RULE_SCOPE_POLICY_VIOLATION`).
+> 4. To verify consistency against an external policy, the manifest can be checked against an independent policy file via `--trusted-scopes <policy.json>` (`EXTERNAL_POLICY_CONSISTENCY_CHECKED`). External policy consistency != owner approval; authority remains UNVERIFIED without out-of-band record. Any manifest attempt to define unapproved scopes or expand declared bounds is rejected (`RULE_SCOPE_POLICY_VIOLATION`).
 
 ---
 
@@ -263,12 +263,12 @@ Following the PR #16 merge (`7f39946`), an independent audit of the PORT-11C Evi
 ### 8.1 External Trusted-Scopes Policy vs. Actual Human Authorization
 - **Audit Finding**: Supplying an external `--trusted-scopes` JSON file merely proves that the manifest entries comply syntactically with that file's declared schema boundaries.
 - **Critical Distinction**: A file on disk does **NOT** constitute authentic human authorization. In an automated multi-agent workflow, an agent could synthesize a permissive policy file.
-- **Fail-Closed Resolution**: The validator does not evaluate human identities, digital signatures, or authorization authority. It explicitly marks external policy validation as `TRUSTED_POLICY_VERIFIED` against the provided file, but includes the permanent invariant: `rom_permission_granted = False`.
+- **Fail-Closed Resolution**: The validator does not evaluate human identities, digital signatures, or authorization authority. It explicitly reports external policy validation as `EXTERNAL_POLICY_CONSISTENCY_CHECKED` against the provided file, explicitly notes authority is UNVERIFIED without out-of-band record, and includes the permanent invariant: `rom_permission_granted = False`.
 - Actual human authorization to inspect or execute firmware remains strictly an external governance gate requiring explicit Owner/Tech Lead sign-off documented in `docs/SAFETY.md`.
 
 ### 8.2 Trusted Policy Fixture Merely Asserts Approval
-- **Audit Finding**: In `tests/fixtures/port11a_trusted_scopes.json`, the field `"policy_authority": "Owner/Tech Lead Authorized PORT-11A Research Scope"` is a descriptive metadata string, not cryptographic proof.
-- **Resolution**: Fixtures are classified as offline test specifications only. They cannot be used as automated authorization tokens for future phases.
+- **Audit Finding**: In `tests/fixtures/port11a_trusted_scopes.json`, asserting `"policy_authority": "Owner/Tech Lead Authorized PORT-11A Research Scope"` overclaimed authority, because providing a JSON file on the CLI does NOT authenticate its creator or independent owner approval.
+- **Resolution**: Renamed to `"UNVERIFIED_EXTERNAL_POLICY"`. Fixtures are classified as offline consistency test specifications only; authority is UNVERIFIED without out-of-band record. They cannot be interpreted as granting permission.
 
 ### 8.3 Parser Validation & Malformed-Input Fail-Closed Handling
 - **Audit Finding**: `load_scopes_file()` previously lacked an explicit file-size bound and did not strictly validate that root JSON or `authorization_scopes` structures were lists of dictionaries.

@@ -1,6 +1,6 @@
 {
   "policy_version": "1.0.0",
-  "policy_authority": "Owner/Tech Lead Authorized PORT-11A Research Scope",
+  "policy_authority": "UNVERIFIED_EXTERNAL_POLICY (External consistency check fixture only; out-of-band owner approval required)",
   "authorization_scopes": [
     {
       "scope_id": "SCOPE-PORT11A-U1",

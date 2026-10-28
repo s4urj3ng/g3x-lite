@@ -497,12 +497,15 @@ class ValidationResult:
     trust_level: str = "SELF_DECLARED_INTERNAL_ONLY"
     evidence_verification_boundary: str = (
         "OFFLINE_DECLARATIONS_AND_SYNTHETIC_FIXTURES_ONLY "
-        "(ROM binary bytes not accessed or authenticated by this tool)"
+        "(ROM binary bytes not accessed or authenticated by this tool; "
+        "external policy consistency != owner approval; authority remains UNVERIFIED without out-of-band record)"
     )
     rom_permission_granted: bool = False
     rom_permission_disclaimer: str = (
-        "This tool validates offline declarations and synthetic test fixtures only; "
-        "it possesses NO authority to grant ROM-reading, firmware dumping, or camera execution permission."
+        "NON-AUTHORITY INVARIANT: This tool validates offline declarations and synthetic test fixtures only; "
+        "it possesses NO authority to grant ROM-reading, firmware dumping, or camera execution permission. "
+        "Providing an external policy file does NOT authenticate its creator or independent owner approval. "
+        "rom_permission_granted remains permanently False."
     )
 
     @property
@@ -593,7 +596,7 @@ class EvidenceValidator:
         # Authorization Trust Boundary Evaluation
         effective_scopes: Dict[str, AuthorizationScope] = {}
         if trusted_scopes is not None:
-            result.trust_level = "TRUSTED_POLICY_VERIFIED"
+            result.trust_level = "EXTERNAL_POLICY_CONSISTENCY_CHECKED"
             effective_scopes = trusted_scopes
             # Validate that manifest does not declare scopes exceeding or contradicting trusted policy
             self._check_scope_policy_compliance(manifest.scopes, trusted_scopes, result)
@@ -605,7 +608,8 @@ class EvidenceValidator:
                 message=(
                     "Manifest validated against self-declared scopes only (internal consistency mode). "
                     "Manifest-declared scopes do NOT constitute actual human authorization to inspect "
-                    "or access ROM. Supply --trusted-scopes to verify against authenticated human policy."
+                    "or access ROM. Supply --trusted-scopes to verify consistency against external policy. "
+                    "External policy consistency != owner approval; authority remains UNVERIFIED without out-of-band record."
                 ),
             )
 
@@ -1051,7 +1055,7 @@ def main() -> int:
         "--trusted-scopes",
         "--scopes",
         dest="trusted_scopes",
-        help="Path to external trusted authorization scopes policy JSON",
+        help="Path to external authorization scopes policy JSON for consistency check (does NOT authenticate owner approval)",
     )
     parser.add_argument(
         "--allow-overlap",
