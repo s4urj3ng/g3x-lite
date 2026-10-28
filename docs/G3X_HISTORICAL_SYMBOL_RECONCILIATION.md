@@ -10,7 +10,7 @@
 
 ## 1. Executive Summary & Objective
 
-This document provides a single, reconciled integration of historical symbol recovery (Worker G7) and cross-version gap analysis (Worker G8). It unifies all recovered symbols into one canonical, machine-readable dataset without duplication, establishes a three-version comparison (**G3X 1.00C | G3X 1.10E | G3X 1.10C**), and enforces strict methodological guardrails against speculative address translation.
+This document provides a single, reconciled integration of historical symbol recovery (Worker G7) and cross-version gap analysis (Worker G8). It unifies all recovered symbols into one canonical, machine-readable dataset without duplication, establishes a three-version comparison (**G3X 1.00C | G3X 1.10E | G3X GM1.10C**), and enforces strict methodological guardrails against speculative address translation.
 
 ### Methodological Guardrails
 1. **Regional Address Deltas Are Hypotheses, Not Translation Rules**:  
@@ -26,15 +26,34 @@ This document provides a single, reconciled integration of historical symbol rec
 
 ---
 
-## 2. Quantitative Dataset Inventory
+## 2. Dataset Reproducibility & Source XLSX Cryptographic Hashes
 
-The unified catalog is maintained in `research/historical/g3x/`:
+To ensure complete scientific reproducibility without committing proprietary binary office formats to Git, the datasets are generated from two historical research workbooks preserved in isolated read-only storage:
+
+1. **`research/historical/g3x/g3xstubs_102b.xlsx`** (27,490 bytes):  
+   `SHA-256: 5b2732e4376b8bb543237503fa6e5786d687286d26b937779188fbd592ad95c5`
+2. **`research/historical/g3x/20151215_g3xstubs_102b.xlsx`** (55,307 bytes):  
+   `SHA-256: 0fcd9dbf2047699256ccffe4a25e6ae62e7228efb4694b09e333b339418c666c`
+
+### Independent Reproduction Protocol
+The canonical 310-row extraction in `research/historical/g3x/g3x_100c_historical_symbols.csv` is produced deterministically from `20151215_g3xstubs_102b.xlsx`:
+- **Worksheet Target**: `stubs_entry.S`
+- **Row Range**: Exactly rows 3 through 312 (310 records).
+- **Column Schema**:
+  - Col A: Symbol Name (`symbol_name`)
+  - Col B: G3X Address (`g3x_100c_address`)
+  - Col C: SX280 Address (`sx280_102b_address`)
+  - Col D: Stubs Entry Flag (`stubs_entry_flag`, typically `'X'`)
+  - Col E: Alternate Notes (`alternate_notes`)
+  - Col H: Primary Author Notes (`notes`)
+
+### Dataset Inventory
 
 | Dataset Artifact | Format | Record Count | Description |
 | :--- | :---: | :---: | :--- |
 | **`g3x_100c_historical_symbols.csv`** | RFC 4180 CSV | 310 data rows | Canonical 1.00C workbook extraction preserving original row numbers (3..312) and author notes. |
 | **`g3x_100c_historical_symbols.json`** | JSON Array | 310 objects | Machine-readable 1.00C catalog with duplicate and uncertainty boolean flags. |
-| **`g3x_three_version_symbol_comparison.csv`** | RFC 4180 CSV | 310 data rows | **Three-version comparison**: `1.00C` vs `1.10E` vs `GM1.10C` with SX280 reference and classifications. |
+| **`g3x_three_version_symbol_comparison.csv`** | RFC 4180 CSV | 310 data rows | **Three-version comparison**: `1.00C` vs `1.10E` vs `GM1.10C` with architectural distinctions. |
 | **`g3x_three_version_symbol_comparison.json`** | JSON Array | 310 objects | Structured JSON three-version comparison dataset. |
 
 ### Summary Statistics
@@ -51,29 +70,38 @@ The unified catalog is maintained in `research/historical/g3x/`:
 
 ---
 
-## 3. Three-Version Cross-Analysis of Critical Primitives
+## 3. Architectural Definitions & Three-Version Comparison
 
-| Symbol Name | Row | SX280 102b | G3X 1.00C (2015) | G3X 1.10E (Patch) | G3X GM1.10C (Project) | Status & Provenance Notes |
-| :--- | :---: | :---: | :---: | :---: | :---: | :--- |
-| **`CreateTask`** | 59 | `0xfc251904` | `0xFC31BB7C` | `0xBFE14A3D` | **`0xFC31BBC4`** | **`VERIFIED_IN_EXISTING_DOCS`**. GM1.10C veneer branches to ATCM `0xBFE14A3C` (Slice S1B/S1C). 1.10E patch bypassed ROM veneer and hooked ATCM directly. |
-| **`CreateTaskStrictly`** | 60 | `0xfc251c0c` | `0xFC31BE44` (?) | *(Not in stubs)* | **`0xFC31BE8C`** | **`VERIFIED_IN_EXISTING_DOCS`**. GM1.10C veneer branches to ATCM `0xBFE154E8` $\to$ forwards to `0xBFE14A3C` (Slice S1D/S1E). Used by `sub_fc1283d2`. |
-| **`task_InitFileModules`**| 260| `0xfc088220` | `0xFC0BD064` | `0xFC0BD071` | **`0xFC0BD071`** | **`VERIFIED_IN_EXISTING_DOCS`**. Instruction address `0xFC0BD070` (Slice S2A), Thumb entry `0xFC0BD071` loaded by creator `sub_fc0bd0b4`. Shift from 1.00C is $+0x0C$. |
-| **`task_PhySw`** | 262| `0xfc0601f4` | `0xFC1288F0` (!)| `0xFC1283AD` | **`0xFC1283AD`** | **`VERIFIED_IN_EXISTING_DOCS`**. Instruction address `0xFC1283AC` (Slice S3A). Historical 1.00C Row 262 (`0xFC1288F0`, "Different Disassembly") was in internal matrix scan code and is **REFUTED**. |
-| **`GetKbdState`** | 114| `0xfc05f576` | `0xFC08EF66` (?) | `0xFC08EF67` | **`0xFC08EF66`** | **`VERIFIED_IN_EXISTING_DOCS`**. Invariant across all versions ($\Delta = 0$). MMIO base `0xD20BF4A0` read-only 12-byte sampler. |
-| **`DebugAssert`** | 62 | `0xfc251d14` | `0xFC31BFAC` | `0x010E1001` | **`0xFC31BFF4`** | **`INFERRED`**. ATCM target is `0xBFE13E78` (Slice S1C). ROM veneer `0xFC31BFF4` follows $+0x48$ veneer table layout. |
-| **`open`** | 172| `0xfc0ba3fe` | `0xFC418A26` | `0xFC418C13` | *(Unknown)* | **`HISTORICAL_CANDIDATE`**. Shift between 1.00C and 1.10E is $+0x1EC$. GM1.10C address remains UNKNOWN pending authorized bounded verification. |
-| **`close`** | 50 | `0xfc0ba46e` | `0xFC418A96` | `0xFC418C83` | *(Unknown)* | **`HISTORICAL_CANDIDATE`**. Shift between 1.00C and 1.10E is $+0x1EC$. GM1.10C address remains UNKNOWN. |
-| **`lseek`** | 157| `0xfc2a51e0` | `0xFC37B540` | `0xFC37B5BD` | *(Unknown)* | **`HISTORICAL_CANDIDATE`**. Shift between 1.00C and 1.10E is $+0x7C$. GM1.10C address remains UNKNOWN. |
-| **`PostLogicalEventToUI`**|177| `0xfc2a610c` | `0xFC35B8E8` | `0xFC35B965` | *(Unknown)* | **`HISTORICAL_CANDIDATE`**. Shift between 1.00C and 1.10E is $+0x7C$. GM1.10C address remains UNKNOWN. |
-| **`UIFS_WriteFirmInfoToFile`**|290| `0xfc1b1dc2`| `0xFC0FE708` (X)| *(Unpopulated)*| *(Unknown)* | **`HISTORICAL_CANDIDATE`**. Duplicate row 1 of 2 in 1.00C workbook. GM1.10C address remains UNKNOWN. |
-| **`UIFS_WriteFirmInfoToFile`**|291| `0xfc392930`| *(Blank)* | *(Unpopulated)*| *(Unknown)* | **`UNKNOWN`**. Duplicate row 2 of 2 in 1.00C workbook (SX280 GUI firm-update variant). |
+To prevent conflation of CPU execution modes, calling conventions, and indirection layers, the dataset explicitly distinguishes:
+- **Thumb Entry Pointer**: An odd address (`addr | 1`, e.g. `0xFC0BD071`, `0xFC1283AD`) passed to branching instructions (`blx`, `bx`) or DryOS task creators, signaling ARM Cortex-R4 Thumb-2 execution.
+- **Instruction Address**: The even, halfword-aligned address where physical opcode bytes reside in memory (e.g. `0xFC0BD070`, `0xFC1283AC`).
+- **ROM Veneer**: An ARM-state (32-bit) branch thunk located in Flash ROM (e.g. `0xFC31BBC4`, `0xFC31BE8C`) used by caller routines to transition across address spaces.
+- **ATCM Target**: The target subroutine resident in the 16 KiB ARM Tightly Coupled Memory at `0xBFE10000..0xBFE13FFF` (copied from Flash ROM during early boot) where core kernel logic executes.
+
+### Detailed Three-Version Comparison Table
+
+| Symbol Name | Row | SX280 102b | G3X 1.00C (Workbook) | G3X 1.10E (Patch) | GM1.10C Architectural Resolution | Status & Exact Evidence Source |
+| :--- | :---: | :---: | :---: | :---: | :--- | :--- |
+| **`CreateTask`** | 59 | `0xfc251904` | `0xFC31BB7C` | `0xBFE14A3D` | **ROM Veneer**: `0xFC31BBC4`<br>**ATCM Target**: `0xBFE14A3C` (entry: `0xBFE14A3D`) | **`VERIFIED_IN_EXISTING_DOCS`**<br>`docs/PORT11A_GM110C_ROM_EVIDENCE.md:144–162` (Slices S1B/S1C). Shift from 1.00C is $+0x48$. 1.10E patch hooked ATCM directly. |
+| **`CreateTaskStrictly`** | 60 | `0xfc251c0c` | `0xFC31BE44` (?) | *(Not in stubs)* | **ROM Veneer**: `0xFC31BE8C`<br>**ATCM Target**: `0xBFE154E8` (entry: `0xBFE154E9`) | **`VERIFIED_IN_EXISTING_DOCS`**<br>`docs/PORT11A_GM110C_ROM_EVIDENCE.md:179–195` (Slices S1D/S1E). Forwards to `0xBFE14A3C`. Used by `sub_fc1283d2`. |
+| **`task_InitFileModules`**| 260| `0xfc088220` | `0xFC0BD064` | `0xFC0BD071` | **Instruction**: `0xFC0BD070`<br>**Thumb Entry**: `0xFC0BD071` | **`VERIFIED_IN_EXISTING_DOCS`**<br>`docs/PORT11A_GM110C_ROM_EVIDENCE.md:208–216` (Slice S2A). Loaded by creator `sub_fc0bd0b4` from `[0xFC0BD1A8]`. Shift from 1.00C is $+0x0C$. |
+| **`task_PhySw`** | 262| `0xfc0601f4` | `0xFC1288F0` (!)| `0xFC1283AD` | **Instruction**: `0xFC1283AC`<br>**Thumb Entry**: `0xFC1283AD` | **`VERIFIED_IN_EXISTING_DOCS`**<br>`docs/PORT11A_GM110C_ROM_EVIDENCE.md:239–247` (Slices S3A/S3B). Loaded by creator `sub_fc1283d2` from `[0xFC128708]`. 1.00C candidate `0xFC1288F0` is **not transferable to GM1.10C; historical correctness for 1.00C unverified**. |
+| **`GetKbdState`** | 114| `0xfc05f576` | `0xFC08EF66` (?) | `0xFC08EF67` | **Instruction**: `0xFC08EF66`<br>**Thumb Entry**: `0xFC08EF67` | **`VERIFIED_IN_EXISTING_DOCS`**<br>`docs/UI001_ROM_RESEARCH.md:37` and `docs/PROJECT_STATE.md:143` (UI-001B architecture review; **not** covered by PORT-11A). Invariant ($\Delta = 0$). MMIO `0xD20BF4A0` sampler. |
+| **`DebugAssert`** | 62 | `0xfc251d14` | `0xFC31BFAC` | `0x010E1001` | **ROM Veneer (Inferred)**: `0xFC31BFF4`<br>**ATCM Callee**: `0xBFE13E78` | **`INFERRED`**<br>`docs/PORT11A_GM110C_ROM_EVIDENCE.md:164` (Slice S1C callee). ATCM target verified; ROM veneer inferred from $+0x48$ table shift. |
+| **`open`** | 172| `0xfc0ba3fe` | `0xFC418A26` | `0xFC418C13` | *(Unknown)* | **`HISTORICAL_CANDIDATE`**<br>`20151215_g3xstubs_102b.xlsx:172` and `g3x_110e.patch:8938`. Shift between 1.00C and 1.10E is $+0x1EC$. GM1.10C address UNKNOWN. |
+| **`close`** | 50 | `0xfc0ba46e` | `0xFC418A96` | `0xFC418C83` | *(Unknown)* | **`HISTORICAL_CANDIDATE`**<br>`20151215_g3xstubs_102b.xlsx:50` and `g3x_110e.patch:8762`. Shift between 1.00C and 1.10E is $+0x1EC$. GM1.10C address UNKNOWN. |
+| **`lseek`** | 157| `0xfc2a51e0` | `0xFC37B540` | `0xFC37B5BD` | *(Unknown)* | **`HISTORICAL_CANDIDATE`**<br>`20151215_g3xstubs_102b.xlsx:157` and `g3x_110e.patch:8914`. Shift between 1.00C and 1.10E is $+0x7C$. GM1.10C address UNKNOWN. |
+| **`PostLogicalEventToUI`**|177| `0xfc2a610c` | `0xFC35B8E8` | `0xFC35B965` | *(Unknown)* | **`HISTORICAL_CANDIDATE`**<br>`20151215_g3xstubs_102b.xlsx:177` and `g3x_110e.patch:8950`. Shift between 1.00C and 1.10E is $+0x7C$. GM1.10C address UNKNOWN. |
+| **`UIFS_WriteFirmInfoToFile`**|290| `0xfc1b1dc2`| `0xFC0FE708` (X)| *(Unpopulated)*| *(Unknown)* | **`HISTORICAL_CANDIDATE`**<br>`20151215_g3xstubs_102b.xlsx:290`. Duplicate row 1 of 2 in 1.00C workbook. GM1.10C address UNKNOWN. |
+| **`UIFS_WriteFirmInfoToFile`**|291| `0xfc392930`| *(Blank)* | *(Unpopulated)*| *(Unknown)* | **`UNKNOWN`**<br>`20151215_g3xstubs_102b.xlsx:291`. Duplicate row 2 of 2 in 1.00C workbook (SX280 GUI firm-update variant). |
 
 ---
 
-## 4. Key Reconciled Findings
+## 4. Key Reconciled Findings & Corrections
 
-1. **Resolution of Historical `task_PhySw` Anomaly**:  
-   Ranma's 2015 workbook assigned `0xFC1288F0` to `task_PhySw` with the author annotation `"Different Disassembly"`. Cross-referencing against Ranma's 2020 patch (`0xFC1283AD`) and the GM1.10C static ROM evidence (`0xFC1283AD`, instruction address `0xFC1283AC` loaded by creator `sub_fc1283d2`) proves that `0xFC1288F0` was a speculative match in the deep keyboard scanning logic. The genuine entry point across both 1.10E and GM1.10C is `0xFC1283AD`.
+1. **Clarification of Historical `task_PhySw` (`0xFC1288F0`)**:  
+   Ranma's 2015 workbook assigned `0xFC1288F0` to `task_PhySw` with the author annotation `"Different Disassembly"`. In GM1.10C, the verified task entry pointer passed to `CreateTaskStrictly` by creator `sub_fc1283d2` is `0xFC1283AD` (instruction address `0xFC1283AC`).  
+   **Correction**: `0xFC1288F0` is **not transferable to GM1.10C**, but this discrepancy on GM1.10C **does not automatically refute the address for historical 1.00C firmware**, where its internal role or correctness remains historically unverified.
 2. **`InitFileModules` Alignment**:  
    The historical 1.00C address was `0xFC0BD064`. In both GM1.10E (`g3x_110e.patch:9040`) and GM1.10C (Slice S2A `[0xFC0BD1A8]`), the Thumb entry pointer is identically `0xFC0BD071` (instruction address `0xFC0BD070`).
 3. **`CreateTask` Architecture**:  
@@ -84,5 +112,5 @@ The unified catalog is maintained in `research/historical/g3x/`:
 ## 5. Conclusion & Safety Summary
 
 - Zero ROM reading or binary modification was performed.
-- All candidate addresses for GM1.10C remain fail-closed as `HISTORICAL_CANDIDATE` or `UNKNOWN` unless specifically verified in tracked ROM slices S1A–S3B.
+- All candidate addresses for GM1.10C remain fail-closed as `HISTORICAL_CANDIDATE` or `UNKNOWN` unless specifically verified in tracked ROM slices S1A–S3B or UI-001 research.
 - The consolidated dataset is stored in `research/historical/g3x/` for future reference.
