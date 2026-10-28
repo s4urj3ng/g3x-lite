@@ -13,10 +13,10 @@
   "files": [
     {
       "path": "platform/g3x/kbd.c",
-      "size": 3750,
-      "baseline_sha256": "ff4d62afd1d98cd22b6369eac0dde539b19a2dec2a44a255c9251c4272eed0ce",
-      "final_sha256": "ff4d62afd1d98cd22b6369eac0dde539b19a2dec2a44a255c9251c4272eed0ce",
-      "provenance": ["CHDK_PORT0C_CODEX_INCREMENTAL_REVIEW.md frozen-source table", "CHDK_PORT0F_TEST_INTEGRITY_REPORT.md", "PORT7A_PLATFORM_CONFIGURATION_VALIDATION.md E9"]
+      "size": 3755,
+      "baseline_sha256": "6d815485016042c6fa7d856caf2f11154f8c012c75896c9b8e554ac4c4c73d3a",
+      "final_sha256": "6d815485016042c6fa7d856caf2f11154f8c012c75896c9b8e554ac4c4c73d3a",
+      "provenance": ["CHDK_PORT0C_CODEX_INCREMENTAL_REVIEW.md frozen-source table", "CHDK_PORT0F_TEST_INTEGRITY_REPORT.md", "PORT7A_PLATFORM_CONFIGURATION_VALIDATION.md E9 & §2.3", "PORT7C_PLATFORM_VALIDATION_FRAMEWORK.md §2.1.1 & §4 Rank 1 (PORT-10B comment index fix)"]
     },
     {
       "path": "platform/g3x/lib.c",
