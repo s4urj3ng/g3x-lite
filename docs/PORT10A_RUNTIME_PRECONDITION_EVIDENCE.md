@@ -12,24 +12,24 @@
 
 ## 1. Executive Technical Conclusion
 
-An exhaustive, evidence-based audit of all tracked, local-only, and historical repository records establishes that **none of the three unresolved runtime prerequisites (U1, U2, U3) can be legitimately promoted to `VERIFIED` using currently permitted repository evidence**.
+A review of the listed available repository evidence (tracked, local-only, and historical records) establishes that **none of the three unresolved runtime prerequisites (U1, U2, U3) can be legitimately promoted to `VERIFIED` using currently permitted repository evidence**.
 
 1. **U1 (`create_task_prologue_verified`) remains UNKNOWN and CONTRADICTED**:
-   - While the kernel veneer `0xFC31BBC4` targeting `CreateTask` @ `0xBFE14A3D` is directly supported by ROM disassembly traces (`RESTART_SD_HOST_AUDIT.md:64`), the exact 8-byte prologue instruction sequence at `hook_CreateTask` (`0xBFE14A3C`) is internally contradicted within local records (`push.w {r1-r9, lr}` vs `push {r4, r5, r6, lr}`).
-   - The replayed literal (`0x8160` in GM1.10E vs `0x00008164` in G5X) has zero verified evidence for GM1.10C.
-   - The underlying ATCM copy source in ROM (`0xFCEEF24C..`) has not been inspected. Replaying unverified instructions risks immediate kernel stack corruption and CPU fault.
+   - While the kernel veneer `0xFC31BBC4` targeting `CreateTask` @ `0xBFE14A3D` is directly supported by ROM disassembly traces (`RESTART_SD_HOST_AUDIT.md:64`), the prologue instruction sequence at `hook_CreateTask` (`0xBFE14A3C`) is internally inconsistent within a single untracked local document (`push.w {r1-r9, lr}` vs `push {r4, r5, r6, lr}`), leaving both claims unresolved until independent GM1.10C evidence is obtained.
+   - The stored word `0x2de9fe43` has disputed independent provenance (matching GM1.10E), and the replayed literal (`0x8160` in GM1.10E vs `0x00008164` in G5X) has zero verified evidence for GM1.10C.
+   - The underlying ATCM copy source in ROM (`0xFCEEF24C..`) has not been inspected. No specific instruction replay can be assumed safe without primary GM1.10C ROM verification.
 
 2. **U2 (`init_file_modules_entry_verified`) remains UNKNOWN and CONTRADICTED**:
    - The ASCII string `"InitFileModules"` is verified in GM1.10C ROM at `0xFC0BD1AC`, but the task entry function address is contradicted between `0xFC0BD071` (untracked local record, copied verbatim from GM1.10E) and `0xFC0BD049` (an inferred `-0x28` shift).
    - Stock task body disassembly, error branches, and successful filesystem completion conditions on GM1.10C are entirely unrecorded.
    - Furthermore, reference CHDK ports signal readiness unconditionally, whereas physical SD card readiness across warm restart remains blocked by unresolved hardware states (P11, P12, P13).
 
-3. **U3 (`physw_entry_verified`) remains UNKNOWN / INFERRED**:
-   - The stock call at `0xFC05B92E` in `task_Startup_my` (`bl sub_fc1283d2`) is the *creator function* (`taskcreate_physw`), not the periodic task loop.
-   - The entry address `0xFC1283AD` recorded in local notes is inherited from GM1.10E without independent GM1.10C ROM proof.
+3. **U3 (`physw_entry_verified`) — creator interpretation is strongly INFERRED; task-entry identity still UNKNOWN**:
+   - Stock `task_Startup` (and `task_Startup_my`) calls `0xFC05B92E: bl sub_fc1283d2`. That `sub_fc1283d2` acts as the `PhySw` creator function (by analogy with G5 X `taskcreate_physw`) is **strongly INFERRED** rather than independently verified from the GM1.10C body of `sub_fc1283d2`, and the `task_PhySw` task-entry identity remains **UNKNOWN** in tracked evidence.
+   - The entry address `0xFC1283AD` recorded in local notes is inherited from GM1.10E (or lacks provenance independent of GM1.10E) without tracked GM1.10C ROM proof.
    - Empirical hardware observations from `UI-001B-1` verify only the physical switch bitmasks in `GetKbdState dest[0]`; they provide **zero** evidence of task replacement, stack sizing (`0x2000` vs `0x800`), key suppression, or `mykbd_task` execution.
 
-**Practical Verdict**: All four runtime interfaces (I1 `CreateTask_my`, I2 `InitFileModules` gate, I3 `SpyTask`, I4 `mykbd_task`) must remain strictly dormant. The PORT-9A fail-closed default configuration (`GM110C_PRECONDITIONS` all `False`) accurately reflects the state of evidence. Any promotion of U1–U3 requires owner authorization for bounded, read-only inspection of specific ROM slices in `firmware/dumps/GM1.10C/PRIMARY.BIN`.
+**Practical Verdict**: All four runtime interfaces (I1 `CreateTask_my`, I2 `InitFileModules` gate, I3 `SpyTask`, I4 `mykbd_task`) must remain strictly dormant. The PORT-9A fail-closed default configuration (`GM110C_PRECONDITIONS` all `False`) accurately reflects the state of evidence. Any promotion of U1–U3 requires separate owner authorization for read-only inspection of the relevant ROM regions in `firmware/dumps/GM1.10C/PRIMARY.BIN`.
 
 ---
 
@@ -90,8 +90,8 @@ When Canon firmware tasks (such as `task_PhySw` or `task_InitFileModules`) are s
 
 1. **Kernel Veneer (`0xFC31BBC4`)**:
    - `docs/RESTART_SD_HOST_AUDIT.md:64` records that kernel veneer `j_CreateTask` at `0xFC31BBC4` branches directly to `0xBFE14A3D` (Thumb mode).
-   - This address is corroborated by `docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md:81`, which notes a consistent `-0x28` offset relative to GM1.10E's veneer (`0xFC31BBEC`).
-   - **Classification**: **VERIFIED** for the existence and target of veneer `0xFC31BBC4`.
+   - `docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md:81` also cites `0xFC31BBC4` (noting a `-0x28` offset relative to GM1.10E's veneer `0xFC31BBEC`), though both documents share provenance from the same original ROM trace rather than constituting two independent primary extractions.
+   - **Classification**: **VERIFIED** for the existence and target of veneer `0xFC31BBC4` (single primary trace, shared provenance across docs).
 
 2. **Hook Location (`0xBFE14A3C`)**:
    - The address `hook_CreateTask = 0xBFE14A3C` resides in the ARM Cortex-R4 ATCM address space (`0xBFE10000..0xBFE1FFFF`).
@@ -105,10 +105,10 @@ When Canon firmware tasks (such as `task_PhySw` or `task_InitFileModules`) are s
 
 ### 3.3 Prologue Description Contradictions
 
-The local stubs audit (`docs/CHDK_PORT0B_STUBS_AUDIT.md`) contains a direct internal contradiction regarding the first instruction of `CreateTask`:
+The untracked local stubs audit (`docs/CHDK_PORT0B_STUBS_AUDIT.md`) contains two conflicting descriptions of the first instruction of `CreateTask`:
 
 ```arm
-; Contradiction in docs/CHDK_PORT0B_STUBS_AUDIT.md:
+; Conflict within untracked docs/CHDK_PORT0B_STUBS_AUDIT.md:
 ; Line 33:
 CreateTask  @ 0xBFE14A3D  ->  push {r4, r5, r6, lr}                                 ; 16-bit Thumb (0xB570)
 
@@ -117,25 +117,25 @@ CreateTask  @ 0xBFE14A3D  ->  push.w {r1, r2, r3, r4, r5, r6, r7, r8, sb, lr}   
 hook_CreateTask @ 0xBFE14A3C -> val = 0x2de9fe43                                   ; Matches g3x_110e.patch
 ```
 
-- **Analysis**: Line 33 describes a standard 4-register 16-bit Thumb push (`0xB570`). Line 112 describes a 10-register 32-bit Thumb-2 `stmdb sp!, {r1-r9, lr}` (`0xE92D 0x43FE`, stored little-endian as `0x2DE9FE43`).
-- **Hazard**: These two encodings have different lengths (2 bytes vs 4 bytes) and alter the stack pointer completely differently (16 bytes vs 40 bytes). Replaying the wrong prologue in `CreateTask_my` corrupts the calling task's register state and crashes the DryOS scheduler upon task entry.
+- **Analysis**: Line 33 describes a 4-register 16-bit Thumb push (`0xB570`), whereas lines 112 and 234 describe a 10-register 32-bit Thumb-2 `stmdb sp!, {r1-r9, lr}` (`0xE92D 0x43FE`, stored little-endian as `0x2DE9FE43`). Because both assertions appear within the same untracked local document and `0x2de9fe43` also matches `g3x_110e.patch` (disputed independent provenance), neither claim logically refutes the other; both remain unresolved until checked against primary GM1.10C evidence.
+- **Hazard**: These two encodings have different lengths (2 bytes vs 4 bytes) and alter the stack pointer differently (16 bytes vs 40 bytes). Neither instruction replay may be assumed or used until the actual GM1.10C ATCM copy source is verified.
 
 ### 3.4 Replayed Literal & Patch Size
 
 - In historical GM1.10E (`g3x_110e.patch:1521`), the hook replays `ldr r0, =0x8160`.
 - In reference G5 X (`chdk-port/platform/g5x/sub/100c/boot.c:164`), the hook replays `ldr r0, =0x00008164`.
-- **Finding for GM1.10C**: The literal replayed after the prologue is **COMPLETELY UNKNOWN**. Reusing `0x8160` on GM1.10C is strictly unjustified without ROM disassembly proof.
+- **Finding for GM1.10C**: The literal (or instruction sequence) following the initial push is **UNKNOWN**. Reusing `0x8160` on GM1.10C is unjustified without GM1.10C ROM proof.
 
 ### 3.5 Contradiction Matrix for U1
 
 | Claim | Source | Firmware Rev | Evidence Type | Confidence | Independently Corroborated? | Remaining Gap |
 |---|---|:---:|---|:---:|:---:|---|
-| Kernel veneer `0xFC31BBC4` branches to `0xBFE14A3D` | `RESTART_SD_HOST_AUDIT.md:64`, `PORT5B:81` | GM1.10C | Static ROM trace | **HIGH** | YES (Tri-agent consensus) | None on veneer itself. |
-| `hook_CreateTask` resides at `0xBFE14A3C` | `CHDK_PORT0B_STUBS_AUDIT.md:234`, `g3x_110e.patch:9045` | GM1.10C / GM1.10E | Local table & patch | **PLAUSIBLE** | NO (Local record copied from E) | ATCM copy source in ROM unread. |
-| Prologue is `push {r4, r5, r6, lr}` | `CHDK_PORT0B_STUBS_AUDIT.md:33` | GM1.10C | Untracked local table | **CONTRADICTED** | NO (Refuted by line 112/234) | Refuted internally; invalid. |
-| Prologue is `push.w {r1-r9, lr}` (`0x2de9fe43`) | `CHDK_PORT0B_STUBS_AUDIT.md:112, 234` | GM1.10C | Untracked local table | **UNVERIFIED** | NO (Matches E, but C ROM unread) | Needs primary ROM byte proof. |
+| Kernel veneer `0xFC31BBC4` branches to `0xBFE14A3D` | `RESTART_SD_HOST_AUDIT.md:64`, `PORT5B:81` | GM1.10C | Static ROM trace | **HIGH** | Shared provenance (`PORT5B` cites same trace) | None on veneer itself. |
+| `hook_CreateTask` resides at `0xBFE14A3C` | `CHDK_PORT0B_STUBS_AUDIT.md:234`, `g3x_110e.patch:9045` | GM1.10C / GM1.10E | Local table & patch | **PLAUSIBLE** | NO (Local record matches E) | ATCM copy source in ROM unread. |
+| Prologue is `push {r4, r5, r6, lr}` | `CHDK_PORT0B_STUBS_AUDIT.md:33` | GM1.10C | Untracked local table | **CONTRADICTED** | NO (Inconsistent with line 112/234) | Inconsistent with another local claim; unresolved until independent evidence. |
+| Prologue is `push.w {r1-r9, lr}` (`0x2de9fe43`) | `CHDK_PORT0B_STUBS_AUDIT.md:112, 234` | GM1.10C | Untracked local table | **CONTRADICTED / UNVERIFIED** | NO (Inconsistent with line 33; matches E) | Disputed provenance; unresolved until independent evidence. |
 | Replayed literal is `0x8160` | `g3x_110e.patch:1521` | GM1.10E | Historical patch | **HISTORICAL_ONLY** | NO (G5X uses `0x8164`) | Exact GM1.10C literal unknown. |
-| Overwrite length is exactly 8 bytes | `g3x_110e.patch:1434`, `g5x boot.c:101` | Reference / GM1.10E | Upstream C pattern | **PLAUSIBLE** | YES (Upstream architecture) | Must verify 8 bytes fit clean instruction boundary on C. |
+| Overwrite length is 8 bytes | `g3x_110e.patch:1434`, `g5x boot.c:101` | Reference / GM1.10E | Upstream C pattern | **PLAUSIBLE** | NO (Upstream reference pattern only) | Instruction boundaries on GM1.10C unverified. |
 
 ---
 
@@ -200,39 +200,46 @@ Even if `InitFileModules` executes its stock code, this does **not** prove that 
 
 ## 5. U3 — PhySw Prerequisite
 
-### 5.1 Creator Function vs Task Entry Point
+### 5.1 Creator Function vs Task Entry Point (Strongly Inferred Creator; Task Entry Still Unknown)
 
-A persistent source of confusion in early project documentation was the conflation of the creator call with the actual task entry point:
+A persistent source of confusion in early project documentation was the relationship between the stock call in `task_Startup` and the periodic `task_PhySw` task entry:
 
-1. **Creator Function (`sub_fc1283d2` @ `0xFC1283D2`)**:
+1. **Stock Call (`sub_fc1283d2` @ `0xFC1283D2`) — Creator Interpretation Strongly Inferred**:
    - Stock `task_Startup` calls `0xFC05B92E: bl sub_fc1283d2` (`CHDK_PORT1C1_CRITICAL_AUDIT.md:222`).
-   - In `CHDK_PORT2C_EXECUTION_LEDGER.md`, this call was proven to occur **after** `StartDiskboot` (`0xFC05B90E`), confirming that `sub_fc1283d2` is executed for the first time during `task_Startup_my` (refuting duplicate task conjectures).
-   - `sub_fc1283d2` is the *creator function* (`taskcreate_physw`), which executes synchronously in the context of `task_Startup` to invoke `CreateTask("PhySw", 0x17, 0x800, task_entry, 0)`.
+   - In `CHDK_PORT2C_EXECUTION_LEDGER.md`, this call was verified to occur **after** `StartDiskboot` (`0xFC05B90E`), confirming that `sub_fc1283d2` is reached for the first time during `task_Startup_my`.
+   - As recorded in `PORT9A_RUNTIME_INTEGRATION_MAP.md:113`, the call instruction `bl sub_fc1283d2` is **VERIFIED**, whereas the interpretation that `sub_fc1283d2` is the `PhySw` *creator function* (analogous to G5 X `taskcreate_physw`, which invokes `CreateTask` for `"PhySw"`) is **strongly INFERRED** from the startup call structure and upstream reference ports; the body of `sub_fc1283d2` and the exact arguments it passes to `CreateTask` have not been independently verified from GM1.10C ROM in tracked records.
 
-2. **Periodic Task Entry (`task_PhySw` @ `0xFC1283AC` / `0xFC1283AD`)**:
-   - `docs/UI001_ROM_RESEARCH.md` §4 provides the disassembly of `0xFC1283AC`:
+2. **Candidate Periodic Task Entry (`0xFC1283AC` / `0xFC1283AD`) — Identity Still Unknown**:
+   - Untracked local notes (`docs/CHDK_PORT0B_STUBS_AUDIT.md:231` and `docs/UI001_ROM_RESEARCH.md` §4) list `0xFC1283AC` (Thumb address `0xFC1283AD`) as `task_PhySw`:
      ```arm
      loc_fc1283ac:
          push    {r4, lr}
-         ldr     r4, =0x000082BC     ; task_PhySw state block
+         ldr     r4, =0x000082BC     ; candidate state block
      loc_fc1283b2:
-         ldr     r0, [r4, #8]        ; sleep duration (10-20 ms)
+         ldr     r0, [r4, #8]        ; sleep duration
          blx     0xFC31BF84          ; SleepTask
-         bl      0xFC12868C          ; Scan switches & debounce
+         bl      0xFC12868C          ; switch scan helper
          cmp     r0, #1
          bne     loc_fc1283c4
-         bl      0xFC12811E          ; Process changes & notify listeners
+         bl      0xFC12811E          ; change notification helper
      loc_fc1283c4:
-         ldr     r0, [r4]            ; Termination flag
+         ldr     r0, [r4]            ; termination flag
          cmp     r0, #0
          bne     loc_fc1283b2
          pop.w   {r4, lr}
          b.w     0xFC31B8FC          ; ExitTask
      ```
-   - The task entry function begins at `0xFC1283AC` (Thumb address `0xFC1283AD`).
-   - This address is identical to GM1.10E (`g3x_110e.patch:9042`).
+   - However, `0xFC1283AD` is identical to the GM1.10E address in `g3x_110e.patch:9042`, and (`PORT9A_RUNTIME_INTEGRATION_MAP.md:114`) whether the local record was derived independently of GM1.10E is **UNKNOWN**. Consequently, `task_PhySw` task-entry identity remains **UNKNOWN** until independently verified from GM1.10C ROM.
 
-### 5.2 What Empirical Keyboard Observations Actually Prove
+### 5.2 Contradiction & Provenance Summary for U3
+
+| Claim | Source | Firmware Rev | Evidence Type | Confidence | Independently Corroborated? | Remaining Gap |
+|---|---|:---:|---|:---:|:---:|---|
+| `task_Startup` calls `bl sub_fc1283d2` at `0xFC05B92E` | `boot_prototype.c:409`, `PORT9A:113` | GM1.10C | Tracked source / ROM trace | **VERIFIED (call)** | Shared provenance across startup audits | Target body of `sub_fc1283d2` not verified in tracked docs. |
+| `sub_fc1283d2` is the `PhySw` creator (`taskcreate_physw`) | `PORT9A:113`, G5X `boot.c:485-500` | GM1.10C / Ref | Structural analogy | **STRONGLY INFERRED** | NO (GM1.10C body of `0xFC1283D2` unread in tracked records) | Creator body and exact `CreateTask` arguments unverified on GM1.10C. |
+| `task_PhySw` task entry is `0xFC1283AD` | `CHDK_PORT0B_STUBS_AUDIT.md:231`, `UI001_ROM_RESEARCH.md` | GM1.10C / GM1.10E | Untracked local notes & E patch | **UNKNOWN** | NO (Matches `g3x_110e.patch:9042`; independent provenance unproven) | Task-entry identity still UNKNOWN without independent GM1.10C ROM check. |
+
+### 5.3 What Empirical Keyboard Observations Actually Prove
 
 Empirical hardware verification in milestone `UI-001B-1` (`docs/UI001B1_HARDWARE_RESULT.md`, `PORT7C_PLATFORM_VALIDATION_FRAMEWORK.md`) confirmed the active-low bitmasks for 8 physical buttons:
 - `KEY_VIDEO` (`0x08`), `KEY_MENU` (`0x10`), `KEY_UP` (`0x20`), `KEY_DOWN` (`0x40`), `KEY_RIGHT` (`0x80`), `KEY_LEFT` (`0x100`), `KEY_DISPLAY` (`0x1000`), `KEY_WIFI` (`0x2000`).
@@ -240,7 +247,7 @@ Empirical hardware verification in milestone `UI-001B-1` (`docs/UI001B1_HARDWARE
 **Boundary of Proof**:
 - **PROVEN**: The bit positions within `GetKbdState dest[0]` and ROM physical switch table `0xFC66C948` corresponding to button presses.
 - **NOT PROVEN**:
-  1. `task_PhySw` task replacement.
+  1. `task_PhySw` task-entry identity or replacement.
   2. `mykbd_task` execution or stack enlargement (`0x800` -> `0x2000`).
   3. Hooking `kbd_p1_f` / `kbd_p2_f` (`0xFC12811E`).
   4. Interception or suppression of `PostLogicalEventToUI` (`0xFC354494`).
@@ -283,10 +290,10 @@ Using PORT-9A (`tools/port9a_runtime_lifecycle.py`) and PORT-9B (`tools/port9b_r
 
 | Interface | Primary Role | Direct Preconditions Required | Current Repository Status | Warm Restart Blocker Dependencies | Implementation Gate |
 |---|---|---|:---:|---|---|
-| **I1: Task Interception** (`CreateTask_my`) | Intercepts task creation in TCM; routes `InitFileModules` and `PhySw` to CHDK wrappers. | **U1**: Exact 8-byte prologue instructions at `0xBFE14A3C` and replayed literal (`0x8160` vs other). | **UNKNOWN / CONTRADICTED** (`push.w` vs `push`; literal unverified). | CPU mode Privileged SVC (P01) and pre-unmask IRQ disabled (P15). | BLOCKED on U1 ROM verification. |
+| **I1: Task Interception** (`CreateTask_my`) | Intercepts task creation in TCM; routes `InitFileModules` and `PhySw` to CHDK wrappers. | **U1**: Prologue instructions at `0xBFE14A3C` and replayed literal/instructions. | **UNKNOWN / CONTRADICTED** (Local claims inconsistent; literal unverified). | CPU mode Privileged SVC (P01) and pre-unmask IRQ disabled (P15). | BLOCKED on U1 ROM verification. |
 | **I2: Readiness Gate** (`init_file_modules_task`) | Runs file module init; latches `fs_ready` to release SpyTask. | **I1** functional + **U2**: `task_InitFileModules` entry (`0xFC0BD071` vs `0xFC0BD049`) and success semantics. | **UNKNOWN / CONTRADICTED** (Entry contradicted; body disassembly absent). | SD host controller reset (P12), card `TRAN` response (P13), `SD1stInit` predicate (P11). | BLOCKED on I1 + U2 ROM verification. |
 | **I3: Core SpyTask** (`spytask`) | Initializes CHDK core, scripts, GUI, and console. | **I2** `fs_ready` + **U4**: SpyTask placement & priority in `task_Startup_my` + DryOS heap shift (P07). | **UNKNOWN** (Commented out in prototype; placement unverified). | Heap collision safety (P07), task table reset (P08), SD filesystem mount completion. | BLOCKED on I2 + U4 + warm restart storage safety. |
-| **I4: Keyboard Task** (`mykbd_task`) | Replaces `task_PhySw`; intercepts ALT key and suppresses Canon UI event dispatch. | **I1** functional + **U3**: `task_PhySw` entry (`0xFC1283AD`), stack enlargement (`0x2000`), continuation. | **UNKNOWN / INFERRED** (Bitmasks VERIFIED; entry local-only; code unwritten). | UI event queue stability (`PostLogicalEventToUI`), physical switch debouncing. | BLOCKED on I1 + U3 ROM verification. |
+| **I4: Keyboard Task** (`mykbd_task`) | Replaces `task_PhySw`; intercepts ALT key and suppresses Canon UI event dispatch. | **I1** functional + **U3**: `task_PhySw` entry identity, creator relationship, stack sizing. | **UNKNOWN / INFERRED** (Creator strongly INFERRED; task-entry identity UNKNOWN). | UI event queue stability (`PostLogicalEventToUI`), physical switch debouncing. | BLOCKED on I1 + U3 ROM verification. |
 
 ### Downstream Prerequisite U4 (Treated Separately)
 
@@ -301,12 +308,12 @@ Using PORT-9A (`tools/port9a_runtime_lifecycle.py`) and PORT-9B (`tools/port9b_r
 
 The following facts are formally recorded as unresolved:
 
-1. **ATCM `CreateTask` Prologue Bytes**: The exact 8 bytes of machine code residing at `0xBFE14A3C` (and its backing ROM copy source `0xFCEEF24C..`) are unverified.
-2. **Replayed Literal**: The 32-bit constant replayed after the prologue in `CreateTask_my` is unrecorded for GM1.10C.
+1. **ATCM `CreateTask` Prologue Instructions**: The machine code residing at `0xBFE14A3C` (and its backing ROM copy source `0xFCEEF24C..`) is unverified, and local notes contain conflicting descriptions (`push {r4, r5, r6, lr}` vs `push.w {r1-r9, lr}`).
+2. **Replayed Literal / Sequence**: The constant or instruction sequence following the `CreateTask` prologue is unrecorded for GM1.10C.
 3. **`task_InitFileModules` Entry Address**: The function pointer passed in `r3` when creating `InitFileModules` is contradicted between `0xFC0BD071` and `0xFC0BD049`.
 4. **`task_InitFileModules` Body & Semantics**: The internal call graph, return register semantics, and error branches of `task_InitFileModules` on GM1.10C are unrecorded.
-5. **`task_PhySw` Entry Corroboration**: The address `0xFC1283AD` has not been corroborated from GM1.10C ROM independently of GM1.10E.
-6. **Stack Sizing for `mykbd_task`**: Whether `0x800` causes stack overflow during CHDK ALT-mode processing on GM1.10C, strictly necessitating `0x2000`, is unmeasured.
+5. **`sub_fc1283d2` Body & `task_PhySw` Entry Identity**: That `sub_fc1283d2` is the `PhySw` creator is strongly inferred, while its GM1.10C body and the `task_PhySw` entry address (`0xFC1283AD` in local notes and GM1.10E) have not been independently verified from GM1.10C ROM.
+6. **Stack Sizing for `mykbd_task`**: Whether `0x800` causes stack overflow during CHDK ALT-mode processing on GM1.10C, necessitating `0x2000`, is unmeasured.
 7. **Filesystem Mount Guarantee**: Whether `InitFileModules` execution guarantees that the SD card is ready for standard file I/O across a warm restart without power-cycling the card is unproven.
 
 ---
@@ -319,18 +326,18 @@ In accordance with Phase 0 rules and the recommendations of PORT-7C (§4, Rank 1
 - **Action**: Correct the stale switch-table index comments in `vendor/g3x-platform/platform/g3x/kbd.c` (e.g. updating `KEY_PLAYBACK` comment from index 10 to index 14, matching `physw_event_table` `0xFC66C9B8` / `physw_bits.txt`), update `vendor/g3x-platform/MANIFEST.json`, and re-run bootstrap/contract validation.
 - **Scope**: Documentation/comment-only fix within tracked vendor files. Zero ROM access required.
 
-### 8.2 Research Proposal: Bounded Read-Only ROM Inspection (Requires Human Approval)
+### 8.2 Proposed Future Evidence Targets: Bounded Read-Only ROM Inspection (Separately Unauthorized)
 
-To transition U1, U2, and U3 from UNKNOWN to VERIFIED, formulate a formal request for owner authorization to perform a tightly bounded, read-only extraction from `firmware/dumps/GM1.10C/PRIMARY.BIN`:
+Any direct inspection of `firmware/dumps/GM1.10C/PRIMARY.BIN` remains **separately unauthorized** under current rules, and neither the exact byte extent required nor the sufficiency of a fixed-size slice can be guaranteed in advance. If the owner later authorizes bounded read-only ROM inspection, the proposed initial evidence targets (not guaranteed resolutions) are:
 
-1. **Slice 1 (U1 — CreateTask)**:
-   - Identify the exact ROM source range for the ATCM copy loop (`0xFC020046`), locate the offset corresponding to `0xBFE14A3C`, and read exactly 16 bytes to establish prologue instructions, instruction width, and the replayed literal.
-2. **Slice 2 (U2 — InitFileModules)**:
-   - Locate code cross-references in ROM to the string `"InitFileModules"` (`0xFC0BD1AC`), trace the `CreateTask` invocation to extract the exact `r3` entry address, and disassemble the first 25 instructions of the task body.
-3. **Slice 3 (U3 — PhySw)**:
-   - Disassemble the 20 instructions of `sub_fc1283d2` (`0xFC1283D2..0xFC128420`) to verify the exact task entry address and stack size passed to `CreateTask("PhySw", ...)`.
+1. **Proposed Target 1 (U1 — CreateTask in ATCM Copy Source)**:
+   - Inspect the ATCM copy source region in ROM (`0xFCEEF24C..`) corresponding to runtime address `0xBFE14A3C` (and any referenced literal pool) to check the actual GM1.10C prologue instructions, instruction boundaries, and any literal loaded in the opening sequence.
+2. **Proposed Target 2 (U2 — InitFileModules Creator & Entry)**:
+   - Inspect code cross-references in ROM to the string `"InitFileModules"` (`0xFC0BD1AC`) to identify the task creation site, candidate `r3` entry pointer, and initial task body structure.
+3. **Proposed Target 3 (U3 — `sub_fc1283d2` & PhySw Entry)**:
+   - Inspect `sub_fc1283d2` (`0xFC1283D2..`) to test the strongly inferred creator interpretation and check what entry address and stack size it passes to `CreateTask`.
 
-*Until explicit human approval is granted, all three slices remain STRICTLY BLOCKED.*
+*Until explicit human authorization is granted, all ROM reads remain STRICTLY BLOCKED.*
 
 ---
 
@@ -338,17 +345,17 @@ To transition U1, U2, and U3 from UNKNOWN to VERIFIED, formulate a formal reques
 
 | ID | Subject | Cited Location | Classification | Notes / Justification |
 |---|---|---|:---:|---|
-| **E-01** | `j_CreateTask` veneer target | `RESTART_SD_HOST_AUDIT.md:64` | **VERIFIED** | Direct ROM disassembly: `0xFC31BBC4` $\to$ `0xBFE14A3D`. |
-| **E-02** | `hook_CreateTask` address | `CHDK_PORT0B_STUBS_AUDIT.md:234` | **HISTORICAL_ONLY** | Untracked local note; copied from `g3x_110e.patch:9045`. |
-| **E-03** | Prologue: `push {r4-r6, lr}` | `CHDK_PORT0B_STUBS_AUDIT.md:33` | **CONTRADICTED** | Internally refuted by lines 112 & 234 of same document. |
-| **E-04** | Prologue: `push.w {r1-r9, lr}` | `CHDK_PORT0B_STUBS_AUDIT.md:112` | **UNVERIFIED** | Matches GM1.10E, but unverified from GM1.10C ROM bytes. |
+| **E-01** | `j_CreateTask` veneer target | `RESTART_SD_HOST_AUDIT.md:64`, `PORT5B:81` | **VERIFIED** | Direct ROM disassembly: `0xFC31BBC4` $\to$ `0xBFE14A3D` (shared provenance across docs). |
+| **E-02** | `hook_CreateTask` address | `CHDK_PORT0B_STUBS_AUDIT.md:234` | **HISTORICAL_ONLY** | Untracked local note; matches `g3x_110e.patch:9045`. |
+| **E-03** | Prologue: `push {r4-r6, lr}` | `CHDK_PORT0B_STUBS_AUDIT.md:33` | **CONTRADICTED** | Inconsistent with lines 112 & 234 of the same local document; unresolved until independent evidence. |
+| **E-04** | Prologue: `push.w {r1-r9, lr}` | `CHDK_PORT0B_STUBS_AUDIT.md:112` | **CONTRADICTED / UNVERIFIED** | Inconsistent with line 33; `0x2de9fe43` matches GM1.10E with disputed independent provenance. |
 | **E-05** | Replayed literal `0x8160` | `g3x_110e.patch:1521` | **HISTORICAL_ONLY** | Established for GM1.10E only; G5 X uses `0x8164`. |
 | **E-06** | `"InitFileModules"` string | `GM110C_FUNCTION_MAP.md:90` | **VERIFIED** | Verified at `0xFC0BD1AC` in GM1.10C ROM. |
 | **E-07** | `task_InitFileModules` entry | `GM110C_FUNCTION_MAP.md:90` | **UNKNOWN** | Explicitly marked UNKNOWN; local claims conflict (`0xFC0BD071` vs `0xFC0BD049`). |
-| **E-08** | Stock PhySw creator call | `boot_prototype.c:409`, `PORT2C:22` | **VERIFIED** | `0xFC05B92E: bl sub_fc1283d2` verified in `task_Startup_my`. |
-| **E-09** | `task_PhySw` loop disassembly | `UI001_ROM_RESEARCH.md:147` | **UNVERIFIED (LOCAL)** | Detailed local disassembly of `0xFC1283AC`; needs tracked ROM proof. |
+| **E-08** | Stock `bl sub_fc1283d2` call & role | `boot_prototype.c:409`, `PORT9A:113` | **VERIFIED (call) / STRONGLY INFERRED (creator)** | Call at `0xFC05B92E` is VERIFIED; creator role is strongly INFERRED; `task_PhySw` entry identity still UNKNOWN. |
+| **E-09** | `task_PhySw` loop disassembly | `UI001_ROM_RESEARCH.md:147`, `PORT9A:114` | **UNKNOWN / UNVERIFIED (LOCAL)** | Untracked local note (`0xFC1283AD` matches GM1.10E; independent GM1.10C provenance unproven). |
 | **E-10** | Physical button bitmasks | `PORT7C:47-56`, `UI001B1_HARDWARE_RESULT.md` | **VERIFIED (OBSERVED)** | 8 Port 0 button bits verified empirically on camera hardware. |
-| **E-11** | Keyboard task replacement | `vendor/.../kbd.c:47-49` | **NOT IMPLEMENTED** | `mykbd_task` deliberately omitted; stock `task_PhySw` runs unmodified. |
+| **E-11** | Keyboard task replacement | `vendor/.../kbd.c:47-49` | **NOT IMPLEMENTED** | `mykbd_task` deliberately omitted; stock call `sub_fc1283d2` runs unmodified. |
 | **E-12** | Model preconditions inert | `PORT9A:34`, `PORT9B:39` | **VERIFIED (MODEL)** | `GM110C_PRECONDITIONS` all False; verified by 32 + 51 unit tests. |
 
 ---
