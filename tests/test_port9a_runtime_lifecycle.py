@@ -26,28 +26,13 @@ from port9a_runtime_lifecycle import (  # noqa: E402
 )
 
 
-def booted(pre=rt.HYPOTHETICAL_ALL_VERIFIED):
-    m = rt.RuntimeLifecycle(pre)
-    m.init_core()
-    m.install_intercept()
-    return m
-
-
-def full_boot():
-    """Reference order: SpyTask created early (as upstream), PhySw, then files."""
-    m = booted()
-    m.create_spytask()
-    m.on_firmware_create_task("PhySw")
-    m.on_firmware_create_task("InitFileModules")
-    m.file_modules_finished(True)
-    return m
-
-
-def synthetic_port11b_boot(static_evidence=rt.SYNTHETIC_ALL_STATIC_AND_DYNAMIC_VERIFIED,
-                           hook_contract=rt.SYNTHETIC_HOOK_CONTRACT_SATISFIED,
-                           boot_generation=1):
+def booted(pre=rt.HYPOTHETICAL_ALL_VERIFIED,
+           static_evidence=rt.SYNTHETIC_ALL_STATIC_AND_DYNAMIC_VERIFIED,
+           hook_contract=rt.SYNTHETIC_HOOK_CONTRACT_SATISFIED,
+           boot_generation=1):
+    """Test-only helper that initializes core and installs intercept under explicit synthetic contracts."""
     m = rt.RuntimeLifecycle(
-        preconditions=rt.HYPOTHETICAL_ALL_VERIFIED,
+        preconditions=pre,
         static_evidence=static_evidence,
         hook_contract=hook_contract,
         boot_generation=boot_generation,
@@ -57,13 +42,33 @@ def synthetic_port11b_boot(static_evidence=rt.SYNTHETIC_ALL_STATIC_AND_DYNAMIC_V
     return m
 
 
+def advance_all_fs_stages_for_test(m, boot_generation=None):
+    """TEST-ONLY helper: explicitly step through Stages 2-6 and final gate check."""
+    m.init_file_modules_started(boot_generation=boot_generation)
+    m.init_file_modules_returned(0, boot_generation=boot_generation)
+    m.record_mount_observation(True, boot_generation=boot_generation)
+    m.record_filesystem_io_readiness(True, boot_generation=boot_generation)
+    m.record_warm_restart_storage_safety(True, boot_generation=boot_generation)
+    return m.file_modules_finished(True, boot_generation=boot_generation)
+
+
+def full_boot():
+    """Reference order: SpyTask created early (as upstream), PhySw, then all 6 FS stages."""
+    m = booted()
+    m.create_spytask()
+    m.on_firmware_create_task("PhySw")
+    m.on_firmware_create_task("InitFileModules")
+    advance_all_fs_stages_for_test(m)
+    return m
+
+
 class SpyTaskOrdering(unittest.TestCase):
     def test_spytask_waits_until_fs_ready(self):
         m = booted()
         self.assertIs(m.create_spytask(), TaskState.WAITING_GATE)
         m.on_firmware_create_task("InitFileModules")
         self.assertIs(m.spytask, TaskState.WAITING_GATE)
-        m.file_modules_finished(True)
+        advance_all_fs_stages_for_test(m)
         self.assertIs(m.spytask, TaskState.RUNNING)
         self.assertEqual(rt.check_trace(m.trace), [])
 
@@ -72,7 +77,7 @@ class SpyTaskOrdering(unittest.TestCase):
         # is lost; the model latches it instead.
         m = booted()
         m.on_firmware_create_task("InitFileModules")
-        m.file_modules_finished(True)
+        advance_all_fs_stages_for_test(m)
         self.assertIs(m.create_spytask(), TaskState.RUNNING)
         self.assertEqual(rt.check_trace(m.trace), [])
 
@@ -81,7 +86,7 @@ class SpyTaskOrdering(unittest.TestCase):
         m.create_spytask()
         self.assertIs(m.spytask_gate_timeout(), TaskState.FAILED)
         m.on_firmware_create_task("InitFileModules")
-        m.file_modules_finished(True)
+        advance_all_fs_stages_for_test(m)
         self.assertIs(m.spytask, TaskState.FAILED)
         self.assertIsNot(m.gate, GateState.READY)
         self.assertEqual(rt.check_trace(m.trace), [])
@@ -116,7 +121,11 @@ class KeyboardTaskPrerequisites(unittest.TestCase):
         self.assertIs(m.kbd, TaskState.RUNNING)
 
     def test_no_kbd_without_intercept(self):
-        m = rt.RuntimeLifecycle(rt.HYPOTHETICAL_ALL_VERIFIED)
+        m = rt.RuntimeLifecycle(
+            rt.HYPOTHETICAL_ALL_VERIFIED,
+            static_evidence=rt.SYNTHETIC_ALL_STATIC_AND_DYNAMIC_VERIFIED,
+            hook_contract=rt.SYNTHETIC_HOOK_CONTRACT_SATISFIED,
+        )
         m.init_core()
         d = m.on_firmware_create_task("PhySw")
         self.assertIs(d.action, Action.PASS_THROUGH)
@@ -128,7 +137,11 @@ class KeyboardTaskPrerequisites(unittest.TestCase):
         self.assertIs(m.kbd, TaskState.NOT_CREATED)
 
     def test_intercept_requires_core(self):
-        m = rt.RuntimeLifecycle(rt.HYPOTHETICAL_ALL_VERIFIED)
+        m = rt.RuntimeLifecycle(
+            rt.HYPOTHETICAL_ALL_VERIFIED,
+            static_evidence=rt.SYNTHETIC_ALL_STATIC_AND_DYNAMIC_VERIFIED,
+            hook_contract=rt.SYNTHETIC_HOOK_CONTRACT_SATISFIED,
+        )
         with self.assertRaises(rt.LifecycleError):
             m.install_intercept()
 
@@ -139,7 +152,7 @@ class KeyboardTaskPrerequisites(unittest.TestCase):
         m.create_spytask()
         self.assertFalse(m.chdk_key_handling)
         m.on_firmware_create_task("InitFileModules")
-        m.file_modules_finished(True)
+        advance_all_fs_stages_for_test(m)
         self.assertTrue(m.chdk_key_handling)
 
 
@@ -154,11 +167,14 @@ class Idempotence(unittest.TestCase):
         self.assertEqual((m.intercept, m.gate, m.spytask, m.kbd), before)
         self.assertEqual(rt.check_trace(m.trace), [])
 
-    def test_second_creation_of_same_task_is_not_replaced_again(self):
+    def test_second_creation_of_same_task_is_rejected_not_recreated(self):
         m = booted()
         self.assertIs(m.on_firmware_create_task("PhySw").action, Action.REPLACE)
-        self.assertIs(m.on_firmware_create_task("PhySw").action, Action.PASS_THROUGH)
+        d2 = m.on_firmware_create_task("PhySw")
+        self.assertIs(d2.action, Action.REJECT_DUPLICATE)
+        self.assertEqual(d2.entry, "duplicate_blocked")
         self.assertEqual([e for e, _ in m.trace].count("kbd_running"), 1)
+        self.assertNotIn("create_stock", [e for e, _ in m.trace])
 
     def test_refused_intercept_stays_refused(self):
         m = rt.RuntimeLifecycle()
@@ -207,7 +223,11 @@ class FailurePaths(unittest.TestCase):
         self.assertEqual(m.fault, "a: first")
 
     def test_fault_blocks_intercept_install(self):
-        m = rt.RuntimeLifecycle(rt.HYPOTHETICAL_ALL_VERIFIED)
+        m = rt.RuntimeLifecycle(
+            rt.HYPOTHETICAL_ALL_VERIFIED,
+            static_evidence=rt.SYNTHETIC_ALL_STATIC_AND_DYNAMIC_VERIFIED,
+            hook_contract=rt.SYNTHETIC_HOOK_CONTRACT_SATISFIED,
+        )
         m.init_core()
         m.report_failure("test", "injected")
         self.assertIs(m.install_intercept(), InterceptState.NOT_INSTALLED)
@@ -219,6 +239,8 @@ class Gm110cDefaults(unittest.TestCase):
     def test_default_preconditions_are_all_unverified(self):
         self.assertEqual(rt.GM110C_PRECONDITIONS, rt.Preconditions(False, False, False))
         self.assertIs(rt.RuntimeLifecycle().preconditions, rt.GM110C_PRECONDITIONS)
+        self.assertIs(rt.RuntimeLifecycle().static_evidence, rt.GM110C_STATIC_EVIDENCE)
+        self.assertIs(rt.RuntimeLifecycle().hook_contract, rt.GM110C_HOOK_CONTRACT)
 
     def test_default_boot_activates_nothing(self):
         m = rt.RuntimeLifecycle()
@@ -235,11 +257,9 @@ class Gm110cDefaults(unittest.TestCase):
 
 
 class Port11bSafetyScenarios(unittest.TestCase):
-    """PORT-11B Phase 2-5 regression scenarios."""
+    """PORT-11B Phase 2-5 and PR #16 B1-B4 remediation regression scenarios."""
 
     def test_static_evidence_present_but_runtime_authorization_absent(self):
-        # U1, U2 entry, and U3 are STATIC_VERIFIED in GM110C_STATIC_EVIDENCE,
-        # but GM110C_PRECONDITIONS remains all False and never authorizes activation.
         ev = rt.GM110C_STATIC_EVIDENCE
         self.assertTrue(ev.static_targets_verified)
         self.assertIs(ev.u1_create_task_prologue_and_continuation, EvidenceStatus.STATIC_VERIFIED)
@@ -262,8 +282,93 @@ class Port11bSafetyScenarios(unittest.TestCase):
         self.assertIs(m.kbd, TaskState.NOT_CREATED)
         self.assertFalse(m.hardware_execution_authorized)
 
+    def test_b1_file_modules_finished_true_never_auto_promotes_stages(self):
+        # Blocker B1 regression: calling file_modules_finished(True) on an armed
+        # gate without prior Stage 2-6 witnesses must NEVER synthesize mount, I/O,
+        # or warm-restart readiness, even when static_evidence and hook_contract
+        # are fully synthetic-verified.
+        m = booted(
+            pre=rt.HYPOTHETICAL_ALL_VERIFIED,
+            static_evidence=rt.SYNTHETIC_ALL_STATIC_AND_DYNAMIC_VERIFIED,
+            hook_contract=rt.SYNTHETIC_HOOK_CONTRACT_SATISFIED,
+        )
+        m.create_spytask()
+        d = m.on_firmware_create_task("InitFileModules")
+        self.assertIs(d.action, Action.REPLACE)
+        self.assertIs(m.gate, GateState.ARMED)
+        self.assertIs(m.fs.stage, FilesystemStage.TASK_CREATED)
+
+        # Calling file_modules_finished(True) directly at Stage 1 fails closed.
+        self.assertIs(m.file_modules_finished(True), GateState.FAILED)
+        self.assertIs(m.fs.stage, FilesystemStage.FAILED)
+        self.assertFalse(m.fs.is_ready)
+        self.assertIs(m.spytask, TaskState.FAILED)
+        self.assertNotIn("fs_ready", [e for e, _ in m.trace])
+        self.assertNotIn("fs_mount_observed", [e for e, _ in m.trace])
+        self.assertEqual(rt.check_trace(m.trace), [])
+
+    def test_b1_file_modules_finished_true_at_any_partial_stage_fails_closed(self):
+        # Verify calling file_modules_finished(True) after Stage 2, 3, 4, or 5
+        # still fails closed because Stage 6 (warm_restart_safe) is not established.
+        for stop_after in ("started", "returned", "mount", "io"):
+            with self.subTest(stop_after=stop_after):
+                m = booted()
+                m.create_spytask()
+                m.on_firmware_create_task("InitFileModules")
+                m.init_file_modules_started()
+                if stop_after in ("returned", "mount", "io"):
+                    m.init_file_modules_returned(0)
+                if stop_after in ("mount", "io"):
+                    m.record_mount_observation(True)
+                if stop_after == "io":
+                    m.record_filesystem_io_readiness(True)
+                self.assertIs(m.file_modules_finished(True), GateState.FAILED)
+                self.assertIs(m.fs.stage, FilesystemStage.FAILED)
+                self.assertIs(m.spytask, TaskState.FAILED)
+                self.assertEqual(rt.check_trace(m.trace), [])
+
+    def test_b2_missing_or_default_hook_contract_refuses_intercept_even_with_hypothetical_preconditions(self):
+        # Blocker B2 regression: RuntimeLifecycle(HYPOTHETICAL_ALL_VERIFIED) with
+        # default GM110C_HOOK_CONTRACT or hook_contract=None must refuse install_intercept().
+        for label, hc in (("default_gm110c_hook_contract", rt.GM110C_HOOK_CONTRACT),
+                          ("none_hook_contract", None)):
+            with self.subTest(case=label):
+                m = rt.RuntimeLifecycle(
+                    preconditions=rt.HYPOTHETICAL_ALL_VERIFIED,
+                    static_evidence=rt.SYNTHETIC_ALL_STATIC_AND_DYNAMIC_VERIFIED,
+                    hook_contract=hc,
+                )
+                m.init_core()
+                self.assertIs(m.install_intercept(), InterceptState.REFUSED)
+                self.assertIs(m.on_firmware_create_task("PhySw").action, Action.PASS_THROUGH)
+                self.assertIs(m.kbd, TaskState.NOT_CREATED)
+
+    def test_b2_u4_unknown_always_blocks_spytask_without_legacy_bypass(self):
+        # Blocker B2 regression: even if preconditions == HYPOTHETICAL_ALL_VERIFIED,
+        # U4 UNKNOWN in static_evidence (or static_evidence=None) always blocks SpyTask.
+        ev_u2_ok_u4_unknown = replace(
+            rt.GM110C_STATIC_EVIDENCE,
+            u2_sd_fat_mount_readiness=EvidenceStatus.STATIC_VERIFIED,
+            u4_spytask_creation_priority_and_dependencies=EvidenceStatus.UNKNOWN,
+        )
+        m = booted(
+            pre=rt.HYPOTHETICAL_ALL_VERIFIED,
+            static_evidence=ev_u2_ok_u4_unknown,
+            hook_contract=rt.SYNTHETIC_HOOK_CONTRACT_SATISFIED,
+        )
+        m.create_spytask()
+        m.on_firmware_create_task("InitFileModules")
+        advance_all_fs_stages_for_test(m)
+        self.assertIs(m.gate, GateState.READY)
+        self.assertTrue(m.fs.is_ready)
+        self.assertIs(m.spytask, TaskState.WAITING_GATE)
+        self.assertIn(
+            ("spytask_blocked_u4", "U4 SpyTask creation/priority/dependencies UNKNOWN"),
+            m.trace,
+        )
+
     def test_init_file_modules_created_but_not_started_blocks_spytask(self):
-        m = synthetic_port11b_boot()
+        m = booted()
         m.create_spytask()
         d = m.on_firmware_create_task("InitFileModules")
         self.assertIs(d.action, Action.REPLACE)
@@ -279,9 +384,7 @@ class Port11bSafetyScenarios(unittest.TestCase):
         self.assertEqual(rt.check_trace(m.trace), [])
 
     def test_init_returns_zero_and_event_5006_do_not_prove_mount_readiness(self):
-        # PORT-11A S2B: sub_fc0d9ccc always returns 0 on normal return;
-        # event 0x5006 is not sufficient to prove mount readiness.
-        m = synthetic_port11b_boot(static_evidence=rt.GM110C_STATIC_EVIDENCE)
+        m = booted(static_evidence=rt.GM110C_STATIC_EVIDENCE)
         m.create_spytask()
         m.on_firmware_create_task("InitFileModules")
         self.assertIs(m.init_file_modules_started(), FilesystemStage.TASK_STARTED)
@@ -292,15 +395,13 @@ class Port11bSafetyScenarios(unittest.TestCase):
         self.assertIs(m.gate, GateState.ARMED)
         self.assertFalse(m.fs.is_ready)
         self.assertIs(m.spytask, TaskState.WAITING_GATE)
-        # Because u2_sd_fat_mount_readiness is UNKNOWN in GM110C_STATIC_EVIDENCE,
-        # attempting to claim mount observation fails closed.
         self.assertIs(m.record_mount_observation(True), FilesystemStage.FAILED)
         self.assertIs(m.gate, GateState.FAILED)
         self.assertIs(m.spytask, TaskState.FAILED)
         self.assertEqual(rt.check_trace(m.trace), [])
 
     def test_mount_observed_without_fs_io_readiness_blocks_spytask(self):
-        m = synthetic_port11b_boot()
+        m = booted()
         m.create_spytask()
         m.on_firmware_create_task("InitFileModules")
         m.init_file_modules_started()
@@ -309,13 +410,12 @@ class Port11bSafetyScenarios(unittest.TestCase):
         self.assertIs(m.gate, GateState.ARMED)
         self.assertFalse(m.fs.is_ready)
         self.assertIs(m.spytask, TaskState.WAITING_GATE)
-        # Skipping fs_io_ready to claim warm_restart_safe fails closed.
         self.assertIs(m.record_warm_restart_storage_safety(True), GateState.FAILED)
         self.assertIs(m.spytask, TaskState.FAILED)
         self.assertEqual(rt.check_trace(m.trace), [])
 
     def test_filesystem_ready_without_warm_restart_safety_blocks_spytask(self):
-        m = synthetic_port11b_boot()
+        m = booted()
         m.create_spytask()
         m.on_firmware_create_task("InitFileModules")
         m.init_file_modules_started()
@@ -325,18 +425,16 @@ class Port11bSafetyScenarios(unittest.TestCase):
         self.assertIs(m.gate, GateState.ARMED)
         self.assertFalse(m.fs.is_ready)
         self.assertIs(m.spytask, TaskState.WAITING_GATE)
-        # Explicit False on warm_restart_safe fails closed.
         self.assertIs(m.record_warm_restart_storage_safety(False), GateState.FAILED)
         self.assertIs(m.spytask, TaskState.FAILED)
         self.assertEqual(rt.check_trace(m.trace), [])
 
     def test_stale_boot_generation_readiness_evidence_rejected(self):
-        m = synthetic_port11b_boot(boot_generation=2)
+        m = booted(boot_generation=2)
         m.create_spytask()
         m.on_firmware_create_task("InitFileModules")
         m.init_file_modules_started(boot_generation=2)
         m.init_file_modules_returned(0, boot_generation=2)
-        # Observation from earlier boot generation 1 must fail closed.
         self.assertIs(
             m.record_mount_observation(True, boot_generation=1),
             FilesystemStage.FAILED,
@@ -365,7 +463,7 @@ class Port11bSafetyScenarios(unittest.TestCase):
             )),
         ):
             with self.subTest(case=label):
-                m = synthetic_port11b_boot()
+                m = booted()
                 m.create_spytask()
                 m.on_firmware_create_task("InitFileModules")
                 m.init_file_modules_started()
@@ -375,20 +473,49 @@ class Port11bSafetyScenarios(unittest.TestCase):
                 self.assertIs(m.spytask, TaskState.FAILED)
                 self.assertEqual(rt.check_trace(m.trace), [])
 
-    def test_duplicate_init_file_modules_creation_blocked(self):
-        m = synthetic_port11b_boot()
+    def test_b3_duplicate_init_file_modules_creation_returns_reject_duplicate(self):
+        # Blocker B3 regression: duplicate creation returns Action.REJECT_DUPLICATE
+        # ("duplicate_blocked") rather than Action.PASS_THROUGH ("stock"), so no
+        # second task (replacement or stock) is created.
+        m = booted()
         d1 = m.on_firmware_create_task("InitFileModules")
         self.assertIs(d1.action, Action.REPLACE)
         d2 = m.on_firmware_create_task("InitFileModules")
-        self.assertIs(d2.action, Action.PASS_THROUGH)
+        self.assertIs(d2.action, Action.REJECT_DUPLICATE)
+        self.assertEqual(d2.entry, "duplicate_blocked")
         events = [e for e, _ in m.trace]
         self.assertIn("duplicate_task_creation_blocked", events)
+        self.assertNotIn("create_stock", events)
         self.assertEqual(events.count("gate_armed"), 1)
         self.assertEqual(events.count("fs_task_created"), 1)
         self.assertEqual(rt.check_trace(m.trace), [])
 
-    def test_physw_creation_through_create_task_strictly(self):
-        m = synthetic_port11b_boot()
+    def test_b3_invalid_context_does_not_fault_stock_pass_through_paths(self):
+        # Blocker B3 regression: when intercept is NOT installed or task is
+        # unlisted, passing an invalid CreatorCallContext must NOT latch a fault
+        # on the stock pass-through path.
+        bad_ctx = CreatorCallContext(predecessor_calls_preserved=False, singleton_guard_checked=False)
+
+        # Case 1: intercept refused (default GM110C mode)
+        m_stock = rt.RuntimeLifecycle()
+        m_stock.init_core()
+        m_stock.install_intercept()
+        d_stock = m_stock.on_firmware_create_task("PhySw", context=bad_ctx)
+        self.assertIs(d_stock.action, Action.PASS_THROUGH)
+        self.assertIsNone(m_stock.fault)
+
+        # Case 2: intercept installed, but task is unlisted ("FileWrite")
+        m_unlisted = booted()
+        d_unlisted = m_unlisted.on_firmware_create_task("FileWrite", context=bad_ctx)
+        self.assertIs(d_unlisted.action, Action.PASS_THROUGH)
+        self.assertIsNone(m_unlisted.fault)
+
+    def test_b4_physw_creation_enforces_create_task_strictly_mechanism(self):
+        # Blocker B4 regression: PhySw must use CREATE_TASK_STRICTLY; passing
+        # CREATE_TASK for PhySw (to skip the CreateTaskStrictly forwarding check)
+        # or CREATE_TASK_STRICTLY for InitFileModules is rejected with a fault.
+        m = booted()
+        self.assertTrue(rt.DEFAULT_PHYSW_CONTEXT.is_synthetic_witness_only)
         d = m.on_firmware_create_task("PhySw")
         self.assertIs(d.action, Action.REPLACE)
         self.assertEqual(d.entry, "mykbd_task")
@@ -396,19 +523,28 @@ class Port11bSafetyScenarios(unittest.TestCase):
         self.assertIn(("create_task_strictly_forwarded", "PhySw"), m.trace)
         self.assertIs(m.kbd, TaskState.RUNNING)
 
+        # Passing CREATE_TASK for PhySw is rejected fail-closed.
+        m_wrong_physw = booted()
+        wrong_physw_ctx = CreatorCallContext(mechanism=CreationMechanism.CREATE_TASK)
+        d_wrong = m_wrong_physw.on_firmware_create_task("PhySw", context=wrong_physw_ctx)
+        self.assertIs(d_wrong.action, Action.PASS_THROUGH)
+        self.assertIs(m_wrong_physw.kbd, TaskState.NOT_CREATED)
+        self.assertIn("expected CREATE_TASK_STRICTLY", m_wrong_physw.fault)
+
+        # Passing CREATE_TASK_STRICTLY for InitFileModules is also rejected fail-closed.
+        m_wrong_fs = booted()
+        wrong_fs_ctx = CreatorCallContext(mechanism=CreationMechanism.CREATE_TASK_STRICTLY)
+        d_wrong_fs = m_wrong_fs.on_firmware_create_task("InitFileModules", context=wrong_fs_ctx)
+        self.assertIs(d_wrong_fs.action, Action.PASS_THROUGH)
+        self.assertIs(m_wrong_fs.gate, GateState.NOT_ARMED)
+        self.assertIn("expected CREATE_TASK", m_wrong_fs.fault)
+
         # If CreateTaskStrictly forwarding safety is UNKNOWN, PhySw replacement fails closed.
         bad_contract = replace(
             rt.SYNTHETIC_HOOK_CONTRACT_SATISFIED,
-            static_prologue_and_boundaries=EvidenceStatus.STATIC_VERIFIED,
             create_task_strictly_forwarding_safe=EvidenceStatus.UNKNOWN,
         )
-        m2 = rt.RuntimeLifecycle(
-            preconditions=rt.HYPOTHETICAL_ALL_VERIFIED,
-            static_evidence=rt.SYNTHETIC_ALL_STATIC_AND_DYNAMIC_VERIFIED,
-            hook_contract=rt.SYNTHETIC_HOOK_CONTRACT_SATISFIED,
-        )
-        m2.init_core()
-        m2.install_intercept()
+        m2 = booted()
         m2.hook_contract = bad_contract
         d2 = m2.on_firmware_create_task("PhySw")
         self.assertIs(d2.action, Action.PASS_THROUGH)
@@ -417,9 +553,18 @@ class Port11bSafetyScenarios(unittest.TestCase):
 
     def test_missing_or_invalid_creator_guard_or_predecessors_rejected(self):
         bad_contexts = (
-            ("missing_predecessors", CreatorCallContext(predecessor_calls_preserved=False)),
-            ("guard_not_checked", CreatorCallContext(singleton_guard_checked=False)),
-            ("guard_already_set", CreatorCallContext(singleton_guard_clear=False)),
+            ("missing_predecessors", CreatorCallContext(
+                mechanism=CreationMechanism.CREATE_TASK_STRICTLY,
+                predecessor_calls_preserved=False,
+            )),
+            ("guard_not_checked", CreatorCallContext(
+                mechanism=CreationMechanism.CREATE_TASK_STRICTLY,
+                singleton_guard_checked=False,
+            )),
+            ("guard_already_set", CreatorCallContext(
+                mechanism=CreationMechanism.CREATE_TASK_STRICTLY,
+                singleton_guard_clear=False,
+            )),
             ("physw_handle_not_stored", CreatorCallContext(
                 mechanism=CreationMechanism.CREATE_TASK_STRICTLY,
                 handle_stored_on_return=False,
@@ -427,7 +572,7 @@ class Port11bSafetyScenarios(unittest.TestCase):
         )
         for label, ctx in bad_contexts:
             with self.subTest(case=label):
-                m = synthetic_port11b_boot()
+                m = booted()
                 m.create_spytask()
                 d = m.on_firmware_create_task("PhySw", context=ctx)
                 self.assertIs(d.action, Action.PASS_THROUGH)
@@ -437,7 +582,6 @@ class Port11bSafetyScenarios(unittest.TestCase):
                 self.assertEqual(rt.check_trace(m.trace), [])
 
     def test_unknown_interrupt_or_cache_safety_blocks_hook_install(self):
-        # Default GM110C_HOOK_CONTRACT has UNKNOWN runtime fields (patch context, IRQ, I-cache, continuation).
         self.assertTrue(rt.GM110C_HOOK_CONTRACT.static_prerequisites_satisfied)
         self.assertFalse(rt.GM110C_HOOK_CONTRACT.runtime_prerequisites_satisfied)
         self.assertFalse(rt.GM110C_HOOK_CONTRACT.all_satisfied)
@@ -468,7 +612,7 @@ class Port11bSafetyScenarios(unittest.TestCase):
             rt.SYNTHETIC_ALL_STATIC_AND_DYNAMIC_VERIFIED,
             u4_spytask_creation_priority_and_dependencies=EvidenceStatus.UNKNOWN,
         )
-        m = synthetic_port11b_boot(static_evidence=evidence_u4_unknown)
+        m = booted(static_evidence=evidence_u4_unknown)
         m.create_spytask()
         m.on_firmware_create_task("PhySw")
         m.on_firmware_create_task("InitFileModules")
@@ -489,7 +633,7 @@ class Port11bSafetyScenarios(unittest.TestCase):
         self.assertEqual(rt.check_trace(m.trace), [])
 
     def test_complete_synthetic_readiness_passes_model_but_never_authorizes_hardware(self):
-        m = synthetic_port11b_boot(boot_generation=3)
+        m = booted(boot_generation=3)
         m.create_spytask()
         d_physw = m.on_firmware_create_task("PhySw")
         d_fs = m.on_firmware_create_task("InitFileModules")
@@ -500,6 +644,7 @@ class Port11bSafetyScenarios(unittest.TestCase):
         self.assertIs(m.record_mount_observation(True, boot_generation=3), FilesystemStage.MOUNT_OBSERVED)
         self.assertIs(m.record_filesystem_io_readiness(True, boot_generation=3), FilesystemStage.FS_IO_READY)
         self.assertIs(m.record_warm_restart_storage_safety(True, boot_generation=3), GateState.READY)
+        self.assertIs(m.file_modules_finished(True, boot_generation=3), GateState.READY)
 
         self.assertTrue(m.fs.is_ready)
         self.assertIs(m.fs.stage, FilesystemStage.WARM_RESTART_SAFE)
@@ -507,8 +652,6 @@ class Port11bSafetyScenarios(unittest.TestCase):
         self.assertIs(m.kbd, TaskState.RUNNING)
         self.assertTrue(m.chdk_key_handling)
         self.assertEqual(rt.check_trace(m.trace), [])
-        # Even in a complete synthetic scenario, hardware execution is NEVER authorized,
-        # and GM110C_PRECONDITIONS remains all False.
         self.assertFalse(m.hardware_execution_authorized)
         self.assertFalse(m.static_evidence.authorizes_runtime_activation)
         self.assertEqual(rt.GM110C_PRECONDITIONS, rt.Preconditions(False, False, False))

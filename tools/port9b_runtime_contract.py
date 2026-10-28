@@ -22,8 +22,10 @@ tracked boot prototype agree with the runtime lifecycle and safety model
                 HYPOTHETICAL, never VERIFIED;
   C5 registry   unverified firmware runtime facts and PORT-11A static vs
                 runtime boundaries are listed, address-free;
-  C6 hook/fs    PORT-11B runtime hook safety contract and 6-stage filesystem
-                readiness promotion requirements are consistent and fail-closed.
+  C6 hook/fs    PORT-11B offline contract structure and default fail-closed
+                invariants for the runtime hook safety contract and 6-stage
+                filesystem readiness promotion requirements (structural/default
+                check only; does not prove hardware readiness).
 
 Labels: VERIFIED_SOURCE = a property of the checked source text;
 STATIC_VERIFIED = static ROM instruction/call-chain evidence from PORT-11A;
@@ -403,13 +405,36 @@ def check_contract(sources, preconditions=rt.GM110C_PRECONDITIONS,
         STATIC_VERIFIED if static_evidence.static_targets_verified else VERIFIED_SOURCE)
 
     # The model under effective preconditions decides what may be active.
-    model = rt.RuntimeLifecycle(effective, static_evidence=static_evidence)
+    # Only when hypothetical preconditions are explicitly allowed do we supply
+    # the synthetic static/dynamic profile and hook contract to evaluate which
+    # source interfaces would be permitted in that hypothetical scenario.
+    eff_static = (
+        rt.SYNTHETIC_ALL_STATIC_AND_DYNAMIC_VERIFIED
+        if effective_hypothetical else static_evidence
+    )
+    eff_hook = (
+        rt.SYNTHETIC_HOOK_CONTRACT_SATISFIED
+        if effective_hypothetical else hook_contract
+    )
+    model = rt.RuntimeLifecycle(
+        effective,
+        static_evidence=eff_static,
+        hook_contract=eff_hook,
+    )
     model.init_core()
     model.install_intercept()
     model.create_spytask()
     for task in rt.REPLACEMENTS:
         model.on_firmware_create_task(task)
-    model.file_modules_finished(True)
+    if model.gate is rt.GateState.ARMED:
+        model.init_file_modules_started()
+        model.init_file_modules_returned(0)
+        model.record_mount_observation(True)
+        model.record_filesystem_io_readiness(True)
+        model.record_warm_restart_storage_safety(True)
+        model.file_modules_finished(True)
+    else:
+        model.file_modules_finished(True)
     allowed = {
         "intercept": model.intercept is rt.InterceptState.INSTALLED,
         "kbd": model.kbd is rt.TaskState.RUNNING,
@@ -468,14 +493,17 @@ def check_contract(sources, preconditions=rt.GM110C_PRECONDITIONS,
         "every PORT-9A precondition has a registry entry"
         + ("" if covered == flag_names else f"; missing {sorted(flag_names - covered)}"))
 
-    # C6: PORT-11B hook safety contract and 6-stage filesystem promotion requirements.
+    # C6: PORT-11B offline contract structure and selected default invariants.
+    # Note: C6 verifies offline contract structure and selected default fail-closed
+    # invariants; it does NOT prove hardware readiness or all state-machine paths.
     hook_ok = (
-        hook_contract.static_prerequisites_satisfied
+        hook_contract is not None
+        and hook_contract.static_prerequisites_satisfied
         and not hook_contract.runtime_prerequisites_satisfied
         and not hook_contract.all_satisfied
     )
     add("C6.hook_safety_contract", hook_ok,
-        "CreateTask static hook prerequisites STATIC_VERIFIED; runtime patch/IRQ/cache/continuation prerequisites remain UNKNOWN",
+        "offline hook contract structure valid: static prerequisites STATIC_VERIFIED, runtime prerequisites UNKNOWN (does not prove hardware readiness)",
         UNVERIFIED_RUNTIME if hook_ok else VERIFIED_SOURCE)
     expected_fs_stages = (
         "task_created",
@@ -487,13 +515,14 @@ def check_contract(sources, preconditions=rt.GM110C_PRECONDITIONS,
     )
     actual_fs_stages = tuple(stage for stage, _ in rt.FILESYSTEM_PROMOTION_EVIDENCE_REQUIREMENTS)
     fs_req_ok = (
-        actual_fs_stages == expected_fs_stages
+        static_evidence is not None
+        and actual_fs_stages == expected_fs_stages
         and all(bool(desc.strip()) for _, desc in rt.FILESYSTEM_PROMOTION_EVIDENCE_REQUIREMENTS)
         and static_evidence.u2_sd_fat_mount_readiness is rt.EvidenceStatus.UNKNOWN
         and static_evidence.u4_spytask_creation_priority_and_dependencies is rt.EvidenceStatus.UNKNOWN
     )
     add("C6.fs_readiness_contract", fs_req_ok,
-        "6-stage filesystem readiness contract defined; U2 mount readiness and U4 SpyTask gate remain UNKNOWN",
+        "offline 6-stage filesystem contract structure valid; U2 mount readiness and U4 SpyTask gate remain UNKNOWN (does not prove hardware readiness)",
         UNVERIFIED_RUNTIME if fs_req_ok else VERIFIED_SOURCE)
     return findings
 

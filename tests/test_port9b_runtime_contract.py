@@ -320,8 +320,10 @@ class RegistryViolations(unittest.TestCase):
         self.assertEqual(by_check["C4.static_vs_runtime_auth"].label, pc.STATIC_VERIFIED)
         self.assertTrue(by_check["C6.hook_safety_contract"].ok)
         self.assertEqual(by_check["C6.hook_safety_contract"].label, pc.UNVERIFIED_RUNTIME)
+        self.assertIn("does not prove hardware readiness", by_check["C6.hook_safety_contract"].detail)
         self.assertTrue(by_check["C6.fs_readiness_contract"].ok)
         self.assertEqual(by_check["C6.fs_readiness_contract"].label, pc.UNVERIFIED_RUNTIME)
+        self.assertIn("does not prove hardware readiness", by_check["C6.fs_readiness_contract"].detail)
 
     def test_port11b_prematurely_claiming_hook_runtime_satisfied_fails_c6(self):
         findings = pc.check_contract(

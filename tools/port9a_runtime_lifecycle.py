@@ -16,7 +16,8 @@ PORT-11B refines the model using static evidence from PORT-11A:
     ready, warm-restart storage safety) with boot-generation binding and
     rejection of constant-zero return codes or UI event 0x5006 as readiness proof;
   * the runtime hook safety contract models static vs runtime hook prerequisites,
-    creator predecessor-call/guard preservation, and CreateTaskStrictly forwarding.
+    synthetic witness assertions for creator predecessor-call/guard preservation,
+    and mandatory CreateTaskStrictly forwarding for PhySw.
 
 It models ordering and safety rules only. It contains no firmware addresses,
 reads no ROM or binary, starts no process and touches no hardware. Nothing here
@@ -53,8 +54,9 @@ class GateState(Enum):
 
 
 class Action(Enum):
-    PASS_THROUGH = "PASS_THROUGH"
-    REPLACE = "REPLACE"
+    PASS_THROUGH = "PASS_THROUGH"   # stock firmware task created unmodified
+    REPLACE = "REPLACE"             # routed to CHDK replacement task
+    REJECT_DUPLICATE = "REJECT_DUPLICATE"  # duplicate creation blocked; no second task created
 
 
 class CreationMechanism(Enum):
@@ -79,6 +81,11 @@ class FilesystemStage(Enum):
 REPLACEMENTS = {
     "InitFileModules": "init_file_modules_task",
     "PhySw": "mykbd_task",
+}
+
+EXPECTED_CREATION_MECHANISMS = {
+    "InitFileModules": CreationMechanism.CREATE_TASK,
+    "PhySw": CreationMechanism.CREATE_TASK_STRICTLY,
 }
 
 
@@ -198,12 +205,22 @@ SYNTHETIC_HOOK_CONTRACT_SATISFIED = HookSafetyContract(
 
 @dataclass(frozen=True)
 class CreatorCallContext:
-    """Models creator predecessor calls, singleton guard, and creation mechanism."""
+    """Synthetic witness assertions for creator call context (NOT physical runtime proof).
+
+    Used in offline scenario modelling to assert whether a candidate wrapper or
+    call path preserved predecessor calls, checked the singleton guard, stored
+    the returned task handle, and used the expected creation mechanism
+    (CREATE_TASK for InitFileModules, CREATE_TASK_STRICTLY for PhySw).
+    """
     mechanism: CreationMechanism = CreationMechanism.CREATE_TASK
     predecessor_calls_preserved: bool = True
     singleton_guard_checked: bool = True
     singleton_guard_clear: bool = True
     handle_stored_on_return: bool = True
+
+    @property
+    def is_synthetic_witness_only(self):
+        return True
 
 
 DEFAULT_INIT_FILE_MODULES_CONTEXT = CreatorCallContext(
@@ -292,7 +309,7 @@ class LifecycleError(Exception):
 class RuntimeLifecycle:
     def __init__(self, preconditions=GM110C_PRECONDITIONS,
                  static_evidence=GM110C_STATIC_EVIDENCE,
-                 hook_contract=None,
+                 hook_contract=GM110C_HOOK_CONTRACT,
                  boot_generation=1):
         if boot_generation < 1:
             raise ValueError("boot_generation must be >= 1")
@@ -377,10 +394,10 @@ class RuntimeLifecycle:
     def install_intercept(self):
         """Model installing the CreateTask interception. Idempotent.
 
-        Refused unless the core is initialized, no fault is latched, the
-        runtime authorization precondition is True, static U1 evidence is
-        STATIC_VERIFIED, and (when a HookSafetyContract is supplied) all
-        static and runtime hook safety prerequisites are satisfied.
+        Refused fail-closed unless the core is initialized, no fault is latched,
+        the runtime authorization precondition is True, static U1 evidence is
+        STATIC_VERIFIED, and a non-None HookSafetyContract with all static and
+        runtime hook safety prerequisites satisfied is present.
         """
         if self.intercept is InterceptState.INSTALLED:
             self._log("install_intercept_repeat")
@@ -395,11 +412,11 @@ class RuntimeLifecycle:
             self.intercept = InterceptState.REFUSED
             self._log("intercept_refused", "CreateTask runtime authorization not granted")
             return self.intercept
-        if self.static_evidence.u1_create_task_prologue_and_continuation is not EvidenceStatus.STATIC_VERIFIED:
+        if self.static_evidence is None or self.static_evidence.u1_create_task_prologue_and_continuation is not EvidenceStatus.STATIC_VERIFIED:
             self.intercept = InterceptState.REFUSED
             self._log("intercept_refused", "U1 static prologue/continuation not verified")
             return self.intercept
-        if self.hook_contract is not None and not self.hook_contract.all_satisfied:
+        if self.hook_contract is None or not self.hook_contract.all_satisfied:
             self.intercept = InterceptState.REFUSED
             self._log("intercept_refused", "hook safety contract prerequisites not satisfied")
             return self.intercept
@@ -408,6 +425,8 @@ class RuntimeLifecycle:
         return self.intercept
 
     def _entry_verified(self, task_name):
+        if self.static_evidence is None:
+            return False
         if task_name == "InitFileModules":
             return (
                 self.preconditions.init_file_modules_entry_verified
@@ -420,59 +439,96 @@ class RuntimeLifecycle:
             )
         return False
 
-    def _validate_creator_context(self, task_name, context):
-        if context is None:
-            context = (
-                DEFAULT_INIT_FILE_MODULES_CONTEXT
-                if task_name == "InitFileModules"
-                else DEFAULT_PHYSW_CONTEXT
-                if task_name == "PhySw"
-                else CreatorCallContext()
+    def _default_creator_context(self, task_name):
+        if task_name == "InitFileModules":
+            return DEFAULT_INIT_FILE_MODULES_CONTEXT
+        if task_name == "PhySw":
+            return DEFAULT_PHYSW_CONTEXT
+        return CreatorCallContext()
+
+    def _validate_creator_context(self, task_name, eff_context):
+        """Validate synthetic creator-context witness assertions for a candidate replacement."""
+        if not isinstance(eff_context, CreatorCallContext):
+            self.report_failure(task_name, "invalid CreatorCallContext type")
+            return False
+        expected_mech = EXPECTED_CREATION_MECHANISMS.get(task_name)
+        if expected_mech is not None and eff_context.mechanism is not expected_mech:
+            self.report_failure(
+                task_name,
+                f"invalid creation mechanism {eff_context.mechanism.value}; expected {expected_mech.value}",
             )
-        if not context.predecessor_calls_preserved:
+            return False
+        if not eff_context.predecessor_calls_preserved:
             self.report_failure(task_name, "creator predecessor calls bypassed")
-            return context, False
-        if not context.singleton_guard_checked or not context.singleton_guard_clear:
+            return False
+        if not eff_context.singleton_guard_checked or not eff_context.singleton_guard_clear:
             self.report_failure(task_name, "creator singleton guard missing or already set")
-            return context, False
-        if task_name == "PhySw" and not context.handle_stored_on_return:
+            return False
+        if task_name == "PhySw" and not eff_context.handle_stored_on_return:
             self.report_failure(task_name, "PhySw task handle store omitted")
-            return context, False
-        if (context.mechanism is CreationMechanism.CREATE_TASK_STRICTLY
-                and self.hook_contract is not None
-                and self.hook_contract.create_task_strictly_forwarding_safe is not EvidenceStatus.STATIC_VERIFIED):
+            return False
+        if (eff_context.mechanism is CreationMechanism.CREATE_TASK_STRICTLY
+                and (self.hook_contract is None
+                     or self.hook_contract.create_task_strictly_forwarding_safe is not EvidenceStatus.STATIC_VERIFIED)):
             self.report_failure(task_name, "CreateTaskStrictly forwarding not verified")
-            return context, False
-        return context, True
+            return False
+        return True
 
     def on_firmware_create_task(self, task_name, context=None):
         """Firmware asks to create `task_name`; decide which entry runs.
 
-        Replaces only listed tasks, and only while the intercept is installed,
-        the task's firmware entry is verified, creator predecessor/guard rules
-        hold, and no fault is latched. Duplicate creation of a replaced task
-        is refused and passes through without re-arming or restarting.
+        Semantics of returned `Action`:
+          * `Action.PASS_THROUGH` (`entry="stock"`): stock task creation proceeds
+            unmodified (used for unlisted tasks, or when intercept is not installed,
+            task entry is unverified, a fault is latched, or creator validation failed).
+          * `Action.REPLACE` (`entry=REPLACEMENTS[task_name]`): first creation of a
+            listed task under an installed intercept and valid creator context is
+            redirected to the CHDK replacement task.
+          * `Action.REJECT_DUPLICATE` (`entry="duplicate_blocked"`): a repeated
+            creation request for a listed singleton task (`InitFileModules` or
+            `PhySw`) after it was already created is rejected by the singleton
+            creation guard; NO second replacement or second stock task is created.
         """
-        eff_context, context_ok = self._validate_creator_context(task_name, context)
-        already_created = task_name in self._created
-        if already_created and task_name in REPLACEMENTS:
+        eff_context = self._default_creator_context(task_name) if context is None else context
+        mechanism = (
+            eff_context.mechanism
+            if isinstance(eff_context, CreatorCallContext)
+            else CreationMechanism.CREATE_TASK
+        )
+
+        # Unlisted tasks always pass through to stock without creator-hook validation.
+        if task_name not in REPLACEMENTS:
+            self._created.append(task_name)
+            self._log("create_stock", task_name)
+            return InterceptDecision(task_name, Action.PASS_THROUGH, "stock", mechanism)
+
+        # Duplicate creation of a listed singleton task is blocked; neither a
+        # second replacement task nor a second stock task is spawned.
+        if task_name in self._created:
             self._log("duplicate_task_creation_blocked", task_name)
+            return InterceptDecision(task_name, Action.REJECT_DUPLICATE, "duplicate_blocked", mechanism)
+
+        # When the intercept is not installed, a fault is already latched, or the
+        # target entry is not verified, stock creation runs unmodified without
+        # evaluating replacement creator-context assertions.
+        if (self.intercept is not InterceptState.INSTALLED
+                or self.fault is not None
+                or not self._entry_verified(task_name)):
+            self._created.append(task_name)
+            self._log("create_stock", task_name)
+            return InterceptDecision(task_name, Action.PASS_THROUGH, "stock", mechanism)
+
+        # Intercept is installed and target is eligible for replacement: validate
+        # the synthetic creator-context witness assertions and forwarding mechanism.
+        if not self._validate_creator_context(task_name, eff_context):
+            self._created.append(task_name)
+            self._log("create_stock", task_name)
+            return InterceptDecision(task_name, Action.PASS_THROUGH, "stock", mechanism)
 
         if eff_context.mechanism is CreationMechanism.CREATE_TASK_STRICTLY:
             self._log("create_task_strictly_forwarded", task_name)
 
-        replace = (
-            context_ok
-            and self.intercept is InterceptState.INSTALLED
-            and task_name in REPLACEMENTS
-            and self._entry_verified(task_name)
-            and self.fault is None
-            and not already_created
-        )
         self._created.append(task_name)
-        if not replace:
-            self._log("create_stock", task_name)
-            return InterceptDecision(task_name, Action.PASS_THROUGH, "stock", eff_context.mechanism)
         entry = REPLACEMENTS[task_name]
         self._log("create_replaced", f"{task_name}->{entry}")
         if task_name == "InitFileModules":
@@ -557,7 +613,8 @@ class RuntimeLifecycle:
         if status != "ok" or observed is not True:
             self._fail_filesystem(f"mount not established (observed={observed!r}, status={status!r})")
             return self.fs.stage
-        if self.static_evidence.u2_sd_fat_mount_readiness is not EvidenceStatus.STATIC_VERIFIED:
+        if (self.static_evidence is None
+                or self.static_evidence.u2_sd_fat_mount_readiness is not EvidenceStatus.STATIC_VERIFIED):
             self._fail_filesystem("U2 SD/FAT mount readiness evidence is UNKNOWN")
             return self.fs.stage
         if not self._require_no_fault("record_mount_observation"):
@@ -603,8 +660,7 @@ class RuntimeLifecycle:
     def record_warm_restart_storage_safety(self, safe, boot_generation=None, status="ok"):
         """Stage 6: Warm-restart storage safety established; latches gate READY."""
         if self.gate is GateState.READY and safe is True and status == "ok":
-            if self._check_generation(boot_generation, "record_warm_restart_storage_safety"):
-                return self.gate
+            self._check_generation(boot_generation, "record_warm_restart_storage_safety")
             return self.gate
         if self.gate is not GateState.ARMED or self.fs.failed:
             self._log("gate_stage_ignored", "record_warm_restart_storage_safety")
@@ -635,14 +691,19 @@ class RuntimeLifecycle:
         return self.gate
 
     def file_modules_finished(self, success, boot_generation=None):
-        """Composite helper for PORT-9A compatibility and synthetic full-readiness tests.
+        """Evaluate final gate readiness after InitFileModules stock work finishes.
 
-        When called with `success=True` on an armed gate whose intermediate
-        stages have not yet been advanced, it steps through stages 2-6 under
-        `boot_generation` (requiring `u2_sd_fat_mount_readiness` to be
-        `STATIC_VERIFIED` unless the caller already advanced stages manually).
+        Fail-closed contract (PORT-11B B1 fix):
+          * A single `success=True` boolean NEVER synthesizes or auto-promotes
+            Stages 2-6 (`task_started`, `init_returned_normally`, `mount_observed`,
+            `fs_io_ready`, `warm_restart_safe`).
+          * If `success` is not `True` or a fault is latched, the gate fails closed.
+          * If `success=True` is called before all 6 stages have been explicitly
+            established for `boot_generation`, the gate fails closed because
+            InitFileModules returning cannot by itself prove mount, I/O, or
+            warm-restart safety.
         """
-        if self.gate is GateState.READY and success is True:
+        if self.gate is GateState.READY and success is True and self.fs.is_ready:
             self._check_generation(boot_generation, "file_modules_finished")
             return self.gate
         if self.gate is not GateState.ARMED:
@@ -653,32 +714,12 @@ class RuntimeLifecycle:
             return self.gate
         if not self._check_generation(boot_generation, "file_modules_finished"):
             return self.gate
-        # If the caller only armed the gate (PORT-9A style), advance stages 2..6
-        # provided static_evidence permits mount readiness (or in legacy PORT-9A
-        # hypothetical mode where static_evidence was not restricted).
-        if not self.fs.task_started:
-            self.init_file_modules_started(boot_generation=boot_generation)
-        if not self.fs.init_returned_normally and not self.fs.failed:
-            self.init_file_modules_returned(0, boot_generation=boot_generation)
-        if not self.fs.mount_observed and not self.fs.failed:
-            if (self.static_evidence.u2_sd_fat_mount_readiness is EvidenceStatus.STATIC_VERIFIED
-                    or (self.hook_contract is None
-                        and self.preconditions == HYPOTHETICAL_ALL_VERIFIED
-                        and self.static_evidence == GM110C_STATIC_EVIDENCE)):
-                self.fs = FilesystemReadinessState(
-                    boot_generation=self.boot_generation,
-                    task_created=True,
-                    task_started=True,
-                    init_returned_normally=True,
-                    mount_observed=True,
-                )
-                self._log("fs_mount_observed")
-            else:
-                self.record_mount_observation(True, boot_generation=boot_generation)
-        if not self.fs.fs_io_ready and not self.fs.failed:
-            self.record_filesystem_io_readiness(True, boot_generation=boot_generation)
-        if not self.fs.warm_restart_safe and not self.fs.failed:
-            self.record_warm_restart_storage_safety(True, boot_generation=boot_generation)
+        if not self.fs.is_ready:
+            self._fail_filesystem(
+                f"file_modules_finished(True) called at stage {self.fs.stage.value} "
+                "without explicit 6-stage readiness proof"
+            )
+            return self.gate
         return self.gate
 
     # -- SpyTask --------------------------------------------------------
@@ -706,13 +747,11 @@ class RuntimeLifecycle:
         return self.spytask
 
     def _u4_permitted(self):
-        if self.static_evidence.u4_spytask_creation_priority_and_dependencies is EvidenceStatus.STATIC_VERIFIED:
-            return True
-        if (self.hook_contract is None
-                and self.preconditions == HYPOTHETICAL_ALL_VERIFIED
-                and self.static_evidence == GM110C_STATIC_EVIDENCE):
-            return True
-        return False
+        """Fail-closed check for U4: UNKNOWN always blocks SpyTask (no legacy bypass)."""
+        return (
+            self.static_evidence is not None
+            and self.static_evidence.u4_spytask_creation_priority_and_dependencies is EvidenceStatus.STATIC_VERIFIED
+        )
 
     def _try_run_spytask(self):
         if (self.spytask is TaskState.WAITING_GATE
