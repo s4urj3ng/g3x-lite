@@ -340,6 +340,31 @@ class RuntimeLifecycle:
         self._stock_observed = []
         self._replaced = []
 
+    def reset(self, boot_generation=None):
+        """Reset the lifecycle for a new boot generation.
+
+        Clears all runtime state (stock observations, replacements, tasks, gate,
+        faults, and filesystem readiness) while preserving preconditions,
+        static evidence, and hook contract.
+        """
+        if boot_generation is not None:
+            if boot_generation < 1:
+                raise ValueError("boot_generation must be >= 1")
+            self.boot_generation = boot_generation
+        else:
+            self.boot_generation += 1
+        self.core_initialized = False
+        self.intercept = InterceptState.NOT_INSTALLED
+        self.gate = GateState.NOT_ARMED
+        self.spytask = TaskState.NOT_CREATED
+        self.kbd = TaskState.NOT_CREATED
+        self.fs = FilesystemReadinessState(boot_generation=self.boot_generation)
+        self.fault = None
+        self.trace = []
+        self._stock_observed = []
+        self._replaced = []
+        return self
+
     @property
     def hardware_execution_authorized(self):
         """Offline model validation NEVER authorizes physical hardware execution."""
@@ -895,6 +920,7 @@ def check_trace(trace):
     kbd = first("kbd_running")
     intercept = first("intercept_installed")
     fault = first("fault")
+    fs_failed = first("fs_failed")
 
     stage_order = (
         "fs_task_created",
@@ -917,12 +943,24 @@ def check_trace(trace):
         errors.append("spytask_running before core_initialized")
     if kbd is not None and (intercept is None or intercept > kbd):
         errors.append("kbd_running without intercept_installed")
-    for name in ("spytask_running", "kbd_running", "fs_ready",
-                 "intercept_installed", "create_replaced",
-                 "fs_mount_observed", "fs_io_ready", "fs_warm_restart_safe"):
-        idx = first(name)
-        if fault is not None and idx is not None and idx > fault:
-            errors.append(f"{name} after fault")
+    post_fault_forbidden = (
+        "spytask_running",
+        "kbd_running",
+        "fs_ready",
+        "intercept_installed",
+        "create_replaced",
+        "fs_mount_observed",
+        "fs_io_ready",
+        "fs_warm_restart_safe",
+    )
+    if fault is not None:
+        for name in post_fault_forbidden:
+            if any(idx > fault for idx, e in enumerate(events) if e == name):
+                errors.append(f"{name} after fault")
+    if fs_failed is not None:
+        for name in ("spytask_running", "kbd_running", "fs_ready"):
+            if any(idx > fs_failed for idx, e in enumerate(events) if e == name):
+                errors.append(f"{name} after fs_failed")
     for name in ("core_initialized", "intercept_installed", "spytask_created",
                  "spytask_running", "kbd_running", "fs_ready", "gate_armed",
                  "fs_task_created", "fs_task_started", "fs_init_returned_normally",

@@ -878,6 +878,54 @@ class Port11bSafetyScenarios(unittest.TestCase):
         self.assertEqual((d_other.action, d_other.entry), (Action.PASS_THROUGH, "stock"))
         self.assertEqual(rt.check_trace(m.trace), [])
 
+    def test_stock_observation_does_not_leak_across_boot_generations(self):
+        # Boot generation boundary: Stock observation in generation 1 does not leak into
+        # generation 2 (tested both via lifecycle reset and separate lifecycle instance).
+        m = rt.RuntimeLifecycle(
+            preconditions=rt.HYPOTHETICAL_ALL_VERIFIED,
+            static_evidence=rt.SYNTHETIC_ALL_STATIC_AND_DYNAMIC_VERIFIED,
+            hook_contract=rt.SYNTHETIC_HOOK_CONTRACT_SATISFIED,
+            boot_generation=1,
+        )
+        m.init_core()
+        # Gen 1: Stock creation observed without intercept
+        d1_p = m.on_firmware_create_task("PhySw")
+        d1_f = m.on_firmware_create_task("InitFileModules")
+        self.assertEqual((d1_p.action, d1_p.entry), (Action.PASS_THROUGH, "stock"))
+        self.assertEqual((d1_f.action, d1_f.entry), (Action.PASS_THROUGH, "stock"))
+        self.assertIn("PhySw", m._stock_observed)
+        self.assertIn("InitFileModules", m._stock_observed)
+
+        # In-place reset for Generation 2: clears stock observation and replaced lists
+        m.reset(boot_generation=2)
+        self.assertEqual(m.boot_generation, 2)
+        self.assertEqual(m._stock_observed, [])
+        self.assertEqual(m._replaced, [])
+        self.assertIs(m.intercept, InterceptState.NOT_INSTALLED)
+        self.assertIsNone(m.fault)
+
+        # In Gen 2, install intercept and create tasks -> properly replaced!
+        m.init_core()
+        self.assertIs(m.install_intercept(), InterceptState.INSTALLED)
+        d2_p = m.on_firmware_create_task("PhySw")
+        self.assertIs(d2_p.action, Action.REPLACE)
+        self.assertEqual(d2_p.entry, "mykbd_task")
+        self.assertIs(m.kbd, TaskState.RUNNING)
+
+        d2_f = m.on_firmware_create_task("InitFileModules")
+        self.assertIs(d2_f.action, Action.REPLACE)
+        self.assertEqual(d2_f.entry, "init_file_modules_task")
+        self.assertIs(m.gate, GateState.ARMED)
+        self.assertTrue(m.fs.task_created)
+
+        # Separate lifecycle instances also do not leak stock observations
+        m_sep1 = rt.RuntimeLifecycle(boot_generation=1)
+        m_sep1.init_core()
+        m_sep1.on_firmware_create_task("PhySw")
+        self.assertIn("PhySw", m_sep1._stock_observed)
+        m_sep2 = rt.RuntimeLifecycle(boot_generation=2)
+        self.assertEqual(m_sep2._stock_observed, [])
+
 
 class NegativeControls(unittest.TestCase):
     """The checker and the model must reject bad orderings, not pass vacuously."""
@@ -900,6 +948,22 @@ class NegativeControls(unittest.TestCase):
         errs = self.bad(["core_initialized", "intercept_installed", "fault",
                          "kbd_running"])
         self.assertIn("kbd_running after fault", errs)
+
+    def test_checker_rejects_spytask_after_fs_failed(self):
+        errs = self.bad([
+            "core_initialized",
+            "intercept_installed",
+            "fs_task_created",
+            "fs_task_started",
+            "fs_init_returned_normally",
+            "fs_mount_observed",
+            "fs_io_ready",
+            "fs_warm_restart_safe",
+            "fs_ready",
+            "fs_failed",
+            "spytask_running",
+        ])
+        self.assertIn("spytask_running after fs_failed", errs)
 
     def test_checker_rejects_duplicate_start(self):
         errs = self.bad(["core_initialized", "intercept_installed", "fs_ready",

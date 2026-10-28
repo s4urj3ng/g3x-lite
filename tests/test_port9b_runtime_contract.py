@@ -409,6 +409,20 @@ class RegistryViolations(unittest.TestCase):
                 findings = pc.check_contract(in_memory(), hook_contract=mutated)
                 self.assertEqual(failed(findings), {"C6.hook_safety_contract"})
 
+        # Promoting any 2 of 4 runtime fields (2 of 4) must also fail C6.hook_safety_contract.
+        for i in range(len(runtime_fields)):
+            for j in range(i + 1, len(runtime_fields)):
+                f1, f2 = runtime_fields[i], runtime_fields[j]
+                with self.subTest(promoted_pair=(f1, f2)):
+                    mutated_pair = replace(
+                        rt.GM110C_HOOK_CONTRACT,
+                        **{f1: rt.EvidenceStatus.STATIC_VERIFIED, f2: rt.EvidenceStatus.STATIC_VERIFIED},
+                    )
+                    self.assertFalse(mutated_pair.runtime_prerequisites_all_unknown)
+                    self.assertFalse(mutated_pair.runtime_prerequisites_satisfied)
+                    findings = pc.check_contract(in_memory(), hook_contract=mutated_pair)
+                    self.assertEqual(failed(findings), {"C6.hook_safety_contract"})
+
         # Promoting 3 of 4 runtime fields (leaving only 1 UNKNOWN) must also fail C6.hook_safety_contract.
         for omitted_field in runtime_fields:
             with self.subTest(promoted_three_except=omitted_field):
