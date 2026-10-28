@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""PORT-9B: offline integration contract between PORT-8A sources and PORT-9A.
+"""PORT-9B / PORT-11B: offline integration contract between PORT-8A sources and PORT-9A.
 
 Checks that the bootstrapped GM1.10C platform sources (PORT-8A) and the
-tracked boot prototype agree with the runtime lifecycle model (PORT-9A):
+tracked boot prototype agree with the runtime lifecycle and safety model
+(PORT-9A / PORT-11B):
 
   C1 integrity  every manifest file is present and at its final SHA-256
                 (PORT-8A build_expected / MANIFEST.json), and the tracked
@@ -14,12 +15,20 @@ tracked boot prototype agree with the runtime lifecycle model (PORT-9A):
                 (source must not run ahead of evidence; regex/source scanning
                 only detects known activation markers and cannot prove the
                 absence of arbitrary runtime hooks);
-  C4 policy     preconditions are the GM1.10C defaults (all unverified);
-                anything else is refused unless explicitly allowed, and is
-                then reported as HYPOTHETICAL, never VERIFIED;
-  C5 registry   unverified firmware runtime facts are listed, address-free.
+  C4 policy     preconditions are the GM1.10C defaults (all unverified), and
+                static ROM evidence (PORT-11A) never authorizes runtime
+                activation or hardware execution; anything else is refused
+                unless explicitly allowed, and is then reported as
+                HYPOTHETICAL, never VERIFIED;
+  C5 registry   unverified firmware runtime facts and PORT-11A static vs
+                runtime boundaries are listed, address-free;
+  C6 hook/fs    PORT-11B offline contract structure and default fail-closed
+                invariants for the runtime hook safety contract and 6-stage
+                filesystem readiness promotion requirements (structural/default
+                check only; does not prove hardware readiness).
 
 Labels: VERIFIED_SOURCE = a property of the checked source text;
+STATIC_VERIFIED = static ROM instruction/call-chain evidence from PORT-11A;
 UNVERIFIED_RUNTIME = a firmware runtime fact this tool cannot establish;
 HYPOTHETICAL = a result computed under preconditions that are not evidence.
 
@@ -53,22 +62,26 @@ PROTOTYPE = "platform/g3x/sub/110c/boot_prototype.c"
 PROTOTYPE_SHA256 = "f7884eb2078e93a0098299e2665c1069ecbc65c7759d8993fa31e38fbb232e68"
 
 VERIFIED_SOURCE = "VERIFIED_SOURCE"
+STATIC_VERIFIED = "STATIC_VERIFIED"
 UNVERIFIED_RUNTIME = "UNVERIFIED_RUNTIME"
 HYPOTHETICAL = "HYPOTHETICAL"
 
 KEY_POWER_BIT = 0x00020000
 
-# Firmware runtime facts the integration needs and nobody has verified for
-# GM1.10C (PORT-9A map section 5). No addresses on purpose: a value only
-# enters here once it is ROM-verified for GM1.10C, never from GM1.10E.
+# Firmware runtime facts the integration needs before runtime activation can be
+# authorized (PORT-9A map section 5, refined by PORT-11A/11B). Static ROM targets
+# for U1/U2/U3 are STATIC_VERIFIED in PORT-11A, but runtime hook safety, SD/FAT
+# mount readiness, and SpyTask placement remain UNVERIFIED_RUNTIME (UNKNOWN).
+# Address-free by contract.
 UNVERIFIED_RUNTIME_FACTS = (
     ("U1", "create_task_prologue_verified",
-     "CreateTask prologue bytes and the literal replayed after it"),
+     "CreateTask prologue and continuation are STATIC_VERIFIED; runtime hook patch context and cache/IRQ safety"),
     ("U2", "init_file_modules_entry_verified",
-     "task_InitFileModules entry and its success/failure semantics"),
+     "InitFileModules entry is STATIC_VERIFIED; SD/FAT mount readiness and warm-restart storage safety"),
     ("U3", "physw_entry_verified",
-     "task_PhySw entry independent of GM1.10E; role of the PhySw creator call"),
-    ("U4", None, "SpyTask creation point and priority on GM1.10C"),
+     "PhySw creator, entry and CreateTaskStrictly chain are STATIC_VERIFIED; runtime replacement and stack safety"),
+    ("U4", None,
+     "SpyTask creation point, priority and readiness dependencies on GM1.10C"),
 )
 
 
@@ -302,7 +315,9 @@ def _active_preconditions(pre):
 
 def check_contract(sources, preconditions=rt.GM110C_PRECONDITIONS,
                    allow_hypothetical=False, manifest_firmware="GM1.10C",
-                   runtime_facts=UNVERIFIED_RUNTIME_FACTS):
+                   runtime_facts=UNVERIFIED_RUNTIME_FACTS,
+                   static_evidence=rt.GM110C_STATIC_EVIDENCE,
+                   hook_contract=rt.GM110C_HOOK_CONTRACT):
     findings = []
 
     def add(check, ok, detail, label=VERIFIED_SOURCE):
@@ -379,14 +394,42 @@ def check_contract(sources, preconditions=rt.GM110C_PRECONDITIONS,
         else rt.GM110C_PRECONDITIONS
     effective_hypothetical = bool(_active_preconditions(effective))
 
-    # The model under effective preconditions decides what may be active.
-    model = rt.RuntimeLifecycle(effective)
+    # Static evidence vs runtime authorization check (PORT-11B Phase 2):
+    # Static evidence (U1/U2-entry/U3 STATIC_VERIFIED) must NEVER imply runtime activation.
+    static_never_authorizes = (
+        not static_evidence.authorizes_runtime_activation
+        and rt.GM110C_PRECONDITIONS == rt.Preconditions(False, False, False)
+    )
+    add("C4.static_vs_runtime_auth", static_never_authorizes,
+        "STATIC_VERIFIED ROM evidence never authorizes runtime activation; GM110C_PRECONDITIONS remains all False",
+        STATIC_VERIFIED if static_evidence.static_targets_verified else VERIFIED_SOURCE)
+
+    # The model under effective preconditions AND the caller's actual
+    # static_evidence / hook_contract decides what may be active (PORT-11B B3:
+    # check_contract() NEVER silently substitutes SYNTHETIC_ALL_STATIC_AND_DYNAMIC_VERIFIED
+    # or SYNTHETIC_HOOK_CONTRACT_SATISFIED for caller-supplied contracts).
+    model = rt.RuntimeLifecycle(
+        effective,
+        static_evidence=static_evidence,
+        hook_contract=hook_contract,
+    )
     model.init_core()
     model.install_intercept()
     model.create_spytask()
     for task in rt.REPLACEMENTS:
         model.on_firmware_create_task(task)
-    model.file_modules_finished(True)
+    if (effective_hypothetical
+            and model.gate is rt.GateState.ARMED
+            and static_evidence is not None
+            and static_evidence.u2_sd_fat_mount_readiness is rt.EvidenceStatus.STATIC_VERIFIED):
+        model.init_file_modules_started()
+        model.init_file_modules_returned(0)
+        model.record_mount_observation(True)
+        model.record_filesystem_io_readiness(True)
+        model.record_warm_restart_storage_safety(True)
+        model.file_modules_finished(True)
+    elif model.gate is not rt.GateState.ARMED:
+        model.file_modules_finished(True)
     allowed = {
         "intercept": model.intercept is rt.InterceptState.INSTALLED,
         "kbd": model.kbd is rt.TaskState.RUNNING,
@@ -436,7 +479,16 @@ def check_contract(sources, preconditions=rt.GM110C_PRECONDITIONS,
         if flag is not None and flag not in flag_names:
             add(f"C5.{fid}", False, f"unknown precondition flag {flag!r}")
             continue
-        claimed = flag is not None and getattr(effective, flag)
+        if flag is not None:
+            claimed = bool(getattr(effective, flag))
+        elif fid == "U4":
+            claimed = (
+                effective_hypothetical
+                and static_evidence is not None
+                and static_evidence.u4_spytask_creation_priority_and_dependencies is rt.EvidenceStatus.STATIC_VERIFIED
+            )
+        else:
+            claimed = False
         add(f"C5.{fid}", True,
             f"{text}: " + ("assumed (hypothetical)" if claimed else "UNKNOWN"),
             HYPOTHETICAL if claimed else UNVERIFIED_RUNTIME)
@@ -444,6 +496,72 @@ def check_contract(sources, preconditions=rt.GM110C_PRECONDITIONS,
     add("C5.coverage", covered == flag_names,
         "every PORT-9A precondition has a registry entry"
         + ("" if covered == flag_names else f"; missing {sorted(flag_names - covered)}"))
+
+    # C6: PORT-11B offline contract structure and selected default invariants.
+    # Note: C6 verifies offline contract structure and selected default fail-closed
+    # invariants; it does NOT prove hardware readiness or all state-machine paths.
+    # Per N1: in default (non-synthetic) validation, EVERY ONE of the four runtime
+    # safety fields in hook_contract must be UNKNOWN (runtime_prerequisites_all_unknown).
+    hook_default_ok = (
+        hook_contract is not None
+        and hook_contract.static_prerequisites_satisfied
+        and hook_contract.runtime_prerequisites_all_unknown
+        and not hook_contract.runtime_prerequisites_satisfied
+        and not hook_contract.all_satisfied
+    )
+    hook_hypothetical_ok = (
+        effective_hypothetical
+        and hook_contract is not None
+        and hook_contract.static_prerequisites_satisfied
+        and hook_contract.runtime_prerequisites_satisfied
+        and hook_contract.all_satisfied
+    )
+    hook_ok = hook_default_ok or hook_hypothetical_ok
+    hook_label = (
+        HYPOTHETICAL if hook_hypothetical_ok
+        else (UNVERIFIED_RUNTIME if hook_default_ok else VERIFIED_SOURCE)
+    )
+    add("C6.hook_safety_contract", hook_ok,
+        "HYPOTHETICAL synthetic hook contract active (offline simulation only; does not prove hardware readiness)"
+        if hook_hypothetical_ok else
+        "offline hook contract structure valid: static prerequisites STATIC_VERIFIED, all 4 runtime prerequisites UNKNOWN (does not prove hardware readiness)",
+        hook_label)
+    expected_fs_stages = (
+        "task_created",
+        "task_started",
+        "init_returned_normally",
+        "mount_observed",
+        "fs_io_ready",
+        "warm_restart_safe",
+    )
+    actual_fs_stages = tuple(stage for stage, _ in rt.FILESYSTEM_PROMOTION_EVIDENCE_REQUIREMENTS)
+    fs_structure_ok = (
+        static_evidence is not None
+        and static_evidence.static_targets_verified
+        and actual_fs_stages == expected_fs_stages
+        and all(bool(desc.strip()) for _, desc in rt.FILESYSTEM_PROMOTION_EVIDENCE_REQUIREMENTS)
+    )
+    fs_default_ok = (
+        fs_structure_ok
+        and static_evidence.u2_sd_fat_mount_readiness is rt.EvidenceStatus.UNKNOWN
+        and static_evidence.u4_spytask_creation_priority_and_dependencies is rt.EvidenceStatus.UNKNOWN
+    )
+    fs_hypothetical_ok = (
+        effective_hypothetical
+        and fs_structure_ok
+        and static_evidence.u2_sd_fat_mount_readiness is rt.EvidenceStatus.STATIC_VERIFIED
+        and static_evidence.u4_spytask_creation_priority_and_dependencies is rt.EvidenceStatus.STATIC_VERIFIED
+    )
+    fs_req_ok = fs_default_ok or fs_hypothetical_ok
+    fs_label = (
+        HYPOTHETICAL if fs_hypothetical_ok
+        else (UNVERIFIED_RUNTIME if fs_default_ok else VERIFIED_SOURCE)
+    )
+    add("C6.fs_readiness_contract", fs_req_ok,
+        "HYPOTHETICAL synthetic 6-stage filesystem and U4 contract active (offline simulation only; does not prove hardware readiness)"
+        if fs_hypothetical_ok else
+        "offline 6-stage filesystem contract structure valid; U2 mount readiness and U4 SpyTask gate remain UNKNOWN (does not prove hardware readiness)",
+        fs_label)
     return findings
 
 

@@ -11,6 +11,7 @@ Run:
 """
 
 import ast
+from dataclasses import replace
 import io
 import json
 from pathlib import Path
@@ -110,11 +111,64 @@ class Positive(unittest.TestCase):
             self.assertEqual(by_check[f"C5.{fid}"].label, expected)
 
     def test_hypothetical_allows_matching_source_activation(self):
+        # Full hypothetical activation requires explicitly passing BOTH hypothetical
+        # preconditions AND the synthetic static/hook contracts (PORT-11B B3).
         src = mutate(in_memory(), KBD_C, "int physw0_override;",
                      'int physw0_override;\nvoid f(void) { asm volatile("bl CreateTask_spytask\\n"); }')
-        findings = pc.check_contract(src, rt.HYPOTHETICAL_ALL_VERIFIED,
-                                     allow_hypothetical=True)
+        findings = pc.check_contract(
+            src,
+            rt.HYPOTHETICAL_ALL_VERIFIED,
+            allow_hypothetical=True,
+            static_evidence=rt.SYNTHETIC_ALL_STATIC_AND_DYNAMIC_VERIFIED,
+            hook_contract=rt.SYNTHETIC_HOOK_CONTRACT_SATISFIED,
+        )
         self.assertEqual(pc.violations(findings), [])
+        by_check = {f.check: f for f in findings}
+        self.assertEqual(by_check["C4.preconditions"].label, pc.HYPOTHETICAL)
+        self.assertEqual(by_check["C4.model_trace"].label, pc.HYPOTHETICAL)
+        self.assertEqual(by_check["C5.U4"].label, pc.HYPOTHETICAL)
+        self.assertEqual(by_check["C6.hook_safety_contract"].label, pc.HYPOTHETICAL)
+        self.assertEqual(by_check["C6.fs_readiness_contract"].label, pc.HYPOTHETICAL)
+
+    def test_b3_hypothetical_never_substitutes_caller_supplied_unknown_contracts(self):
+        # Independent Review Blocker B3:
+        # Calling check_contract() with core_spytask() in sources,
+        # preconditions=HYPOTHETICAL_ALL_VERIFIED, allow_hypothetical=True,
+        # static_evidence=UNVERIFIED_STATIC_EVIDENCE, and hook_contract=GM110C_HOOK_CONTRACT
+        # must NEVER silently replace the supplied contracts with synthetic ones,
+        # and MUST reject the unjustified SpyTask activation (C3.spytask fails).
+        src = mutate(
+            in_memory(),
+            KBD_C,
+            "int physw0_override;",
+            "int physw0_override;\nvoid f(void) { core_spytask(); }",
+        )
+        findings_unverified = pc.check_contract(
+            src,
+            preconditions=rt.HYPOTHETICAL_ALL_VERIFIED,
+            allow_hypothetical=True,
+            static_evidence=rt.UNVERIFIED_STATIC_EVIDENCE,
+            hook_contract=rt.GM110C_HOOK_CONTRACT,
+        )
+        self.assertIn("C3.spytask", failed(findings_unverified))
+        self.assertIn("C6.fs_readiness_contract", failed(findings_unverified))
+
+        # Even with default GM110C_STATIC_EVIDENCE and GM110C_HOOK_CONTRACT,
+        # allow_hypothetical=True must keep runtime prerequisites UNKNOWN and
+        # reject core_spytask() activation.
+        findings_gm110c = pc.check_contract(
+            src,
+            preconditions=rt.HYPOTHETICAL_ALL_VERIFIED,
+            allow_hypothetical=True,
+            static_evidence=rt.GM110C_STATIC_EVIDENCE,
+            hook_contract=rt.GM110C_HOOK_CONTRACT,
+        )
+        self.assertEqual(failed(findings_gm110c), {"C3.spytask"})
+        by_check = {f.check: f for f in findings_gm110c}
+        self.assertIn("allows nothing", by_check["C4.model_trace"].detail)
+        self.assertEqual(by_check["C5.U4"].label, pc.UNVERIFIED_RUNTIME)
+        self.assertEqual(by_check["C6.hook_safety_contract"].label, pc.UNVERIFIED_RUNTIME)
+        self.assertEqual(by_check["C6.fs_readiness_contract"].label, pc.UNVERIFIED_RUNTIME)
 
 
 class PreconditionPolicy(unittest.TestCase):
@@ -312,6 +366,82 @@ class RegistryViolations(unittest.TestCase):
         facts = pc.UNVERIFIED_RUNTIME_FACTS + (("U9", "made_up_flag", "x"),)
         self.assertEqual(failed(pc.check_contract(in_memory(), runtime_facts=facts)),
                          {"C5.U9", "C5.coverage"})
+
+    def test_port11b_static_vs_runtime_contract_checks_present(self):
+        findings = pc.check_contract(in_memory())
+        by_check = {f.check: f for f in findings}
+        self.assertTrue(by_check["C4.static_vs_runtime_auth"].ok)
+        self.assertEqual(by_check["C4.static_vs_runtime_auth"].label, pc.STATIC_VERIFIED)
+        self.assertTrue(by_check["C6.hook_safety_contract"].ok)
+        self.assertEqual(by_check["C6.hook_safety_contract"].label, pc.UNVERIFIED_RUNTIME)
+        self.assertIn("does not prove hardware readiness", by_check["C6.hook_safety_contract"].detail)
+        self.assertTrue(by_check["C6.fs_readiness_contract"].ok)
+        self.assertEqual(by_check["C6.fs_readiness_contract"].label, pc.UNVERIFIED_RUNTIME)
+        self.assertIn("does not prove hardware readiness", by_check["C6.fs_readiness_contract"].detail)
+
+    def test_port11b_prematurely_claiming_hook_runtime_satisfied_fails_c6(self):
+        findings = pc.check_contract(
+            in_memory(),
+            hook_contract=rt.SYNTHETIC_HOOK_CONTRACT_SATISFIED,
+        )
+        self.assertEqual(failed(findings), {"C6.hook_safety_contract"})
+
+    def test_n1_partial_promotion_of_hook_runtime_fields_fails_c6(self):
+        # Independent Review N1: C6.hook_safety_contract must verify that EACH
+        # of the four runtime safety fields in hook_contract remains UNKNOWN,
+        # not merely that not all four are satisfied.
+        self.assertTrue(rt.GM110C_HOOK_CONTRACT.runtime_prerequisites_all_unknown)
+        runtime_fields = (
+            "patch_execution_context_safe",
+            "interrupt_masking_and_concurrency_safe",
+            "icache_and_branch_predictor_coherent",
+            "continuation_behavior_safe",
+        )
+        # Promoting any single runtime field (1 of 4) must fail C6.hook_safety_contract.
+        for field_name in runtime_fields:
+            with self.subTest(promoted_one=field_name):
+                mutated = replace(
+                    rt.GM110C_HOOK_CONTRACT,
+                    **{field_name: rt.EvidenceStatus.STATIC_VERIFIED},
+                )
+                self.assertFalse(mutated.runtime_prerequisites_all_unknown)
+                self.assertFalse(mutated.runtime_prerequisites_satisfied)
+                findings = pc.check_contract(in_memory(), hook_contract=mutated)
+                self.assertEqual(failed(findings), {"C6.hook_safety_contract"})
+
+        # Promoting any 2 of 4 runtime fields (2 of 4) must also fail C6.hook_safety_contract.
+        for i in range(len(runtime_fields)):
+            for j in range(i + 1, len(runtime_fields)):
+                f1, f2 = runtime_fields[i], runtime_fields[j]
+                with self.subTest(promoted_pair=(f1, f2)):
+                    mutated_pair = replace(
+                        rt.GM110C_HOOK_CONTRACT,
+                        **{f1: rt.EvidenceStatus.STATIC_VERIFIED, f2: rt.EvidenceStatus.STATIC_VERIFIED},
+                    )
+                    self.assertFalse(mutated_pair.runtime_prerequisites_all_unknown)
+                    self.assertFalse(mutated_pair.runtime_prerequisites_satisfied)
+                    findings = pc.check_contract(in_memory(), hook_contract=mutated_pair)
+                    self.assertEqual(failed(findings), {"C6.hook_safety_contract"})
+
+        # Promoting 3 of 4 runtime fields (leaving only 1 UNKNOWN) must also fail C6.hook_safety_contract.
+        for omitted_field in runtime_fields:
+            with self.subTest(promoted_three_except=omitted_field):
+                mutated_three = replace(
+                    rt.SYNTHETIC_HOOK_CONTRACT_SATISFIED,
+                    **{omitted_field: rt.EvidenceStatus.UNKNOWN},
+                )
+                self.assertFalse(mutated_three.runtime_prerequisites_all_unknown)
+                self.assertFalse(mutated_three.runtime_prerequisites_satisfied)
+                findings = pc.check_contract(in_memory(), hook_contract=mutated_three)
+                self.assertEqual(failed(findings), {"C6.hook_safety_contract"})
+
+    def test_port11b_prematurely_claiming_u2_or_u4_verified_fails_c6(self):
+        findings = pc.check_contract(
+            in_memory(),
+            static_evidence=rt.SYNTHETIC_ALL_STATIC_AND_DYNAMIC_VERIFIED,
+        )
+        self.assertEqual(failed(findings), {"C6.fs_readiness_contract"})
+
 
 
 class TargetTree(unittest.TestCase):
