@@ -46,6 +46,7 @@ from tools.port13_oblig_u4 import (
     evaluate_obligation,
     evaluate_u4_obligations,
     get_obligation,
+    is_empirical_evidence,
     is_static_evidence,
     is_static_veneer_or_entry_evidence,
 )
@@ -55,8 +56,8 @@ class TestPort13ObligU4(unittest.TestCase):
     """Offline test suite for U4 SpyTask launch proof obligations."""
 
     def test_u4_obligations_catalog_structure_and_citations(self):
-        """Invariant: All 9 obligations have valid schema, statuses, and tracked citations."""
-        self.assertEqual(len(U4_OBLIGATIONS), 9, "Expected 9 canonical U4 obligations.")
+        """Invariant: All 11 obligations have valid schema, statuses, and tracked citations."""
+        self.assertEqual(len(U4_OBLIGATIONS), 11, "Expected 11 canonical U4 obligations.")
         self.assertEqual(
             tuple(o.id for o in U4_OBLIGATIONS),
             CANONICAL_OBLIGATION_IDS,
@@ -77,7 +78,7 @@ class TestPort13ObligU4(unittest.TestCase):
 
             # Check status
             self.assertIsInstance(oblig.current_status, ObligationStatus)
-            # In baseline GM1.10C, all 9 obligations must be UNKNOWN
+            # In baseline GM1.10C, all 11 obligations must be UNKNOWN
             self.assertEqual(
                 oblig.current_status,
                 ObligationStatus.UNKNOWN,
@@ -96,7 +97,15 @@ class TestPort13ObligU4(unittest.TestCase):
 
         # Check explicit runtime evidence requirements
         runtime_flagged = {o.id for o in U4_OBLIGATIONS if o.requires_runtime_evidence}
-        expected_runtime = {"OBLIG-U4-01", "OBLIG-U4-02", "OBLIG-U4-05"}
+        expected_runtime = {
+            "OBLIG-U4-01",
+            "OBLIG-U4-02",
+            "OBLIG-U4-05",
+            "OBLIG-U4-07",
+            "OBLIG-U4-09",
+            "OBLIG-U4-10",
+            "OBLIG-U4-11",
+        }
         self.assertEqual(
             runtime_flagged,
             expected_runtime,
@@ -215,6 +224,35 @@ class TestPort13ObligU4(unittest.TestCase):
         self.assertEqual(res.status, ObligationStatus.UNKNOWN)
         self.assertIn("Static evidence", res.reason)
 
+    def test_oblig_u4_09_with_static_evidence_evaluates_not_satisfied(self):
+        """Negative Test [P1]: OBLIG-U4-09 rejects static CONTINUATION_TRACE evidence."""
+        oblig = get_obligation("OBLIG-U4-09")
+        self.assertIsNotNone(oblig)
+        self.assertTrue(
+            oblig.requires_runtime_evidence,
+            "OBLIG-U4-09 must be explicitly marked with requires_runtime_evidence=True.",
+        )
+        self.assertEqual(oblig.domain, Domain.CONTINUATION)
+
+        static_continuation_evidence = EvidenceArtifact(
+            artifact_id="STATIC-CONT-01",
+            artifact_type="CONTINUATION_TRACE",
+            status=ObligationStatus.VERIFIED,
+            description="Static tail branch opcode match b.w sub_fc0d0126 at boot_prototype.c:434",
+            citation="docs/PORT13_REVIEW_U4.md:126-129, 181, 281, 302",
+            is_static=True,
+            how_captured="static_disassembly",
+        )
+
+        res = evaluate_obligation(oblig, static_continuation_evidence)
+        self.assertEqual(
+            res.verdict,
+            EvaluationVerdict.NOT_SATISFIED,
+            "OBLIG-U4-09 with is_static=True evidence must evaluate to NOT_SATISFIED.",
+        )
+        self.assertEqual(res.status, ObligationStatus.UNKNOWN)
+        self.assertIn("Static evidence", res.reason)
+
     def test_all_runtime_flagged_obligations_reject_static_evidence(self):
         """Regression Test [P1]: Loop over every runtime-flagged obligation and verify static evidence rejection."""
         runtime_obligations = [o for o in U4_OBLIGATIONS if o.requires_runtime_evidence]
@@ -285,11 +323,27 @@ class TestPort13ObligU4(unittest.TestCase):
 
         # 2. Missing ID (subset) must raise ValueError
         subset = tuple(o for o in U4_OBLIGATIONS if o.id != "OBLIG-U4-01")
-        self.assertEqual(len(subset), 8)
+        self.assertEqual(len(subset), 10)
         with self.assertRaises(ValueError) as ctx_missing:
             evaluate_u4_obligations(obligations=subset)
         self.assertIn("missing", str(ctx_missing.exception).lower())
         self.assertIn("OBLIG-U4-01", str(ctx_missing.exception))
+
+        # Check subset missing OBLIG-U4-10
+        subset_10 = tuple(o for o in U4_OBLIGATIONS if o.id != "OBLIG-U4-10")
+        self.assertEqual(len(subset_10), 10)
+        with self.assertRaises(ValueError) as ctx_missing_10:
+            evaluate_u4_obligations(obligations=subset_10)
+        self.assertIn("missing", str(ctx_missing_10.exception).lower())
+        self.assertIn("OBLIG-U4-10", str(ctx_missing_10.exception))
+
+        # Check subset missing OBLIG-U4-11
+        subset_11 = tuple(o for o in U4_OBLIGATIONS if o.id != "OBLIG-U4-11")
+        self.assertEqual(len(subset_11), 10)
+        with self.assertRaises(ValueError) as ctx_missing_11:
+            evaluate_u4_obligations(obligations=subset_11)
+        self.assertIn("missing", str(ctx_missing_11.exception).lower())
+        self.assertIn("OBLIG-U4-11", str(ctx_missing_11.exception))
 
         # 3. Duplicate ID must raise ValueError
         duplicates = list(U4_OBLIGATIONS)
@@ -316,19 +370,64 @@ class TestPort13ObligU4(unittest.TestCase):
         self.assertIn("OBLIG-U4-99", str(ctx_unk.exception))
 
     def test_timeout_bypass_causal_link_remains_unknown(self):
-        """Explicit Test: C06b legacy-timeout-bypass -> corruption/panic causal link must remain UNKNOWN."""
+        """Explicit Test [P1]: C06b legacy-timeout-bypass causal link must remain UNKNOWN (never INFERRED)."""
         oblig = get_obligation("OBLIG-U4-07")
         self.assertIsNotNone(oblig)
         self.assertEqual(oblig.id, "OBLIG-U4-07")
         self.assertEqual(oblig.current_status, ObligationStatus.UNKNOWN)
         self.assertEqual(oblig.domain, Domain.CAUSAL_ANALYSIS)
+        self.assertTrue(oblig.requires_runtime_evidence)
 
-        # In baseline, must evaluate to NOT_SATISFIED
+        # Baseline evaluation (no evidence): must evaluate to NOT_SATISFIED, UNKNOWN
         baseline_res = evaluate_obligation(oblig)
         self.assertEqual(baseline_res.verdict, EvaluationVerdict.NOT_SATISFIED)
         self.assertEqual(baseline_res.status, ObligationStatus.UNKNOWN)
 
-        # Non-crash trace (e.g. speculation or inference) must be rejected
+        # Case (a): VERIFIED STORAGE_CORRUPTION_TRACE with is_static=True gives status UNKNOWN and NOT_SATISFIED
+        static_trace = EvidenceArtifact(
+            artifact_id="STATIC-CORRUPT-01",
+            artifact_type="STORAGE_CORRUPTION_TRACE",
+            status=ObligationStatus.VERIFIED,
+            description="Static inspection of storage timeout logic",
+            citation="docs/PORT13_REVIEW_U4.md:71-74, 174",
+            is_static=True,
+            how_captured="static_disassembly",
+        )
+        static_res = evaluate_obligation(oblig, static_trace)
+        self.assertEqual(static_res.verdict, EvaluationVerdict.NOT_SATISFIED)
+        self.assertEqual(static_res.status, ObligationStatus.UNKNOWN)
+
+        # Case (b1): Unverified STORAGE_CORRUPTION_TRACE (status=INFERRED) gives status UNKNOWN, not INFERRED, and NOT_SATISFIED
+        inferred_trace = EvidenceArtifact(
+            artifact_id="INFERRED-CORRUPT-01",
+            artifact_type="STORAGE_CORRUPTION_TRACE",
+            status=ObligationStatus.INFERRED,
+            description="Inferred causal link between timeout bypass and storage corruption",
+            citation="docs/PORT13_REVIEW_U4.md:71-74, 174",
+            is_static=False,
+            how_captured="historical_analysis",
+        )
+        inferred_res = evaluate_obligation(oblig, inferred_trace)
+        self.assertEqual(inferred_res.verdict, EvaluationVerdict.NOT_SATISFIED)
+        self.assertEqual(inferred_res.status, ObligationStatus.UNKNOWN)
+        self.assertNotEqual(inferred_res.status, ObligationStatus.INFERRED)
+
+        # Case (b2): Non-empirical STORAGE_CORRUPTION_TRACE gives status UNKNOWN, not INFERRED, and NOT_SATISFIED
+        non_empirical_trace = EvidenceArtifact(
+            artifact_id="THEORETICAL-CORRUPT-01",
+            artifact_type="STORAGE_CORRUPTION_TRACE",
+            status=ObligationStatus.VERIFIED,
+            description="Theoretical simulation of filesystem state machine timeout",
+            citation="docs/PORT13_REVIEW_U4.md:71-74, 174",
+            is_static=False,
+            how_captured="theoretical_model",
+        )
+        non_emp_res = evaluate_obligation(oblig, non_empirical_trace)
+        self.assertEqual(non_emp_res.verdict, EvaluationVerdict.NOT_SATISFIED)
+        self.assertEqual(non_emp_res.status, ObligationStatus.UNKNOWN)
+        self.assertNotEqual(non_emp_res.status, ObligationStatus.INFERRED)
+
+        # Case (b3): Non-matching artifact type (e.g. historical anecdote) gives status UNKNOWN and NOT_SATISFIED
         speculative_evidence = EvidenceArtifact(
             artifact_id="SPECULATIVE-CLAIM-01",
             artifact_type="HISTORICAL_ANECDOTE",
@@ -340,7 +439,93 @@ class TestPort13ObligU4(unittest.TestCase):
         )
         spec_res = evaluate_obligation(oblig, speculative_evidence)
         self.assertEqual(spec_res.verdict, EvaluationVerdict.NOT_SATISFIED)
-        self.assertIn("untested conjecture", spec_res.reason)
+        self.assertEqual(spec_res.status, ObligationStatus.UNKNOWN)
+
+        # Positive Case: Genuine verified empirical runtime crash dump evaluates to SATISFIED
+        genuine_trace = EvidenceArtifact(
+            artifact_id="EMPIRICAL-CORRUPT-01",
+            artifact_type="STORAGE_CORRUPTION_TRACE",
+            status=ObligationStatus.VERIFIED,
+            description="Empirical hardware crash dump demonstrating storage bus timeout fault",
+            citation="docs/PORT13_REVIEW_U4.md:71-74, 174",
+            is_static=False,
+            how_captured="hardware_crash_dump",
+        )
+        self.assertTrue(is_empirical_evidence(genuine_trace))
+        gen_res = evaluate_obligation(oblig, genuine_trace)
+        self.assertEqual(gen_res.verdict, EvaluationVerdict.SATISFIED)
+        self.assertEqual(gen_res.status, ObligationStatus.VERIFIED)
+
+    def test_unresolved_c17_or_c18_obligations_block_overall_u4_verdict(self):
+        """Catalog completeness [P2]: Overall U4 verdict cannot be SATISFIED while C17 or C18 are unresolved."""
+        oblig_10 = get_obligation("OBLIG-U4-10")
+        oblig_11 = get_obligation("OBLIG-U4-11")
+        self.assertIsNotNone(oblig_10)
+        self.assertIsNotNone(oblig_11)
+        self.assertTrue(oblig_10.requires_runtime_evidence)
+        self.assertTrue(oblig_11.requires_runtime_evidence)
+        self.assertEqual(oblig_10.domain, Domain.CONCURRENCY_CONSTRAINTS)
+        self.assertEqual(oblig_11.domain, Domain.WARM_RESTART_CLEANUP)
+
+        # Baseline: All obligations UNKNOWN -> NOT_SATISFIED
+        baseline_report = evaluate_u4_obligations()
+        self.assertEqual(baseline_report.verdict, EvaluationVerdict.NOT_SATISFIED)
+
+        # Build evidence map satisfying OBLIG-U4-01..09
+        base_evidence_map = {}
+        for oblig in U4_OBLIGATIONS:
+            if oblig.id in ("OBLIG-U4-10", "OBLIG-U4-11"):
+                continue
+            base_evidence_map[oblig.id] = EvidenceArtifact(
+                artifact_id=f"SYNTHETIC-{oblig.id}",
+                artifact_type=oblig.required_evidence.artifact_type,
+                status=ObligationStatus.VERIFIED,
+                description=f"Synthetic valid artifact for {oblig.id}",
+                citation=oblig.citation,
+                is_static=False,
+                how_captured="runtime_execution_trace",
+            )
+
+        # Case 1: OBLIG-U4-10 and OBLIG-U4-11 unresolved -> NOT_SATISFIED
+        report_10_11_unresolved = evaluate_u4_obligations(evidence_map=base_evidence_map)
+        self.assertEqual(report_10_11_unresolved.verdict, EvaluationVerdict.NOT_SATISFIED)
+        self.assertEqual(report_10_11_unresolved.satisfied_count, 9)
+        self.assertEqual(report_10_11_unresolved.not_satisfied_count, 2)
+        self.assertTrue(report_10_11_unresolved.is_fail_closed)
+
+        # Case 2: Only OBLIG-U4-11 unresolved (OBLIG-U4-10 satisfied) -> NOT_SATISFIED
+        evidence_with_10 = dict(base_evidence_map)
+        evidence_with_10["OBLIG-U4-10"] = EvidenceArtifact(
+            artifact_id="SYNTHETIC-OBLIG-U4-10",
+            artifact_type=oblig_10.required_evidence.artifact_type,
+            status=ObligationStatus.VERIFIED,
+            description="Synthetic valid yield and interrupt spec",
+            citation=oblig_10.citation,
+            is_static=False,
+            how_captured="runtime_execution_trace",
+        )
+        report_11_unresolved = evaluate_u4_obligations(evidence_map=evidence_with_10)
+        self.assertEqual(report_11_unresolved.verdict, EvaluationVerdict.NOT_SATISFIED)
+        self.assertEqual(report_11_unresolved.satisfied_count, 10)
+        self.assertEqual(report_11_unresolved.not_satisfied_count, 1)
+        self.assertTrue(report_11_unresolved.is_fail_closed)
+
+        # Case 3: Only OBLIG-U4-10 unresolved (OBLIG-U4-11 satisfied) -> NOT_SATISFIED
+        evidence_with_11 = dict(base_evidence_map)
+        evidence_with_11["OBLIG-U4-11"] = EvidenceArtifact(
+            artifact_id="SYNTHETIC-OBLIG-U4-11",
+            artifact_type=oblig_11.required_evidence.artifact_type,
+            status=ObligationStatus.VERIFIED,
+            description="Synthetic valid warm restart semaphore trace",
+            citation=oblig_11.citation,
+            is_static=False,
+            how_captured="runtime_execution_trace",
+        )
+        report_10_unresolved = evaluate_u4_obligations(evidence_map=evidence_with_11)
+        self.assertEqual(report_10_unresolved.verdict, EvaluationVerdict.NOT_SATISFIED)
+        self.assertEqual(report_10_unresolved.satisfied_count, 10)
+        self.assertEqual(report_10_unresolved.not_satisfied_count, 1)
+        self.assertTrue(report_10_unresolved.is_fail_closed)
 
     def test_unverified_evidence_fails_closed(self):
         """Invariant: Evidence with INFERRED or UNKNOWN status must fail closed."""
@@ -380,9 +565,9 @@ class TestPort13ObligU4(unittest.TestCase):
         self.assertIn("does not match required artifact type", res.reason)
 
     def test_partial_satisfaction_fails_closed(self):
-        """Invariant: If 8 of 9 obligations are satisfied, overall verdict remains NOT_SATISFIED."""
+        """Invariant: If 10 of 11 obligations are satisfied, overall verdict remains NOT_SATISFIED."""
         evidence_map = {}
-        # Satisfy 8 obligations with valid synthetic runtime artifacts
+        # Satisfy 10 obligations with valid synthetic runtime artifacts
         for oblig in U4_OBLIGATIONS:
             if oblig.id == "OBLIG-U4-01":
                 continue  # Leave OBLIG-U4-01 unsatisfied
@@ -402,12 +587,12 @@ class TestPort13ObligU4(unittest.TestCase):
             EvaluationVerdict.NOT_SATISFIED,
             "Overall verdict must remain NOT_SATISFIED if even one obligation is unsatisfied.",
         )
-        self.assertEqual(report.satisfied_count, 8)
+        self.assertEqual(report.satisfied_count, 10)
         self.assertEqual(report.not_satisfied_count, 1)
         self.assertTrue(report.is_fail_closed)
 
     def test_synthetic_positive_path_when_all_obligations_satisfied(self):
-        """Positive test: When ALL 9 obligations receive valid verified runtime artifacts, verdict is SATISFIED."""
+        """Positive test: When ALL 11 obligations receive valid verified runtime artifacts, verdict is SATISFIED."""
         evidence_map = {}
         for oblig in U4_OBLIGATIONS:
             evidence_map[oblig.id] = EvidenceArtifact(
@@ -426,7 +611,7 @@ class TestPort13ObligU4(unittest.TestCase):
             EvaluationVerdict.SATISFIED,
             "When all obligations have valid runtime verified evidence, verdict must be SATISFIED.",
         )
-        self.assertEqual(report.satisfied_count, 9)
+        self.assertEqual(report.satisfied_count, 11)
         self.assertEqual(report.not_satisfied_count, 0)
         self.assertFalse(report.is_fail_closed)
 

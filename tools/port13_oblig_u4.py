@@ -45,6 +45,8 @@ class Domain(str, Enum):
     CAUSAL_ANALYSIS = "CAUSAL_ANALYSIS"
     EXECUTION_CONTEXT = "EXECUTION_CONTEXT"
     CONTINUATION = "CONTINUATION"
+    CONCURRENCY_CONSTRAINTS = "CONCURRENCY_CONSTRAINTS"
+    WARM_RESTART_CLEANUP = "WARM_RESTART_CLEANUP"
 
 
 # Tracked static ROM anchor points (PORT-11A).
@@ -64,6 +66,8 @@ CANONICAL_OBLIGATION_IDS: Tuple[str, ...] = (
     "OBLIG-U4-07",
     "OBLIG-U4-08",
     "OBLIG-U4-09",
+    "OBLIG-U4-10",
+    "OBLIG-U4-11",
 )
 
 
@@ -262,7 +266,7 @@ U4_OBLIGATIONS: Tuple[U4Obligation, ...] = (
         current_status=ObligationStatus.UNKNOWN,
         citation="docs/PORT13_REVIEW_U4.md:71-74, 174, 272, 290",
         domain=Domain.CAUSAL_ANALYSIS,
-        requires_runtime_evidence=False,
+        requires_runtime_evidence=True,
     ),
     U4Obligation(
         id="OBLIG-U4-08",
@@ -293,7 +297,39 @@ U4_OBLIGATIONS: Tuple[U4Obligation, ...] = (
         current_status=ObligationStatus.UNKNOWN,
         citation="docs/PORT13_REVIEW_U4.md:126-129, 181, 281, 302",
         domain=Domain.CONTINUATION,
-        requires_runtime_evidence=False,
+        requires_runtime_evidence=True,
+    ),
+    U4Obligation(
+        id="OBLIG-U4-10",
+        statement="SpyTask cooperative yield behavior and global-interrupt disable constraints (Finding C17)",
+        required_evidence=RequiredEvidence(
+            artifact_type="SPYTASK_YIELD_CONCURRENCY_SPEC",
+            what_it_must_show=(
+                "Specification or execution trace proving DryOS kernel scheduling yield rules (via SleepTask "
+                "or message queues) and verifying whether SpyTask is forbidden from globally disabling "
+                "interrupts or starving concurrent real-time tasks on GM1.10C."
+            ),
+        ),
+        current_status=ObligationStatus.UNKNOWN,
+        citation="docs/PORT13_REVIEW_U4.md:185, 280, 301",
+        domain=Domain.CONCURRENCY_CONSTRAINTS,
+        requires_runtime_evidence=True,
+    ),
+    U4Obligation(
+        id="OBLIG-U4-11",
+        statement="Isolation of warm-restart semaphore-freeze hypothesis across reboot (Finding C18 / Remediation #9)",
+        required_evidence=RequiredEvidence(
+            artifact_type="SEMAPHORE_CLEANUP_TRACE",
+            what_it_must_show=(
+                "Empirical reboot trace or kernel teardown analysis demonstrating whether lingering "
+                "semaphores from aborted tasks induce a boot freeze during warm restart, or if kernel "
+                "re-initialization cleanly resets Low RAM OS structures."
+            ),
+        ),
+        current_status=ObligationStatus.UNKNOWN,
+        citation="docs/PORT13_REVIEW_U4.md:186, 280, 301",
+        domain=Domain.WARM_RESTART_CLEANUP,
+        requires_runtime_evidence=True,
     ),
 )
 
@@ -330,6 +366,39 @@ def is_static_evidence(evidence: EvidenceArtifact) -> bool:
 is_static_veneer_or_entry_evidence = is_static_evidence
 
 
+def is_empirical_evidence(evidence: EvidenceArtifact) -> bool:
+    """Classify whether evidence artifact represents genuine empirical runtime observation.
+
+    Evidence is classified as non-empirical if:
+      - is_static is True or is_static_evidence(evidence) is True,
+      - how_captured indicates non-empirical derivation (e.g. contains 'static',
+        'infer', 'speculat', 'anecdote', 'hypothesis', 'theor', 'assumption',
+        'untested', 'conjecture'),
+      - artifact_type indicates non-empirical data (e.g. contains 'ANECDOTE',
+        'SPECULATION', 'THEORY', 'INFERENCE', 'INFERRED').
+    """
+    if is_static_evidence(evidence):
+        return False
+    if evidence.how_captured:
+        hc = evidence.how_captured.lower()
+        if any(term in hc for term in (
+            "static",
+            "infer",
+            "speculat",
+            "anecdote",
+            "hypothesis",
+            "theor",
+            "assumption",
+            "untested",
+            "conjecture",
+        )):
+            return False
+    at = evidence.artifact_type.upper()
+    if any(term in at for term in ("ANECDOTE", "SPECULATION", "THEORY", "INFERENCE", "INFERRED")):
+        return False
+    return True
+
+
 def evaluate_obligation(
     obligation: U4Obligation,
     evidence: Optional[EvidenceArtifact] = None,
@@ -341,11 +410,11 @@ def evaluate_obligation(
          Any status other than VERIFIED evaluates as NOT_SATISFIED.
       2. If evidence is present, evidence.status must be VERIFIED.
       3. Obligations marked with requires_runtime_evidence=True (runtime hook placement,
-         task start ordering, or runtime readiness) reject static evidence. Static veneer
-         (0xFC31BBC4 -> 0xBFE14A3C) and PhySw entry (0xFC1283AD) evidence cannot satisfy
-         these obligations.
-      4. Legacy timeout-bypass causal link (OBLIG-U4-07) must stay UNKNOWN unless
-         supported by empirical crash traces (STORAGE_CORRUPTION_TRACE).
+         task start ordering, continuation, readiness, or causal effects) reject static
+         evidence. Static veneer (0xFC31BBC4 -> 0xBFE14A3C) and PhySw entry (0xFC1283AD)
+         evidence cannot satisfy these obligations.
+      4. Legacy timeout-bypass causal link (OBLIG-U4-07) must stay UNKNOWN (never INFERRED)
+         whenever evidence is unverified, static, or non-empirical.
     """
     # Case 1: No external evidence passed (evaluating current baseline state)
     if evidence is None:
@@ -368,6 +437,28 @@ def evaluate_obligation(
             citation=obligation.citation,
         )
 
+    # Invariant: C06b causal link between legacy timeout bypass and corruption/panic
+    # must stay UNKNOWN (never INFERRED) whenever evidence is unverified, static,
+    # or non-empirical. Both provenance and artifact type checks are enforced.
+    if obligation.id == "OBLIG-U4-07":
+        if (
+            evidence.status != ObligationStatus.VERIFIED
+            or is_static_evidence(evidence)
+            or not is_empirical_evidence(evidence)
+            or evidence.artifact_type != "STORAGE_CORRUPTION_TRACE"
+        ):
+            return ObligationResult(
+                obligation_id=obligation.id,
+                verdict=EvaluationVerdict.NOT_SATISFIED,
+                status=ObligationStatus.UNKNOWN,
+                reason=(
+                    "The legacy timeout-bypass -> storage corruption/kernel panic link is "
+                    "untested conjecture; status must stay UNKNOWN (never INFERRED) whenever "
+                    "evidence is unverified, static, or non-empirical."
+                ),
+                citation=evidence.citation,
+            )
+
     # Case 2: Evidence artifact provided
     if evidence.status != ObligationStatus.VERIFIED:
         return ObligationResult(
@@ -382,7 +473,7 @@ def evaluate_obligation(
         )
 
     # Invariant: Static evidence cannot satisfy obligations requiring runtime evidence
-    # (such as runtime hook placement, task start ordering, or runtime readiness).
+    # (such as runtime hook placement, task start ordering, continuation, readiness, or causal effects).
     if obligation.requires_runtime_evidence and is_static_evidence(evidence):
         return ObligationResult(
             obligation_id=obligation.id,
@@ -395,20 +486,6 @@ def evaluate_obligation(
             ),
             citation=evidence.citation,
         )
-
-    # Invariant: Causal link between legacy timeout bypass and corruption/panic stays UNKNOWN
-    if obligation.id == "OBLIG-U4-07":
-        if evidence.artifact_type != "STORAGE_CORRUPTION_TRACE":
-            return ObligationResult(
-                obligation_id=obligation.id,
-                verdict=EvaluationVerdict.NOT_SATISFIED,
-                status=ObligationStatus.UNKNOWN,
-                reason=(
-                    "The legacy timeout-bypass -> storage corruption/kernel panic link is "
-                    "untested conjecture; requires empirical STORAGE_CORRUPTION_TRACE."
-                ),
-                citation=evidence.citation,
-            )
 
     # Invariant: Artifact type must match required type
     if evidence.artifact_type != obligation.required_evidence.artifact_type:
@@ -439,7 +516,7 @@ def evaluate_u4_obligations(
     """Evaluate all U4 obligations fail closed.
 
     Enforces that an overall U4 verdict may only be issued when the supplied set
-    exactly matches the canonical IDs OBLIG-U4-01..09.
+    exactly matches the canonical IDs OBLIG-U4-01..11.
     An empty set, a missing ID, a duplicate ID, or an unknown ID raises ValueError.
 
     Returns NOT_SATISFIED if any obligation lacks VERIFIED evidence.
@@ -452,7 +529,7 @@ def evaluate_u4_obligations(
     if not target_obligations:
         raise ValueError(
             "Obligation set cannot be empty; an overall U4 verdict requires "
-            "the complete canonical set of obligations (OBLIG-U4-01..09)."
+            "the complete canonical set of obligations (OBLIG-U4-01..11)."
         )
 
     ids = [o.id for o in target_obligations]

@@ -27,13 +27,13 @@ This document establishes the canonical repository proof obligations for U4, cod
 1. **Decoupling of Static Evidence from Runtime Hook Placement, Launch Ordering, and Readiness:**
    Static ROM disassembly—specifically the CreateTask ARM veneer (`0xFC31BBC4 -> relocated ATCM instruction 0xBFE14A3C`) and the PhySw Thumb entry point (`0xFC1283AD`)—establishes **strictly** the static presence and relocation destination of firmware code. It does **NOT** prove runtime hook placement, ATCM instruction cache / branch predictor coherence, IRQ safety, task launch ordering, or filesystem readiness.
 2. **Explicit `requires_runtime_evidence` Obligation Flag:**
-   Obligations concerning runtime hook placement, task start ordering, or runtime readiness are explicitly tagged with `requires_runtime_evidence=True` (e.g. `OBLIG-U4-01`, `OBLIG-U4-02`, and `OBLIG-U4-05`). This requirement is codified as an explicit obligation property rather than derived from technical domain tags. Static evidence submitted against any obligation with this flag evaluates strictly as **`NOT_SATISFIED`**.
+   Obligations concerning runtime behaviour (launch ordering, hook placement, readiness, causal effects, continuation, task yield constraints, and restart cleanup: `OBLIG-U4-01`, `OBLIG-U4-02`, `OBLIG-U4-05`, `OBLIG-U4-07`, `OBLIG-U4-09`, `OBLIG-U4-10`, `OBLIG-U4-11`) are explicitly tagged with `requires_runtime_evidence=True`. This requirement is codified as an explicit obligation property rather than derived from technical domain tags. Static evidence submitted against any obligation with this flag evaluates strictly as **`NOT_SATISFIED`**.
 3. **Provenance-Based Evidence Classification:**
    Evidence artifacts are classified as static or dynamic strictly by provenance fields (`is_static`, `artifact_type`, and `how_captured`) and by demonstrated technical properties, **never** by which addresses are mentioned. A genuine dynamic trace (`is_static=False`) referencing patched ATCM addresses (such as `0xBFE14A3C`) is eligible for evaluation and is not erroneously classified as static.
 4. **Canonical Set Completeness Enforcement:**
-   An overall U4 verdict may only be issued when the supplied set of obligations exactly matches the canonical set `OBLIG-U4-01..09`. Calling `evaluate_u4_obligations` with an empty set, missing IDs, duplicate IDs, or unknown IDs immediately raises `ValueError`, guaranteeing that partial or truncated obligation sets can never report `SATISFIED`.
+   An overall U4 verdict may only be issued when the supplied set of obligations exactly matches the canonical set `OBLIG-U4-01..11`. Calling `evaluate_u4_obligations` with an empty set, missing IDs, duplicate IDs, or unknown IDs immediately raises `ValueError`, guaranteeing that partial or truncated obligation sets can never report `SATISFIED`.
 5. **Isolation of the Legacy Timeout-Bypass Causal Link (Finding C06b):**
-   Upstream CHDK (`core/main.c:136, 156`) implemented a 10-second timeout bypass that permitted SpyTask to execute without verified filesystem readiness. While the bypass behavior is verified, asserting that this bypass *caused* storage corruption and kernel panics is an untested inference (`docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md:204` [F5]). This causal relationship must strictly remain **`UNKNOWN`**.
+   Upstream CHDK (`core/main.c:136, 156`) implemented a 10-second timeout bypass that permitted SpyTask to execute without verified filesystem readiness. While the bypass behavior is verified, asserting that this bypass *caused* storage corruption and kernel panics is an untested inference (`docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md:204` [F5]). This causal relationship must strictly remain **`UNKNOWN`** (never `INFERRED`) whenever evidence is unverified, static, or non-empirical; provenance checks are enforced alongside artifact matching.
 6. **Fail-Closed Evaluator Model:**
    Any proof obligation lacking `VERIFIED` evidence evaluates as **`NOT_SATISFIED`**. If even a single obligation is `NOT_SATISFIED`, the overall U4 verdict evaluates as **`NOT_SATISFIED`**. For GM1.10C today, all runtime obligations are `UNKNOWN`, ensuring that the overall U4 evaluation verdict is strictly **`NOT_SATISFIED`**.
 
@@ -41,7 +41,7 @@ This document establishes the canonical repository proof obligations for U4, cod
 
 ## 2. Master Catalog of U4 Proof Obligations
 
-The table below defines the 9 canonical U4 proof obligations, their required evidence specifications, baseline GM1.10C statuses, tracked repository citations, and runtime evidence requirements:
+The table below defines the 11 canonical U4 proof obligations, their required evidence specifications, baseline GM1.10C statuses, tracked repository citations, and runtime evidence requirements:
 
 | ID | Title / Domain | Statement | Required Evidence (Artifact Type & Specification) | Requires Runtime Evidence | Status (GM1.10C) | Tracked Citation | Contract / Review Link |
 |---|---|---|---|---|---|---|---|
@@ -51,9 +51,11 @@ The table below defines the 9 canonical U4 proof obligations, their required evi
 | **OBLIG-U4-04** | Stack Sizing & Dynamic Memory Ownership (`MEMORY_OWNERSHIP`) | Task stack sizing (`0x2000` bytes) and DryOS dynamic memory pool ownership validation. | `KERNEL_HEAP_SPEC`: Heap allocator disassembly proving `CreateTask` dynamically allocates `0x2000` bytes from a verified heap pool without buffer exhaustion or collision with camera buffers or executable RAM. | `False` | **`UNKNOWN`** | `docs/PORT13_REVIEW_U4.md:98-101, 121-125, 171, 184, 274, 279, 292, 300` | Findings C04, C16; Remediation #3, #8 |
 | **OBLIG-U4-05** | Filesystem Readiness Gating (`FS_GATING`) | Filesystem readiness gating and monotonic latch synchronization (Contract I3). | `LIFECYCLE_STATE_TRACE`: SpyTask is created in `WAITING_GATE` and moves to `RUNNING` strictly after all 6 filesystem stages are satisfied (`GateState.READY`) with no latched fault; while U4 is UNKNOWN, SpyTask remains blocked in `WAITING_GATE`. | **`True`** | **`UNKNOWN`** | `docs/PORT13_REVIEW_U4.md:63-64, 92-96, 145-152, 172, 175, 179, 215-216, 273, 291` | Contract I3; Findings C05, C07, C11, C14; Remediation #2 |
 | **OBLIG-U4-06** | Fail-Closed Gate Timeout (`FAILCLOSED_TIMEOUT`) | Fail-closed gate timeout enforcement eliminating upstream CHDK legacy bypass. | `TIMEOUT_GATING_SPEC`: Deterministic transition of SpyTask to `FAILED` upon gate timeout (`spytask_gate_timeout`), never allowing the task to bypass the gate or launch into unmapped routines. | `False` | **`UNKNOWN`** | `docs/PORT13_REVIEW_U4.md:63-64, 145-152, 173, 209-210` | Contract I3; Finding C06; Remediation #2 |
-| **OBLIG-U4-07** | Timeout-Bypass Causal Link Isolation (`CAUSAL_ANALYSIS`) | Empirical verification or isolation of the causal link between legacy timeout bypass and storage corruption / kernel panic. | `STORAGE_CORRUPTION_TRACE`: Hardware crash log or empirical trace demonstrating whether un-gated SpyTask execution directly induced storage media corruption and kernel panic, or whether the claim is unproven correlation. | `False` | **`UNKNOWN`** | `docs/PORT13_REVIEW_U4.md:71-74, 174, 272, 290` | Finding C06b; Remediation #1; `PORT5B:204` (F5) |
+| **OBLIG-U4-07** | Timeout-Bypass Causal Link Isolation (`CAUSAL_ANALYSIS`) | Empirical verification or isolation of the causal link between legacy timeout bypass and storage corruption / kernel panic. | `STORAGE_CORRUPTION_TRACE`: Hardware crash log or empirical trace demonstrating whether un-gated SpyTask execution directly induced storage media corruption and kernel panic, or whether the claim is unproven correlation. | **`True`** | **`UNKNOWN`** | `docs/PORT13_REVIEW_U4.md:71-74, 174, 272, 290` | Finding C06b; Remediation #1; `PORT5B:204` (F5) |
 | **OBLIG-U4-08** | CPU Execution Context (`EXECUTION_CONTEXT`) | Task execution CPU mode and interrupt mask conformance (Privileged Supervisor Mode). | `TASK_CONTEXT_EVIDENCE`: Proof that SpyTask executes in Privileged Supervisor Mode (`M = 0x13`) with initial CPSR `0x000000F3`, unmasked to IRQ enabled and FIQ disabled (`CPSR[7:6] = 0b01`), never assuming System Mode or unmasked FIQ. | `False` | **`UNKNOWN`** | `docs/PORT13_REVIEW_U4.md:113-120, 183, 278, 299` | Finding C15; Remediation #7 |
-| **OBLIG-U4-09** | Continuation Branch Safety (`CONTINUATION`) | Continuation branch runtime safety (tail branch `b.w sub_fc0d0126`). | `CONTINUATION_TRACE`: Runtime proof that executing the tail branch `b.w sub_fc0d0126` (`boot_prototype.c:434`) successfully resumes startup without stack corruption, CPU exception, or hang. | `False` | **`UNKNOWN`** | `docs/PORT13_REVIEW_U4.md:126-129, 181, 281, 302` | Findings C12, C13; Remediation #10 |
+| **OBLIG-U4-09** | Continuation Branch Safety (`CONTINUATION`) | Continuation branch runtime safety (tail branch `b.w sub_fc0d0126`). | `CONTINUATION_TRACE`: Runtime proof that executing the tail branch `b.w sub_fc0d0126` (`boot_prototype.c:434`) successfully resumes startup without stack corruption, CPU exception, or hang. | **`True`** | **`UNKNOWN`** | `docs/PORT13_REVIEW_U4.md:126-129, 181, 281, 302` | Findings C12, C13; Remediation #10 |
+| **OBLIG-U4-10** | SpyTask Yield & Global Interrupt Constraints (`CONCURRENCY_CONSTRAINTS`) | SpyTask cooperative yield behavior and global-interrupt disable constraints (Finding C17). | `SPYTASK_YIELD_CONCURRENCY_SPEC`: Specification or execution trace proving DryOS kernel scheduling yield rules (via SleepTask or message queues) and verifying whether SpyTask is forbidden from globally disabling interrupts or starving concurrent real-time tasks. | **`True`** | **`UNKNOWN`** | `docs/PORT13_REVIEW_U4.md:185, 280, 301` | Contract I3; Finding C17; Remediation #9 |
+| **OBLIG-U4-11** | Warm-Restart Semaphore Freeze Hypothesis (`WARM_RESTART_CLEANUP`) | Isolation of warm-restart semaphore-freeze hypothesis across reboot (Finding C18 / Remediation #9). | `SEMAPHORE_CLEANUP_TRACE`: Empirical reboot trace or kernel teardown analysis demonstrating whether lingering semaphores from aborted tasks induce a boot freeze during warm restart, or if kernel re-initialization cleanly resets Low RAM OS structures. | **`True`** | **`UNKNOWN`** | `docs/PORT13_REVIEW_U4.md:186, 280, 301` | Contract I3; Finding C18; Remediation #9 |
 
 ---
 
@@ -105,7 +107,8 @@ The table below defines the 9 canonical U4 proof obligations, their required evi
 ### 3.7 OBLIG-U4-07: Legacy Timeout-Bypass Causal Link Isolation (C06b)
 - **Problem Statement:** PR #25 §1.2 asserted that the upstream 10-second timeout bypass "caused storage corruptions and kernel panics".
 - **Evidence Audit:** Tracked sources (`docs/PORT9A_RUNTIME_INTEGRATION_MAP.md:95-99` and `docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md:204` [F5]) establish the bypass code structure, but explicitly label the causal connection to crashes/panics as **`INFERRED`** and **"not tested"**.
-- **Governance Mandate:** The causal claim is unproven correlation. It must remain strictly **`UNKNOWN`** unless verified by empirical crash dumps (`STORAGE_CORRUPTION_TRACE`).
+- **Governance Mandate:** The causal claim is unproven correlation. It must remain strictly **`UNKNOWN`** (never `INFERRED`) whenever evidence is unverified, static, or non-empirical; marked with `requires_runtime_evidence=True`. The evaluator enforces provenance checks and requires an empirical `STORAGE_CORRUPTION_TRACE`.
+- **Contract Link:** Contract I3; Finding C06b; Remediation #1; `PORT5B:204` (F5).
 
 ### 3.8 OBLIG-U4-08: CPU Execution Context & Privileged Mode Conformance
 - **Problem Statement:** PR #25 §4.1 asserted DryOS user tasks execute in ARM System Mode with IRQ and FIQ enabled (`CPSR[7:6] = 0b00`).
@@ -117,7 +120,23 @@ The table below defines the 9 canonical U4 proof obligations, their required evi
 ### 3.9 OBLIG-U4-09: Continuation Branch Runtime Safety
 - **Problem Statement:** PR #25 §3 labeled tail continuation branch `b.w sub_fc0d0126` (`boot_prototype.c:434`) as `VERIFIED_IN_EXISTING_DOCS` for "semantic continuation".
 - **Evidence Audit:** While matching opcode bytes are verified in source, whether branching to `sub_fc0d0126` achieves successful runtime continuation without crash or hang is `UNKNOWN` (`docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md:114`).
-- **Required Artifact:** `CONTINUATION_TRACE` demonstrating clean execution resumption across the continuation branch.
+- **Static Evidence Boundary:** Opcode matching in source is static evidence and cannot satisfy runtime continuation. Marked with `requires_runtime_evidence=True`. Static artifacts (`is_static=True`) evaluate strictly as `NOT_SATISFIED`.
+- **Required Artifact:** `CONTINUATION_TRACE` demonstrating clean dynamic execution resumption across the continuation branch.
+- **Contract Link:** Contract I3; Findings C12, C13; Remediation #10.
+
+### 3.10 OBLIG-U4-10: SpyTask Cooperative Yield Behavior and Global-Interrupt Disable Constraints
+- **Problem Statement:** PR #25 §4.3 (Finding C17) asserted that SpyTask must yield via `SleepTask` or message queues and must never disable interrupts globally.
+- **Evidence Audit:** Citing `docs/PROJECT_STATE.md:359` (stub extraction) or `port9a_runtime_lifecycle.py:276` (FS stage) is unsupported (`docs/PORT13_REVIEW_U4.md:185, 280, 301`). While `PROJECT_STATE.md:456, 539` documents the UI-001 cooperative polling heuristic, no tracked kernel scheduling specification exists on `origin/main`. DryOS kernel scheduling constraints and interrupt restrictions on GM1.10C remain unverified RTOS design assumptions.
+- **Static Evidence Boundary:** Verifying task yield mechanics and absence of global interrupt disabling requires dynamic execution traces or a definitive DryOS kernel specification; static disassembly alone cannot verify runtime concurrency compliance. Marked with `requires_runtime_evidence=True`.
+- **Required Artifact:** `SPYTASK_YIELD_CONCURRENCY_SPEC` proving kernel yield rules and verifying that SpyTask does not disable interrupts globally or starve concurrent real-time tasks.
+- **Contract Link:** Contract I3; Finding C17; Remediation #9.
+
+### 3.11 OBLIG-U4-11: Isolation of Warm-Restart Semaphore-Freeze Hypothesis Across Reboot
+- **Problem Statement:** PR #25 §4.4 (Finding C18 / Remediation #9) asserted that lingering semaphores from aborted tasks freeze the boot sequence across warm restart.
+- **Evidence Audit:** Citing `PORT3C:154-159` is unsupported (that section addresses SD bus states and CMD0, not semaphores). Furthermore, `docs/CHDK_PORT1C1_CRITICAL_AUDIT.md:100` establishes that kernel initialization re-constructs Low RAM OS structures and queues from ROM constants upon restart (`docs/PORT13_REVIEW_U4.md:186, 280, 301`). The freeze claim is an unverified assumption.
+- **Static Evidence Boundary:** Causal effects of synchronization objects across reboot cannot be resolved statically. Marked with `requires_runtime_evidence=True`.
+- **Required Artifact:** `SEMAPHORE_CLEANUP_TRACE`: Empirical reboot trace or kernel teardown analysis demonstrating whether lingering semaphores from aborted tasks freeze warm restart, or if kernel re-initialization cleanly resets OS structures.
+- **Contract Link:** Contract I3; Finding C18; Remediation #9.
 
 ---
 
@@ -130,12 +149,12 @@ $$\text{Verdict}(O_i) = \begin{cases}
 \text{NOT\_SATISFIED} & \text{otherwise} 
 \end{cases}$$
 
-$$\text{OverallVerdict}(\text{U4}) = \bigwedge_{i=1}^{9} \text{Verdict}(O_i)$$
+$$\text{OverallVerdict}(\text{U4}) = \bigwedge_{i=1}^{11} \text{Verdict}(O_i)$$
 
 ### 4.1 Boundary Guard: Explicit Runtime-Evidence Requirement & Static Evidence Exclusion
-Every obligation concerning runtime hook placement, task start ordering, or runtime readiness is explicitly tagged with `requires_runtime_evidence=True`:
+Every obligation concerning runtime hook placement, task start ordering, continuation, readiness, or causal runtime effects is explicitly tagged with `requires_runtime_evidence=True`:
 
-$$O_i \in \{O_1, O_2, O_5\} \implies \text{RequiresRuntime}(O_i) = \text{True}$$
+$$O_i \in \{O_1, O_2, O_5, O_7, O_9, O_{10}, O_{11}\} \implies \text{RequiresRuntime}(O_i) = \text{True}$$
 
 Static evidence ($E$ where $\text{IsStaticEvidence}(E) = \text{True}$) cannot satisfy any obligation where $\text{RequiresRuntime}(O_i) = \text{True}$:
 
@@ -149,18 +168,18 @@ Evidence is classified strictly by provenance fields (`is_static`, `artifact_typ
 - Genuine dynamic traces (`is_static = False`) that reference target firmware or ATCM addresses (such as `0xBFE14A3C`) are **not** classified as static and remain fully eligible to satisfy runtime obligations.
 
 ### 4.3 Completeness Invariant and Error Handling
-An overall U4 verdict may only be computed when the obligation set supplied to `evaluate_u4_obligations` exactly matches the 9 canonical IDs (`OBLIG-U4-01..09`):
+An overall U4 verdict may only be computed when the obligation set supplied to `evaluate_u4_obligations` exactly matches the 11 canonical IDs (`OBLIG-U4-01..11`):
 - **Empty set (`obligations=()`):** Raises `ValueError`.
-- **Missing IDs (e.g. subset of 8 obligations):** Raises `ValueError`.
+- **Missing IDs (e.g. subset of obligations):** Raises `ValueError`.
 - **Duplicate IDs:** Raises `ValueError`.
 - **Unknown IDs:** Raises `ValueError`.
 
 This fail-closed design prevents truncated or manipulated obligation sets from producing a false `SATISFIED` verdict.
 
 ### 4.4 Baseline Evaluation Outcome
-Because all 9 obligations in the GM1.10C baseline catalog currently possess `current_status = UNKNOWN`:
+Because all 11 obligations in the GM1.10C baseline catalog currently possess `current_status = UNKNOWN`:
 
-$$\forall i \in \{1, \dots, 9\}, \quad \text{Verdict}(O_i) = \text{NOT\_SATISFIED}$$
+$$\forall i \in \{1, \dots, 11\}, \quad \text{Verdict}(O_i) = \text{NOT\_SATISFIED}$$
 $$\text{OverallVerdict}(\text{U4}) = \text{NOT\_SATISFIED}$$
 
 The offline model fails closed by design.
@@ -172,21 +191,23 @@ The offline model fails closed by design.
 The proof obligations and boundary guards are implemented and verified via:
 1. `tools/port13_oblig_u4.py`: Canonical Python standard library module implementing:
    - Data structures: `U4Obligation` (with explicit `requires_runtime_evidence` flag), `RequiredEvidence`, `EvidenceArtifact` (with `how_captured` provenance field), `ObligationResult`, `U4EvaluationReport`.
-   - The 9 canonical obligations `OBLIG-U4-01` through `OBLIG-U4-09` (`CANONICAL_OBLIGATION_IDS`).
+   - The 11 canonical obligations `OBLIG-U4-01` through `OBLIG-U4-11` (`CANONICAL_OBLIGATION_IDS`).
    - Fail-closed evaluation function `evaluate_u4_obligations()` with canonical set completeness enforcement.
-   - Provenance-based static evidence classifier `is_static_evidence()`.
+   - Provenance-based static evidence classifier `is_static_evidence()` and empirical classifier `is_empirical_evidence()`.
 2. `tests/test_port13_oblig_u4.py`: Deterministic unit test suite validating:
-   - Schema, citation integrity, and exact canonical ID alignment (`test_u4_obligations_catalog_structure_and_citations`).
+   - Schema, citation integrity, and exact canonical ID alignment across all 11 obligations (`test_u4_obligations_catalog_structure_and_citations`).
    - Fail-closed baseline evaluation (`test_baseline_evaluator_fails_closed`).
    - Static CreateTask veneer rejection for hook placement (`test_static_veneer_evidence_cannot_satisfy_runtime_hook_placement`).
    - Static PhySw entry rejection for launch ordering (`test_static_physw_entry_evidence_cannot_satisfy_launch_ordering`).
    - Static evidence rejection for OBLIG-U4-05 filesystem gating (`test_oblig_u4_05_with_static_evidence_stays_not_satisfied`).
-   - Exhaustive rejection of static evidence across all runtime-flagged obligations (`test_all_runtime_flagged_obligations_reject_static_evidence`).
+   - Static evidence rejection for OBLIG-U4-09 continuation (`test_oblig_u4_09_with_static_evidence_evaluates_not_satisfied`).
+   - Exhaustive rejection of static evidence across all 7 runtime-flagged obligations (`test_all_runtime_flagged_obligations_reject_static_evidence`).
    - Provenance eligibility of genuine runtime hook safety evidence referencing ATCM address `0xBFE14A3C` (`test_genuine_runtime_hook_safety_evidence_referencing_atcm_is_eligible`).
    - Completeness validation raising `ValueError` on empty, missing, duplicate, or unknown IDs (`test_evaluate_u4_obligations_canonical_set_validation`).
-   - Isolation of the C06b causal claim as UNKNOWN (`test_timeout_bypass_causal_link_remains_unknown`).
-   - Negative controls on unverified evidence, mismatched artifact types, and partial satisfaction.
-   - Positive synthetic path when all obligations receive valid runtime artifacts.
+   - Isolation of the C06b causal claim as UNKNOWN (never INFERRED) across unverified, static, and non-empirical evidence (`test_timeout_bypass_causal_link_remains_unknown`).
+   - Unresolved C17 and C18 obligations blocking the overall U4 verdict (`test_unresolved_c17_or_c18_obligations_block_overall_u4_verdict`).
+   - Negative controls on unverified evidence, mismatched artifact types, and partial satisfaction (10 of 11 satisfied).
+   - Positive synthetic path when all 11 obligations receive valid runtime artifacts.
    - Address containment proving zero new firmware addresses are introduced.
 
 ---
