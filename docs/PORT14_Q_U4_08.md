@@ -233,10 +233,9 @@ While the tracked primary evidence proves that the bootstrap task dispatch seque
    > "Leaves `OBLIG-U4-08` as `UNKNOWN` (fail-closed) if the tracked evidence is deemed specific to initial bootstrap task dispatch rather than general `CreateTask` context creation for `task_spytask`, or if DryOS tasks ran in System Mode or unmasked FIQ"
    [VERIFIED: docs/PORT13_NEXT_QUESTIONS.md:83].
 
-### 6.2 Task Constraint Enforcement and Final Decision
+### 6.2 Final Determination
 
-1. Determination: Because a necessary subclaim connecting `CreateTask` for `SpyTask` to the bootstrap context initialization path rests on an `UNKNOWN` internal helper (`0xBFE10B88`), and runtime creation of `SpyTask` is disabled in the prototype source, `OBLIG-U4-08` cannot be promoted to `VERIFIED` and retains its baseline status of `UNKNOWN` under the fail-closed rule [INFERRED: tools/port13_oblig_u4.py:290; docs/PORT13_NEXT_QUESTIONS.md:83; chdk-port/platform/g3x/sub/110c/boot_prototype.c:75–78, 409–416; docs/PORT13_REVIEW_U4.md:133; docs/PORT11A_GM110C_ROM_EVIDENCE.md:170, 180].
-2. In accordance with task constraints (`"Do not edit code in this task"`; `"Only docs/PORT14_Q_U4_08.md is changed"`), no code files or tests were modified during this task [VERIFIED: docs/agentbridge/PORT14_BASE.md:464]. Test execution verification cites the recorded AgentBridge validation run [VERIFIED: docs/agentbridge/PORT14_BASE.md:463–465].
+Because a necessary subclaim connecting `CreateTask` for `SpyTask` to the bootstrap context initialization path rests on an `UNKNOWN` internal helper (`0xBFE10B88`), and runtime creation of `SpyTask` is disabled in the prototype source, `OBLIG-U4-08` cannot be promoted to `VERIFIED` and retains its baseline status of `UNKNOWN` under the fail-closed rule [INFERRED: tools/port13_oblig_u4.py:290; docs/PORT13_NEXT_QUESTIONS.md:83; chdk-port/platform/g3x/sub/110c/boot_prototype.c:75–78, 409–416; docs/PORT13_REVIEW_U4.md:133; docs/PORT11A_GM110C_ROM_EVIDENCE.md:170, 180].
 
 Resulting status of OBLIG-U4-08: UNKNOWN (unchanged) [INFERRED: tools/port13_oblig_u4.py:290; docs/PORT13_NEXT_QUESTIONS.md:83].
 
