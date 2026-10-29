@@ -78,7 +78,7 @@ The execution flow within `task_InitFileModules` (`0xFC0BD070..0xFC0BD09B`) is v
 |---|---|---|---|
 | **Creator `sub_fc0bd0b4`** | Loads `"InitFileModules"`, prio `0x19`, stack `0x1000`, entry `0xFC0BD071` ([`PORT11A:220–228`](PORT11A_GM110C_ROM_EVIDENCE.md#L220-L228)). | Static task identity, creation parameters, and initial execution vector. | Whether `sub_fc0bd0b4` was invoked during boot (`UNKNOWN` caller graph; [`PORT11A:81, 407`](PORT11A_GM110C_ROM_EVIDENCE.md#L81)). |
 | **Thumb Entry `0xFC0BD071`** | Slice `S2A` instruction bytes at `0xFC0BD070` ([`PORT11A:251`](PORT11A_GM110C_ROM_EVIDENCE.md#L251)). | Statically verified entry point of `task_InitFileModules`. | Does **not** prove scheduler dispatch, CPU execution, or host controller power/clocking. |
-| **Callee 1 `sub_fc0d9ccc` Return** | Slice `S2B`: zero conditional branches, ends with `movs r0, #0; pop {r4, pc}` ([`PORT11A:281–284`](PORT11A_GM110C_ROM_EVIDENCE.md#L281-L284)). | Subroutine epilogue reached without unhandled CPU fault. | **Cannot prove storage mount readiness**: `r0 = 0` is unconditionally hardcoded; provides zero dynamic media discrimination. |
+| **Callee 1 `sub_fc0d9ccc` Return** | Slice `S2B`: zero conditional branches, ends with `movs r0, #0; pop {r4, pc}` ([`PORT11A:281–284`](PORT11A_GM110C_ROM_EVIDENCE.md#L281-L284)). | Static return sequence: normal return yields constant `r0 = 0` (`movs r0, #0; pop {r4, pc}` at `0xFC0D9CF2..0xFC0D9CF5`). Actual runtime completion and absence of CPU faults remains **`UNKNOWN`**. | **Cannot prove storage mount readiness**: `r0 = 0` is unconditionally hardcoded; provides zero dynamic media discrimination. Does not prove the epilogue was reached at runtime without a CPU fault. |
 | **Callee 2 `sub_fc0d9cf6` Call** | Invoked sequentially at `0xFC0BD086` ([`PORT11A:259`](PORT11A_GM110C_ROM_EVIDENCE.md#L259)). | Static sequential invocation in task body. | Does not prove FAT partition mounted, cluster tables valid, or file handles writable. Nested callees are `UNKNOWN` ([`PORT11A:286, 289`](PORT11A_GM110C_ROM_EVIDENCE.md#L286)). |
 | **Event `0x5006` Call** | Target routine `0xFC35B93C` called with `0x5006` ([`PORT11A:258, 265`](PORT11A_GM110C_ROM_EVIDENCE.md#L258)). | Instruction call to routine `0xFC35B93C`. | Does not prove filesystem readiness: event `0x5006` is insufficient for filesystem I/O ([`port9a:301, 678–679`](../tools/port9a_runtime_lifecycle.py#L301)). Queuing mechanism is `UNKNOWN`. |
 
@@ -119,18 +119,20 @@ The following eight proof obligations are codified in [`tools/port13_u2_obligati
   - [`docs/PORT13_REVIEW_U2.md:24–25`](PORT13_REVIEW_U2.md#L24-L25) (Observing entry vector `0xFC0BD071` does not prove dynamic dispatch).
 - **Epistemic Invariant**: Static entry evidence `0xFC0BD071` cannot discharge this obligation.
 
-### 3.3 Obligation OBLIG-U2-03: Dynamic Status Discrimination & Constant Return Suppression
+### 3.3 Obligation OBLIG-U2-03: Runtime Normal Completion Witness
 - **ID**: `OBLIG-U2-03`
 - **Kind**: **`RUNTIME`**
 - **Current Status**: **`UNKNOWN`**
-- **Statement**: Dynamic return status code discrimination proving physical media presence and FAT partition validity; unconditional `r0=0` from `sub_fc0d9ccc` provides zero dynamic discrimination.
+- **Statement**: Current-generation normal completion witness confirming both `sub_fc0d9ccc` and `sub_fc0d9cf6` return normally in current boot generation (note: `sub_fc0d9ccc` `r0==0` is constant on normal return and does NOT prove mount).
 - **Required Evidence**:
-  - *Artifact Type*: `DYNAMIC_STATUS_WITNESS`
-  - *What It Must Show*: Subroutine completion witness verifying return code inspects real storage/media state rather than relying on constant `r0 == 0`.
+  - *Artifact Type*: `COMPLETION_WITNESS`
+  - *What It Must Show*: Dynamic completion witness verifying both `sub_fc0d9ccc` and `sub_fc0d9cf6` returned in current boot generation without latched fault (noting that `sub_fc0d9ccc` `r0==0` is constant on normal return and does NOT prove mount).
 - **Tracked Citations**:
-  - [`docs/PORT11A_GM110C_ROM_EVIDENCE.md:21, 281–284, 390`](PORT11A_GM110C_ROM_EVIDENCE.md#L21) (`sub_fc0d9ccc` contains zero conditional branches, returns `r0=0` constant on normal return).
   - [`tools/port9a_runtime_lifecycle.py:298–299`](../tools/port9a_runtime_lifecycle.py#L298-L299) (`FILESYSTEM_PROMOTION_EVIDENCE_REQUIREMENTS` stage `init_returned_normally`).
-  - [`docs/PORT13_REVIEW_U2.md:25, 100, 142–144`](PORT13_REVIEW_U2.md#L25) (Epilogue `r0=0` is unconditional constant on normal return).
+  - [`tools/port9a_runtime_lifecycle.py:670–706`](../tools/port9a_runtime_lifecycle.py#L670-L706) (`RuntimeLifecycle.init_file_modules_returned()` requires current generation and no latched fault).
+  - [`docs/PORT11A_GM110C_ROM_EVIDENCE.md:21, 281–284, 390`](PORT11A_GM110C_ROM_EVIDENCE.md#L21) (`sub_fc0d9ccc` contains zero conditional branches, returns `r0=0` constant on normal return).
+  - [`docs/PORT13_REVIEW_U2.md:25, 100, 142–144`](PORT13_REVIEW_U2.md#L25) (Epilogue `r0=0` is unconditional constant on normal return; does not prove mount).
+- **Notes**: Requires dynamic completion witness for `sub_fc0d9ccc` and `sub_fc0d9cf6` in active boot generation; `r0==0` is constant on normal return and does not prove mount.
 
 ### 3.4 Obligation OBLIG-U2-04: Event `0x5006` Decoupling from Filesystem Gate
 - **ID**: `OBLIG-U2-04`
@@ -143,6 +145,7 @@ The following eight proof obligations are codified in [`tools/port13_u2_obligati
 - **Tracked Citations**:
   - [`tools/port9a_runtime_lifecycle.py:300–301`](../tools/port9a_runtime_lifecycle.py#L300-L301) (`FILESYSTEM_PROMOTION_EVIDENCE_REQUIREMENTS` stage `mount_observed`: event `0x5006` alone is insufficient).
   - [`tools/port9a_runtime_lifecycle.py:678–679`](../tools/port9a_runtime_lifecycle.py#L678-L679) (Posting event `0x5006` does not advance to `mount_observed` or `fs_io_ready`).
+  - [`tools/port9a_runtime_lifecycle.py:708–737`](../tools/port9a_runtime_lifecycle.py#L708-L737) (`RuntimeLifecycle.record_mount_observation()` requires independent mount observation).
   - [`docs/PORT11A_GM110C_ROM_EVIDENCE.md:258, 265`](PORT11A_GM110C_ROM_EVIDENCE.md#L258) (`0xFC35B93C` target outside `S2A` / `UNKNOWN`).
   - [`docs/PORT13_REVIEW_U2.md:26, 43–44, 108–109, 145–147`](PORT13_REVIEW_U2.md#L26) (Event `0x5006` alone is insufficient for filesystem readiness).
 
@@ -213,7 +216,13 @@ The following eight proof obligations are codified in [`tools/port13_u2_obligati
 The obligations model codified in `tools/port13_u2_obligations.py` strictly adheres to `tools/port9a_runtime_lifecycle.py`:
 1. **Preconditions Invariant**: `GM110C_PRECONDITIONS.init_file_modules_entry_verified` is strictly `False` ([`port9a:100, 105`](../tools/port9a_runtime_lifecycle.py#L100)).
 2. **Static Evidence Separation**: `GM110C_STATIC_EVIDENCE.u2_init_file_modules_entry` is `STATIC_VERIFIED`, while `GM110C_STATIC_EVIDENCE.u2_sd_fat_mount_readiness` is strictly `UNKNOWN` ([`port9a:119–120`](../tools/port9a_runtime_lifecycle.py#L119-L120)).
-3. **Six-Stage Promotion Requirements Completeness**: All six stages of `FILESYSTEM_PROMOTION_EVIDENCE_REQUIREMENTS` (`task_created`, `task_started`, `init_returned_normally`, `mount_observed`, `fs_io_ready`, `warm_restart_safe`) are mapped directly to obligations `OBLIG-U2-01` through `OBLIG-U2-08` ([`port9a:293–306`](../tools/port9a_runtime_lifecycle.py#L293-L306)).
+3. **Six-Stage Promotion Requirements Completeness**: All six stages of `FILESYSTEM_PROMOTION_EVIDENCE_REQUIREMENTS` ([`port9a:293–306`](../tools/port9a_runtime_lifecycle.py#L293-L306)) are mapped directly to tracked line numbers in `port9a` and canonical proof obligations:
+   - Stage 1: `task_created` ([`port9a:294`](../tools/port9a_runtime_lifecycle.py#L294)) $\to$ `OBLIG-U2-01` (static creator vector) & `OBLIG-U2-02` (task creation witness).
+   - Stage 2: `task_started` ([`port9a:296`](../tools/port9a_runtime_lifecycle.py#L296)) $\to$ `OBLIG-U2-02` (execution witness after scheduler dispatch).
+   - Stage 3: `init_returned_normally` ([`port9a:298`](../tools/port9a_runtime_lifecycle.py#L298)) $\to$ `OBLIG-U2-03` (normal completion witness for both `sub_fc0d9ccc` and `sub_fc0d9cf6`).
+   - Stage 4: `mount_observed` ([`port9a:300`](../tools/port9a_runtime_lifecycle.py#L300)) $\to$ `OBLIG-U2-04` (independent kernel storage mount proof decoupled from event `0x5006`).
+   - Stage 5: `fs_io_ready` ([`port9a:302`](../tools/port9a_runtime_lifecycle.py#L302)) $\to$ `OBLIG-U2-05` (verified non-destructive open/read capability prior to CHDK file access).
+   - Stage 6: `warm_restart_safe` ([`port9a:304`](../tools/port9a_runtime_lifecycle.py#L304)) $\to$ `OBLIG-U2-08` (warm-restart SD host/card state preconditions resolution).
 
 ### 4.2 Consistency with `tools/port9b_runtime_contract.py`
 The obligations model aligns with `tools/port9b_runtime_contract.py`:
@@ -227,20 +236,33 @@ The obligations model aligns with `tools/port9b_runtime_contract.py`:
 
 ### 5.1 Fail-Closed Evaluator Implementation
 The evaluator in [`tools/port13_u2_obligations.py`](../tools/port13_u2_obligations.py) implements the following fail-closed rules:
-- `evaluate()` evaluates all eight obligations.
-- If any obligation is `UNKNOWN` or `INFERRED`, or if any citation is missing, untracked, or points to a forbidden local path, `is_ready` evaluates to `False` and `status` evaluates to `"not-ready"`.
-- Static evidence (such as `0xFC0BD071`, `STATIC_ROM_SLICE`, or offline disassemblies) submitted to discharge any runtime obligation (`OBLIG-U2-02`..`08`) is strictly rejected with `RULE_STATIC_CANNOT_DISCHARGE_RUNTIME`.
+- `evaluate()` evaluates aggregate filesystem readiness, which strictly requires the **complete canonical obligation set** (`OBLIG-U2-01` through `OBLIG-U2-08`). Any strict subset, missing obligation, extra obligation, or substituted obligation causes aggregate evaluation to fail closed (`is_ready = False`, `status = "not-ready"`, `RULE_INCOMPLETE_OBLIGATION_SET`).
+- Per-obligation satisfaction in isolation is evaluated via `evaluate_obligation()`, and queried on `EvaluationResult` via `obligation_evaluations` or `is_obligation_satisfied(obligation_id)`. Satisfying an individual obligation in isolation (including `OBLIG-U2-01`) does not confer aggregate readiness.
+- Submitted evidence artifacts are strictly validated before discharging any obligation:
+  - The artifact's citation must be present and non-empty (`RULE_MISSING_CITATIONS`).
+  - The citation must point to a Git-tracked file on `origin/main` (`RULE_UNTRACKED_PATH`).
+  - The citation must not reference forbidden local-only paths (`firmware/`, `PORT-9A L1/L2`) (`RULE_FORBIDDEN_LOCAL_PATH`).
+  - The artifact's `artifact_type` must match the obligation's required artifact type (`RULE_ARTIFACT_TYPE_MISMATCH`).
+  - The artifact's status must be `VERIFIED` (`RULE_EVIDENCE_STATUS_NOT_VERIFIED`).
+  - For runtime obligations, static evidence (including ROM slices, `0xFC0BD071`, or citations to `docs/PORT11A_GM110C_ROM_EVIDENCE.md` even with empty addresses) is strictly rejected with `RULE_STATIC_CANNOT_DISCHARGE_RUNTIME`.
 - Address provenance verification guarantees that every firmware address referenced in the module is cited to a Git-tracked document at the exact line number.
 
 ### 5.2 Test Suite Verification
 The offline test suite in [`tests/test_port13_u2_obligations.py`](../tests/test_port13_u2_obligations.py) validates the entire contract:
 - `test_evaluate_returns_not_ready_for_shipped_data`: Confirms `is_ready == False`, `status == "not-ready"`, and 7 of 8 obligations are `UNKNOWN`.
-- `test_there_is_no_path_to_ready_from_shipped_data`: Proves no subset or permutation of shipped data can evaluate to ready.
+- `test_there_is_no_path_to_ready_from_shipped_data`: Proves no path to ready from shipped data and asserts each single obligation evaluated alone fails aggregate readiness.
+- `test_every_strict_subset_of_canonical_set_returns_not_ready`: Verifies every strict subset (length 1 through 7, including evaluating just `OBLIG-U2-01` with static evidence) returns `not-ready`.
+- `test_static_entry_evidence_satisfies_static_entry_obligation`: Confirms static entry evidence satisfies `OBLIG-U2-01` in isolation while aggregate readiness remains `not-ready`.
 - `test_static_entry_evidence_cannot_discharge_any_runtime_obligation`: Proves static entry evidence `0xFC0BD071` cannot discharge any of the 7 runtime obligations.
-- `test_static_entry_evidence_satisfies_static_entry_obligation`: Confirms static entry evidence satisfies `OBLIG-U2-01`.
+- `test_execution_witness_citing_only_port11a_static_evidence_fails`: Negative test confirming an `EXECUTION_WITNESS` citing PORT11A static ROM evidence with empty addresses is rejected with `RULE_STATIC_CANNOT_DISCHARGE_RUNTIME`.
+- `test_runtime_obligations_with_missing_citations_fail`: Negative test confirming `VERIFIED/RUNTIME` artifacts with missing citations fail across all 7 runtime obligations.
+- `test_runtime_obligations_with_untracked_citations_fail`: Negative test confirming `VERIFIED/RUNTIME` artifacts with untracked citations fail across all 7 runtime obligations.
+- `test_runtime_obligations_with_forbidden_firmware_citations_fail`: Negative test confirming `VERIFIED/RUNTIME` artifacts citing `firmware/` dumps fail across all 7 runtime obligations.
+- `test_artifact_type_mismatch_fails`: Negative test confirming an artifact with mismatched `artifact_type` fails closed.
 - `test_missing_citations_cause_failure`: Proves empty citations or blank paths fail closed.
 - `test_untracked_citations_cause_failure`: Proves citations to untracked files (`sub/110e/boot.c`) fail closed.
 - `test_local_only_citations_cause_failure`: Proves citations to local dumps (`firmware/dumps/...`) or `PORT-9A L1/L2` fail closed.
+- `test_port9a_six_stage_promotion_contract_completeness`: Verifies the 6-stage filesystem promotion structure, line citations in `port9a`, and mapping to `OBLIG-U2-03` and `OBLIG-U2-04`.
 - `test_verify_i2_contract_consistency_helper`: Asserts agreement with PORT-9A model and PORT-9B I2 contract.
 - `test_all_addresses_cited_in_tracked_docs`: Verifies address provenance and ensures zero new firmware addresses.
 - `test_no_subprocess_imported`: Enforces standard library only and zero subprocess calls.

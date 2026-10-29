@@ -118,6 +118,8 @@ RULE_PRECONDITION_INVARIANT_VIOLATED = "RULE_PRECONDITION_INVARIANT_VIOLATED"
 RULE_CONTRACT_INVARIANT_VIOLATED = "RULE_CONTRACT_INVARIANT_VIOLATED"
 RULE_ADDRESS_NOT_TRACKED = "RULE_ADDRESS_NOT_TRACKED"
 RULE_EMPTY_DATASET = "RULE_EMPTY_DATASET"
+RULE_INCOMPLETE_OBLIGATION_SET = "RULE_INCOMPLETE_OBLIGATION_SET"
+RULE_ARTIFACT_TYPE_MISMATCH = "RULE_ARTIFACT_TYPE_MISMATCH"
 
 
 # -----------------------------------------------------------------------------
@@ -397,20 +399,33 @@ class EvidenceArtifact:
         return is_static_evidence(self)
 
 
+STATIC_EVIDENCE_PATH_MARKERS: Tuple[str, ...] = (
+    "PORT11A",
+    "ROM_EVIDENCE",
+)
+
+
 def is_static_evidence(artifact: Any) -> bool:
-    """True if artifact represents static ROM evidence (such as 0xFC0BD071 or ROM slice S2A)."""
+    """True if artifact represents static ROM evidence (such as 0xFC0BD071, ROM slices, or ROM docs)."""
     if artifact is None:
         return False
     if isinstance(artifact, EvidenceArtifact):
         if artifact.kind == ObligationKind.STATIC or str(artifact.kind).lower() == "static":
             return True
-        art_type = artifact.artifact_type.upper()
+        art_type = artifact.artifact_type.strip().upper()
         if art_type.startswith("STATIC_") or "ROM" in art_type:
             return True
         hc = artifact.how_captured.lower()
         if any(term in hc for term in ("static", "rom_disassembly", "offline_inspection", "rom_slice")):
             return True
-        if any(addr in ("0xFC0BD071", "0xFC0BD070") for addr in artifact.associated_addresses):
+        if any(addr in ("0xFC0BD071", "0xFC0BD070", "0xFC0BD0B4", "0xFC0BD1A8", "0xFC0D9CCC", "0xFC0D9CF2") for addr in artifact.associated_addresses):
+            return True
+        if artifact.citation is not None:
+            cit_path = str(artifact.citation.path)
+            if any(marker in cit_path for marker in STATIC_EVIDENCE_PATH_MARKERS):
+                return True
+        desc = artifact.description.lower()
+        if any(term in desc for term in ("static rom", "slice s2a", "slice s2b", "rom slice")):
             return True
         return False
     # Generic object/duck typing
@@ -419,14 +434,22 @@ def is_static_evidence(artifact: Any) -> bool:
     kind = getattr(artifact, "kind", None)
     if kind is not None and (kind == ObligationKind.STATIC or str(kind).lower() == "static"):
         return True
-    art_type = str(getattr(artifact, "artifact_type", "")).upper()
+    art_type = str(getattr(artifact, "artifact_type", "")).strip().upper()
     if art_type.startswith("STATIC_") or "ROM" in art_type:
         return True
     hc = str(getattr(artifact, "how_captured", "")).lower()
     if any(k in hc for k in ("static", "rom_disassembly", "offline_inspection", "rom_slice")):
         return True
     addrs = tuple(str(a) for a in getattr(artifact, "associated_addresses", ()))
-    if any(a in ("0xFC0BD071", "0xFC0BD070") for a in addrs):
+    if any(a in ("0xFC0BD071", "0xFC0BD070", "0xFC0BD0B4", "0xFC0BD1A8", "0xFC0D9CCC", "0xFC0D9CF2") for a in addrs):
+        return True
+    cit = getattr(artifact, "citation", None)
+    if cit is not None:
+        cit_path = str(getattr(cit, "path", ""))
+        if any(marker in cit_path for marker in STATIC_EVIDENCE_PATH_MARKERS):
+            return True
+    desc = str(getattr(artifact, "description", "")).lower()
+    if any(term in desc for term in ("static rom", "slice s2a", "slice s2b", "rom slice")):
         return True
     return False
 
@@ -482,6 +505,11 @@ class EvaluationResult:
     def is_fail_closed(self) -> bool:
         """True if not ready and evaluated with fail-closed rules."""
         return not self.is_ready
+
+    def is_obligation_satisfied(self, obligation_id: str) -> bool:
+        """Check whether an individual obligation evaluated to satisfied."""
+        ev = self.obligation_evaluations.get(obligation_id)
+        return ev.is_satisfied if ev is not None else False
 
     def summary(self) -> str:
         lines = [
@@ -601,29 +629,32 @@ DEFAULT_U2_OBLIGATIONS: Tuple[U2Obligation, ...] = (
         notes="Static ROM entry 0xFC0BD071 cannot discharge this runtime obligation.",
     ),
 
-    # (b) The runtime readiness signal - Stage 3: init returned normally & non-discrimination of r0=0
+    # (b) The runtime readiness signal - Stage 3: init returned normally
     U2Obligation(
         id="OBLIG-U2-03",
         statement=(
-            "Dynamic return status code discrimination proving physical media presence and "
-            "FAT partition validity; unconditional r0=0 from sub_fc0d9ccc provides zero discrimination"
+            "Current-generation normal completion witness confirming both sub_fc0d9ccc "
+            "and sub_fc0d9cf6 return normally in current boot generation (note: sub_fc0d9ccc "
+            "r0==0 is constant on normal return and does NOT prove mount)"
         ),
         kind=ObligationKind.RUNTIME,
         status=ObligationStatus.UNKNOWN,
         required_evidence=RequiredEvidence(
-            artifact_type="DYNAMIC_STATUS_WITNESS",
+            artifact_type="COMPLETION_WITNESS",
             what_it_must_show=(
-                "Subroutine completion witness verifying return code inspects real storage/media "
-                "state rather than hardcoded r0=0 constant"
+                "Dynamic completion witness verifying both sub_fc0d9ccc and sub_fc0d9cf6 returned "
+                "in current boot generation without latched fault (noting that sub_fc0d9ccc r0==0 "
+                "is constant on normal return and does NOT prove mount)"
             ),
         ),
         citations=(
-            Citation(path="docs/PORT11A_GM110C_ROM_EVIDENCE.md", line=21, note="sub_fc0d9ccc contains zero conditional branches, returns r0=0 constant"),
-            Citation(path="docs/PORT11A_GM110C_ROM_EVIDENCE.md", line=281, note="movs r0, #0 at 0xFC0D9CF2 on normal return"),
             Citation(path="tools/port9a_runtime_lifecycle.py", line=298, note="FILESYSTEM_PROMOTION_EVIDENCE_REQUIREMENTS stage init_returned_normally"),
-            Citation(path="docs/PORT13_REVIEW_U2.md", line=25, note="Epilogue r0=0 is unconditional constant on normal return"),
+            Citation(path="tools/port9a_runtime_lifecycle.py", line=670, note="RuntimeLifecycle.init_file_modules_returned() requires current boot generation, no faults"),
+            Citation(path="docs/PORT11A_GM110C_ROM_EVIDENCE.md", line=21, note="sub_fc0d9ccc contains zero conditional branches, returns r0=0 constant on normal return"),
+            Citation(path="docs/PORT11A_GM110C_ROM_EVIDENCE.md", line=281, note="movs r0, #0 at 0xFC0D9CF2 on normal return"),
+            Citation(path="docs/PORT13_REVIEW_U2.md", line=25, note="Epilogue r0=0 is unconditional constant on normal return; does not prove mount"),
         ),
-        notes="Checking r0==0 after sub_fc0d9ccc yields constant 0 whether an SD card is present, formatted, or corrupted.",
+        notes="Requires dynamic completion witness for sub_fc0d9ccc and sub_fc0d9cf6 in active boot generation; r0==0 is constant on normal return and does not prove mount.",
     ),
 
     # (b) The runtime readiness signal - Stage 4: mount observed & event 0x5006 decoupling
@@ -645,6 +676,7 @@ DEFAULT_U2_OBLIGATIONS: Tuple[U2Obligation, ...] = (
         citations=(
             Citation(path="tools/port9a_runtime_lifecycle.py", line=300, note="FILESYSTEM_PROMOTION_EVIDENCE_REQUIREMENTS stage mount_observed: event 0x5006 alone is insufficient"),
             Citation(path="tools/port9a_runtime_lifecycle.py", line=678, note="Posting event 0x5006 does not advance to mount_observed or fs_io_ready"),
+            Citation(path="tools/port9a_runtime_lifecycle.py", line=708, note="RuntimeLifecycle.record_mount_observation() requires independent mount observation"),
             Citation(path="docs/PORT11A_GM110C_ROM_EVIDENCE.md", line=258, note="0xFC35B93C target outside S2A / UNKNOWN"),
             Citation(path="docs/PORT13_REVIEW_U2.md", line=26, note="Event 0x5006 alone is insufficient for filesystem readiness"),
         ),
@@ -755,6 +787,41 @@ DEFAULT_U2_OBLIGATIONS: Tuple[U2Obligation, ...] = (
     ),
 )
 
+CANONICAL_U2_OBLIGATION_IDS: Tuple[str, ...] = tuple(ob.id for ob in DEFAULT_U2_OBLIGATIONS)
+
+PORT9A_SIX_STAGE_CORRESPONDENCE: Dict[str, Dict[str, Any]] = {
+    "task_created": {
+        "port9a_line": 294,
+        "obligation_ids": ("OBLIG-U2-01", "OBLIG-U2-02"),
+        "description": "Static creator call-chain proof + runtime observation that CreateTask was invoked for InitFileModules in current boot generation",
+    },
+    "task_started": {
+        "port9a_line": 296,
+        "obligation_ids": ("OBLIG-U2-02",),
+        "description": "Execution witness confirming task_InitFileModules entry ran in current boot generation after scheduler dispatch",
+    },
+    "init_returned_normally": {
+        "port9a_line": 298,
+        "obligation_ids": ("OBLIG-U2-03",),
+        "description": "Completion witness after sub_fc0d9ccc and sub_fc0d9cf6 return in current boot generation (note: sub_fc0d9ccc r0==0 is constant on normal return and does NOT prove mount)",
+    },
+    "mount_observed": {
+        "port9a_line": 300,
+        "obligation_ids": ("OBLIG-U2-04",),
+        "description": "Independent kernel/storage state proof that FAT volume mount succeeded (event 0x5006 alone is insufficient)",
+    },
+    "fs_io_ready": {
+        "port9a_line": 302,
+        "obligation_ids": ("OBLIG-U2-05",),
+        "description": "Verified non-destructive file open/read capability on mounted volume without contention or timeout",
+    },
+    "warm_restart_safe": {
+        "port9a_line": 304,
+        "obligation_ids": ("OBLIG-U2-08",),
+        "description": "Resolution of warm-restart SD host/card state preconditions (P11 SD1stInit predicate, P12 controller reset, P13 card state, P15 IRQ state) for current boot generation",
+    },
+}
+
 
 # -----------------------------------------------------------------------------
 # Address & Contract Provenance Verification Helpers
@@ -851,6 +918,289 @@ def verify_i2_contract_consistency() -> Tuple[bool, List[str]]:
 # Fail-Closed Evaluator
 # -----------------------------------------------------------------------------
 
+def evaluate_obligation(
+    obligation: U2Obligation,
+    evidence: Optional[Union[EvidenceArtifact, Dict[str, EvidenceArtifact]]] = None,
+    repo_root: Optional[Union[str, Path]] = None,
+    check_disk: bool = True,
+    pinned_hashes: Optional[Dict[str, str]] = None,
+    file_reader: Optional[Callable[[Path], bytes]] = None,
+) -> SingleObligationEvaluation:
+    """Evaluate a single U2 obligation in isolation.
+
+    Validates:
+      - Supporting citations on the obligation (presence, tracking, no forbidden paths).
+      - If evidence is provided:
+        - Evidence citation (presence, tracking, no forbidden paths).
+        - Evidence artifact_type matches obligation.required_evidence.artifact_type.
+        - Evidence status is VERIFIED.
+        - Static evidence cannot discharge runtime obligations (even with empty associated_addresses
+          or when citing static documentation like PORT11A).
+      - If no evidence is provided:
+        - Shipped baseline status must be VERIFIED (only OBLIG-U2-01).
+
+    Note:
+      Satisfying an obligation in isolation (even OBLIG-U2-01) does NOT confer
+      aggregate filesystem readiness. Aggregate readiness requires the full
+      canonical set evaluated via evaluate().
+    """
+    root = Path(repo_root).resolve() if repo_root is not None else REPO_ROOT_DEFAULT.resolve()
+    active_pins = PINNED_FILE_HASHES if pinned_hashes is None else pinned_hashes
+    ob_findings: List[ObligationFinding] = []
+
+    # 1. Validate obligation supporting citations
+    if not obligation.citations:
+        ob_findings.append(
+            ObligationFinding(
+                rule_id=RULE_MISSING_CITATIONS,
+                obligation_id=obligation.id,
+                severity="ERROR",
+                message=f"Obligation {obligation.id} has no supporting citations",
+            )
+        )
+    else:
+        for cit in obligation.citations:
+            if not cit.path or not cit.path.strip():
+                ob_findings.append(
+                    ObligationFinding(
+                        rule_id=RULE_MISSING_CITATIONS,
+                        obligation_id=obligation.id,
+                        severity="ERROR",
+                        message=f"Obligation {obligation.id} carries an empty citation path",
+                    )
+                )
+                continue
+
+            clean_path = cit.path.strip().replace("\\", "/")
+
+            # Check forbidden local-only or untracked paths
+            if any(clean_path.startswith(prefix) or prefix in clean_path for prefix in FORBIDDEN_PATH_PREFIXES):
+                ob_findings.append(
+                    ObligationFinding(
+                        rule_id=RULE_FORBIDDEN_LOCAL_PATH,
+                        obligation_id=obligation.id,
+                        severity="ERROR",
+                        message=f"Citation '{clean_path}' references forbidden local-only or untracked path",
+                    )
+                )
+                continue
+
+            # Check tracking on origin/main
+            if clean_path not in ORIGIN_MAIN_TRACKED_FILES:
+                ob_findings.append(
+                    ObligationFinding(
+                        rule_id=RULE_UNTRACKED_PATH,
+                        obligation_id=obligation.id,
+                        severity="ERROR",
+                        message=f"Citation '{clean_path}' is not a tracked file on origin/main",
+                    )
+                )
+                continue
+
+            # Disk existence and content authentication
+            if check_disk:
+                full_path = root / clean_path
+                if not full_path.is_file():
+                    ob_findings.append(
+                        ObligationFinding(
+                            rule_id=RULE_MISSING_CITED_PATH,
+                            obligation_id=obligation.id,
+                            severity="ERROR",
+                            message=f"Cited file '{clean_path}' does not exist on disk",
+                        )
+                    )
+                    continue
+
+                if clean_path in active_pins:
+                    try:
+                        content_bytes = (
+                            file_reader(full_path) if file_reader is not None else full_path.read_bytes()
+                        )
+                        digest = hashlib.sha256(content_bytes).hexdigest()
+                        if digest.lower() != active_pins[clean_path].lower():
+                            ob_findings.append(
+                                ObligationFinding(
+                                    rule_id=RULE_CONTENT_HASH_MISMATCH,
+                                    obligation_id=obligation.id,
+                                    severity="ERROR",
+                                    message=(
+                                        f"Cited file '{clean_path}' content hash mismatch "
+                                        f"(expected {active_pins[clean_path]}, got {digest})"
+                                    ),
+                                )
+                            )
+                    except Exception as exc:
+                        ob_findings.append(
+                            ObligationFinding(
+                                rule_id=RULE_UNREADABLE_SOURCE,
+                                obligation_id=obligation.id,
+                                severity="ERROR",
+                                message=f"Cannot read cited file '{clean_path}': {exc}",
+                            )
+                        )
+
+    # 2. Extract submitted evidence artifact for this obligation
+    ev_artifact: Optional[EvidenceArtifact] = None
+    if evidence is not None:
+        if isinstance(evidence, EvidenceArtifact):
+            ev_artifact = evidence
+        elif isinstance(evidence, dict):
+            ev_artifact = evidence.get(obligation.id)
+
+    is_satisfied = False
+    reason = ""
+
+    if ev_artifact is not None:
+        # A. Validate evidence citation
+        if ev_artifact.citation is None or not ev_artifact.citation.path or not ev_artifact.citation.path.strip():
+            ob_findings.append(
+                ObligationFinding(
+                    rule_id=RULE_MISSING_CITATIONS,
+                    obligation_id=obligation.id,
+                    severity="ERROR",
+                    message=f"Evidence artifact '{ev_artifact.artifact_id}' has missing or empty citation",
+                )
+            )
+        else:
+            ev_path = ev_artifact.citation.path.strip().replace("\\", "/")
+            if any(ev_path.startswith(prefix) or prefix in ev_path for prefix in FORBIDDEN_PATH_PREFIXES):
+                ob_findings.append(
+                    ObligationFinding(
+                        rule_id=RULE_FORBIDDEN_LOCAL_PATH,
+                        obligation_id=obligation.id,
+                        severity="ERROR",
+                        message=f"Evidence artifact citation '{ev_path}' references forbidden local-only path",
+                    )
+                )
+            elif ev_path not in ORIGIN_MAIN_TRACKED_FILES:
+                ob_findings.append(
+                    ObligationFinding(
+                        rule_id=RULE_UNTRACKED_PATH,
+                        obligation_id=obligation.id,
+                        severity="ERROR",
+                        message=f"Evidence artifact citation '{ev_path}' is not a tracked file on origin/main",
+                    )
+                )
+            elif check_disk:
+                full_ev_path = root / ev_path
+                if not full_ev_path.is_file():
+                    ob_findings.append(
+                        ObligationFinding(
+                            rule_id=RULE_MISSING_CITED_PATH,
+                            obligation_id=obligation.id,
+                            severity="ERROR",
+                            message=f"Evidence artifact cited file '{ev_path}' does not exist on disk",
+                        )
+                    )
+                elif ev_path in active_pins:
+                    try:
+                        content_bytes = (
+                            file_reader(full_ev_path) if file_reader is not None else full_ev_path.read_bytes()
+                        )
+                        digest = hashlib.sha256(content_bytes).hexdigest()
+                        if digest.lower() != active_pins[ev_path].lower():
+                            ob_findings.append(
+                                ObligationFinding(
+                                    rule_id=RULE_CONTENT_HASH_MISMATCH,
+                                    obligation_id=obligation.id,
+                                    severity="ERROR",
+                                    message=(
+                                        f"Evidence cited file '{ev_path}' content hash mismatch "
+                                        f"(expected {active_pins[ev_path]}, got {digest})"
+                                    ),
+                                )
+                            )
+                    except Exception as exc:
+                        ob_findings.append(
+                            ObligationFinding(
+                                rule_id=RULE_UNREADABLE_SOURCE,
+                                obligation_id=obligation.id,
+                                severity="ERROR",
+                                message=f"Cannot read evidence cited file '{ev_path}': {exc}",
+                            )
+                        )
+
+        # B. Check artifact_type match
+        req_type = obligation.required_evidence.artifact_type.strip().upper()
+        act_type = ev_artifact.artifact_type.strip().upper()
+        if req_type != act_type:
+            ob_findings.append(
+                ObligationFinding(
+                    rule_id=RULE_ARTIFACT_TYPE_MISMATCH,
+                    obligation_id=obligation.id,
+                    severity="ERROR",
+                    message=(
+                        f"Evidence artifact '{ev_artifact.artifact_id}' artifact_type '{ev_artifact.artifact_type}' "
+                        f"does not match required artifact_type '{obligation.required_evidence.artifact_type}' for {obligation.id}"
+                    ),
+                )
+            )
+
+        # C. Check status is VERIFIED
+        if ev_artifact.status != ObligationStatus.VERIFIED:
+            ob_findings.append(
+                ObligationFinding(
+                    rule_id=RULE_EVIDENCE_STATUS_NOT_VERIFIED,
+                    obligation_id=obligation.id,
+                    severity="ERROR",
+                    message=f"Provided evidence status is {ev_artifact.status.value}, expected VERIFIED",
+                )
+            )
+
+        # D. Static evidence CANNOT discharge runtime obligations
+        if obligation.is_runtime and is_static_evidence(ev_artifact):
+            ob_findings.append(
+                ObligationFinding(
+                    rule_id=RULE_STATIC_CANNOT_DISCHARGE_RUNTIME,
+                    obligation_id=obligation.id,
+                    severity="ERROR",
+                    message=(
+                        f"Static evidence ({ev_artifact.artifact_id}) cannot discharge "
+                        f"runtime obligation '{obligation.id}'; runtime readiness requires dynamic storage witness."
+                    ),
+                )
+            )
+
+        has_errors = any(f.severity == "ERROR" for f in ob_findings)
+        if not has_errors:
+            is_satisfied = True
+            reason = f"Satisfied by verified evidence '{ev_artifact.artifact_id}'"
+        else:
+            is_satisfied = False
+            reason = "Evidence validation errors prevent satisfaction"
+
+    else:
+        # No evidence artifact provided: evaluate baseline status
+        if obligation.status == ObligationStatus.VERIFIED:
+            has_errors = any(f.severity == "ERROR" for f in ob_findings)
+            if not has_errors:
+                is_satisfied = True
+                reason = "Obligation is VERIFIED in repository baseline documentation"
+            else:
+                is_satisfied = False
+                reason = "Obligation citations have errors"
+        else:
+            ob_findings.append(
+                ObligationFinding(
+                    rule_id=RULE_STATUS_UNVERIFIED,
+                    obligation_id=obligation.id,
+                    severity="WARNING",
+                    message=f"Obligation {obligation.id} status is {obligation.status.value}; requires verified evidence",
+                )
+            )
+            is_satisfied = False
+            reason = f"Obligation status is {obligation.status.value}; fail-closed without verified evidence"
+
+    return SingleObligationEvaluation(
+        obligation_id=obligation.id,
+        kind=obligation.kind,
+        status=obligation.status,
+        is_satisfied=is_satisfied,
+        reason=reason,
+        findings=tuple(ob_findings),
+    )
+
+
 def evaluate(
     obligations: Optional[Sequence[U2Obligation]] = None,
     evidence: Optional[Dict[str, EvidenceArtifact]] = None,
@@ -862,12 +1212,15 @@ def evaluate(
     """Evaluate U2 filesystem readiness proof obligations fail-closed.
 
     Fail-closed guarantees:
-      - Overall is_ready evaluates to False unless EVERY obligation evaluates to VERIFIED.
+      - Aggregate readiness requires the COMPLETE canonical obligation set
+        (all 8 obligations OBLIG-U2-01..08). Any missing, extra, or substituted
+        obligation causes aggregate evaluation to fail closed (is_ready=False).
       - Shipped data has 7 UNKNOWN runtime obligations and 1 VERIFIED static entry obligation;
         is_ready is False and status is 'not-ready'.
-      - Static ROM evidence (0xFC0BD071 / ROM slices) CANNOT discharge any runtime obligation.
-      - Missing citations, citations to untracked files, or citations to local-only paths
-        (e.g., firmware/ dumps or PORT-9A L1/L2) force is_ready to False.
+      - Static ROM evidence (0xFC0BD071 / ROM slices / PORT11A citations) CANNOT discharge
+        any runtime obligation, even if associated_addresses is empty.
+      - Missing citations, citations to untracked files, citations to forbidden local-only paths
+        (e.g., firmware/ dumps or PORT-9A L1/L2), or artifact_type mismatches cause failure.
       - Agreement with PORT-9A model (preconditions False) and PORT-9B I2 contract is strictly enforced.
     """
     target_obligations = tuple(DEFAULT_U2_OBLIGATIONS if obligations is None else obligations)
@@ -913,170 +1266,40 @@ def evaluate(
                 )
             )
 
-    # 2. Evaluate each obligation
-    for ob in target_obligations:
-        ob_findings: List[ObligationFinding] = []
-
-        # Citation validation
-        if not ob.citations:
-            ob_findings.append(
-                ObligationFinding(
-                    rule_id=RULE_MISSING_CITATIONS,
-                    obligation_id=ob.id,
-                    severity="ERROR",
-                    message=f"Obligation {ob.id} has no supporting citations",
-                )
+    # 2. Check canonical set requirement for aggregate readiness
+    supplied_ids = tuple(ob.id for ob in target_obligations)
+    is_canonical_set = (
+        set(supplied_ids) == set(CANONICAL_U2_OBLIGATION_IDS)
+        and len(supplied_ids) == len(CANONICAL_U2_OBLIGATION_IDS)
+    )
+    if not is_canonical_set:
+        findings.append(
+            ObligationFinding(
+                rule_id=RULE_INCOMPLETE_OBLIGATION_SET,
+                obligation_id="AGGREGATE",
+                severity="ERROR",
+                message=(
+                    f"Aggregate filesystem readiness requires the complete canonical obligation set "
+                    f"({len(CANONICAL_U2_OBLIGATION_IDS)} obligations: {list(CANONICAL_U2_OBLIGATION_IDS)}). "
+                    f"Supplied set has {len(supplied_ids)} obligations: {list(supplied_ids)}."
+                ),
             )
-        else:
-            for cit in ob.citations:
-                if not cit.path or not cit.path.strip():
-                    ob_findings.append(
-                        ObligationFinding(
-                            rule_id=RULE_MISSING_CITATIONS,
-                            obligation_id=ob.id,
-                            severity="ERROR",
-                            message=f"Obligation {ob.id} carries an empty citation path",
-                        )
-                    )
-                    continue
-
-                clean_path = cit.path.strip()
-
-                # Check forbidden local-only or untracked paths
-                if any(clean_path.startswith(prefix) or prefix in clean_path for prefix in FORBIDDEN_PATH_PREFIXES):
-                    ob_findings.append(
-                        ObligationFinding(
-                            rule_id=RULE_FORBIDDEN_LOCAL_PATH,
-                            obligation_id=ob.id,
-                            severity="ERROR",
-                            message=f"Citation '{clean_path}' references forbidden local-only or untracked path",
-                        )
-                    )
-                    continue
-
-                # Check tracking on origin/main
-                if clean_path not in ORIGIN_MAIN_TRACKED_FILES:
-                    ob_findings.append(
-                        ObligationFinding(
-                            rule_id=RULE_UNTRACKED_PATH,
-                            obligation_id=ob.id,
-                            severity="ERROR",
-                            message=f"Citation '{clean_path}' is not a tracked file on origin/main",
-                        )
-                    )
-                    continue
-
-                # Disk existence and content authentication
-                if check_disk:
-                    full_path = root / clean_path
-                    if not full_path.is_file():
-                        ob_findings.append(
-                            ObligationFinding(
-                                rule_id=RULE_MISSING_CITED_PATH,
-                                obligation_id=ob.id,
-                                severity="ERROR",
-                                message=f"Cited file '{clean_path}' does not exist on disk",
-                            )
-                        )
-                        continue
-
-                    # Authenticate digest if pinned
-                    if clean_path in active_pins:
-                        try:
-                            content_bytes = (
-                                file_reader(full_path) if file_reader is not None else full_path.read_bytes()
-                            )
-                            digest = hashlib.sha256(content_bytes).hexdigest()
-                            if digest.lower() != active_pins[clean_path].lower():
-                                ob_findings.append(
-                                    ObligationFinding(
-                                        rule_id=RULE_CONTENT_HASH_MISMATCH,
-                                        obligation_id=ob.id,
-                                        severity="ERROR",
-                                        message=(
-                                            f"Cited file '{clean_path}' content hash mismatch "
-                                            f"(expected {active_pins[clean_path]}, got {digest})"
-                                        ),
-                                    )
-                                )
-                        except Exception as exc:
-                            ob_findings.append(
-                                ObligationFinding(
-                                    rule_id=RULE_UNREADABLE_SOURCE,
-                                    obligation_id=ob.id,
-                                    severity="ERROR",
-                                    message=f"Cannot read cited file '{clean_path}': {exc}",
-                                )
-                            )
-
-        # Evidence validation: check provided evidence artifact or fallback to current status
-        ev_artifact = evidence.get(ob.id) if evidence is not None else None
-        is_satisfied = False
-        reason = ""
-
-        if ev_artifact is not None:
-            # Evidence provided: must be VERIFIED
-            if ev_artifact.status != ObligationStatus.VERIFIED:
-                ob_findings.append(
-                    ObligationFinding(
-                        rule_id=RULE_EVIDENCE_STATUS_NOT_VERIFIED,
-                        obligation_id=ob.id,
-                        severity="ERROR",
-                        message=f"Provided evidence status is {ev_artifact.status.value}, expected VERIFIED",
-                    )
-                )
-                reason = f"Evidence status {ev_artifact.status.value} is not VERIFIED"
-            # Invariant: Static evidence CANNOT discharge runtime obligations
-            elif ob.is_runtime and is_static_evidence(ev_artifact):
-                ob_findings.append(
-                    ObligationFinding(
-                        rule_id=RULE_STATIC_CANNOT_DISCHARGE_RUNTIME,
-                        obligation_id=ob.id,
-                        severity="ERROR",
-                        message=(
-                            f"Static evidence ({ev_artifact.artifact_id} / 0xFC0BD071) cannot discharge "
-                            f"runtime obligation '{ob.id}'; runtime readiness requires dynamic storage witness."
-                        ),
-                    )
-                )
-                reason = "Static evidence cannot discharge runtime obligation"
-            else:
-                is_satisfied = True
-                reason = f"Satisfied by verified evidence '{ev_artifact.artifact_id}'"
-        else:
-            # No evidence artifact passed: evaluate baseline status
-            if ob.status == ObligationStatus.VERIFIED:
-                is_satisfied = True
-                reason = "Obligation is VERIFIED in repository baseline documentation"
-            else:
-                ob_findings.append(
-                    ObligationFinding(
-                        rule_id=RULE_STATUS_UNVERIFIED,
-                        obligation_id=ob.id,
-                        severity="WARNING",
-                        message=f"Obligation {ob.id} status is {ob.status.value}; requires verified evidence",
-                    )
-                )
-                reason = f"Obligation status is {ob.status.value}; fail-closed without verified evidence"
-
-        # If citation errors occurred, force unsatisfied
-        has_errors = any(f.severity == "ERROR" for f in ob_findings)
-        if has_errors:
-            is_satisfied = False
-            if not reason:
-                reason = "Citation validation errors prevent satisfaction"
-
-        findings.extend(ob_findings)
-        obligation_evals[ob.id] = SingleObligationEvaluation(
-            obligation_id=ob.id,
-            kind=ob.kind,
-            status=ob.status,
-            is_satisfied=is_satisfied,
-            reason=reason,
-            findings=tuple(ob_findings),
         )
 
-    # Aggregate counts
+    # 3. Evaluate each obligation
+    for ob in target_obligations:
+        single_eval = evaluate_obligation(
+            obligation=ob,
+            evidence=evidence,
+            repo_root=root,
+            check_disk=check_disk,
+            pinned_hashes=active_pins,
+            file_reader=file_reader,
+        )
+        obligation_evals[ob.id] = single_eval
+        findings.extend(single_eval.findings)
+
+    # 4. Aggregate counts
     total_obligations = len(target_obligations)
     verified_count = sum(1 for ev in obligation_evals.values() if ev.is_satisfied)
     inferred_count = sum(1 for ob in target_obligations if ob.status == ObligationStatus.INFERRED)
@@ -1086,8 +1309,13 @@ def evaluate(
     error_count = sum(1 for f in findings if f.severity == "ERROR")
     warning_count = sum(1 for f in findings if f.severity == "WARNING")
 
-    # Fail closed: ready ONLY if zero errors, every obligation satisfied, and dataset non-empty
-    is_ready = error_count == 0 and verified_count == total_obligations and total_obligations > 0
+    # Aggregate readiness: requires complete canonical set, zero errors, and all canonical obligations satisfied
+    is_ready = (
+        is_canonical_set
+        and error_count == 0
+        and verified_count == len(CANONICAL_U2_OBLIGATION_IDS)
+        and total_obligations == len(CANONICAL_U2_OBLIGATION_IDS)
+    )
     status = EvaluationVerdict.READY.value if is_ready else EvaluationVerdict.NOT_READY.value
 
     return EvaluationResult(

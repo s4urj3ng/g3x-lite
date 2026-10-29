@@ -32,6 +32,7 @@ if str(REPO_ROOT / "tools") not in sys.path:
 
 import tools.port13_u2_obligations as u2
 from tools.port13_u2_obligations import (
+    CANONICAL_U2_OBLIGATION_IDS,
     Citation,
     DEFAULT_U2_OBLIGATIONS,
     EvaluationResult,
@@ -42,9 +43,12 @@ from tools.port13_u2_obligations import (
     ObligationStatus,
     ORIGIN_MAIN_TRACKED_FILES,
     PINNED_FILE_HASHES,
+    PORT9A_SIX_STAGE_CORRESPONDENCE,
     RequiredEvidence,
+    RULE_ARTIFACT_TYPE_MISMATCH,
     RULE_CONTENT_HASH_MISMATCH,
     RULE_FORBIDDEN_LOCAL_PATH,
+    RULE_INCOMPLETE_OBLIGATION_SET,
     RULE_MISSING_CITED_PATH,
     RULE_MISSING_CITATIONS,
     RULE_PRECONDITION_INVARIANT_VIOLATED,
@@ -54,6 +58,7 @@ from tools.port13_u2_obligations import (
     TRACKED_ADDRESS_CITATIONS,
     U2Obligation,
     evaluate,
+    evaluate_obligation,
     get_obligation,
     is_static_evidence,
     verify_address_provenance,
@@ -87,14 +92,76 @@ class TestShippedDataFailClosed(unittest.TestCase):
         """There must be no path to ready from shipped data without unverified runtime proof."""
         res = evaluate(DEFAULT_U2_OBLIGATIONS, repo_root=REPO_ROOT)
         self.assertFalse(res.is_ready)
+        self.assertEqual(res.status, "not-ready")
 
-        # Every individual runtime obligation must evaluate to unsatisfied
+        # Every individual obligation evaluated via evaluate([ob]) must evaluate to not-ready
+        # because every strict subset of the canonical set fails aggregate readiness
         for ob in DEFAULT_U2_OBLIGATIONS:
             single_res = evaluate([ob], repo_root=REPO_ROOT)
+            self.assertFalse(single_res.is_ready, f"{ob.id} alone is a strict subset and must evaluate to not-ready")
+            self.assertEqual(single_res.status, "not-ready")
+            self.assertIn(RULE_INCOMPLETE_OBLIGATION_SET, [f.rule_id for f in single_res.findings])
+
+            # Per-obligation satisfaction query
             if ob.id == "OBLIG-U2-01":
-                self.assertTrue(single_res.is_ready, f"{ob.id} is static entry and should evaluate to ready")
+                self.assertTrue(single_res.obligation_evaluations[ob.id].is_satisfied)
+                self.assertTrue(single_res.is_obligation_satisfied(ob.id))
+                self.assertTrue(evaluate_obligation(ob, repo_root=REPO_ROOT).is_satisfied)
             else:
-                self.assertFalse(single_res.is_ready, f"{ob.id} is runtime and must evaluate to not-ready")
+                self.assertFalse(single_res.obligation_evaluations[ob.id].is_satisfied)
+                self.assertFalse(single_res.is_obligation_satisfied(ob.id))
+                self.assertFalse(evaluate_obligation(ob, repo_root=REPO_ROOT).is_satisfied)
+
+    def test_every_strict_subset_of_canonical_set_returns_not_ready(self):
+        """Every strict subset of the canonical obligation set must evaluate to not-ready."""
+        canonical_obs = list(DEFAULT_U2_OBLIGATIONS)
+        self.assertEqual(len(canonical_obs), 8)
+
+        # Subsets of length 1 to 7
+        for k in range(1, len(canonical_obs)):
+            subset = canonical_obs[:k]
+            res = evaluate(subset, repo_root=REPO_ROOT)
+            self.assertFalse(res.is_ready, f"Subset of size {k} must not evaluate to ready")
+            self.assertEqual(res.status, "not-ready")
+            self.assertIn(RULE_INCOMPLETE_OBLIGATION_SET, [f.rule_id for f in res.findings])
+
+        # Single obligation OBLIG-U2-01 alone must evaluate to not-ready
+        ob1 = get_obligation("OBLIG-U2-01")
+        self.assertIsNotNone(ob1)
+        res_ob1 = evaluate([ob1], repo_root=REPO_ROOT)
+        self.assertFalse(res_ob1.is_ready)
+        self.assertEqual(res_ob1.status, "not-ready")
+        self.assertIn(RULE_INCOMPLETE_OBLIGATION_SET, [f.rule_id for f in res_ob1.findings])
+
+        # Single obligation OBLIG-U2-01 with static evidence must still be not-ready in aggregate
+        static_ev = EvidenceArtifact(
+            artifact_id="STATIC-ROM-EVIDENCE",
+            artifact_type="STATIC_ROM_SLICE",
+            status=ObligationStatus.VERIFIED,
+            kind=ObligationKind.STATIC,
+            citation=Citation(path="docs/PORT11A_GM110C_ROM_EVIDENCE.md", line=21),
+            associated_addresses=("0xFC0BD071",),
+        )
+        res_single_ev = evaluate([ob1], evidence={"OBLIG-U2-01": static_ev}, repo_root=REPO_ROOT)
+        self.assertFalse(res_single_ev.is_ready, "Single obligation with static evidence must not give aggregate ready")
+        self.assertEqual(res_single_ev.status, "not-ready")
+        self.assertIn(RULE_INCOMPLETE_OBLIGATION_SET, [f.rule_id for f in res_single_ev.findings])
+        self.assertTrue(res_single_ev.obligation_evaluations["OBLIG-U2-01"].is_satisfied)
+        self.assertTrue(res_single_ev.is_obligation_satisfied("OBLIG-U2-01"))
+
+        # Extra / non-canonical obligation must also fail aggregate readiness
+        fake_ob = U2Obligation(
+            id="OBLIG-FAKE-EXTRA",
+            statement="Fake extra obligation",
+            kind=ObligationKind.STATIC,
+            status=ObligationStatus.VERIFIED,
+            required_evidence=RequiredEvidence("TEST", "test"),
+            citations=(Citation(path="docs/PORT11A_GM110C_ROM_EVIDENCE.md", line=21),),
+        )
+        res_extra = evaluate(canonical_obs + [fake_ob], repo_root=REPO_ROOT)
+        self.assertFalse(res_extra.is_ready)
+        self.assertEqual(res_extra.status, "not-ready")
+        self.assertIn(RULE_INCOMPLETE_OBLIGATION_SET, [f.rule_id for f in res_extra.findings])
 
     def test_get_obligation_lookup(self):
         """get_obligation retrieves canonical obligations by ID."""
@@ -124,13 +191,45 @@ class TestStaticEvidenceCannotDischargeRuntimeObligations(unittest.TestCase):
         )
 
     def test_static_entry_evidence_satisfies_static_entry_obligation(self):
-        """Static entry evidence 0xFC0BD071 CAN satisfy OBLIG-U2-01 (static task entry)."""
+        """Static entry evidence 0xFC0BD071 CAN satisfy OBLIG-U2-01 in isolation."""
         ob1 = get_obligation("OBLIG-U2-01")
         self.assertIsNotNone(ob1)
+
+        # In isolation via evaluate_obligation():
+        single_eval = evaluate_obligation(ob1, evidence=self.static_entry_evidence, repo_root=REPO_ROOT)
+        self.assertTrue(single_eval.is_satisfied)
+        self.assertIn("Satisfied by verified evidence", single_eval.reason)
+
+        # In aggregate evaluate(): subset alone fails aggregate readiness, but obligation is satisfied
         res = evaluate([ob1], evidence={"OBLIG-U2-01": self.static_entry_evidence}, repo_root=REPO_ROOT)
-        self.assertTrue(res.is_ready)
-        self.assertEqual(res.status, "ready")
-        self.assertEqual(res.verified_count, 1)
+        self.assertFalse(res.is_ready)
+        self.assertEqual(res.status, "not-ready")
+        self.assertIn(RULE_INCOMPLETE_OBLIGATION_SET, [f.rule_id for f in res.findings])
+        self.assertTrue(res.obligation_evaluations["OBLIG-U2-01"].is_satisfied)
+        self.assertTrue(res.is_obligation_satisfied("OBLIG-U2-01"))
+
+    def test_execution_witness_citing_only_port11a_static_evidence_fails(self):
+        """An EXECUTION_WITNESS citing only PORT11A static evidence with empty associated_addresses fails."""
+        ob2 = get_obligation("OBLIG-U2-02")
+        self.assertIsNotNone(ob2)
+        sneak_art = EvidenceArtifact(
+            artifact_id="EXEC-WITNESS-PORT11A-ONLY",
+            artifact_type="EXECUTION_WITNESS",
+            status=ObligationStatus.VERIFIED,
+            kind=ObligationKind.RUNTIME,
+            description="Purported dynamic witness citing static ROM evidence",
+            citation=Citation(path="docs/PORT11A_GM110C_ROM_EVIDENCE.md", line=21),
+            associated_addresses=(),  # empty addresses!
+            how_captured="Dynamic execution trace",
+        )
+        single_eval = evaluate_obligation(ob2, evidence=sneak_art, repo_root=REPO_ROOT)
+        self.assertFalse(single_eval.is_satisfied)
+        self.assertIn(RULE_STATIC_CANNOT_DISCHARGE_RUNTIME, [f.rule_id for f in single_eval.findings])
+
+        res = evaluate(DEFAULT_U2_OBLIGATIONS, evidence={"OBLIG-U2-02": sneak_art}, repo_root=REPO_ROOT)
+        self.assertFalse(res.is_ready)
+        self.assertEqual(res.status, "not-ready")
+        self.assertIn(RULE_STATIC_CANNOT_DISCHARGE_RUNTIME, [f.rule_id for f in res.findings])
 
     def test_static_entry_evidence_cannot_discharge_any_runtime_obligation(self):
         """Static entry evidence (0xFC0BD071) CANNOT discharge any runtime obligation."""
@@ -261,6 +360,93 @@ class TestCitationValidationFailClosed(unittest.TestCase):
         self.assertFalse(res_b.is_ready)
         self.assertIn(RULE_FORBIDDEN_LOCAL_PATH, [f.rule_id for f in res_b.findings])
 
+    def test_runtime_obligations_with_missing_citations_fail(self):
+        """VERIFIED/RUNTIME artifacts for all seven runtime obligations with missing citations give not-ready."""
+        runtime_obs = [ob for ob in DEFAULT_U2_OBLIGATIONS if ob.is_runtime]
+        self.assertEqual(len(runtime_obs), 7)
+        for ob in runtime_obs:
+            with self.subTest(obligation_id=ob.id):
+                art = EvidenceArtifact(
+                    artifact_id=f"MISSING-CIT-{ob.id}",
+                    artifact_type=ob.required_evidence.artifact_type,
+                    status=ObligationStatus.VERIFIED,
+                    kind=ObligationKind.RUNTIME,
+                    citation=None,  # Missing citation
+                )
+                single_eval = evaluate_obligation(ob, evidence=art, repo_root=REPO_ROOT)
+                self.assertFalse(single_eval.is_satisfied)
+                self.assertIn(RULE_MISSING_CITATIONS, [f.rule_id for f in single_eval.findings])
+
+                res = evaluate(DEFAULT_U2_OBLIGATIONS, evidence={ob.id: art}, repo_root=REPO_ROOT)
+                self.assertFalse(res.is_ready)
+                self.assertEqual(res.status, "not-ready")
+                self.assertIn(RULE_MISSING_CITATIONS, [f.rule_id for f in res.findings])
+
+    def test_runtime_obligations_with_untracked_citations_fail(self):
+        """VERIFIED/RUNTIME artifacts for all seven runtime obligations with untracked citations give not-ready."""
+        runtime_obs = [ob for ob in DEFAULT_U2_OBLIGATIONS if ob.is_runtime]
+        self.assertEqual(len(runtime_obs), 7)
+        for ob in runtime_obs:
+            with self.subTest(obligation_id=ob.id):
+                art = EvidenceArtifact(
+                    artifact_id=f"UNTRACKED-CIT-{ob.id}",
+                    artifact_type=ob.required_evidence.artifact_type,
+                    status=ObligationStatus.VERIFIED,
+                    kind=ObligationKind.RUNTIME,
+                    citation=Citation(path="untracked/bogus_runtime_witness.txt", line=1),
+                )
+                single_eval = evaluate_obligation(ob, evidence=art, repo_root=REPO_ROOT)
+                self.assertFalse(single_eval.is_satisfied)
+                self.assertIn(RULE_UNTRACKED_PATH, [f.rule_id for f in single_eval.findings])
+
+                res = evaluate(DEFAULT_U2_OBLIGATIONS, evidence={ob.id: art}, repo_root=REPO_ROOT)
+                self.assertFalse(res.is_ready)
+                self.assertEqual(res.status, "not-ready")
+                self.assertIn(RULE_UNTRACKED_PATH, [f.rule_id for f in res.findings])
+
+    def test_runtime_obligations_with_forbidden_firmware_citations_fail(self):
+        """VERIFIED/RUNTIME artifacts for all seven runtime obligations with firmware/ citations give not-ready."""
+        runtime_obs = [ob for ob in DEFAULT_U2_OBLIGATIONS if ob.is_runtime]
+        self.assertEqual(len(runtime_obs), 7)
+        for ob in runtime_obs:
+            with self.subTest(obligation_id=ob.id):
+                art = EvidenceArtifact(
+                    artifact_id=f"FW-CIT-{ob.id}",
+                    artifact_type=ob.required_evidence.artifact_type,
+                    status=ObligationStatus.VERIFIED,
+                    kind=ObligationKind.RUNTIME,
+                    citation=Citation(path="firmware/dumps/GM1.10C/PRIMARY.BIN", line=1),
+                )
+                single_eval = evaluate_obligation(ob, evidence=art, repo_root=REPO_ROOT)
+                self.assertFalse(single_eval.is_satisfied)
+                self.assertIn(RULE_FORBIDDEN_LOCAL_PATH, [f.rule_id for f in single_eval.findings])
+
+                res = evaluate(DEFAULT_U2_OBLIGATIONS, evidence={ob.id: art}, repo_root=REPO_ROOT)
+                self.assertFalse(res.is_ready)
+                self.assertEqual(res.status, "not-ready")
+                self.assertIn(RULE_FORBIDDEN_LOCAL_PATH, [f.rule_id for f in res.findings])
+
+    def test_artifact_type_mismatch_fails(self):
+        """Evidence artifact with mismatched artifact_type must fail closed."""
+        ob2 = get_obligation("OBLIG-U2-02")
+        self.assertIsNotNone(ob2)
+        # OBLIG-U2-02 requires EXECUTION_WITNESS; provide STORAGE_MOUNT_PROOF instead
+        mismatched_art = EvidenceArtifact(
+            artifact_id="MISMATCH-TYPE-02",
+            artifact_type="STORAGE_MOUNT_PROOF",
+            status=ObligationStatus.VERIFIED,
+            kind=ObligationKind.RUNTIME,
+            citation=Citation(path="tools/port9a_runtime_lifecycle.py", line=296),
+        )
+        single_eval = evaluate_obligation(ob2, evidence=mismatched_art, repo_root=REPO_ROOT)
+        self.assertFalse(single_eval.is_satisfied)
+        self.assertIn(RULE_ARTIFACT_TYPE_MISMATCH, [f.rule_id for f in single_eval.findings])
+
+        res = evaluate(DEFAULT_U2_OBLIGATIONS, evidence={"OBLIG-U2-02": mismatched_art}, repo_root=REPO_ROOT)
+        self.assertFalse(res.is_ready)
+        self.assertEqual(res.status, "not-ready")
+        self.assertIn(RULE_ARTIFACT_TYPE_MISMATCH, [f.rule_id for f in res.findings])
+
     def test_missing_file_on_disk_fails_closed(self):
         """A cited file that does not exist on disk fails closed."""
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -316,7 +502,7 @@ class TestAgreementWithPort9aAndPort9bModels(unittest.TestCase):
         self.assertIn("InitFileModules", desc)
 
     def test_port9a_six_stage_promotion_contract_completeness(self):
-        """Verify all six promotion stages are present in FILESYSTEM_PROMOTION_EVIDENCE_REQUIREMENTS."""
+        """Verify all six promotion stages are present in FILESYSTEM_PROMOTION_EVIDENCE_REQUIREMENTS and mapped with tracked lines."""
         stages = [stage for stage, _ in rt.FILESYSTEM_PROMOTION_EVIDENCE_REQUIREMENTS]
         expected_stages = [
             "task_created",
@@ -327,6 +513,35 @@ class TestAgreementWithPort9aAndPort9bModels(unittest.TestCase):
             "warm_restart_safe",
         ]
         self.assertEqual(stages, expected_stages)
+
+        # Read port9a lines to verify each line number in PORT9A_SIX_STAGE_CORRESPONDENCE is exact
+        port9a_lines = (REPO_ROOT / "tools/port9a_runtime_lifecycle.py").read_text(encoding="utf-8").splitlines()
+
+        for stage_name, info in PORT9A_SIX_STAGE_CORRESPONDENCE.items():
+            line_no = info["port9a_line"]
+            # line_no is 1-indexed
+            line_text = port9a_lines[line_no - 1]
+            self.assertIn(
+                stage_name,
+                line_text,
+                f"Stage {stage_name} expected on line {line_no} of tools/port9a_runtime_lifecycle.py, got: {line_text}",
+            )
+            for ob_id in info["obligation_ids"]:
+                ob = get_obligation(ob_id)
+                self.assertIsNotNone(ob, f"Mapped obligation {ob_id} for stage {stage_name} not found")
+
+        # Verify stage 3 (init_returned_normally) maps to OBLIG-U2-03
+        ob3 = get_obligation("OBLIG-U2-03")
+        self.assertIsNotNone(ob3)
+        self.assertEqual(ob3.required_evidence.artifact_type, "COMPLETION_WITNESS")
+        self.assertIn("sub_fc0d9ccc and sub_fc0d9cf6", ob3.statement)
+        self.assertIn("r0==0", ob3.statement)
+
+        # Verify stage 4 (mount_observed) maps to OBLIG-U2-04
+        ob4 = get_obligation("OBLIG-U2-04")
+        self.assertIsNotNone(ob4)
+        self.assertEqual(ob4.required_evidence.artifact_type, "STORAGE_MOUNT_PROOF")
+        self.assertIn("0x5006", ob4.statement)
 
     def test_verify_i2_contract_consistency_helper(self):
         """Contract consistency helper must succeed against tracked repository code."""
