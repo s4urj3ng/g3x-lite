@@ -14,8 +14,10 @@ Covers:
 
 from __future__ import annotations
 
+import hashlib
 import pathlib
 import sys
+import tempfile
 import unittest
 
 # Ensure repo root and tools are in sys.path
@@ -35,16 +37,25 @@ from tools.port13_memory_obligations import (
     MemoryObligation,
     ObligationFinding,
     ObligationStatus,
+    ORIGIN_MAIN_PIN_COMMIT,
     ORIGIN_MAIN_TRACKED_FILES,
+    PINNED_ORIGIN_MAIN_FILE_HASHES,
+    RULE_CONTENT_HASH_MISMATCH,
     RULE_EMPTY_CITATIONS,
     RULE_HISTORICAL_CANNOT_VERIFY,
     RULE_MISSING_CITED_PATH,
     RULE_PENDING_PR_CANNOT_VERIFY,
     RULE_STATUS_NOT_VERIFIED,
     RULE_UNACCEPTABLE_SOURCE,
+    RULE_UNPINNED_SOURCE,
+    RULE_UNREADABLE_SOURCE,
     RULE_UNTRACKED_SOURCE,
+    SUPPORTED_FIRMWARE,
+    SUPPORTED_FIRMWARES,
     TRACKED_ADDRESS_CITATIONS,
     evaluate,
+    is_supported_firmware,
+    normalize_firmware,
     verify_address_provenance,
 )
 
@@ -336,6 +347,223 @@ class TestAddressProvenanceAndIntegrity(unittest.TestCase):
                 target_line,
                 f"Address {addr_str} not found in {citation.document_ref}:{citation.line}",
             )
+
+
+class TestFirmwareIdentityAllowlist(unittest.TestCase):
+    """Enforce strict GM1.10C firmware identity allowlist on VERIFIED obligations."""
+
+    def test_strict_allowlist_accepts_only_normalized_gm110c(self):
+        """Allowlist helper accepts only GM1.10C after normalization, rejecting everything else."""
+        self.assertTrue(is_supported_firmware("GM1.10C"))
+        self.assertTrue(is_supported_firmware("gm1.10c"))
+        self.assertTrue(is_supported_firmware(" GM1.10C "))
+        self.assertTrue(is_supported_firmware("gm1.10c\t"))
+
+        # Strict rejection of historical, unknown, or malformed revisions
+        self.assertFalse(is_supported_firmware("gm1.10e"))
+        self.assertFalse(is_supported_firmware("GM1.10E "))
+        self.assertFalse(is_supported_firmware("UNKNOWN"))
+        self.assertFalse(is_supported_firmware(""))
+        self.assertFalse(is_supported_firmware(None))
+        self.assertFalse(is_supported_firmware("GM1.10X"))
+        self.assertFalse(is_supported_firmware("1.00C"))
+        self.assertFalse(is_supported_firmware("1.10E"))
+        self.assertFalse(is_supported_firmware("GM1.00C"))
+
+    def test_verified_obligation_rejects_unsupported_firmware_variants(self):
+        """Changing the VERIFIED obligation's citation firmware to non-GM1.10C fails closed."""
+        base_ob = [ob for ob in DEFAULT_MEMORY_OBLIGATIONS if ob.id == "OBLIG-MEM-16A"][0]
+
+        test_variants = ["gm1.10e", "GM1.10E ", "UNKNOWN", "", "GM1.10X", None]
+        for bad_fw in test_variants:
+            with self.subTest(firmware=bad_fw):
+                bad_cit = Citation(
+                    path=base_ob.citations[0].path,
+                    line=base_ob.citations[0].line,
+                    end_line=base_ob.citations[0].end_line,
+                    firmware=bad_fw,  # type: ignore
+                    note="Tampered citation firmware for test",
+                )
+                tampered_ob = MemoryObligation(
+                    id=base_ob.id,
+                    statement=base_ob.statement,
+                    required_evidence_type=base_ob.required_evidence_type,
+                    acceptable_tracked_sources=base_ob.acceptable_tracked_sources,
+                    current_status=ObligationStatus.VERIFIED,
+                    citations=(bad_cit,),
+                )
+                res = evaluate([tampered_ob], repo_root=REPO_ROOT)
+                self.assertFalse(res.is_ready, f"Failed to fail-closed on firmware variant {bad_fw!r}")
+                self.assertGreaterEqual(res.error_count, 1)
+                rules = [f.rule_id for f in res.findings]
+                self.assertIn(
+                    RULE_HISTORICAL_CANNOT_VERIFY,
+                    rules,
+                    f"Expected RULE_HISTORICAL_CANNOT_VERIFY for firmware {bad_fw!r}",
+                )
+
+
+class TestHistoricalProvenanceMixedVersionDocs(unittest.TestCase):
+    """Enforce fail-closed handling of historical evidence in mixed-version docs."""
+
+    def test_shipped_oblig_mem_10_fails_if_promoted_to_verified(self):
+        """OBLIG-MEM-10 documents OMAR only for GM1.10E; promoting to VERIFIED forces False."""
+        base_ob = [ob for ob in DEFAULT_MEMORY_OBLIGATIONS if ob.id == "OBLIG-MEM-10"][0]
+        promoted = MemoryObligation(
+            id=base_ob.id,
+            statement=base_ob.statement,
+            required_evidence_type=base_ob.required_evidence_type,
+            acceptable_tracked_sources=base_ob.acceptable_tracked_sources,
+            current_status=ObligationStatus.VERIFIED,
+            citations=base_ob.citations,
+            pending_pr=base_ob.pending_pr,
+            notes=base_ob.notes,
+        )
+        res = evaluate([promoted], repo_root=REPO_ROOT)
+        self.assertFalse(res.is_ready)
+        self.assertGreaterEqual(res.error_count, 1)
+        rules = [f.rule_id for f in res.findings]
+        self.assertIn(RULE_HISTORICAL_CANNOT_VERIFY, rules)
+
+    def test_all_shipped_historical_obligations_fail_if_promoted_to_verified(self):
+        """Obligations citing historical firmware lines cannot be verified."""
+        historical_ob_ids = (
+            "OBLIG-MEM-01",
+            "OBLIG-MEM-10",
+            "OBLIG-MEM-11",
+            "OBLIG-MEM-12",
+            "OBLIG-MEM-13",
+            "OBLIG-MEM-17",
+        )
+        for ob_id in historical_ob_ids:
+            with self.subTest(obligation_id=ob_id):
+                base_ob = [ob for ob in DEFAULT_MEMORY_OBLIGATIONS if ob.id == ob_id][0]
+                promoted = MemoryObligation(
+                    id=base_ob.id,
+                    statement=base_ob.statement,
+                    required_evidence_type=base_ob.required_evidence_type,
+                    acceptable_tracked_sources=base_ob.acceptable_tracked_sources,
+                    current_status=ObligationStatus.VERIFIED,
+                    citations=base_ob.citations,
+                    pending_pr=base_ob.pending_pr,
+                    notes=base_ob.notes,
+                )
+                res = evaluate([promoted], repo_root=REPO_ROOT)
+                self.assertFalse(res.is_ready)
+                self.assertGreaterEqual(res.error_count, 1)
+                rules = [f.rule_id for f in res.findings]
+                self.assertIn(RULE_HISTORICAL_CANNOT_VERIFY, rules)
+
+    def test_no_shipped_verified_obligation_depends_only_on_historical_citations(self):
+        """Generic invariant: no shipped VERIFIED obligation depends solely on historical evidence."""
+        verified_obligations = [
+            ob for ob in DEFAULT_MEMORY_OBLIGATIONS
+            if ob.current_status == ObligationStatus.VERIFIED
+        ]
+        self.assertGreater(len(verified_obligations), 0, "Shipped dataset has no VERIFIED obligations")
+        for ob in verified_obligations:
+            self.assertGreater(len(ob.citations), 0)
+            for cit in ob.citations:
+                self.assertFalse(
+                    cit.is_historical,
+                    f"VERIFIED obligation {ob.id} has citation marked is_historical=True",
+                )
+                self.assertEqual(
+                    normalize_firmware(cit.firmware),
+                    SUPPORTED_FIRMWARE,
+                    f"VERIFIED obligation {ob.id} cites non-{SUPPORTED_FIRMWARE} firmware {cit.firmware!r}",
+                )
+                self.assertNotIn(
+                    cit.path,
+                    HISTORICAL_ONLY_PATHS,
+                    f"VERIFIED obligation {ob.id} cites historical-only path {cit.path}",
+                )
+
+
+class TestContentAuthenticationAndDigestPinning(unittest.TestCase):
+    """Verify cryptographic SHA-256 provenance authentication for cited files."""
+
+    def test_all_pinned_hashes_match_disk_files(self):
+        """Every entry in PINNED_ORIGIN_MAIN_FILE_HASHES must exist and match its pin."""
+        self.assertGreaterEqual(len(PINNED_ORIGIN_MAIN_FILE_HASHES), 9)
+        for rel_path, expected_hash in PINNED_ORIGIN_MAIN_FILE_HASHES.items():
+            full_path = REPO_ROOT / rel_path
+            self.assertTrue(full_path.is_file(), f"Pinned file '{rel_path}' missing on disk")
+            actual_sha = hashlib.sha256(full_path.read_bytes()).hexdigest()
+            self.assertEqual(
+                actual_sha.lower(),
+                expected_hash.lower(),
+                f"Digest mismatch for '{rel_path}' against pinned commit {ORIGIN_MAIN_PIN_COMMIT}",
+            )
+
+    def test_altered_content_at_allowed_path_fails_via_injectable_reader(self):
+        """Content alteration at an allowed path must be rejected fail-closed via file_reader."""
+        base_ob = [ob for ob in DEFAULT_MEMORY_OBLIGATIONS if ob.id == "OBLIG-MEM-16A"][0]
+
+        def corrupted_reader(p: pathlib.Path) -> bytes:
+            return b"TAMPERED_ROM_EVIDENCE_BYTES_0xDEADBEEF"
+
+        res = evaluate([base_ob], repo_root=REPO_ROOT, file_reader=corrupted_reader)
+        self.assertFalse(res.is_ready)
+        self.assertGreaterEqual(res.error_count, 1)
+        rules = [f.rule_id for f in res.findings]
+        self.assertIn(RULE_CONTENT_HASH_MISMATCH, rules)
+
+    def test_altered_content_at_allowed_path_fails_via_temp_root(self):
+        """Content alteration at an allowed path must be rejected fail-closed via repo_root."""
+        base_ob = [ob for ob in DEFAULT_MEMORY_OBLIGATIONS if ob.id == "OBLIG-MEM-16A"][0]
+        cited_rel_path = base_ob.citations[0].path
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = pathlib.Path(tmp_dir)
+            fake_file = tmp_root / cited_rel_path
+            fake_file.parent.mkdir(parents=True, exist_ok=True)
+            fake_file.write_text("Altered documentation bytes", encoding="utf-8")
+
+            res = evaluate([base_ob], repo_root=tmp_root)
+            self.assertFalse(res.is_ready)
+            self.assertGreaterEqual(res.error_count, 1)
+            rules = [f.rule_id for f in res.findings]
+            self.assertIn(RULE_CONTENT_HASH_MISMATCH, rules)
+
+    def test_unpinned_path_at_allowed_path_fails(self):
+        """A tracked origin/main file that lacks a pinned SHA-256 digest must fail closed."""
+        # README.md is tracked on origin/main but not in PINNED_ORIGIN_MAIN_FILE_HASHES
+        self.assertIn("README.md", ORIGIN_MAIN_TRACKED_FILES)
+        self.assertNotIn("README.md", PINNED_ORIGIN_MAIN_FILE_HASHES)
+
+        ob_unpinned = MemoryObligation(
+            id="TEST-UNPINNED-01",
+            statement="Test unpinned source rejection",
+            required_evidence_type="ROM_VERIFIED",
+            acceptable_tracked_sources=("README.md",),
+            current_status=ObligationStatus.VERIFIED,
+            citations=(
+                Citation(
+                    path="README.md",
+                    line=1,
+                    firmware="GM1.10C",
+                ),
+            ),
+        )
+        res = evaluate([ob_unpinned], repo_root=REPO_ROOT)
+        self.assertFalse(res.is_ready)
+        self.assertGreaterEqual(res.error_count, 1)
+        rules = [f.rule_id for f in res.findings]
+        self.assertIn(RULE_UNPINNED_SOURCE, rules)
+
+    def test_unreadable_file_fails_closed(self):
+        """An unreadable source file forces fail-closed evaluate()."""
+        base_ob = [ob for ob in DEFAULT_MEMORY_OBLIGATIONS if ob.id == "OBLIG-MEM-16A"][0]
+
+        def failing_reader(p: pathlib.Path) -> bytes:
+            raise PermissionError("EACCES: Permission denied")
+
+        res = evaluate([base_ob], repo_root=REPO_ROOT, file_reader=failing_reader)
+        self.assertFalse(res.is_ready)
+        self.assertGreaterEqual(res.error_count, 1)
+        rules = [f.rule_id for f in res.findings]
+        self.assertIn(RULE_UNREADABLE_SOURCE, rules)
 
 
 class TestSecurityAndScopeBoundaries(unittest.TestCase):
