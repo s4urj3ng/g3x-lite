@@ -234,7 +234,7 @@ The obligations model codified in `tools/port13_u2_obligations.py` strictly adhe
      - Stage 4: `mount_observed` `[VERIFIED: tools/port9a_runtime_lifecycle.py:300]` $\to$ `OBLIG-U2-04` (independent kernel storage mount proof decoupled from event `0x5006`).
      - Stage 5: `fs_io_ready` `[VERIFIED: tools/port9a_runtime_lifecycle.py:302]` $\to$ `OBLIG-U2-05` (verified non-destructive open/read capability prior to CHDK file access).
      - Stage 6: `warm_restart_safe` `[VERIFIED: tools/port9a_runtime_lifecycle.py:304]` $\to$ `OBLIG-U2-08` (warm-restart SD host/card state preconditions resolution).
-4. **Programmatic Stage Correspondence Mapping** `[PROPOSED (this document): implemented in tools/port13_u2_obligations.py:814–844; verified by test_port9a_six_stage_promotion_contract_completeness (tests/test_port13_u2_obligations.py:509–549)]`:
+4. **Programmatic Stage Correspondence Mapping** `[PROPOSED (this document): implemented in tools/port13_u2_obligations.py:812–844; verified by test_port9a_six_stage_promotion_contract_completeness (tests/test_port13_u2_obligations.py:509–549)]`:
    - The dictionary `PORT9A_SIX_STAGE_CORRESPONDENCE` formalizes the exact line citations in `port9a` for automated regression testing.
 
 ### 4.2 Consistency with `tools/port9b_runtime_contract.py`
@@ -255,35 +255,37 @@ The obligations model aligns with `tools/port9b_runtime_contract.py`:
 ### 5.1 Fail-Closed Evaluator Implementation Architecture
 The evaluator in [`tools/port13_u2_obligations.py`](../tools/port13_u2_obligations.py) implements the following structural fail-closed guarantees:
 
-1. **Full Value Equality Canonical Set Enforcement** `[VERIFIED: implemented in tools/port13_u2_obligations.py:972–984, 1328–1375; verified by tests/test_port13_u2_obligations.py:611–659]`:
+1. **Full Value Equality Canonical Set & Noncanonical Rejection Enforcement** `[VERIFIED: implemented in tools/port13_u2_obligations.py:972–993, 1244–1260, 1403–1432; verified by tests/test_port13_u2_obligations.py:611–659, 760–869]`:
    - `evaluate()` evaluates aggregate filesystem readiness, which strictly requires the **complete canonical obligation set** (`OBLIG-U2-01` through `OBLIG-U2-08`) compared by **full value equality** against `DEFAULT_U2_OBLIGATIONS` (`target_obligations == DEFAULT_U2_OBLIGATIONS`).
    - If any obligation is missing, extra, or if IDs do not match, aggregate evaluation fails with `RULE_INCOMPLETE_OBLIGATION_SET`.
    - If IDs match but any obligation field (`id`, `statement`, `kind`, `status`, `required_evidence`, `citations`, `notes`) differs from the canonical definition (such as the reviewer's substitution exploit or flipping `kind` from RUNTIME to STATIC), aggregate evaluation fails with `RULE_NONCANONICAL_OBLIGATION`.
-   - In isolation, `evaluate_obligation()` also verifies that any obligation claiming a canonical ID matches `CANONICAL_OBLIGATIONS_MAP[obligation.id]` by full value equality (`tools/port13_u2_obligations.py:972–984`), failing with `RULE_NONCANONICAL_OBLIGATION` if modified.
+   - In isolation, `evaluate_obligation()` verifies that any obligation with a noncanonical ID (not present in `CANONICAL_OBLIGATIONS_MAP`) is rejected with `RULE_NONCANONICAL_OBLIGATION` (`tools/port13_u2_obligations.py:972–982`). Any obligation claiming a canonical ID must match `CANONICAL_OBLIGATIONS_MAP[obligation.id]` by full value equality (`tools/port13_u2_obligations.py:983–993`), failing with `RULE_NONCANONICAL_OBLIGATION` if modified.
+   - **Only the canonical static-entry obligation (`OBLIG-U2-01`) may be satisfied without evidence** (by full value equality with its entry in `CANONICAL_OBLIGATIONS_MAP`; `tools/port13_u2_obligations.py:1244–1260`). No other obligation may skip evidence checks just because it is marked `VERIFIED`.
 
-2. **Positive Runtime Witness Allowlist (`TRUSTED_RUNTIME_WITNESSES`)** `[VERIFIED: implemented in tools/port13_u2_obligations.py:286, 1200–1229; verified by tests/test_port13_u2_obligations.py:661–745]`:
+2. **Positive Runtime Witness Allowlist (`TRUSTED_RUNTIME_WITNESSES`) & Mandatory Runtime Provenance** `[VERIFIED: implemented in tools/port13_u2_obligations.py:286, 1209–1229, 1262–1300; verified by tests/test_port13_u2_obligations.py:661–745, 760–824]`:
    - Existing tracked documentation (`docs/`), source files (`chdk-port/`, `vendor/`), reviews (`docs/PORT13_REVIEW_U2.md`), or Python tools (`tools/`) on `origin/main` are static offline materials and must NEVER discharge any runtime obligation, regardless of caller-supplied labels (`kind=RUNTIME`, `status=VERIFIED`, matching `artifact_type`).
    - This invariant is enforced as a **positive allowlist**, not a denylist: `tools/port13_u2_obligations.py:286` defines the module-level registry `TRUSTED_RUNTIME_WITNESSES: frozenset[str] = frozenset()`.
-   - In `evaluate_obligation()` (`tools/port13_u2_obligations.py:1200–1229`), any artifact submitted for a runtime obligation (`obligation.is_runtime`) whose `artifact_id` and citation path are not in `TRUSTED_RUNTIME_WITNESSES` is rejected with `RULE_UNTRUSTED_RUNTIME_PROVENANCE`.
+   - In `evaluate_obligation()` (`tools/port13_u2_obligations.py:1209–1229`), any artifact submitted for a runtime obligation (`obligation.is_runtime`) whose `artifact_id` and citation path are not in `TRUSTED_RUNTIME_WITNESSES` is rejected with `RULE_UNTRUSTED_RUNTIME_PROVENANCE`.
+   - **Any obligation with `kind=RUNTIME`, canonical or noncanonical, must always undergo runtime-provenance enforcement**: if marked `VERIFIED` without a trusted runtime witness artifact in `TRUSTED_RUNTIME_WITNESSES`, it fails closed with `RULE_UNTRUSTED_RUNTIME_PROVENANCE` (`tools/port13_u2_obligations.py:1266–1277`) and `RULE_STATIC_CANNOT_DISCHARGE_RUNTIME` if citing static ROM evidence (`tools/port13_u2_obligations.py:1278–1299`).
    - Because `TRUSTED_RUNTIME_WITNESSES` is strictly empty in shipped code, **aggregate ready (`is_ready = True`) is structurally unreachable** from shipped data or from any caller-supplied artifacts citing repository files. Populating any entry in this registry requires physical hardware execution, dynamic telemetry capture, and an authorized, human-reviewed PR following phase transition.
 
-3. **Static Evidence Rejection for Runtime Obligations** `[VERIFIED: implemented in tools/port13_u2_obligations.py:427–474, 1188–1199; verified by tests/test_port13_u2_obligations.py:216–287]`:
+3. **Static Evidence Rejection for Runtime Obligations** `[VERIFIED: implemented in tools/port13_u2_obligations.py:427–474, 1195–1207, 1278–1299; verified by tests/test_port13_u2_obligations.py:216–291, 790–824]`:
    - The statically evidenced Thumb entry pointer `0xFC0BD071` (instruction address `0xFC0BD070`, ROM slice `S2A`) may satisfy ONLY `OBLIG-U2-01`.
    - `is_static_evidence()` (`tools/port13_u2_obligations.py:427–474`) detects static ROM artifacts, ROM slices, disassembly descriptions, ROM address references, and PORT11A citations.
-   - Any static evidence submitted for a runtime obligation is rejected with `RULE_STATIC_CANNOT_DISCHARGE_RUNTIME` (`tools/port13_u2_obligations.py:1188–1199`).
+   - Any static evidence submitted for a runtime obligation, or any runtime obligation claiming `VERIFIED` citing static ROM evidence (such as `0xFC0BD071` or `docs/PORT11A_GM110C_ROM_EVIDENCE.md`), is rejected with `RULE_STATIC_CANNOT_DISCHARGE_RUNTIME` (`tools/port13_u2_obligations.py:1195–1207, 1278–1299`).
 
-4. **Citation Authenticity, Path Restrictions, and Content Integrity** `[VERIFIED: implemented in tools/port13_u2_obligations.py:989–1060, 1073–1141; verified by tests/test_port13_u2_obligations.py:297–471]`:
+4. **Citation Authenticity, Path Restrictions, and Content Integrity** `[VERIFIED: implemented in tools/port13_u2_obligations.py:995–1085, 1098–1166; verified by tests/test_port13_u2_obligations.py:297–475]`:
    - Supporting citations on obligations and submitted evidence artifacts must be non-empty (`RULE_MISSING_CITATIONS`).
    - Citations must point to files tracked in `ORIGIN_MAIN_TRACKED_FILES` (`RULE_UNTRACKED_PATH`).
    - Citations referencing forbidden local-only paths (`firmware/`, `PORT-9A L1/L2`) are rejected with `RULE_FORBIDDEN_LOCAL_PATH`.
    - Pinned files (`PINNED_FILE_HASHES`, `tools/port13_u2_obligations.py:150–159`) are validated against SHA-256 digests; tampering triggers `RULE_CONTENT_HASH_MISMATCH`. Missing files on disk trigger `RULE_MISSING_CITED_PATH`.
    - Evidence artifact types must match `obligation.required_evidence.artifact_type` exactly; mismatches trigger `RULE_ARTIFACT_TYPE_MISMATCH`.
 
-5. **Strict Address Provenance Verification** `[VERIFIED: implemented in tools/port13_u2_obligations.py:294–334, 853–896; verified by tests/test_port13_u2_obligations.py:577–599]`:
-   - Zero new firmware addresses: every firmware address referenced in the module is registered in `TRACKED_ADDRESS_CITATIONS` (`tools/port13_u2_obligations.py:294–334`) and verified against exact document line references on disk.
+5. **Strict Address Provenance Verification** `[VERIFIED: implemented in tools/port13_u2_obligations.py:301–331, 853–896; verified by tests/test_port13_u2_obligations.py:577–599]`:
+   - Zero new firmware addresses: every firmware address referenced in the module is registered in `TRACKED_ADDRESS_CITATIONS` (`tools/port13_u2_obligations.py:301–331`) and verified against exact document line references on disk.
 
 ### 5.2 Test Suite Verification Catalog
-The offline test suite in [`tests/test_port13_u2_obligations.py`](../tests/test_port13_u2_obligations.py) comprises 33 unit tests validating the entire contract:
+The offline test suite in [`tests/test_port13_u2_obligations.py`](../tests/test_port13_u2_obligations.py) comprises 36 unit tests validating the entire contract:
 
 1. `test_evaluate_returns_not_ready_for_shipped_data` `[VERIFIED: tests/test_port13_u2_obligations.py:79–94]`: Confirms `is_ready == False`, `status == "not-ready"`, 7 unknown runtime obligations, 1 static verified obligation, and `is_fail_closed == True`.
 2. `test_there_is_no_path_to_ready_from_shipped_data` `[VERIFIED: tests/test_port13_u2_obligations.py:96–118]`: Proves no path to ready from shipped data; each single obligation evaluated alone fails aggregate readiness with `RULE_INCOMPLETE_OBLIGATION_SET`.
@@ -292,7 +294,7 @@ The offline test suite in [`tests/test_port13_u2_obligations.py`](../tests/test_
 5. `test_static_entry_evidence_satisfies_static_entry_obligation` `[VERIFIED: tests/test_port13_u2_obligations.py:198–214]`: Confirms static entry evidence satisfies `OBLIG-U2-01` in isolation while aggregate readiness remains `not-ready`.
 6. `test_execution_witness_citing_only_port11a_static_evidence_fails` `[VERIFIED: tests/test_port13_u2_obligations.py:216–237]`: Negative test confirming an `EXECUTION_WITNESS` citing PORT11A static ROM evidence with empty addresses is rejected with `RULE_STATIC_CANNOT_DISCHARGE_RUNTIME`.
 7. `test_static_entry_evidence_cannot_discharge_any_runtime_obligation` `[VERIFIED: tests/test_port13_u2_obligations.py:239–251]`: Proves static entry evidence `0xFC0BD071` cannot discharge any of the 7 runtime obligations.
-8. `test_static_evidence_detection_variants` `[VERIFIED: tests/test_port13_u2_obligations.py:253–287]`: Confirms diverse static artifact representations (mislabeled kind, static artifact type, static entry address, offline disassembly description) are rejected for runtime obligations.
+8. `test_static_evidence_detection_variants` `[VERIFIED: tests/test_port13_u2_obligations.py:253–291]`: Confirms diverse static artifact representations (mislabeled kind, static artifact type, static entry address, offline disassembly description) are rejected for runtime obligations.
 9. `test_missing_citations_cause_failure` `[VERIFIED: tests/test_port13_u2_obligations.py:297–323]`: Proves empty citations tuple or blank paths fail closed with `RULE_MISSING_CITATIONS`.
 10. `test_untracked_citations_cause_failure` `[VERIFIED: tests/test_port13_u2_obligations.py:325–338]`: Proves citations to untracked files (`platform/g3x/sub/110e/boot.c`) fail closed with `RULE_UNTRACKED_PATH`.
 11. `test_local_only_citations_cause_failure` `[VERIFIED: tests/test_port13_u2_obligations.py:340–366]`: Proves citations to local dumps (`firmware/dumps/...`) or `PORT-9A L1/L2` fail closed with `RULE_FORBIDDEN_LOCAL_PATH`.
@@ -315,9 +317,12 @@ The offline test suite in [`tests/test_port13_u2_obligations.py`](../tests/test_
 28. `test_relabelled_runtime_artifacts_exploit_fails` `[VERIFIED: tests/test_port13_u2_obligations.py:661–702]`: Proves that 7 relabeled `VERIFIED/RUNTIME` artifacts citing `docs/PORT13_REVIEW_U2.md:24` fail with `RULE_UNTRUSTED_RUNTIME_PROVENANCE` and evaluate to `not-ready`.
 29. `test_sample_of_tracked_docs_and_tools_rejected_as_runtime_citations` `[VERIFIED: tests/test_port13_u2_obligations.py:704–740]`: Loops over a representative sample of 10 tracked docs/tools (`docs/PORT13_REVIEW_U2.md`, `docs/PORT11A_GM110C_ROM_EVIDENCE.md`, `tools/port9a_runtime_lifecycle.py`, `tools/port9b_runtime_contract.py`, `README.md`, `docs/SAFETY.md`, `docs/RESTART_SD_HOST_AUDIT.md`, `docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md`, `tools/port13_u2_obligations.py`, `AGENTS.md`) and asserts that every one is rejected with `RULE_UNTRUSTED_RUNTIME_PROVENANCE`.
 30. `test_trusted_runtime_witnesses_is_empty_in_shipped_code` `[VERIFIED: tests/test_port13_u2_obligations.py:742–745]`: Asserts that `TRUSTED_RUNTIME_WITNESSES` is strictly empty `frozenset()`.
-31. `test_no_subprocess_imported` `[VERIFIED: tests/test_port13_u2_obligations.py:751–753]`: Enforces zero subprocess imports in `tools/port13_u2_obligations.py`.
-32. `test_standard_library_only` `[VERIFIED: tests/test_port13_u2_obligations.py:755–759]`: Enforces standard library only (no pytest, requests, capstone, ghidra, keystone, or numpy).
-33. `test_all_obligations_serialize_to_dict_and_json` `[VERIFIED: tests/test_port13_u2_obligations.py:761–769]`: Asserts all obligations and results serialize cleanly to JSON.
+31. `test_reviewer_repro_noncanonical_verified_runtime_obligation_fails` `[VERIFIED: tests/test_port13_u2_obligations.py:760–788]`: Reviewer repro regression test proving that a copy of `OBLIG-U2-02` with noncanonical `id='U2-RUNTIME-CLAIM'`, `status=VERIFIED`, and citations to `docs/PORT11A_GM110C_ROM_EVIDENCE.md:21` returns `is_satisfied=False` with error findings (`RULE_NONCANONICAL_OBLIGATION` and `RULE_UNTRUSTED_RUNTIME_PROVENANCE`).
+32. `test_verified_runtime_obligation_with_noncanonical_id_citing_static_rom_cannot_satisfy` `[VERIFIED: tests/test_port13_u2_obligations.py:790–824]`: Proves that a `VERIFIED` runtime obligation with a noncanonical ID citing static ROM entry `0xFC0BD071` / `docs/PORT11A_GM110C_ROM_EVIDENCE.md` cannot be satisfied in isolation or aggregate, triggering `RULE_NONCANONICAL_OBLIGATION`, `RULE_UNTRUSTED_RUNTIME_PROVENANCE`, and `RULE_STATIC_CANNOT_DISCHARGE_RUNTIME`.
+33. `test_canonical_static_entry_obligation_evaluates_as_before` `[VERIFIED: tests/test_port13_u2_obligations.py:826–869]`: Asserts canonical static-entry obligation `OBLIG-U2-01` still evaluates as before: satisfied in isolation with no evidence (verified in baseline), satisfied in isolation with static evidence artifact, and satisfied in shipped baseline `evaluate(DEFAULT_U2_OBLIGATIONS)` with aggregate `not-ready` (1 verified, 7 unknown, 0 errors, 7 warnings).
+34. `test_no_subprocess_imported` `[VERIFIED: tests/test_port13_u2_obligations.py:875–877]`: Enforces zero subprocess imports in `tools/port13_u2_obligations.py`.
+35. `test_standard_library_only` `[VERIFIED: tests/test_port13_u2_obligations.py:879–883]`: Enforces standard library only (no pytest, requests, capstone, ghidra, keystone, or numpy).
+36. `test_all_obligations_serialize_to_dict_and_json` `[VERIFIED: tests/test_port13_u2_obligations.py:885–893]`: Asserts all obligations and results serialize cleanly to JSON.
 
 ---
 

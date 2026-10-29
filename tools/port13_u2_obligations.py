@@ -968,9 +968,18 @@ def evaluate_obligation(
     active_pins = PINNED_FILE_HASHES if pinned_hashes is None else pinned_hashes
     ob_findings: List[ObligationFinding] = []
 
-    # 0. Canonical definition equality check if obligation claims a canonical ID
+    # 0. Canonical definition equality check
     canonical_def = CANONICAL_OBLIGATIONS_MAP.get(obligation.id)
-    if canonical_def is not None and obligation != canonical_def:
+    if canonical_def is None:
+        ob_findings.append(
+            ObligationFinding(
+                rule_id=RULE_NONCANONICAL_OBLIGATION,
+                obligation_id=obligation.id,
+                severity="ERROR",
+                message=f"Obligation '{obligation.id}' is not a recognized canonical obligation ID",
+            )
+        )
+    elif obligation != canonical_def:
         ob_findings.append(
             ObligationFinding(
                 rule_id=RULE_NONCANONICAL_OBLIGATION,
@@ -1230,25 +1239,90 @@ def evaluate_obligation(
 
     else:
         # No evidence artifact provided: evaluate baseline status
-        if obligation.status == ObligationStatus.VERIFIED:
+        # Only the canonical static-entry obligation (OBLIG-U2-01) may be satisfied without evidence,
+        # and only if it matches its entry in CANONICAL_OBLIGATIONS_MAP by full value equality.
+        canonical_static_entry = CANONICAL_OBLIGATIONS_MAP.get("OBLIG-U2-01")
+        if (
+            obligation.id == "OBLIG-U2-01"
+            and canonical_static_entry is not None
+            and obligation == canonical_static_entry
+            and obligation.status == ObligationStatus.VERIFIED
+        ):
             has_errors = any(f.severity == "ERROR" for f in ob_findings)
             if not has_errors:
                 is_satisfied = True
-                reason = "Obligation is VERIFIED in repository baseline documentation"
+                reason = "Canonical static task entry obligation is VERIFIED in repository baseline documentation"
             else:
                 is_satisfied = False
                 reason = "Obligation citations have errors"
         else:
-            ob_findings.append(
-                ObligationFinding(
-                    rule_id=RULE_STATUS_UNVERIFIED,
-                    obligation_id=obligation.id,
-                    severity="WARNING",
-                    message=f"Obligation {obligation.id} status is {obligation.status.value}; requires verified evidence",
-                )
-            )
+            # Any other obligation cannot be satisfied without verified evidence.
             is_satisfied = False
-            reason = f"Obligation status is {obligation.status.value}; fail-closed without verified evidence"
+            if obligation.is_runtime:
+                # Any obligation with kind=RUNTIME, canonical or not, must always go through
+                # the runtime-provenance check. With the shipped empty TRUSTED_RUNTIME_WITNESSES
+                # it must fail closed (is_satisfied=False, with a finding).
+                if obligation.status == ObligationStatus.VERIFIED:
+                    ob_findings.append(
+                        ObligationFinding(
+                            rule_id=RULE_UNTRUSTED_RUNTIME_PROVENANCE,
+                            obligation_id=obligation.id,
+                            severity="ERROR",
+                            message=(
+                                f"Runtime obligation '{obligation.id}' cannot be marked VERIFIED without trusted runtime evidence. "
+                                f"TRUSTED_RUNTIME_WITNESSES allowlist is empty in shipped code; "
+                                f"tracked documentation and static ROM evidence can never satisfy runtime obligations."
+                            ),
+                        )
+                    )
+                    # If it cites static evidence or addresses, also enforce that static evidence cannot discharge runtime
+                    has_static_cit = any(
+                        any(m in str(c.path) for m in STATIC_EVIDENCE_PATH_MARKERS)
+                        for c in obligation.citations
+                        if c and c.path
+                    )
+                    has_static_addr = any(
+                        addr in ("0xFC0BD071", "0xFC0BD070")
+                        for addr in HEX_ADDR_RE.findall(f"{obligation.statement} {obligation.notes}")
+                    )
+                    if has_static_cit or has_static_addr:
+                        ob_findings.append(
+                            ObligationFinding(
+                                rule_id=RULE_STATIC_CANNOT_DISCHARGE_RUNTIME,
+                                obligation_id=obligation.id,
+                                severity="ERROR",
+                                message=(
+                                    f"Static ROM evidence (citing 0xFC0BD071 / docs/PORT11A_GM110C_ROM_EVIDENCE.md) "
+                                    f"cannot discharge runtime obligation '{obligation.id}'."
+                                ),
+                            )
+                        )
+                    reason = f"Runtime obligation '{obligation.id}' cannot be satisfied without trusted runtime evidence"
+                else:
+                    ob_findings.append(
+                        ObligationFinding(
+                            rule_id=RULE_STATUS_UNVERIFIED,
+                            obligation_id=obligation.id,
+                            severity="WARNING",
+                            message=f"Obligation {obligation.id} status is {obligation.status.value}; requires verified evidence",
+                        )
+                    )
+                    reason = f"Obligation status is {obligation.status.value}; fail-closed without verified evidence"
+            else:
+                # Static obligation that is not the canonical static-entry obligation
+                ob_findings.append(
+                    ObligationFinding(
+                        rule_id=RULE_STATUS_UNVERIFIED,
+                        obligation_id=obligation.id,
+                        severity="ERROR" if obligation.status == ObligationStatus.VERIFIED else "WARNING",
+                        message=(
+                            f"Non-canonical or modified static obligation '{obligation.id}' cannot be satisfied without verified evidence"
+                            if obligation.status == ObligationStatus.VERIFIED
+                            else f"Obligation {obligation.id} status is {obligation.status.value}; requires verified evidence"
+                        ),
+                    )
+                )
+                reason = f"Obligation status is {obligation.status.value}; requires verified evidence"
 
     return SingleObligationEvaluation(
         obligation_id=obligation.id,

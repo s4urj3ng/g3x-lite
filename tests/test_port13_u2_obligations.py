@@ -745,6 +745,130 @@ class TestReviewerExploitsAndPositiveAllowlist(unittest.TestCase):
         self.assertEqual(TRUSTED_RUNTIME_WITNESSES, frozenset())
 
 
+class TestReviewerP2NoncanonicalVerifiedRuntimeExploit(unittest.TestCase):
+    """[P2] Regression tests for noncanonical IDs and unevidenced VERIFIED runtime obligations.
+
+    Verifies:
+      - (a) Reviewer's exact repro: copying OBLIG-U2-02 with id='U2-RUNTIME-CLAIM',
+            status=VERIFIED, citations to PORT11A:21 must give is_satisfied=False with error findings.
+      - (b) A VERIFIED runtime obligation with noncanonical ID citing 0xFC0BD071 /
+            docs/PORT11A_GM110C_ROM_EVIDENCE.md cannot be satisfied in isolation or aggregate.
+      - (c) Canonical static-entry obligation OBLIG-U2-01 still evaluates as before
+            (satisfied in isolation with or without static evidence; satisfied in shipped aggregate).
+    """
+
+    def test_reviewer_repro_noncanonical_verified_runtime_obligation_fails(self):
+        """[P2-a] Reviewer repro: copy OBLIG-U2-02 with id='U2-RUNTIME-CLAIM', status=VERIFIED.
+
+        Reviewer repro:
+          copy OBLIG-U2-02 with id='U2-RUNTIME-CLAIM', status=VERIFIED,
+          citations=(Citation('docs/PORT11A_GM110C_ROM_EVIDENCE.md', line=21),).
+        Must return is_satisfied=False with error findings (not is_satisfied=True with no findings).
+        """
+        ob2 = get_obligation("OBLIG-U2-02")
+        self.assertIsNotNone(ob2)
+        repro_ob = dataclasses.replace(
+            ob2,
+            id="U2-RUNTIME-CLAIM",
+            status=ObligationStatus.VERIFIED,
+            citations=(Citation("docs/PORT11A_GM110C_ROM_EVIDENCE.md", line=21),),
+        )
+        single_eval = evaluate_obligation(repro_ob, repo_root=REPO_ROOT)
+        self.assertFalse(
+            single_eval.is_satisfied,
+            "Noncanonical runtime obligation claiming VERIFIED must not be satisfied",
+        )
+        self.assertGreater(
+            len(single_eval.findings),
+            0,
+            "Must have findings explaining rejection, not zero findings",
+        )
+        rule_ids = [f.rule_id for f in single_eval.findings]
+        self.assertIn(RULE_NONCANONICAL_OBLIGATION, rule_ids)
+        self.assertIn(RULE_UNTRUSTED_RUNTIME_PROVENANCE, rule_ids)
+
+    def test_verified_runtime_obligation_with_noncanonical_id_citing_static_rom_cannot_satisfy(self):
+        """[P2-b] A VERIFIED runtime obligation with noncanonical ID citing 0xFC0BD071 / PORT11A cannot be satisfied.
+
+        Asserts that:
+          - in isolation via evaluate_obligation() it returns is_satisfied=False,
+          - it triggers RULE_NONCANONICAL_OBLIGATION, RULE_UNTRUSTED_RUNTIME_PROVENANCE,
+            and RULE_STATIC_CANNOT_DISCHARGE_RUNTIME,
+          - in aggregate evaluate([ob]) it returns is_ready=False with status 'not-ready'.
+        """
+        custom_runtime_ob = U2Obligation(
+            id="U2-CUSTOM-RUNTIME-ENTRY",
+            statement="Purported runtime readiness from static entry 0xFC0BD071 in slice S2A",
+            kind=ObligationKind.RUNTIME,
+            status=ObligationStatus.VERIFIED,
+            required_evidence=RequiredEvidence(
+                artifact_type="EXECUTION_WITNESS",
+                what_it_must_show="Dynamic execution trace",
+            ),
+            citations=(
+                Citation(path="docs/PORT11A_GM110C_ROM_EVIDENCE.md", line=21),
+            ),
+            notes="Citing static entry 0xFC0BD071 to claim runtime readiness",
+        )
+        single_eval = evaluate_obligation(custom_runtime_ob, repo_root=REPO_ROOT)
+        self.assertFalse(single_eval.is_satisfied)
+        rule_ids = [f.rule_id for f in single_eval.findings]
+        self.assertIn(RULE_NONCANONICAL_OBLIGATION, rule_ids)
+        self.assertIn(RULE_UNTRUSTED_RUNTIME_PROVENANCE, rule_ids)
+        self.assertIn(RULE_STATIC_CANNOT_DISCHARGE_RUNTIME, rule_ids)
+
+        # In aggregate evaluation
+        agg_res = evaluate([custom_runtime_ob], repo_root=REPO_ROOT)
+        self.assertFalse(agg_res.is_ready)
+        self.assertEqual(agg_res.status, "not-ready")
+        self.assertFalse(agg_res.is_obligation_satisfied("U2-CUSTOM-RUNTIME-ENTRY"))
+
+    def test_canonical_static_entry_obligation_evaluates_as_before(self):
+        """[P2-c] Canonical static-entry obligation OBLIG-U2-01 still evaluates as before.
+
+        Confirms:
+          - in isolation with no evidence, OBLIG-U2-01 is satisfied (VERIFIED in baseline),
+          - in isolation with static evidence artifact, OBLIG-U2-01 is satisfied,
+          - in shipped aggregate evaluate(DEFAULT_U2_OBLIGATIONS), OBLIG-U2-01 is satisfied
+            while aggregate is_ready=False (not-ready) with 1 verified, 7 unknown,
+            0 errors, and 7 warnings.
+        """
+        ob1 = get_obligation("OBLIG-U2-01")
+        self.assertIsNotNone(ob1)
+
+        # 1. Isolation with no evidence
+        eval_no_ev = evaluate_obligation(ob1, repo_root=REPO_ROOT)
+        self.assertTrue(eval_no_ev.is_satisfied)
+        self.assertEqual(len([f for f in eval_no_ev.findings if f.severity == "ERROR"]), 0)
+        self.assertIn("Canonical static task entry obligation is VERIFIED", eval_no_ev.reason)
+
+        # 2. Isolation with static evidence artifact
+        static_ev = EvidenceArtifact(
+            artifact_id="ROM-SLICE-S2A-ENTRY",
+            artifact_type="STATIC_ROM_SLICE",
+            status=ObligationStatus.VERIFIED,
+            kind=ObligationKind.STATIC,
+            description="Static ROM slice S2A disassembly confirming task_InitFileModules entry 0xFC0BD071",
+            citation=Citation(path="docs/PORT11A_GM110C_ROM_EVIDENCE.md", line=21),
+            associated_addresses=("0xFC0BD071", "0xFC0BD070"),
+            how_captured="static ROM disassembly",
+        )
+        eval_with_ev = evaluate_obligation(ob1, evidence=static_ev, repo_root=REPO_ROOT)
+        self.assertTrue(eval_with_ev.is_satisfied)
+        self.assertEqual(len([f for f in eval_with_ev.findings if f.severity == "ERROR"]), 0)
+        self.assertIn("Satisfied by verified evidence", eval_with_ev.reason)
+
+        # 3. Aggregate evaluation on shipped baseline
+        agg_res = evaluate(DEFAULT_U2_OBLIGATIONS, repo_root=REPO_ROOT)
+        self.assertFalse(agg_res.is_ready)
+        self.assertEqual(agg_res.status, "not-ready")
+        self.assertTrue(agg_res.is_obligation_satisfied("OBLIG-U2-01"))
+        self.assertEqual(agg_res.verified_count, 1)
+        self.assertEqual(agg_res.unknown_count, 7)
+        self.assertEqual(agg_res.error_count, 0)
+        self.assertEqual(agg_res.warning_count, 7)
+
+
 class TestSecurityAndScopeBoundaries(unittest.TestCase):
     """Enforce standard library only and no subprocess imports."""
 
