@@ -12,10 +12,11 @@ Verifies:
   - Evidence provenance classification: genuine runtime evidence referencing anchor
     addresses (such as 0xBFE14A3C) is NOT rejected as static.
   - Completeness validation: evaluate_u4_obligations requires exact canonical IDs
-    OBLIG-U4-01..09 and raises ValueError on empty, missing, duplicate, or unknown IDs.
-  - The legacy-timeout-bypass -> storage corruption/kernel panic causal link remains UNKNOWN.
+    OBLIG-U4-01..11 and raises ValueError on empty, missing, duplicate, or unknown IDs.
+  - The legacy-timeout-bypass -> storage corruption/kernel panic causal link remains UNKNOWN;
+    declared empirical metadata or tampered flags strictly evaluate to NOT_SATISFIED / UNKNOWN.
   - Fail-closed containment on partial satisfaction, unverified evidence, and mismatched types.
-  - Positive synthetic path when all obligations are provided with valid runtime evidence.
+  - Positive synthetic paths for satisfiable runtime obligations while overall verdict strictly remains NOT_SATISFIED.
   - No new firmware addresses or offsets are introduced.
 
 Standard library only.
@@ -446,20 +447,40 @@ class TestPort13ObligU4(unittest.TestCase):
         self.assertEqual(spec_res.verdict, EvaluationVerdict.NOT_SATISFIED)
         self.assertEqual(spec_res.status, ObligationStatus.UNKNOWN)
 
-        # Positive Case: Genuine verified empirical runtime crash dump evaluates to SATISFIED
-        genuine_trace = EvidenceArtifact(
+        # Rejection regression test: pass empirical-artifact metadata or a tampered VERIFIED flag
+        # for OBLIG-U4-07; assert that the obligation stays UNKNOWN / NOT SATISFIED and that the
+        # overall U4 verdict strictly remains NOT SATISFIED per docs/PORT13_REVIEW_U4.md:71-74 (C06b).
+        empirical_trace = EvidenceArtifact(
             artifact_id="EMPIRICAL-CORRUPT-01",
             artifact_type="STORAGE_CORRUPTION_TRACE",
             status=ObligationStatus.VERIFIED,
-            description="Empirical hardware crash dump demonstrating storage bus timeout fault",
-            citation="docs/PORT13_REVIEW_U4.md:71-74, 174",
+            description="Empirical hardware crash dump asserting storage bus timeout fault",
+            citation="docs/PORT13_REVIEW_U4.md:71-74",
             is_static=False,
             how_captured="hardware_crash_dump",
         )
-        self.assertTrue(is_empirical_evidence(genuine_trace))
-        gen_res = evaluate_obligation(oblig, genuine_trace)
-        self.assertEqual(gen_res.verdict, EvaluationVerdict.SATISFIED)
-        self.assertEqual(gen_res.status, ObligationStatus.VERIFIED)
+        self.assertTrue(is_empirical_evidence(empirical_trace))
+        emp_res = evaluate_obligation(oblig, empirical_trace)
+        self.assertEqual(emp_res.verdict, EvaluationVerdict.NOT_SATISFIED)
+        self.assertEqual(emp_res.status, ObligationStatus.UNKNOWN)
+        self.assertNotEqual(emp_res.status, ObligationStatus.VERIFIED)
+        self.assertNotEqual(emp_res.status, ObligationStatus.INFERRED)
+
+        # Tampered obligation with VERIFIED flag cannot promote C06b
+        tampered_c06b = replace(oblig, current_status=ObligationStatus.VERIFIED)
+        tamp_res = evaluate_obligation(tampered_c06b, empirical_trace)
+        self.assertEqual(tamp_res.verdict, EvaluationVerdict.NOT_SATISFIED)
+        self.assertEqual(tamp_res.status, ObligationStatus.UNKNOWN)
+        self.assertNotEqual(tamp_res.status, ObligationStatus.VERIFIED)
+
+        # Overall U4 evaluation with empirical metadata or tampered VERIFIED flag for OBLIG-U4-07
+        # strictly stays NOT_SATISFIED
+        report_emp = evaluate_u4_obligations(evidence_map={oblig.id: empirical_trace})
+        self.assertEqual(report_emp.verdict, EvaluationVerdict.NOT_SATISFIED)
+        self.assertTrue(report_emp.is_fail_closed)
+        res_in_report = [r for r in report_emp.results if r.obligation_id == "OBLIG-U4-07"][0]
+        self.assertEqual(res_in_report.verdict, EvaluationVerdict.NOT_SATISFIED)
+        self.assertEqual(res_in_report.status, ObligationStatus.UNKNOWN)
 
     def test_unresolved_c17_or_c18_obligations_block_overall_u4_verdict(self):
         """Catalog completeness [P2]: Overall U4 verdict cannot be SATISFIED while C17 or C18 are unresolved."""
@@ -476,7 +497,8 @@ class TestPort13ObligU4(unittest.TestCase):
         baseline_report = evaluate_u4_obligations()
         self.assertEqual(baseline_report.verdict, EvaluationVerdict.NOT_SATISFIED)
 
-        # Build evidence map satisfying OBLIG-U4-01..09
+        # Build evidence map with synthetic artifacts for OBLIG-U4-01..09
+        # (OBLIG-U4-07 receives an artifact but strictly evaluates to NOT_SATISFIED / UNKNOWN)
         base_evidence_map = {}
         for oblig in U4_OBLIGATIONS:
             if oblig.id in ("OBLIG-U4-10", "OBLIG-U4-11"):
@@ -492,13 +514,15 @@ class TestPort13ObligU4(unittest.TestCase):
             )
 
         # Case 1: OBLIG-U4-10 and OBLIG-U4-11 unresolved -> NOT_SATISFIED
+        # (8 satisfied: OBLIG-U4-01..06, 08..09; 3 not satisfied: OBLIG-U4-07, 10, 11)
         report_10_11_unresolved = evaluate_u4_obligations(evidence_map=base_evidence_map)
         self.assertEqual(report_10_11_unresolved.verdict, EvaluationVerdict.NOT_SATISFIED)
-        self.assertEqual(report_10_11_unresolved.satisfied_count, 9)
-        self.assertEqual(report_10_11_unresolved.not_satisfied_count, 2)
+        self.assertEqual(report_10_11_unresolved.satisfied_count, 8)
+        self.assertEqual(report_10_11_unresolved.not_satisfied_count, 3)
         self.assertTrue(report_10_11_unresolved.is_fail_closed)
 
         # Case 2: Only OBLIG-U4-11 unresolved (OBLIG-U4-10 satisfied) -> NOT_SATISFIED
+        # (9 satisfied: OBLIG-U4-01..06, 08..10; 2 not satisfied: OBLIG-U4-07, 11)
         evidence_with_10 = dict(base_evidence_map)
         evidence_with_10["OBLIG-U4-10"] = EvidenceArtifact(
             artifact_id="SYNTHETIC-OBLIG-U4-10",
@@ -511,11 +535,12 @@ class TestPort13ObligU4(unittest.TestCase):
         )
         report_11_unresolved = evaluate_u4_obligations(evidence_map=evidence_with_10)
         self.assertEqual(report_11_unresolved.verdict, EvaluationVerdict.NOT_SATISFIED)
-        self.assertEqual(report_11_unresolved.satisfied_count, 10)
-        self.assertEqual(report_11_unresolved.not_satisfied_count, 1)
+        self.assertEqual(report_11_unresolved.satisfied_count, 9)
+        self.assertEqual(report_11_unresolved.not_satisfied_count, 2)
         self.assertTrue(report_11_unresolved.is_fail_closed)
 
         # Case 3: Only OBLIG-U4-10 unresolved (OBLIG-U4-11 satisfied) -> NOT_SATISFIED
+        # (9 satisfied: OBLIG-U4-01..06, 08..09, 11; 2 not satisfied: OBLIG-U4-07, 10)
         evidence_with_11 = dict(base_evidence_map)
         evidence_with_11["OBLIG-U4-11"] = EvidenceArtifact(
             artifact_id="SYNTHETIC-OBLIG-U4-11",
@@ -528,8 +553,8 @@ class TestPort13ObligU4(unittest.TestCase):
         )
         report_10_unresolved = evaluate_u4_obligations(evidence_map=evidence_with_11)
         self.assertEqual(report_10_unresolved.verdict, EvaluationVerdict.NOT_SATISFIED)
-        self.assertEqual(report_10_unresolved.satisfied_count, 10)
-        self.assertEqual(report_10_unresolved.not_satisfied_count, 1)
+        self.assertEqual(report_10_unresolved.satisfied_count, 9)
+        self.assertEqual(report_10_unresolved.not_satisfied_count, 2)
         self.assertTrue(report_10_unresolved.is_fail_closed)
 
     def test_unverified_evidence_fails_closed(self):
@@ -570,9 +595,9 @@ class TestPort13ObligU4(unittest.TestCase):
         self.assertIn("does not match required artifact type", res.reason)
 
     def test_partial_satisfaction_fails_closed(self):
-        """Invariant: If 10 of 11 obligations are satisfied, overall verdict remains NOT_SATISFIED."""
+        """Invariant: If obligations are only partially satisfied, overall verdict remains NOT_SATISFIED."""
         evidence_map = {}
-        # Satisfy 10 obligations with valid synthetic runtime artifacts
+        # Provide valid synthetic runtime artifacts for obligations other than OBLIG-U4-01
         for oblig in U4_OBLIGATIONS:
             if oblig.id == "OBLIG-U4-01":
                 continue  # Leave OBLIG-U4-01 unsatisfied
@@ -592,12 +617,17 @@ class TestPort13ObligU4(unittest.TestCase):
             EvaluationVerdict.NOT_SATISFIED,
             "Overall verdict must remain NOT_SATISFIED if even one obligation is unsatisfied.",
         )
-        self.assertEqual(report.satisfied_count, 10)
-        self.assertEqual(report.not_satisfied_count, 1)
+        # 9 obligations satisfied (OBLIG-U4-02..06, 08..11); OBLIG-U4-01 has no evidence, OBLIG-U4-07 cannot be promoted
+        self.assertEqual(report.satisfied_count, 9)
+        self.assertEqual(report.not_satisfied_count, 2)
         self.assertTrue(report.is_fail_closed)
 
-    def test_synthetic_positive_path_when_all_obligations_satisfied(self):
-        """Positive test: When ALL 11 obligations receive valid verified runtime artifacts, verdict is SATISFIED."""
+    def test_synthetic_positive_path_for_satisfiable_obligations_leaves_u4_not_satisfied(self):
+        """Positive test for satisfiable obligations: When all 10 non-C06b obligations receive valid
+        verified runtime artifacts, each individually evaluates to SATISFIED. However, because OBLIG-U4-07
+        strictly remains UNKNOWN / NOT_SATISFIED under current tracked evidence per docs/PORT13_REVIEW_U4.md:71-74,
+        the overall U4 evaluation verdict strictly remains NOT_SATISFIED.
+        """
         evidence_map = {}
         for oblig in U4_OBLIGATIONS:
             evidence_map[oblig.id] = EvidenceArtifact(
@@ -607,18 +637,39 @@ class TestPort13ObligU4(unittest.TestCase):
                 description=f"Synthetic dynamic verified artifact for {oblig.id}",
                 citation=oblig.citation,
                 is_static=False,
-                how_captured="runtime_execution_trace",
+                how_captured="runtime_execution_trace" if oblig.id != "OBLIG-U4-07" else "hardware_crash_dump",
             )
 
+        # All 10 non-C06b obligations evaluate individually to SATISFIED
+        for oblig in U4_OBLIGATIONS:
+            if oblig.id == "OBLIG-U4-07":
+                continue
+            ind_res = evaluate_obligation(oblig, evidence_map[oblig.id])
+            self.assertEqual(
+                ind_res.verdict,
+                EvaluationVerdict.SATISFIED,
+                f"Obligation {oblig.id} must evaluate to SATISFIED with valid runtime artifact.",
+            )
+            self.assertEqual(ind_res.status, ObligationStatus.VERIFIED)
+
+        # OBLIG-U4-07 strictly evaluates to NOT_SATISFIED and UNKNOWN
+        oblig_07 = get_obligation("OBLIG-U4-07")
+        self.assertIsNotNone(oblig_07)
+        res_07 = evaluate_obligation(oblig_07, evidence_map["OBLIG-U4-07"])
+        self.assertEqual(res_07.verdict, EvaluationVerdict.NOT_SATISFIED)
+        self.assertEqual(res_07.status, ObligationStatus.UNKNOWN)
+
+        # Overall U4 evaluation across all 11 obligations:
+        # 10 satisfied, 1 not satisfied -> overall verdict strictly NOT_SATISFIED
         report = evaluate_u4_obligations(evidence_map=evidence_map)
         self.assertEqual(
             report.verdict,
-            EvaluationVerdict.SATISFIED,
-            "When all obligations have valid runtime verified evidence, verdict must be SATISFIED.",
+            EvaluationVerdict.NOT_SATISFIED,
+            "When all obligations receive runtime artifacts, overall verdict must stay NOT_SATISFIED due to C06b.",
         )
-        self.assertEqual(report.satisfied_count, 11)
-        self.assertEqual(report.not_satisfied_count, 0)
-        self.assertFalse(report.is_fail_closed)
+        self.assertEqual(report.satisfied_count, 10)
+        self.assertEqual(report.not_satisfied_count, 1)
+        self.assertTrue(report.is_fail_closed)
 
     def test_runtime_obligations_fail_closed_on_non_empirical_provenance(self):
         """Regression Test [P1]: Non-empirical or unprovenanced evidence fails closed on all runtime obligations.

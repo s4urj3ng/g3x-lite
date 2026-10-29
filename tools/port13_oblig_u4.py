@@ -455,9 +455,10 @@ def evaluate_obligation(
          whitespace, unknown, simulated, synthetic, or unallowlisted provenance)
          CANNOT satisfy these obligations and evaluate as NOT_SATISFIED, whatever flag
          the caller passes in the obligation object.
-      4. Legacy timeout-bypass causal link (OBLIG-U4-07 / Finding C06b) must stay
-         UNKNOWN (never INFERRED or VERIFIED) whenever evidence is unverified, static,
-         non-empirical, or if the obligation definition was tampered.
+      4. Legacy timeout-bypass causal link (OBLIG-U4-07 / Finding C06b) is unsupported
+         conjecture (docs/PORT13_REVIEW_U4.md:71-74); with the current tracked evidence
+         set it must always evaluate as status UNKNOWN / NOT_SATISFIED. Caller-supplied
+         flags, metadata, or declared empirical artifacts must never promote it.
       5. Unknown obligation IDs not in CANONICAL_OBLIGATION_IDS fail closed as NOT_SATISFIED.
     """
     canonical = get_obligation(obligation.id)
@@ -514,37 +515,40 @@ def evaluate_obligation(
             citation=canonical.citation,
         )
 
-    # Invariant: C06b causal link between legacy timeout bypass and corruption/panic
-    # must stay UNKNOWN (never INFERRED or VERIFIED) whenever evidence is unverified, static,
-    # non-empirical, wrong artifact type, or if obligation policy is tampered.
+    # Invariant: C06b causal link between legacy timeout bypass and storage corruption /
+    # kernel panic is unsupported conjecture (Finding C06b, docs/PORT13_REVIEW_U4.md:71-74).
+    # With the current tracked evidence set, OBLIG-U4-07 must always evaluate as status
+    # UNKNOWN / NOT_SATISFIED. Caller-supplied flags, metadata, or declared empirical
+    # artifacts must never promote it. Hard-coded guard ensures it cannot fall through
+    # to SATISFIED/VERIFIED under any caller inputs.
     if canonical.id == "OBLIG-U4-07" or obligation.id == "OBLIG-U4-07":
-        if (
-            evidence.status != ObligationStatus.VERIFIED
-            or is_static_evidence(evidence)
-            or not is_empirical_evidence(evidence)
-            or evidence.artifact_type != canonical.required_evidence.artifact_type
-            or tampered
-        ):
-            return ObligationResult(
-                obligation_id=canonical.id,
-                verdict=EvaluationVerdict.NOT_SATISFIED,
-                status=ObligationStatus.UNKNOWN,
-                reason=(
-                    "Static evidence (CreateTask veneer 0xFC31BBC4 -> ATCM 0xBFE14A3C, "
-                    "PhySw Thumb entry 0xFC1283AD) proves static code presence only and "
-                    "cannot satisfy runtime hook placement or launch-ordering obligations; "
-                    "the legacy timeout-bypass -> storage corruption/kernel panic link is "
-                    "untested conjecture; status must stay UNKNOWN (never INFERRED) whenever "
-                    "evidence is unverified, static, or non-empirical."
-                    if is_static_evidence(evidence)
-                    else (
-                        "The legacy timeout-bypass -> storage corruption/kernel panic link is "
-                        "untested conjecture; status must stay UNKNOWN (never INFERRED) whenever "
-                        "evidence is unverified, static, non-empirical, or if obligation policy is tampered."
-                    )
-                ),
-                citation=evidence.citation,
-            )
+        citation = (
+            evidence.citation
+            if (evidence is not None and getattr(evidence, "citation", None))
+            else canonical.citation
+        )
+        return ObligationResult(
+            obligation_id=canonical.id,
+            verdict=EvaluationVerdict.NOT_SATISFIED,
+            status=ObligationStatus.UNKNOWN,
+            reason=(
+                "Static evidence (CreateTask veneer 0xFC31BBC4 -> ATCM 0xBFE14A3C, "
+                "PhySw Thumb entry 0xFC1283AD) proves static code presence only and "
+                "cannot satisfy runtime hook placement or launch-ordering obligations; "
+                "the legacy timeout-bypass -> storage corruption/kernel panic link is "
+                "unsupported conjecture (C06b, docs/PORT13_REVIEW_U4.md:71-74); status strictly "
+                "remains UNKNOWN / NOT_SATISFIED under current tracked evidence and cannot be "
+                "promoted by caller-supplied inputs, flags, or declared empirical metadata."
+                if is_static_evidence(evidence)
+                else (
+                    "The legacy timeout-bypass -> storage corruption/kernel panic link is "
+                    "unsupported conjecture (C06b, docs/PORT13_REVIEW_U4.md:71-74); status strictly "
+                    "remains UNKNOWN / NOT_SATISFIED under current tracked evidence and cannot be "
+                    "promoted by caller-supplied inputs, flags, or declared empirical metadata."
+                )
+            ),
+            citation=citation,
+        )
 
     # Invariant: Static and non-empirical evidence cannot satisfy obligations requiring runtime evidence
     # (such as runtime hook placement, task start ordering, continuation, readiness, or causal effects).
