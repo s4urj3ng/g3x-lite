@@ -879,7 +879,7 @@ class TestPort13ObligU4(unittest.TestCase):
         self.assertEqual(res_hook.status, ObligationStatus.UNKNOWN)
         self.assertIn("Static evidence", res_hook.reason)
 
-        # Overall verdict test: catalog of tampered obligations with static evidence
+        # Overall verdict test: catalog of tampered obligations with static evidence for runtime obligations
         tampered_catalog = tuple(
             replace(o, requires_runtime_evidence=False) if o.requires_runtime_evidence else o
             for o in U4_OBLIGATIONS
@@ -894,7 +894,7 @@ class TestPort13ObligU4(unittest.TestCase):
                 is_static=True,
                 how_captured="static_rom_disassembly",
             )
-            for o in U4_OBLIGATIONS
+            for o in runtime_obligations
         }
         report = evaluate_u4_obligations(obligations=tampered_catalog, evidence_map=static_map)
         self.assertEqual(
@@ -905,6 +905,30 @@ class TestPort13ObligU4(unittest.TestCase):
         self.assertTrue(report.is_fail_closed)
         self.assertEqual(report.satisfied_count, 0)
         self.assertEqual(report.not_satisfied_count, len(U4_OBLIGATIONS))
+
+        # Overall verdict test: when static evidence is supplied for all 11 obligations,
+        # the 7 runtime obligations still fail closed and overall verdict remains NOT_SATISFIED.
+        static_map_all = {
+            o.id: EvidenceArtifact(
+                artifact_id=f"STATIC-ALL-{o.id}",
+                artifact_type=o.required_evidence.artifact_type,
+                status=ObligationStatus.VERIFIED,
+                description=f"Static evidence for {o.id}",
+                citation=o.citation,
+                is_static=True,
+                how_captured="static_rom_disassembly",
+            )
+            for o in U4_OBLIGATIONS
+        }
+        report_all = evaluate_u4_obligations(obligations=tampered_catalog, evidence_map=static_map_all)
+        self.assertEqual(
+            report_all.verdict,
+            EvaluationVerdict.NOT_SATISFIED,
+            "Overall U4 verdict must stay NOT_SATISFIED even if static evidence is supplied for all obligations.",
+        )
+        self.assertTrue(report_all.is_fail_closed)
+        self.assertEqual(report_all.not_satisfied_count, len(runtime_obligations))
+        self.assertEqual(report_all.satisfied_count, len(U4_OBLIGATIONS) - len(runtime_obligations))
 
     def test_tampered_policy_fields_cannot_produce_satisfied(self):
         """Regression Test [P2]: Tampering with status, required evidence kind, or domain fails closed.
