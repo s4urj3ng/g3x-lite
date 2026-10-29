@@ -30,6 +30,8 @@ if str(REPO_ROOT / "tools") not in sys.path:
 import tools.port13_memory_obligations as pmo
 from tools.port13_memory_obligations import (
     Citation,
+    CitationProvenance,
+    CITATION_PROVENANCE_REGISTRY,
     DEFAULT_MEMORY_OBLIGATIONS,
     EvaluationResult,
     HISTORICAL_FIRMWARES,
@@ -40,20 +42,29 @@ from tools.port13_memory_obligations import (
     ORIGIN_MAIN_PIN_COMMIT,
     ORIGIN_MAIN_TRACKED_FILES,
     PINNED_ORIGIN_MAIN_FILE_HASHES,
+    REQUIRED_OBLIGATION_IDS,
     RULE_CONTENT_HASH_MISMATCH,
+    RULE_DUPLICATE_OBLIGATION_ID,
     RULE_EMPTY_CITATIONS,
+    RULE_EMPTY_DATASET,
     RULE_HISTORICAL_CANNOT_VERIFY,
+    RULE_INCOMPLETE_OBLIGATION_SET,
     RULE_MISSING_CITED_PATH,
+    RULE_NON_PRODUCTION_EVIDENCE_CONFIG,
     RULE_PENDING_PR_CANNOT_VERIFY,
+    RULE_PROVENANCE_CONFLICT,
     RULE_STATUS_NOT_VERIFIED,
     RULE_UNACCEPTABLE_SOURCE,
+    RULE_UNKNOWN_OBLIGATION_ID,
     RULE_UNPINNED_SOURCE,
     RULE_UNREADABLE_SOURCE,
+    RULE_UNREGISTERED_CITATION,
     RULE_UNTRACKED_SOURCE,
     SUPPORTED_FIRMWARE,
     SUPPORTED_FIRMWARES,
     TRACKED_ADDRESS_CITATIONS,
     evaluate,
+    evaluate_single_obligation,
     is_supported_firmware,
     normalize_firmware,
     verify_address_provenance,
@@ -87,15 +98,25 @@ class TestCurrentReadinessAndShippedData(unittest.TestCase):
         ]
         self.assertEqual(len(unverified_ids), 17)
 
-        # Even if individual subsets are evaluated, any subset containing
-        # an INFERRED or UNKNOWN obligation must evaluate to is_ready == False
+        # Evaluating individual obligations or incomplete subsets must NEVER evaluate to is_ready == True.
+        # Overall readiness strictly requires the complete canonical set of 18 obligations.
         for ob in DEFAULT_MEMORY_OBLIGATIONS:
             sub_res = evaluate([ob], repo_root=REPO_ROOT)
+            self.assertFalse(sub_res.is_ready)
+            self.assertIn(RULE_INCOMPLETE_OBLIGATION_SET, [f.rule_id for f in sub_res.findings])
             if ob.id == "OBLIG-MEM-16A":
-                # OBLIG-MEM-16A is the only verified static copy bound
-                self.assertTrue(sub_res.is_ready)
+                # Per-obligation evaluation verifies OBLIG-MEM-16A in isolation
+                self.assertTrue(sub_res.obligation_results[ob.id].is_verified)
             else:
-                self.assertFalse(sub_res.is_ready)
+                self.assertFalse(sub_res.obligation_results[ob.id].is_verified)
+
+    def test_evaluate_single_obligation_16a_returns_not_ready(self):
+        """[Reviewer Regression P1] evaluate([OBLIG-MEM-16A]) must return is_ready == False."""
+        ob_16a = [ob for ob in DEFAULT_MEMORY_OBLIGATIONS if ob.id == "OBLIG-MEM-16A"][0]
+        res = evaluate([ob_16a], repo_root=REPO_ROOT)
+        self.assertFalse(res.is_ready)
+        self.assertIn(RULE_INCOMPLETE_OBLIGATION_SET, [f.rule_id for f in res.findings])
+        self.assertTrue(res.obligation_results["OBLIG-MEM-16A"].is_verified)
 
 
 class TestFailClosedCitationValidation(unittest.TestCase):
@@ -590,6 +611,268 @@ class TestSecurityAndScopeBoundaries(unittest.TestCase):
             import json
             raw_json = json.dumps(d)
             self.assertIn(ob.id, raw_json)
+
+
+class TestReviewerDefectRegressions(unittest.TestCase):
+    """Regression test suite reproducing each reviewer-discovered bypass scenario."""
+
+    def test_p1_incomplete_obligation_set_single_16a_fails_closed(self):
+        """[Reviewer P1] Calling evaluate() with only OBLIG-MEM-16A must return is_ready=False.
+
+        Even though OBLIG-MEM-16A is verified, 17 required obligations are missing.
+        evaluate() must require the complete canonical set of 18 obligations and report
+        RULE_INCOMPLETE_OBLIGATION_SET.
+        """
+        ob_16a = [ob for ob in DEFAULT_MEMORY_OBLIGATIONS if ob.id == "OBLIG-MEM-16A"][0]
+        res = evaluate([ob_16a], repo_root=REPO_ROOT)
+        self.assertFalse(res.is_ready)
+        self.assertEqual(res.total_obligations, 1)
+        self.assertEqual(res.verified_count, 1)
+        rules = [f.rule_id for f in res.findings]
+        self.assertIn(RULE_INCOMPLETE_OBLIGATION_SET, rules)
+        self.assertGreaterEqual(res.error_count, 1)
+        # Verify the individual obligation result is verified while overall readiness is False
+        self.assertTrue(res.obligation_results["OBLIG-MEM-16A"].is_verified)
+
+    def test_p1_omitted_flags_on_historical_line_172_fails_closed(self):
+        """[Reviewer P1] Promoting OBLIG-MEM-10 with Citation(..., line=172) and no flags returns False.
+
+        Line 172 in docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md documents OMAR only for GM1.10E.
+        Provenance must be resolved from the trusted citation provenance registry rather than
+        defaulting to GM1.10C. Both evaluate([promoted]) and evaluate(full_set) must fail closed
+        with RULE_HISTORICAL_CANNOT_VERIFY.
+        """
+        # Exact reviewer scenario: Citation with line 172 and no flags supplied
+        promoted_cit = Citation(path="docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md", line=172)
+        promoted_ob10 = MemoryObligation(
+            id="OBLIG-MEM-10",
+            statement="Promote OBLIG-MEM-10 without caller flags",
+            required_evidence_type="ROM_VERIFIED",
+            acceptable_tracked_sources=("docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md",),
+            current_status=ObligationStatus.VERIFIED,
+            citations=(promoted_cit,),
+        )
+
+        # In isolation (sub-res fails closed on incomplete set AND historical citation)
+        res_single = evaluate([promoted_ob10], repo_root=REPO_ROOT)
+        self.assertFalse(res_single.is_ready)
+        single_rules = [f.rule_id for f in res_single.findings]
+        self.assertIn(RULE_HISTORICAL_CANNOT_VERIFY, single_rules)
+        self.assertFalse(res_single.obligation_results["OBLIG-MEM-10"].is_verified)
+
+        # In full canonical set with OBLIG-MEM-10 promoted
+        full_set = [
+            promoted_ob10 if ob.id == "OBLIG-MEM-10" else ob
+            for ob in DEFAULT_MEMORY_OBLIGATIONS
+        ]
+        res_full = evaluate(full_set, repo_root=REPO_ROOT)
+        self.assertFalse(res_full.is_ready)
+        full_rules = [f.rule_id for f in res_full.findings]
+        self.assertIn(RULE_HISTORICAL_CANNOT_VERIFY, full_rules)
+
+    def test_p2_injected_bytes_and_pinned_hashes_override_fails_closed(self):
+        """[Reviewer P2] Injected bytes with matching pinned_hashes override must return is_ready=False.
+
+        Production pins are authoritative and immutable. If any test hook is used (pinned_hashes override,
+        custom file_reader, alternate repo_root), evaluate() must never report production readiness,
+        failing closed with RULE_NON_PRODUCTION_EVIDENCE_CONFIG.
+        """
+        fake_content = b"INJECTED_ARBITRARY_BYTES_REVIEWER_SCENARIO"
+        fake_hash = hashlib.sha256(fake_content).hexdigest()
+
+        # Attacker crafts override hashes matching injected content for all pinned files
+        override_pins = {path: fake_hash for path in PINNED_ORIGIN_MAIN_FILE_HASHES.keys()}
+        def injected_reader(p: pathlib.Path) -> bytes:
+            return fake_content
+
+        # Even if obligations are marked VERIFIED with registered citations:
+        mock_obligations = []
+        for ob in DEFAULT_MEMORY_OBLIGATIONS:
+            # Use valid registered GM1.10C citation
+            reg_cit = Citation(
+                path="docs/PORT11A_GM110C_ROM_EVIDENCE.md",
+                line=20,
+                firmware="GM1.10C",
+                is_historical=False,
+            )
+            mock_obligations.append(
+                MemoryObligation(
+                    id=ob.id,
+                    statement=ob.statement,
+                    required_evidence_type="ROM_VERIFIED",
+                    acceptable_tracked_sources=("docs/PORT11A_GM110C_ROM_EVIDENCE.md",),
+                    current_status=ObligationStatus.VERIFIED,
+                    citations=(reg_cit,),
+                )
+            )
+
+        res = evaluate(
+            mock_obligations,
+            repo_root=REPO_ROOT,
+            pinned_hashes=override_pins,
+            file_reader=injected_reader,
+        )
+        self.assertFalse(res.is_ready)
+        rules = [f.rule_id for f in res.findings]
+        self.assertIn(RULE_NON_PRODUCTION_EVIDENCE_CONFIG, rules)
+        self.assertGreaterEqual(res.error_count, 1)
+
+
+class TestPropertyNoPathToTrueFromShippedData(unittest.TestCase):
+    """Property-style test suite establishing that no manipulation of shipped data reaches True."""
+
+    def test_property_no_shipped_combination_reaches_ready(self):
+        """Property: No combination of shipped obligations, including promoting any single
+
+        obligation to VERIFIED, can ever evaluate to is_ready == True.
+        """
+        # Baseline shipped dataset
+        self.assertFalse(evaluate(DEFAULT_MEMORY_OBLIGATIONS, repo_root=REPO_ROOT).is_ready)
+
+        # Promoting any single obligation in the canonical set
+        for i, target_ob in enumerate(DEFAULT_MEMORY_OBLIGATIONS):
+            promoted_ob = MemoryObligation(
+                id=target_ob.id,
+                statement=target_ob.statement,
+                required_evidence_type=target_ob.required_evidence_type,
+                acceptable_tracked_sources=target_ob.acceptable_tracked_sources,
+                current_status=ObligationStatus.VERIFIED,
+                citations=target_ob.citations,
+                pending_pr=target_ob.pending_pr,
+                notes=target_ob.notes,
+            )
+            promoted_set = list(DEFAULT_MEMORY_OBLIGATIONS)
+            promoted_set[i] = promoted_ob
+
+            res = evaluate(promoted_set, repo_root=REPO_ROOT)
+            self.assertFalse(
+                res.is_ready,
+                f"Promoting single obligation {target_ob.id} erroneously produced is_ready=True",
+            )
+
+        # Evaluating any proper subset of canonical obligations (sizes 1 through 17)
+        for k in range(1, len(DEFAULT_MEMORY_OBLIGATIONS)):
+            subset = DEFAULT_MEMORY_OBLIGATIONS[:k]
+            res_sub = evaluate(subset, repo_root=REPO_ROOT)
+            self.assertFalse(res_sub.is_ready)
+            self.assertIn(RULE_INCOMPLETE_OBLIGATION_SET, [f.rule_id for f in res_sub.findings])
+
+
+class TestProvenanceRegistryAndObligationSetIntegrity(unittest.TestCase):
+    """Tests covering provenance registry lookups, conflict detection, and canonical ID rules."""
+
+    def test_unregistered_citation_fails_closed(self):
+        """A citation with unrecorded line or missing line forces RULE_UNREGISTERED_CITATION."""
+        # Unregistered line
+        cit_unreg_line = Citation(path="docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md", line=99999)
+        ob_unreg_line = MemoryObligation(
+            id="OBLIG-MEM-16A",
+            statement="Test unregistered line citation",
+            required_evidence_type="ROM_VERIFIED",
+            acceptable_tracked_sources=("docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md",),
+            current_status=ObligationStatus.VERIFIED,
+            citations=(cit_unreg_line,),
+        )
+        res_a = evaluate_single_obligation(ob_unreg_line, repo_root=REPO_ROOT)
+        self.assertFalse(res_a.is_verified)
+        self.assertIn(RULE_UNREGISTERED_CITATION, [f.rule_id for f in res_a.findings])
+
+        # Missing line (line=None)
+        cit_no_line = Citation(path="docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md", line=None)
+        ob_no_line = MemoryObligation(
+            id="OBLIG-MEM-16A",
+            statement="Test unlineated citation",
+            required_evidence_type="ROM_VERIFIED",
+            acceptable_tracked_sources=("docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md",),
+            current_status=ObligationStatus.VERIFIED,
+            citations=(cit_no_line,),
+        )
+        res_b = evaluate_single_obligation(ob_no_line, repo_root=REPO_ROOT)
+        self.assertFalse(res_b.is_verified)
+        self.assertIn(RULE_UNREGISTERED_CITATION, [f.rule_id for f in res_b.findings])
+
+    def test_caller_flag_conflict_with_registry_fails_closed(self):
+        """Caller-supplied flags conflicting with trusted provenance registry must fail."""
+        # Line 172 is GM1.10E; caller claims GM1.10C
+        cit_conflicting_fw = Citation(
+            path="docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md",
+            line=172,
+            firmware="GM1.10C",
+        )
+        ob_conflict = MemoryObligation(
+            id="OBLIG-MEM-10",
+            statement="Test conflicting firmware flag",
+            required_evidence_type="ROM_VERIFIED",
+            acceptable_tracked_sources=("docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md",),
+            current_status=ObligationStatus.VERIFIED,
+            citations=(cit_conflicting_fw,),
+        )
+        res = evaluate_single_obligation(ob_conflict, repo_root=REPO_ROOT)
+        self.assertFalse(res.is_verified)
+        rules = [f.rule_id for f in res.findings]
+        self.assertIn(RULE_PROVENANCE_CONFLICT, rules)
+
+        # Line 20 is non-historical; caller claims is_historical=True
+        cit_conflicting_hist = Citation(
+            path="docs/PORT11A_GM110C_ROM_EVIDENCE.md",
+            line=20,
+            is_historical=True,
+        )
+        ob_conflict_hist = MemoryObligation(
+            id="OBLIG-MEM-16A",
+            statement="Test conflicting is_historical flag",
+            required_evidence_type="ROM_VERIFIED",
+            acceptable_tracked_sources=("docs/PORT11A_GM110C_ROM_EVIDENCE.md",),
+            current_status=ObligationStatus.VERIFIED,
+            citations=(cit_conflicting_hist,),
+        )
+        res_hist = evaluate_single_obligation(ob_conflict_hist, repo_root=REPO_ROOT)
+        self.assertFalse(res_hist.is_verified)
+        self.assertIn(RULE_PROVENANCE_CONFLICT, [f.rule_id for f in res_hist.findings])
+
+    def test_duplicate_obligation_ids_fails_closed(self):
+        """Supplying duplicate obligation IDs triggers RULE_DUPLICATE_OBLIGATION_ID."""
+        ob_16a = [ob for ob in DEFAULT_MEMORY_OBLIGATIONS if ob.id == "OBLIG-MEM-16A"][0]
+        # Full set with one obligation duplicated
+        tampered_set = list(DEFAULT_MEMORY_OBLIGATIONS) + [ob_16a]
+        res = evaluate(tampered_set, repo_root=REPO_ROOT)
+        self.assertFalse(res.is_ready)
+        rules = [f.rule_id for f in res.findings]
+        self.assertIn(RULE_DUPLICATE_OBLIGATION_ID, rules)
+
+    def test_unknown_obligation_id_fails_closed(self):
+        """Supplying an unknown obligation ID triggers RULE_UNKNOWN_OBLIGATION_ID."""
+        ob_unknown_id = MemoryObligation(
+            id="OBLIG-MEM-99_ROGUE",
+            statement="Unknown rogue obligation",
+            required_evidence_type="ROM_VERIFIED",
+            acceptable_tracked_sources=("docs/PORT11A_GM110C_ROM_EVIDENCE.md",),
+            current_status=ObligationStatus.VERIFIED,
+            citations=(
+                Citation(
+                    path="docs/PORT11A_GM110C_ROM_EVIDENCE.md",
+                    line=20,
+                    firmware="GM1.10C",
+                    is_historical=False,
+                ),
+            ),
+        )
+        tampered_set = list(DEFAULT_MEMORY_OBLIGATIONS) + [ob_unknown_id]
+        res = evaluate(tampered_set, repo_root=REPO_ROOT)
+        self.assertFalse(res.is_ready)
+        rules = [f.rule_id for f in res.findings]
+        self.assertIn(RULE_UNKNOWN_OBLIGATION_ID, rules)
+
+    def test_immutable_module_constants(self):
+        """Module constants MappingProxyType cannot be mutated."""
+        with self.assertRaises(TypeError):
+            PINNED_ORIGIN_MAIN_FILE_HASHES["new_file"] = "fake_hash"  # type: ignore
+
+        with self.assertRaises(TypeError):
+            CITATION_PROVENANCE_REGISTRY[("path", 1)] = CitationProvenance("GM1.10C", False)  # type: ignore
+
+        with self.assertRaises(TypeError):
+            TRACKED_ADDRESS_CITATIONS["0x12345678"] = pmo.AddressCitation("0x12345678", "docs/SAFETY.md", 1, "test")  # type: ignore
 
 
 if __name__ == "__main__":

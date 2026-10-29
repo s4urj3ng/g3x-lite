@@ -13,12 +13,12 @@
 
 The purpose of milestone **PORT-13 (`p13-oblig-mem`)** is to formalize memory-ownership proof obligations for the Canon PowerShot G3 X (Firmware **GM1.10C**, DIGIC 6, dual-core Cortex-R4) as machine-readable data, enforced by a deterministic, fail-closed evaluation engine.
 
-Following the independent review of Draft PR #23 ([`docs/PORT13_REVIEW_PR23.md`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-13-offline-p13-oblig-mem/docs/PORT13_REVIEW_PR23.md)) and the resolution of three P1 fail-open defects, this module establishes the following evidentiary and security safeguards:
-1. **Fail-Closed by Design**: Memory ownership cannot be presumed. Overall readiness evaluates strictly to `False` unless every obligation is `VERIFIED` with primary GM1.10C evidence tracked on `origin/main`.
+Following the independent review of Draft PR #23 ([`docs/PORT13_REVIEW_PR23.md`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-13-offline-p13-oblig-mem/docs/PORT13_REVIEW_PR23.md)) and the resolution of reviewer defects, this module establishes the following evidentiary and security safeguards:
+1. **Fail-Closed by Design & Canonical Required Obligation Set**: Memory ownership cannot be presumed. Overall readiness evaluates strictly to `False` unless every obligation in the canonical 18-obligation set (`REQUIRED_OBLIGATION_IDS`) is `VERIFIED` with primary GM1.10C evidence tracked on `origin/main`. Evaluating subsets or individual obligations (e.g. `OBLIG-MEM-16A`) never asserts overall readiness.
 2. **Epistemic Principle: Bounds ≠ Ownership**: Byte copy ranges do not verify subsystem ownership. In accordance with [`docs/PORT11A_GM110C_ROM_EVIDENCE.md:26`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-13-offline-p13-oblig-mem/docs/PORT11A_GM110C_ROM_EVIDENCE.md#L26), static instruction copies are classified as `STATIC_VERIFIED`, while functional ownership, allocator rules, and scheduler semantics remain `INFERRED` or `UNKNOWN`.
-3. **Firmware Identity Strict Allowlist**: Replaced case-sensitive denylists with a normalized allowlist accepting strictly `GM1.10C`. Everything else—including `gm1.10e`, `GM1.10E `, `UNKNOWN`, `""`, `None`, `1.00C`, `1.10E`, or unrecognized variants (`GM1.10X`)—is rejected with an explicit error when claimed for `VERIFIED` status.
-4. **Historical Provenance in Mixed-Version Documents**: In mixed-firmware comparisons (e.g. [`docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-13-offline-p13-oblig-mem/docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md)), citations citing lines or sections documenting values for GM1.10E, 1.10E, or 1.00C (such as line 172 documenting OMAR only for GM1.10E) are explicitly tagged `firmware="GM1.10E"`, `is_historical=True`. Obligations supported only by such citations remain `INFERRED` or `UNKNOWN` and cannot evaluate to `VERIFIED`.
-5. **Cryptographic Content Authentication**: File existence and path whitelists do not establish provenance. For every cited evidence file, [`tools/port13_memory_obligations.py`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-13-offline-p13-oblig-mem/tools/port13_memory_obligations.py) pins the cryptographic SHA-256 digest of its `origin/main` content at commit `581b1a4bb30456bf18c46dc4bcf61b0375aee251`. Evaluation hashes local content without network or git dependencies, failing closed if a file is missing, unreadable, unpinned, or tampered.
+3. **Firmware Identity Strict Allowlist**: Normalized allowlist accepting strictly `GM1.10C`. Everything else—including `gm1.10e`, `GM1.10E `, `UNKNOWN`, `""`, `None`, `1.00C`, `1.10E`, or unrecognized variants (`GM1.10X`)—is rejected with an explicit error when claimed for `VERIFIED` status.
+4. **Trusted Citation Provenance Registry & Anti-Tampering**: In mixed-firmware comparisons (e.g. [`docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-13-offline-p13-oblig-mem/docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md)), provenance is determined exclusively by the module's immutable `CITATION_PROVENANCE_REGISTRY` keyed by `(path, line)`. Caller-supplied flags cannot override historical status; citations with omitted flags never default to `GM1.10C`; and unrecorded citations force fail-closed evaluation.
+5. **Authoritative Immutable Digest Pins & Non-Production Rejection**: File existence and path whitelists do not establish provenance. For every cited evidence file, [`tools/port13_memory_obligations.py`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-13-offline-p13-oblig-mem/tools/port13_memory_obligations.py) pins the cryptographic SHA-256 digest of its `origin/main` content at commit `581b1a4bb30456bf18c46dc4bcf61b0375aee251` as an immutable `MappingProxyType`. Any test hook usage (`pinned_hashes` override, custom `file_reader`, or alternate `repo_root`) immediately forces `is_ready = False` with `RULE_NON_PRODUCTION_EVIDENCE_CONFIG`.
 6. **Pending PR Quarantine**: Evidence originating solely from unmerged Draft PR #23 is quarantined with status `UNKNOWN` and explicitly annotated with its pending PR reference.
 7. **Zero New Firmware Addresses**: Every memory address appearing in [`tools/port13_memory_obligations.py`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-13-offline-p13-oblig-mem/tools/port13_memory_obligations.py) and this document is already present in a tracked `origin/main` document, cited `file:line`.
 
@@ -30,21 +30,29 @@ The evaluation function `evaluate()` in [`tools/port13_memory_obligations.py`](f
 
 | Rule Identifier | Severity | Trigger Condition | Fail-Closed Consequence |
 |---|:---:|---|---|
+| **`RULE_INCOMPLETE_OBLIGATION_SET`** | `ERROR` | One or more canonical obligations from `REQUIRED_OBLIGATION_IDS` are missing from evaluation. | Aggregate `is_ready` forced to `False`. |
+| **`RULE_DUPLICATE_OBLIGATION_ID`** | `ERROR` | Duplicate obligation IDs provided to `evaluate()`. | Aggregate `is_ready` forced to `False`. |
+| **`RULE_UNKNOWN_OBLIGATION_ID`** | `ERROR` | An unrecognized obligation ID outside `REQUIRED_OBLIGATION_IDS` is supplied. | Aggregate `is_ready` forced to `False`. |
+| **`RULE_NON_PRODUCTION_EVIDENCE_CONFIG`** | `ERROR` | Test hooks active (`pinned_hashes` override, custom `file_reader`, or alternate `repo_root`). | Production readiness forced to `False`. |
+| **`RULE_UNREGISTERED_CITATION`** | `ERROR` | Citation `(path, line)` is not in `CITATION_PROVENANCE_REGISTRY`. | Obligation disqualified; `is_ready` forced to `False`. |
+| **`RULE_PROVENANCE_CONFLICT`** | `ERROR` | Caller-supplied citation flags conflict with trusted provenance registry entries. | Obligation disqualified; `is_ready` forced to `False`. |
 | **`RULE_MISSING_CITED_PATH`** | `ERROR` | A cited file path does not exist on disk or in the injected file reader. | Obligation disqualified; `is_ready` forced to `False`. |
 | **`RULE_UNREADABLE_SOURCE`** | `ERROR` | A cited file cannot be read due to I/O or permissions error. | Obligation disqualified; `is_ready` forced to `False`. |
 | **`RULE_UNTRACKED_SOURCE`** | `ERROR` | A cited path is not in the whitelist of 103 files tracked on `origin/main`. | Obligation disqualified; `is_ready` forced to `False`. |
 | **`RULE_UNPINNED_SOURCE`** | `ERROR` | A cited path lacks a cryptographic SHA-256 digest pin in `PINNED_ORIGIN_MAIN_FILE_HASHES`. | Obligation disqualified; `is_ready` forced to `False`. |
 | **`RULE_CONTENT_HASH_MISMATCH`** | `ERROR` | Local file SHA-256 digest differs from pinned `origin/main` digest. | Obligation disqualified; `is_ready` forced to `False`. |
 | **`RULE_UNACCEPTABLE_SOURCE`** | `ERROR` | A cited path is not explicitly listed in the obligation's `acceptable_tracked_sources`. | Obligation disqualified; `is_ready` forced to `False`. |
-| **`RULE_HISTORICAL_CANNOT_VERIFY`** | `ERROR` | A citation is marked `is_historical`, cites historical-only paths, or has normalized firmware other than `GM1.10C`, while the obligation is marked `VERIFIED`. | Obligation disqualified; `is_ready` forced to `False`. |
+| **`RULE_HISTORICAL_CANNOT_VERIFY`** | `ERROR` | Citation line is historical, cites historical-only paths, or lacks verified `GM1.10C` provenance while obligation is marked `VERIFIED`. | Obligation disqualified; `is_ready` forced to `False`. |
 | **`RULE_PENDING_PR_CANNOT_VERIFY`** | `ERROR` | An obligation claims `VERIFIED` status despite relying on evidence found only in an unmerged PR (`pending_pr`). | Obligation disqualified; `is_ready` forced to `False`. |
 | **`RULE_STATUS_NOT_VERIFIED`** | `WARNING` | An obligation has status `UNKNOWN` or `INFERRED`. | Aggregate `is_ready` forced to `False`. |
 | **`RULE_EMPTY_CITATIONS`** | `ERROR` | An obligation has an empty citations tuple. | Obligation disqualified; `is_ready` forced to `False`. |
 | **`RULE_EMPTY_DATASET`** | `ERROR` | Zero obligations provided to `evaluate()`. | `is_ready` forced to `False`. |
 
 Overall readiness is `True` **if and only if**:
-- `total_obligations > 0`
-- `verified_count == total_obligations`
+- `total_obligations == len(REQUIRED_OBLIGATION_IDS) == 18`
+- `passed_id_set == REQUIRED_OBLIGATION_IDS` (complete canonical set, zero missing, zero unknown, zero duplicates)
+- `is_production_config == True` (zero test hooks: default root, immutable production pins, no injected readers)
+- `verified_count == 18`
 - `error_count == 0`
 - `unknown_count == 0`
 - `inferred_count == 0`
@@ -102,7 +110,21 @@ To guarantee evidence authenticity and prevent local tampering or untracked inje
 | `research/historical/g3x/g3x_100c_historical_symbols.json` | `13524f24b855dddc9eb44ab5141020e5c8d34eb8a4a7f50c8e5914269a6bb86d` | Historical 1.00C symbol table JSON |
 | `vendor/g3x-platform/platform/g3x/platform_camera.h` | `0fed491abe86c069166c4aadc50eceec81dd0da835943049e03b370fede9f6ac` | Camera configuration header |
 
-### 4.2 How to Verify and Refresh Digest Pins
+### 4.2 Trusted Citation Provenance Registry (`CITATION_PROVENANCE_REGISTRY`)
+
+To eliminate reliance on caller-supplied flags or unverified assumptions in mixed-firmware documents (such as [`docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-13-offline-p13-oblig-mem/docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md) and [`docs/PORT5A_RANMA_PORT_RECOVERY.md`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-13-offline-p13-oblig-mem/docs/PORT5A_RANMA_PORT_RECOVERY.md)), every cited `(path, line)` pair is recorded in `CITATION_PROVENANCE_REGISTRY` as an immutable `MappingProxyType`:
+- **Strict Provenance Lookup**: Firmware identity and historical status are looked up directly from the registry. Caller-supplied flags cannot override registered values.
+- **Fail-Closed on Unspecified Provenance**: Omitted or `None` citation flags never default to `GM1.10C`.
+- **Conflict Detection**: Any discrepancy between caller-supplied flags and the registry triggers `RULE_PROVENANCE_CONFLICT` (severity `ERROR`).
+- **Unregistered Citation Rejection**: Any citation referencing an uncataloged file or line triggers `RULE_UNREGISTERED_CITATION` (severity `ERROR`).
+
+### 4.3 Authoritative Immutable Pins & Non-Production Override Behavior
+
+`PINNED_ORIGIN_MAIN_FILE_HASHES` is an immutable `MappingProxyType` constant anchoring file digests to `origin/main` commit `581b1a4bb30456bf18c46dc4bcf61b0375aee251`.
+- **Strict Production Gate**: If any test hook is provided to `evaluate()`—such as a `pinned_hashes` override dictionary, a custom `file_reader` callable, or an alternate `repo_root`—the evaluation engine automatically registers a finding with `RULE_NON_PRODUCTION_EVIDENCE_CONFIG` (severity `ERROR`).
+- **No Path to Ready under Test Hooks**: Test configurations can still verify error reporting and hash-mismatch rejection, but overall readiness is strictly forced to `False`.
+
+### 4.4 How to Verify and Refresh Digest Pins
 
 When upstream commits introduce approved changes to evidence documents, refresh the digest pins using read-only git operations:
 

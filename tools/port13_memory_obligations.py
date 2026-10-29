@@ -24,6 +24,7 @@ import json
 from pathlib import Path
 import re
 import sys
+from types import MappingProxyType
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 # -----------------------------------------------------------------------------
@@ -97,6 +98,42 @@ RULE_PENDING_PR_CANNOT_VERIFY = "RULE_PENDING_PR_CANNOT_VERIFY"
 RULE_STATUS_NOT_VERIFIED = "RULE_STATUS_NOT_VERIFIED"
 RULE_EMPTY_CITATIONS = "RULE_EMPTY_CITATIONS"
 RULE_ADDRESS_NOT_TRACKED = "RULE_ADDRESS_NOT_TRACKED"
+RULE_EMPTY_DATASET = "RULE_EMPTY_DATASET"
+RULE_INCOMPLETE_OBLIGATION_SET = "RULE_INCOMPLETE_OBLIGATION_SET"
+RULE_DUPLICATE_OBLIGATION_ID = "RULE_DUPLICATE_OBLIGATION_ID"
+RULE_UNKNOWN_OBLIGATION_ID = "RULE_UNKNOWN_OBLIGATION_ID"
+RULE_UNREGISTERED_CITATION = "RULE_UNREGISTERED_CITATION"
+RULE_PROVENANCE_CONFLICT = "RULE_PROVENANCE_CONFLICT"
+RULE_NON_PRODUCTION_EVIDENCE_CONFIG = "RULE_NON_PRODUCTION_EVIDENCE_CONFIG"
+
+
+# -----------------------------------------------------------------------------
+# Canonical Required Obligation Set
+# -----------------------------------------------------------------------------
+
+# Full canonical set of 18 GM1.10C memory ownership proof obligations.
+# Overall readiness evaluates strictly to False unless all 18 obligations are
+# present, unique, and verified with non-historical, pinned origin/main evidence.
+REQUIRED_OBLIGATION_IDS: frozenset[str] = frozenset({
+    "OBLIG-MEM-01",
+    "OBLIG-MEM-02",
+    "OBLIG-MEM-03",
+    "OBLIG-MEM-04",
+    "OBLIG-MEM-05",
+    "OBLIG-MEM-06",
+    "OBLIG-MEM-07",
+    "OBLIG-MEM-08",
+    "OBLIG-MEM-09",
+    "OBLIG-MEM-10",
+    "OBLIG-MEM-11",
+    "OBLIG-MEM-12",
+    "OBLIG-MEM-13",
+    "OBLIG-MEM-14",
+    "OBLIG-MEM-15",
+    "OBLIG-MEM-16A",
+    "OBLIG-MEM-16B",
+    "OBLIG-MEM-17",
+})
 
 
 # -----------------------------------------------------------------------------
@@ -124,8 +161,9 @@ def is_supported_firmware(val: Optional[str]) -> bool:
 
 
 # SHA-256 digests of cited evidence files on origin/main @ 581b1a4bb30456bf18c46dc4bcf61b0375aee251
-# Computed via read-only git show origin/main:<path> piped into python3 hashlib
-PINNED_ORIGIN_MAIN_FILE_HASHES: Dict[str, str] = {
+# Computed via read-only git show origin/main:<path> piped into python3 hashlib.
+# Authoritative and immutable via MappingProxyType.
+_PINNED_ORIGIN_MAIN_FILE_HASHES_RAW: Dict[str, str] = {
     "chdk-port/platform/g3x/sub/110c/boot_prototype.c": "f7884eb2078e93a0098299e2665c1069ecbc65c7759d8993fa31e38fbb232e68",
     "docs/G3X_HISTORICAL_SYMBOL_RECONCILIATION.md": "c04e83dec333fb6c41b4a854394a11f3fc36ce71c0eda6f3ef212da6a03bf74d",
     "docs/GM110C_MEMORY_MAP.md": "74561df2bd43b233ea35763df9689076791f67fcedf24291fb72f17571efdf05",
@@ -140,6 +178,10 @@ PINNED_ORIGIN_MAIN_FILE_HASHES: Dict[str, str] = {
     "research/historical/g3x/g3x_100c_historical_symbols.json": "13524f24b855dddc9eb44ab5141020e5c8d34eb8a4a7f50c8e5914269a6bb86d",
     "vendor/g3x-platform/platform/g3x/platform_camera.h": "0fed491abe86c069166c4aadc50eceec81dd0da835943049e03b370fede9f6ac",
 }
+
+PINNED_ORIGIN_MAIN_FILE_HASHES: MappingProxyType[str, str] = MappingProxyType(
+    _PINNED_ORIGIN_MAIN_FILE_HASHES_RAW
+)
 
 # Exactly 103 files tracked on origin/main @ 581b1a4bb30456bf18c46dc4bcf61b0375aee251
 ORIGIN_MAIN_TRACKED_FILES: frozenset[str] = frozenset({
@@ -278,8 +320,9 @@ class AddressCitation:
     firmware: str = "GM1.10C"
 
 
-# All 57 addresses appearing in this module are verified present in tracked origin/main files
-TRACKED_ADDRESS_CITATIONS: Dict[str, AddressCitation] = {
+# All 57 addresses appearing in this module are verified present in tracked origin/main files.
+# Authoritative and immutable via MappingProxyType.
+_TRACKED_ADDRESS_CITATIONS_RAW: Dict[str, AddressCitation] = {
     "0x00000000": AddressCitation("0x00000000", "docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md", 166, "Low vector table base"),
     "0x00003FFF": AddressCitation("0x00003FFF", "docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md", 166, "Historical exception vectors upper limit"),
     "0x00008000": AddressCitation("0x00008000", "docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md", 167, "Low-RAM data copy destination start"),
@@ -341,6 +384,251 @@ TRACKED_ADDRESS_CITATIONS: Dict[str, AddressCitation] = {
     "0xFCEF5E67": AddressCitation("0xFCEF5E67", "docs/PORT11A_GM110C_ROM_EVIDENCE.md", 20, "Cortex-R4 ATCM copy source in ROM end inclusive"),
 }
 
+TRACKED_ADDRESS_CITATIONS: MappingProxyType[str, AddressCitation] = MappingProxyType(
+    _TRACKED_ADDRESS_CITATIONS_RAW
+)
+
+
+# -----------------------------------------------------------------------------
+# Trusted Citation Provenance Registry
+# -----------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class CitationProvenance:
+    """Trusted provenance entry for a cited line in repository documentation."""
+    firmware: str
+    is_historical: bool
+    context: str = ""
+
+
+# Authoritative provenance registry keyed by (path, line).
+# Immutable MappingProxyType module constant: caller-supplied flags are NOT trusted,
+# and unspecified provenance never defaults to GM1.10C. Any citation not in this
+# registry forces evaluate() to return not-ready (RULE_UNREGISTERED_CITATION).
+_CITATION_PROVENANCE_REGISTRY_RAW: Dict[Tuple[str, int], CitationProvenance] = {
+    # docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md
+    ("docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md", 75): CitationProvenance(
+        firmware="GM1.10C",
+        is_historical=False,
+        context="Firmware executable RAM mirror copy source in ROM (0xFCEC854C)",
+    ),
+    ("docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md", 77): CitationProvenance(
+        firmware="GM1.10C",
+        is_historical=False,
+        context="Low-RAM data copy source in ROM (0xFCE91058)",
+    ),
+    ("docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md", 78): CitationProvenance(
+        firmware="GM1.10C",
+        is_historical=False,
+        context="Firmware executable RAM mirror destination start (0x010E1000) and blo limit (0x01107D00)",
+    ),
+    ("docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md", 101): CitationProvenance(
+        firmware="GM1.10E",
+        is_historical=True,
+        context="Historical Ranma loader stack pointer setup (0x8000)",
+    ),
+    ("docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md", 166): CitationProvenance(
+        firmware="GM1.10E",
+        is_historical=True,
+        context="ATCM exception vectors 0x00000000..0x00003FFF historically reported for GM1.10E",
+    ),
+    ("docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md", 167): CitationProvenance(
+        firmware="GM1.10C",
+        is_historical=False,
+        context="Canon low-RAM data section 0x00008000..0x0003F4F3",
+    ),
+    ("docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md", 168): CitationProvenance(
+        firmware="GM1.10C",
+        is_historical=False,
+        context="Canon static BSS 0x0003F4F4..0x003489B3",
+    ),
+    ("docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md", 169): CitationProvenance(
+        firmware="GM1.10C",
+        is_historical=False,
+        context="Default Canon heap base 0x003489B4 / sub-pool 1 limit 0x00600014 / upper limit 0x006CDFFF",
+    ),
+    ("docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md", 170): CitationProvenance(
+        firmware="GM1.10C",
+        is_historical=False,
+        context="Heap Pool 0 upper chunk block descriptor 0x0060E000",
+    ),
+    ("docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md", 171): CitationProvenance(
+        firmware="GM1.10C",
+        is_historical=False,
+        context="AdditionAgent ARAM buffer base 0x006CE000..0x006EFFFF (size 0x22000)",
+    ),
+    ("docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md", 172): CitationProvenance(
+        firmware="GM1.10E",
+        is_historical=True,
+        context="Historical OMAR staging RAM 0x00700000..0x0075FFFF documented only for GM1.10E",
+    ),
+    ("docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md", 173): CitationProvenance(
+        firmware="GM1.10E",
+        is_historical=True,
+        context="Mid-DRAM unreferenced gap 0x00760000..0x00C80000 documented only for GM1.10E",
+    ),
+    ("docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md", 174): CitationProvenance(
+        firmware="GM1.10E",
+        is_historical=True,
+        context="Zico Xtensa code cached mirror 0x00A00000..0x00B14DEF / 0x80A00000",
+    ),
+    ("docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md", 175): CitationProvenance(
+        firmware="GM1.10E",
+        is_historical=True,
+        context="Ranma GM1.10E high-DRAM placement candidate 0x00C80000..0x00DFFFFF",
+    ),
+    ("docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md", 176): CitationProvenance(
+        firmware="GM1.10E",
+        is_historical=True,
+        context="Xtensa / avcore RAM base 0x00E00000 documented only for GM1.10E",
+    ),
+    ("docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md", 177): CitationProvenance(
+        firmware="GM1.10C",
+        is_historical=False,
+        context="Firmware executable RAM mirror destination end 0x010E1000..0x01107CFF",
+    ),
+    ("docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md", 178): CitationProvenance(
+        firmware="GM1.10E",
+        is_historical=True,
+        context="Historical ATCM/BTCM kernel copy 0xBFE10800..0xBFE17418",
+    ),
+    ("docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md", 179): CitationProvenance(
+        firmware="GM1.10E",
+        is_historical=True,
+        context="Historical RAM mirror 0x20000000 / uncached mirror 0x40000000",
+    ),
+
+    # docs/PORT5A_RANMA_PORT_RECOVERY.md
+    ("docs/PORT5A_RANMA_PORT_RECOVERY.md", 108): CitationProvenance(
+        firmware="GM1.10E",
+        is_historical=True,
+        context="Ranma GM1.10E core placement comparison vs GM1.10C candidate",
+    ),
+
+    # docs/PROJECT_STATE.md
+    ("docs/PROJECT_STATE.md", 294): CitationProvenance(
+        firmware="GM1.10C",
+        is_historical=False,
+        context="Kernel minimum headroom assert threshold 0x000B1FEC / routine 0xFC05B3C8",
+    ),
+    ("docs/PROJECT_STATE.md", 295): CitationProvenance(
+        firmware="GM1.10C",
+        is_historical=False,
+        context="ROM literals 0xFC0200DC and 0xFC05B450 anchoring Canon BSS end and heap base",
+    ),
+    ("docs/PROJECT_STATE.md", 308): CitationProvenance(
+        firmware="GM1.10C",
+        is_historical=False,
+        context="AdditionAgent DMA read routine 0xFC55888C..0xFC5588C0 and sensor raw buffer pointer 0x43DBFCA0",
+    ),
+
+    # docs/HANDOFF.md
+    ("docs/HANDOFF.md", 796): CitationProvenance(
+        firmware="GM1.10C",
+        is_historical=False,
+        context="Shifted heap base candidate scan [0x003489B4, 0x003C89B4)",
+    ),
+
+    # chdk-port/platform/g3x/sub/110c/boot_prototype.c
+    ("chdk-port/platform/g3x/sub/110c/boot_prototype.c", 108): CitationProvenance(
+        firmware="GM1.10C",
+        is_historical=False,
+        context="Executable RAM mirror copy loop blo against 0x01107D00",
+    ),
+    ("chdk-port/platform/g3x/sub/110c/boot_prototype.c", 179): CitationProvenance(
+        firmware="GM1.10C",
+        is_historical=False,
+        context="Shifted heap base model and headroom check 0x006CE000 - r4 >= 0x000B1FEC",
+    ),
+    ("chdk-port/platform/g3x/sub/110c/boot_prototype.c", 206): CitationProvenance(
+        firmware="GM1.10C",
+        is_historical=False,
+        context="Heap chunk block descriptor 0x0060E000",
+    ),
+    ("chdk-port/platform/g3x/sub/110c/boot_prototype.c", 210): CitationProvenance(
+        firmware="GM1.10C",
+        is_historical=False,
+        context="Sub-pool limit literal 0x00600014",
+    ),
+
+    # vendor/g3x-platform/platform/g3x/platform_camera.h
+    ("vendor/g3x-platform/platform/g3x/platform_camera.h", 38): CitationProvenance(
+        firmware="GM1.10C",
+        is_historical=False,
+        context="CAM_UNCACHED_BIT 0x40000000 definition",
+    ),
+    ("vendor/g3x-platform/platform/g3x/platform_camera.h", 44): CitationProvenance(
+        firmware="GM1.10C",
+        is_historical=False,
+        context="Sensor RAW buffer dimensions definition",
+    ),
+
+    # docs/PORT11A_GM110C_ROM_EVIDENCE.md
+    ("docs/PORT11A_GM110C_ROM_EVIDENCE.md", 20): CitationProvenance(
+        firmware="GM1.10C",
+        is_historical=False,
+        context="Primary GM1.10C ROM Slice S1A evidence",
+    ),
+    ("docs/PORT11A_GM110C_ROM_EVIDENCE.md", 60): CitationProvenance(
+        firmware="GM1.10C",
+        is_historical=False,
+        context="Slice S1A ATCM copy loop start and literal pool end",
+    ),
+    ("docs/PORT11A_GM110C_ROM_EVIDENCE.md", 103): CitationProvenance(
+        firmware="GM1.10C",
+        is_historical=False,
+        context="ROM literal for ATCM source start (0xFCEEF24C)",
+    ),
+    ("docs/PORT11A_GM110C_ROM_EVIDENCE.md", 104): CitationProvenance(
+        firmware="GM1.10C",
+        is_historical=False,
+        context="ROM literal for ATCM destination start (0xBFE10800)",
+    ),
+
+    # docs/G3X_HISTORICAL_SYMBOL_RECONCILIATION.md
+    ("docs/G3X_HISTORICAL_SYMBOL_RECONCILIATION.md", 79): CitationProvenance(
+        firmware="GM1.10C",
+        is_historical=False,
+        context="ATCM target execution role in symbol reconciliation",
+    ),
+
+    # Tracked baseline files used in citations and tests
+    ("docs/GM110C_MEMORY_MAP.md", 1): CitationProvenance(
+        firmware="GM1.10C",
+        is_historical=False,
+        context="GM1.10C memory map header",
+    ),
+    ("docs/SAFETY.md", 1): CitationProvenance(
+        firmware="GM1.10C",
+        is_historical=False,
+        context="Project safety policy header",
+    ),
+    ("README.md", 1): CitationProvenance(
+        firmware="GM1.10C",
+        is_historical=False,
+        context="Project README header",
+    ),
+    ("research/historical/g3x/g3x_100c_historical_symbols.csv", 1): CitationProvenance(
+        firmware="1.00C",
+        is_historical=True,
+        context="Historical 1.00C symbol table CSV",
+    ),
+    ("research/historical/g3x/g3x_100c_historical_symbols.json", 1): CitationProvenance(
+        firmware="1.00C",
+        is_historical=True,
+        context="Historical 1.00C symbol table JSON",
+    ),
+    ("docs/PATCH_AUDIT_110E.md", 1): CitationProvenance(
+        firmware="GM1.10E",
+        is_historical=True,
+        context="Historical GM1.10E patch audit",
+    ),
+}
+
+CITATION_PROVENANCE_REGISTRY: MappingProxyType[Tuple[str, int], CitationProvenance] = MappingProxyType(
+    _CITATION_PROVENANCE_REGISTRY_RAW
+)
+
 
 # -----------------------------------------------------------------------------
 # Data Models
@@ -352,9 +640,9 @@ class Citation:
     path: str
     line: Optional[int] = None
     end_line: Optional[int] = None
-    firmware: str = "GM1.10C"
+    firmware: Optional[str] = None
     note: str = ""
-    is_historical: bool = False
+    is_historical: Optional[bool] = None
 
     def to_dict(self) -> Dict[str, Any]:
         res: Dict[str, Any] = {
@@ -959,6 +1247,297 @@ DEFAULT_MEMORY_OBLIGATIONS: Tuple[MemoryObligation, ...] = (
 
 
 # -----------------------------------------------------------------------------
+# Internal Obligation Evaluator & Public Per-Obligation Helper
+# -----------------------------------------------------------------------------
+
+def _evaluate_obligation(
+    oblig: MemoryObligation,
+    resolved_root: Path,
+    active_pins: MappingProxyType[str, str] | Dict[str, str],
+    file_reader: Optional[Callable[[Path], bytes]] = None,
+) -> Tuple[bool, List[ObligationFinding]]:
+    """Internal helper to validate citations and evaluate single obligation certainty."""
+    ob_findings: List[ObligationFinding] = []
+    has_error = False
+
+    # 1. Citations existence and tracking validation
+    if not oblig.citations:
+        ob_findings.append(
+            ObligationFinding(
+                rule_id=RULE_EMPTY_CITATIONS,
+                obligation_id=oblig.id,
+                severity="ERROR",
+                message=f"Obligation '{oblig.id}' has no supporting citations",
+            )
+        )
+        has_error = True
+
+    for cit in oblig.citations:
+        cit_path = resolved_root / cit.path
+        content_bytes: Optional[bytes] = None
+
+        # Check 1a: File existence and readability
+        if file_reader is not None:
+            try:
+                content_bytes = file_reader(cit_path)
+            except FileNotFoundError:
+                ob_findings.append(
+                    ObligationFinding(
+                        rule_id=RULE_MISSING_CITED_PATH,
+                        obligation_id=oblig.id,
+                        severity="ERROR",
+                        message=f"Cited path '{cit.path}' does not exist",
+                    )
+                )
+                has_error = True
+            except Exception as e:
+                ob_findings.append(
+                    ObligationFinding(
+                        rule_id=RULE_UNREADABLE_SOURCE,
+                        obligation_id=oblig.id,
+                        severity="ERROR",
+                        message=f"Cited file '{cit.path}' cannot be read: {e}",
+                    )
+                )
+                has_error = True
+        else:
+            if not cit_path.is_file():
+                ob_findings.append(
+                    ObligationFinding(
+                        rule_id=RULE_MISSING_CITED_PATH,
+                        obligation_id=oblig.id,
+                        severity="ERROR",
+                        message=(
+                            f"Cited path '{cit.path}' does not exist on disk at {cit_path}"
+                        ),
+                    )
+                )
+                has_error = True
+            else:
+                try:
+                    content_bytes = cit_path.read_bytes()
+                except Exception as e:
+                    ob_findings.append(
+                        ObligationFinding(
+                            rule_id=RULE_UNREADABLE_SOURCE,
+                            obligation_id=oblig.id,
+                            severity="ERROR",
+                            message=f"Cited file '{cit.path}' cannot be read: {e}",
+                        )
+                    )
+                    has_error = True
+
+        # Check 1b: Tracked on origin/main whitelist
+        if cit.path not in ORIGIN_MAIN_TRACKED_FILES:
+            ob_findings.append(
+                ObligationFinding(
+                    rule_id=RULE_UNTRACKED_SOURCE,
+                    obligation_id=oblig.id,
+                    severity="ERROR",
+                    message=(
+                        f"Cited path '{cit.path}' is not a tracked origin/main file"
+                    ),
+                )
+            )
+            has_error = True
+
+        # Check 1c: Content authentication against pinned origin/main hash
+        if cit.path not in active_pins:
+            ob_findings.append(
+                ObligationFinding(
+                    rule_id=RULE_UNPINNED_SOURCE,
+                    obligation_id=oblig.id,
+                    severity="ERROR",
+                    message=(
+                        f"Cited path '{cit.path}' is not pinned in PINNED_ORIGIN_MAIN_FILE_HASHES "
+                        f"(origin/main commit {ORIGIN_MAIN_PIN_COMMIT})"
+                    ),
+                )
+            )
+            has_error = True
+        elif content_bytes is not None:
+            local_sha256 = hashlib.sha256(content_bytes).hexdigest()
+            expected_sha256 = active_pins[cit.path]
+            if local_sha256.lower() != expected_sha256.lower():
+                ob_findings.append(
+                    ObligationFinding(
+                        rule_id=RULE_CONTENT_HASH_MISMATCH,
+                        obligation_id=oblig.id,
+                        severity="ERROR",
+                        message=(
+                            f"Content authentication failed for '{cit.path}': "
+                            f"local SHA-256 {local_sha256} does not match pinned {expected_sha256} "
+                            f"(origin/main commit {ORIGIN_MAIN_PIN_COMMIT})"
+                        ),
+                    )
+                )
+                has_error = True
+
+        # Check 1d: Explicitly in obligation's acceptable tracked sources
+        if cit.path not in oblig.acceptable_tracked_sources:
+            ob_findings.append(
+                ObligationFinding(
+                    rule_id=RULE_UNACCEPTABLE_SOURCE,
+                    obligation_id=oblig.id,
+                    severity="ERROR",
+                    message=(
+                        f"Cited source '{cit.path}' is not listed in acceptable_tracked_sources "
+                        f"{oblig.acceptable_tracked_sources}"
+                    ),
+                )
+            )
+            has_error = True
+
+        # Check 1e: Citation Provenance Registry lookup & historical provenance enforcement
+        reg_key = (cit.path, cit.line) if cit.line is not None else None
+        reg_entry = CITATION_PROVENANCE_REGISTRY.get(reg_key) if reg_key else None
+
+        if reg_entry is None:
+            ob_findings.append(
+                ObligationFinding(
+                    rule_id=RULE_UNREGISTERED_CITATION,
+                    obligation_id=oblig.id,
+                    severity="ERROR",
+                    message=(
+                        f"Citation '{cit.path}:{cit.line}' is not registered in the trusted "
+                        f"citation provenance registry; unverified provenance forces fail-closed"
+                    ),
+                )
+            )
+            has_error = True
+        else:
+            # Check for conflict between caller-supplied flags and trusted registry
+            if cit.firmware is not None and normalize_firmware(cit.firmware) != normalize_firmware(reg_entry.firmware):
+                ob_findings.append(
+                    ObligationFinding(
+                        rule_id=RULE_PROVENANCE_CONFLICT,
+                        obligation_id=oblig.id,
+                        severity="ERROR",
+                        message=(
+                            f"Caller-supplied firmware {cit.firmware!r} conflicts with trusted registry "
+                            f"firmware {reg_entry.firmware!r} for '{cit.path}:{cit.line}'"
+                        ),
+                    )
+                )
+                has_error = True
+
+            if cit.is_historical is not None and cit.is_historical != reg_entry.is_historical:
+                ob_findings.append(
+                    ObligationFinding(
+                        rule_id=RULE_PROVENANCE_CONFLICT,
+                        obligation_id=oblig.id,
+                        severity="ERROR",
+                        message=(
+                            f"Caller-supplied is_historical={cit.is_historical} conflicts with trusted "
+                            f"registry is_historical={reg_entry.is_historical} for '{cit.path}:{cit.line}'"
+                        ),
+                    )
+                )
+                has_error = True
+
+        # Determine effective historical and firmware identity from registry & caller flags
+        # Unspecified provenance never defaults to GM1.10C; callers cannot bypass registry
+        caller_is_hist = (
+            cit.is_historical is True
+            or not is_supported_firmware(cit.firmware)
+        )
+        registry_is_hist = (
+            (reg_entry.is_historical if reg_entry else True)
+            or not is_supported_firmware(reg_entry.firmware if reg_entry else None)
+        )
+        effective_is_historical = (
+            caller_is_hist
+            or registry_is_hist
+            or (cit.path in HISTORICAL_ONLY_PATHS)
+        )
+        effective_firmware = reg_entry.firmware if reg_entry else (cit.firmware or "UNREGISTERED")
+
+        if effective_is_historical and oblig.current_status == ObligationStatus.VERIFIED:
+            ob_findings.append(
+                ObligationFinding(
+                    rule_id=RULE_HISTORICAL_CANNOT_VERIFY,
+                    obligation_id=oblig.id,
+                    severity="ERROR",
+                    message=(
+                        f"Historical or unsupported firmware citation '{cit.path}:{cit.line}' "
+                        f"({effective_firmware!r}, is_historical={effective_is_historical}) "
+                        f"cannot support VERIFIED status"
+                    ),
+                )
+            )
+            has_error = True
+
+        # Check 1f: Pending PR evidence cannot be VERIFIED
+        if oblig.pending_pr and oblig.current_status == ObligationStatus.VERIFIED:
+            ob_findings.append(
+                ObligationFinding(
+                    rule_id=RULE_PENDING_PR_CANNOT_VERIFY,
+                    obligation_id=oblig.id,
+                    severity="ERROR",
+                    message=(
+                        f"Obligation cites evidence found only in unmerged {oblig.pending_pr}; "
+                        f"cannot be VERIFIED"
+                    ),
+                )
+            )
+            has_error = True
+
+    # 2. Obligation status categorization and readiness impact
+    if oblig.current_status == ObligationStatus.UNKNOWN:
+        ob_findings.append(
+            ObligationFinding(
+                rule_id=RULE_STATUS_NOT_VERIFIED,
+                obligation_id=oblig.id,
+                severity="WARNING",
+                message=f"Obligation is UNKNOWN: {oblig.statement[:80]}...",
+            )
+        )
+        is_verified = False
+    elif oblig.current_status == ObligationStatus.INFERRED:
+        ob_findings.append(
+            ObligationFinding(
+                rule_id=RULE_STATUS_NOT_VERIFIED,
+                obligation_id=oblig.id,
+                severity="WARNING",
+                message=f"Obligation is INFERRED: {oblig.statement[:80]}...",
+            )
+        )
+        is_verified = False
+    elif oblig.current_status == ObligationStatus.VERIFIED:
+        is_verified = not has_error
+    else:
+        is_verified = False
+
+    return (is_verified, ob_findings)
+
+
+def evaluate_single_obligation(
+    obligation: MemoryObligation,
+    repo_root: Optional[Union[str, Path]] = None,
+    file_reader: Optional[Callable[[Path], bytes]] = None,
+) -> SingleObligationEvaluation:
+    """Evaluate an individual obligation in isolation.
+
+    NOTE: This returns whether the single obligation meets verification criteria.
+    It NEVER sets or asserts overall readiness for the memory ownership model.
+    """
+    canonical_root = Path(__file__).resolve().parent.parent
+    resolved_root = canonical_root if repo_root is None else Path(repo_root).resolve()
+    is_verified, findings = _evaluate_obligation(
+        oblig=obligation,
+        resolved_root=resolved_root,
+        active_pins=PINNED_ORIGIN_MAIN_FILE_HASHES,
+        file_reader=file_reader,
+    )
+    return SingleObligationEvaluation(
+        obligation_id=obligation.id,
+        current_status=obligation.current_status,
+        is_verified=is_verified,
+        findings=tuple(findings),
+    )
+
+
+# -----------------------------------------------------------------------------
 # Evaluation Engine
 # -----------------------------------------------------------------------------
 
@@ -971,16 +1550,24 @@ def evaluate(
     """Evaluate memory ownership proof obligations against tracked repository evidence.
 
     This function is strictly fail-closed:
-      - Overall readiness is False unless EVERY obligation evaluates to VERIFIED.
-      - A missing cited file forces False.
-      - An unreadable cited file forces False.
-      - An untracked or local-only source forces False.
-      - An unpinned source (not in PINNED_ORIGIN_MAIN_FILE_HASHES) forces False.
-      - A content digest mismatch against pinned origin/main forces False.
-      - An unacceptable source (not in acceptable_tracked_sources) forces False.
-      - A historical-firmware-only (1.00C/1.10E) or non-GM1.10C source forces False.
-      - An unmerged PR citation forces False.
-      - An obligation status of UNKNOWN or INFERRED forces False.
+      - Overall readiness is False unless EVERY obligation in the canonical required set
+        evaluates to VERIFIED with registered, non-historical, pinned origin/main evidence.
+      - A missing obligation from REQUIRED_OBLIGATION_IDS forces False (RULE_INCOMPLETE_OBLIGATION_SET).
+      - Duplicate obligation IDs force False (RULE_DUPLICATE_OBLIGATION_ID).
+      - Unknown obligation IDs force False (RULE_UNKNOWN_OBLIGATION_ID).
+      - Any non-production test hook (pinned_hashes override, custom file_reader, alternate repo_root)
+        forces False (RULE_NON_PRODUCTION_EVIDENCE_CONFIG).
+      - An unregistered citation forces False (RULE_UNREGISTERED_CITATION).
+      - A citation flag conflicting with the provenance registry forces False (RULE_PROVENANCE_CONFLICT).
+      - A missing cited file forces False (RULE_MISSING_CITED_PATH).
+      - An unreadable cited file forces False (RULE_UNREADABLE_SOURCE).
+      - An untracked or local-only source forces False (RULE_UNTRACKED_SOURCE).
+      - An unpinned source forces False (RULE_UNPINNED_SOURCE).
+      - A content digest mismatch against pinned origin/main forces False (RULE_CONTENT_HASH_MISMATCH).
+      - An unacceptable source forces False (RULE_UNACCEPTABLE_SOURCE).
+      - A historical-firmware-only (1.00C/1.10E) or non-GM1.10C source forces False (RULE_HISTORICAL_CANNOT_VERIFY).
+      - An unmerged PR citation forces False (RULE_PENDING_PR_CANNOT_VERIFY).
+      - An obligation status of UNKNOWN or INFERRED forces False (RULE_STATUS_NOT_VERIFIED).
 
     Returns:
         EvaluationResult containing aggregate readiness and individual findings.
@@ -990,25 +1577,44 @@ def evaluate(
     else:
         target_obligations = tuple(obligations)
 
+    canonical_root = Path(__file__).resolve().parent.parent
     if repo_root is None:
-        # Default to root of the current repository/worktree
-        resolved_root = Path(__file__).resolve().parent.parent
+        resolved_root = canonical_root
+        is_alternate_root = False
     else:
         resolved_root = Path(repo_root).resolve()
-
-    active_pins = PINNED_ORIGIN_MAIN_FILE_HASHES if pinned_hashes is None else pinned_hashes
+        is_alternate_root = (resolved_root != canonical_root)
 
     findings: List[ObligationFinding] = []
-    obligation_evals: Dict[str, SingleObligationEvaluation] = {}
 
-    verified_count = 0
-    inferred_count = 0
-    unknown_count = 0
+    # Detect test hooks and enforce non-production rejection
+    non_prod_hooks: List[str] = []
+    if pinned_hashes is not None:
+        non_prod_hooks.append("pinned_hashes override")
+    if file_reader is not None:
+        non_prod_hooks.append("custom file_reader")
+    if is_alternate_root:
+        non_prod_hooks.append("alternate repo_root")
+
+    if non_prod_hooks:
+        findings.append(
+            ObligationFinding(
+                rule_id=RULE_NON_PRODUCTION_EVIDENCE_CONFIG,
+                obligation_id="GLOBAL",
+                severity="ERROR",
+                message=(
+                    "Non-production evidence configuration active (test hooks in use: "
+                    f"{', '.join(non_prod_hooks)}); evaluate() will never assert production readiness"
+                ),
+            )
+        )
+
+    active_pins = PINNED_ORIGIN_MAIN_FILE_HASHES if pinned_hashes is None else pinned_hashes
 
     if not target_obligations:
         findings.append(
             ObligationFinding(
-                rule_id="RULE_EMPTY_DATASET",
+                rule_id=RULE_EMPTY_DATASET,
                 obligation_id="GLOBAL",
                 severity="ERROR",
                 message="No memory ownership proof obligations provided for evaluation",
@@ -1020,238 +1626,99 @@ def evaluate(
             verified_count=0,
             inferred_count=0,
             unknown_count=0,
-            error_count=1,
+            error_count=len([f for f in findings if f.severity == "ERROR"]),
             warning_count=0,
             obligation_results={},
             findings=tuple(findings),
         )
 
+    passed_ids = [ob.id for ob in target_obligations]
+    passed_id_set = set(passed_ids)
+
+    # Validate complete canonical set of obligations
+    if len(passed_ids) != len(passed_id_set):
+        seen = set()
+        duplicates = set()
+        for oid in passed_ids:
+            if oid in seen:
+                duplicates.add(oid)
+            seen.add(oid)
+        findings.append(
+            ObligationFinding(
+                rule_id=RULE_DUPLICATE_OBLIGATION_ID,
+                obligation_id="GLOBAL",
+                severity="ERROR",
+                message=f"Duplicate obligation ID(s) supplied: {sorted(duplicates)}",
+            )
+        )
+
+    unknown_ids = passed_id_set - REQUIRED_OBLIGATION_IDS
+    if unknown_ids:
+        findings.append(
+            ObligationFinding(
+                rule_id=RULE_UNKNOWN_OBLIGATION_ID,
+                obligation_id="GLOBAL",
+                severity="ERROR",
+                message=f"Unknown obligation ID(s) supplied: {sorted(unknown_ids)}",
+            )
+        )
+
+    missing_ids = REQUIRED_OBLIGATION_IDS - passed_id_set
+    if missing_ids:
+        findings.append(
+            ObligationFinding(
+                rule_id=RULE_INCOMPLETE_OBLIGATION_SET,
+                obligation_id="GLOBAL",
+                severity="ERROR",
+                message=(
+                    f"Obligation set is incomplete. Overall readiness requires all {len(REQUIRED_OBLIGATION_IDS)} "
+                    f"canonical obligations. Missing {len(missing_ids)} obligation(s): {sorted(missing_ids)}"
+                ),
+            )
+        )
+
+    obligation_evals: Dict[str, SingleObligationEvaluation] = {}
+    verified_count = 0
+    inferred_count = 0
+    unknown_count = 0
+
     for oblig in target_obligations:
-        ob_findings: List[ObligationFinding] = []
-        has_error = False
-
-        # 1. Citations existence and tracking validation
-        if not oblig.citations:
-            ob_findings.append(
-                ObligationFinding(
-                    rule_id=RULE_EMPTY_CITATIONS,
-                    obligation_id=oblig.id,
-                    severity="ERROR",
-                    message=f"Obligation '{oblig.id}' has no supporting citations",
-                )
-            )
-            has_error = True
-
-        for cit in oblig.citations:
-            cit_path = resolved_root / cit.path
-            content_bytes: Optional[bytes] = None
-
-            # Check 1a: File existence and readability
-            if file_reader is not None:
-                try:
-                    content_bytes = file_reader(cit_path)
-                except FileNotFoundError:
-                    ob_findings.append(
-                        ObligationFinding(
-                            rule_id=RULE_MISSING_CITED_PATH,
-                            obligation_id=oblig.id,
-                            severity="ERROR",
-                            message=f"Cited path '{cit.path}' does not exist",
-                        )
-                    )
-                    has_error = True
-                except Exception as e:
-                    ob_findings.append(
-                        ObligationFinding(
-                            rule_id=RULE_UNREADABLE_SOURCE,
-                            obligation_id=oblig.id,
-                            severity="ERROR",
-                            message=f"Cited file '{cit.path}' cannot be read: {e}",
-                        )
-                    )
-                    has_error = True
-            else:
-                if not cit_path.is_file():
-                    ob_findings.append(
-                        ObligationFinding(
-                            rule_id=RULE_MISSING_CITED_PATH,
-                            obligation_id=oblig.id,
-                            severity="ERROR",
-                            message=(
-                                f"Cited path '{cit.path}' does not exist on disk at {cit_path}"
-                            ),
-                        )
-                    )
-                    has_error = True
-                else:
-                    try:
-                        content_bytes = cit_path.read_bytes()
-                    except Exception as e:
-                        ob_findings.append(
-                            ObligationFinding(
-                                rule_id=RULE_UNREADABLE_SOURCE,
-                                obligation_id=oblig.id,
-                                severity="ERROR",
-                                message=f"Cited file '{cit.path}' cannot be read: {e}",
-                            )
-                        )
-                        has_error = True
-
-            # Check 1b: Tracked on origin/main whitelist
-            if cit.path not in ORIGIN_MAIN_TRACKED_FILES:
-                ob_findings.append(
-                    ObligationFinding(
-                        rule_id=RULE_UNTRACKED_SOURCE,
-                        obligation_id=oblig.id,
-                        severity="ERROR",
-                        message=(
-                            f"Cited path '{cit.path}' is not a tracked origin/main file"
-                        ),
-                    )
-                )
-                has_error = True
-
-            # Check 1c: Content authentication against pinned origin/main hash
-            if cit.path not in active_pins:
-                ob_findings.append(
-                    ObligationFinding(
-                        rule_id=RULE_UNPINNED_SOURCE,
-                        obligation_id=oblig.id,
-                        severity="ERROR",
-                        message=(
-                            f"Cited path '{cit.path}' is not pinned in PINNED_ORIGIN_MAIN_FILE_HASHES "
-                            f"(origin/main commit {ORIGIN_MAIN_PIN_COMMIT})"
-                        ),
-                    )
-                )
-                has_error = True
-            elif content_bytes is not None:
-                local_sha256 = hashlib.sha256(content_bytes).hexdigest()
-                expected_sha256 = active_pins[cit.path]
-                if local_sha256.lower() != expected_sha256.lower():
-                    ob_findings.append(
-                        ObligationFinding(
-                            rule_id=RULE_CONTENT_HASH_MISMATCH,
-                            obligation_id=oblig.id,
-                            severity="ERROR",
-                            message=(
-                                f"Content authentication failed for '{cit.path}': "
-                                f"local SHA-256 {local_sha256} does not match pinned {expected_sha256} "
-                                f"(origin/main commit {ORIGIN_MAIN_PIN_COMMIT})"
-                            ),
-                        )
-                    )
-                    has_error = True
-
-            # Check 1d: Explicitly in obligation's acceptable tracked sources
-            if cit.path not in oblig.acceptable_tracked_sources:
-                ob_findings.append(
-                    ObligationFinding(
-                        rule_id=RULE_UNACCEPTABLE_SOURCE,
-                        obligation_id=oblig.id,
-                        severity="ERROR",
-                        message=(
-                            f"Cited source '{cit.path}' is not listed in acceptable_tracked_sources "
-                            f"{oblig.acceptable_tracked_sources}"
-                        ),
-                    )
-                )
-                has_error = True
-
-            # Check 1e: Firmware identity check (strict allowlist GM1.10C) & historical check
-            norm_fw = normalize_firmware(cit.firmware)
-            is_supported_fw = (norm_fw == SUPPORTED_FIRMWARE)
-            is_historical = (
-                cit.is_historical
-                or not is_supported_fw
-                or cit.path in HISTORICAL_ONLY_PATHS
-            )
-            if is_historical and oblig.current_status == ObligationStatus.VERIFIED:
-                ob_findings.append(
-                    ObligationFinding(
-                        rule_id=RULE_HISTORICAL_CANNOT_VERIFY,
-                        obligation_id=oblig.id,
-                        severity="ERROR",
-                        message=(
-                            f"Historical or unsupported firmware citation '{cit.path}' "
-                            f"({cit.firmware!r}, normalized: {norm_fw!r}, expected: '{SUPPORTED_FIRMWARE}', "
-                            f"is_historical={cit.is_historical}) cannot support VERIFIED status"
-                        ),
-                    )
-                )
-                has_error = True
-
-            # Check 1f: Pending PR evidence cannot be VERIFIED
-            if oblig.pending_pr and oblig.current_status == ObligationStatus.VERIFIED:
-                ob_findings.append(
-                    ObligationFinding(
-                        rule_id=RULE_PENDING_PR_CANNOT_VERIFY,
-                        obligation_id=oblig.id,
-                        severity="ERROR",
-                        message=(
-                            f"Obligation cites evidence found only in unmerged {oblig.pending_pr}; "
-                            f"cannot be VERIFIED"
-                        ),
-                    )
-                )
-                has_error = True
-
-        # 2. Obligation status categorization and readiness impact
+        is_verified, ob_findings = _evaluate_obligation(
+            oblig=oblig,
+            resolved_root=resolved_root,
+            active_pins=active_pins,
+            file_reader=file_reader,
+        )
         if oblig.current_status == ObligationStatus.UNKNOWN:
             unknown_count += 1
-            ob_findings.append(
-                ObligationFinding(
-                    rule_id=RULE_STATUS_NOT_VERIFIED,
-                    obligation_id=oblig.id,
-                    severity="WARNING",
-                    message=f"Obligation is UNKNOWN: {oblig.statement[:80]}...",
-                )
-            )
-            is_verified = False
-
         elif oblig.current_status == ObligationStatus.INFERRED:
             inferred_count += 1
-            ob_findings.append(
-                ObligationFinding(
-                    rule_id=RULE_STATUS_NOT_VERIFIED,
-                    obligation_id=oblig.id,
-                    severity="WARNING",
-                    message=f"Obligation is INFERRED: {oblig.statement[:80]}...",
-                )
-            )
-            is_verified = False
+        elif oblig.current_status == ObligationStatus.VERIFIED and is_verified:
+            verified_count += 1
 
-        elif oblig.current_status == ObligationStatus.VERIFIED:
-            if has_error:
-                # Disqualified from VERIFIED due to citation failure
-                is_verified = False
-            else:
-                verified_count += 1
-                is_verified = True
-        else:
-            is_verified = False
-
-        single_eval = SingleObligationEvaluation(
+        obligation_evals[oblig.id] = SingleObligationEvaluation(
             obligation_id=oblig.id,
             current_status=oblig.current_status,
             is_verified=is_verified,
             findings=tuple(ob_findings),
         )
-        obligation_evals[oblig.id] = single_eval
         findings.extend(ob_findings)
 
     total = len(target_obligations)
     errors = [f for f in findings if f.severity == "ERROR"]
     warnings = [f for f in findings if f.severity == "WARNING"]
 
-    # Overall readiness is True IF AND ONLY IF:
-    # 1. Total obligations > 0
-    # 2. Every single obligation is VERIFIED
-    # 3. Exactly zero errors occurred
-    # 4. Unknown count == 0 and Inferred count == 0
+    is_complete_canonical_set = (
+        passed_id_set == REQUIRED_OBLIGATION_IDS
+        and len(passed_ids) == len(REQUIRED_OBLIGATION_IDS)
+    )
+    is_production_config = (len(non_prod_hooks) == 0)
+
     overall_ready = (
-        total > 0
-        and verified_count == total
+        is_complete_canonical_set
+        and is_production_config
+        and total == len(REQUIRED_OBLIGATION_IDS)
+        and verified_count == len(REQUIRED_OBLIGATION_IDS)
         and len(errors) == 0
         and unknown_count == 0
         and inferred_count == 0
