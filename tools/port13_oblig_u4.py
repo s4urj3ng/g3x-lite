@@ -54,6 +54,18 @@ STATIC_ANCHOR_CREATETASK_VENEER = "0xFC31BBC4 -> 0xBFE14A3C"
 STATIC_ANCHOR_PHYSW_THUMB_ENTRY = "0xFC1283AD"
 STATIC_ANCHOR_ADDRESSES = frozenset({"0xFC31BBC4", "0xBFE14A3C", "0xFC1283AD"})
 
+CANONICAL_OBLIGATION_IDS: Tuple[str, ...] = (
+    "OBLIG-U4-01",
+    "OBLIG-U4-02",
+    "OBLIG-U4-03",
+    "OBLIG-U4-04",
+    "OBLIG-U4-05",
+    "OBLIG-U4-06",
+    "OBLIG-U4-07",
+    "OBLIG-U4-08",
+    "OBLIG-U4-09",
+)
+
 
 @dataclass(frozen=True)
 class RequiredEvidence:
@@ -71,7 +83,12 @@ class U4Obligation:
     current_status: ObligationStatus
     citation: str
     domain: Domain
-    is_runtime_obligation: bool = True
+    requires_runtime_evidence: bool = False
+
+    @property
+    def is_runtime_obligation(self) -> bool:
+        """Backwards compatibility alias for requires_runtime_evidence."""
+        return self.requires_runtime_evidence
 
 
 @dataclass(frozen=True)
@@ -84,6 +101,7 @@ class EvidenceArtifact:
     citation: str
     is_static: bool = False
     associated_addresses: Tuple[str, ...] = ()
+    how_captured: str = ""
 
 
 @dataclass(frozen=True)
@@ -149,7 +167,7 @@ U4_OBLIGATIONS: Tuple[U4Obligation, ...] = (
         current_status=ObligationStatus.UNKNOWN,
         citation="docs/PORT13_REVIEW_U4.md:50-55, 85-90, 167, 176, 277, 296-298",
         domain=Domain.LAUNCH_ORDERING,
-        is_runtime_obligation=True,
+        requires_runtime_evidence=True,
     ),
     U4Obligation(
         id="OBLIG-U4-02",
@@ -164,7 +182,7 @@ U4_OBLIGATIONS: Tuple[U4Obligation, ...] = (
         current_status=ObligationStatus.UNKNOWN,
         citation="docs/PORT13_REVIEW_U4.md:41-46, 86, 141-144, 177, 258, 297",
         domain=Domain.RUNTIME_HOOK_PLACEMENT,
-        is_runtime_obligation=True,
+        requires_runtime_evidence=True,
     ),
     U4Obligation(
         id="OBLIG-U4-03",
@@ -181,7 +199,7 @@ U4_OBLIGATIONS: Tuple[U4Obligation, ...] = (
         current_status=ObligationStatus.UNKNOWN,
         citation="docs/PORT13_REVIEW_U4.md:60-61, 103-112, 168-170, 275-276, 293-294",
         domain=Domain.SCHEDULER_POLICY,
-        is_runtime_obligation=True,
+        requires_runtime_evidence=False,
     ),
     U4Obligation(
         id="OBLIG-U4-04",
@@ -197,7 +215,7 @@ U4_OBLIGATIONS: Tuple[U4Obligation, ...] = (
         current_status=ObligationStatus.UNKNOWN,
         citation="docs/PORT13_REVIEW_U4.md:98-101, 121-125, 171, 184, 274, 279, 292, 300",
         domain=Domain.MEMORY_OWNERSHIP,
-        is_runtime_obligation=True,
+        requires_runtime_evidence=False,
     ),
     U4Obligation(
         id="OBLIG-U4-05",
@@ -213,7 +231,7 @@ U4_OBLIGATIONS: Tuple[U4Obligation, ...] = (
         current_status=ObligationStatus.UNKNOWN,
         citation="docs/PORT13_REVIEW_U4.md:63-64, 92-96, 145-152, 172, 175, 179, 215-216, 273, 291",
         domain=Domain.FS_GATING,
-        is_runtime_obligation=True,
+        requires_runtime_evidence=True,
     ),
     U4Obligation(
         id="OBLIG-U4-06",
@@ -228,7 +246,7 @@ U4_OBLIGATIONS: Tuple[U4Obligation, ...] = (
         current_status=ObligationStatus.UNKNOWN,
         citation="docs/PORT13_REVIEW_U4.md:63-64, 145-152, 173, 209-210",
         domain=Domain.FAILCLOSED_TIMEOUT,
-        is_runtime_obligation=True,
+        requires_runtime_evidence=False,
     ),
     U4Obligation(
         id="OBLIG-U4-07",
@@ -244,7 +262,7 @@ U4_OBLIGATIONS: Tuple[U4Obligation, ...] = (
         current_status=ObligationStatus.UNKNOWN,
         citation="docs/PORT13_REVIEW_U4.md:71-74, 174, 272, 290",
         domain=Domain.CAUSAL_ANALYSIS,
-        is_runtime_obligation=True,
+        requires_runtime_evidence=False,
     ),
     U4Obligation(
         id="OBLIG-U4-08",
@@ -260,7 +278,7 @@ U4_OBLIGATIONS: Tuple[U4Obligation, ...] = (
         current_status=ObligationStatus.UNKNOWN,
         citation="docs/PORT13_REVIEW_U4.md:113-120, 183, 278, 299",
         domain=Domain.EXECUTION_CONTEXT,
-        is_runtime_obligation=True,
+        requires_runtime_evidence=False,
     ),
     U4Obligation(
         id="OBLIG-U4-09",
@@ -275,7 +293,7 @@ U4_OBLIGATIONS: Tuple[U4Obligation, ...] = (
         current_status=ObligationStatus.UNKNOWN,
         citation="docs/PORT13_REVIEW_U4.md:126-129, 181, 281, 302",
         domain=Domain.CONTINUATION,
-        is_runtime_obligation=True,
+        requires_runtime_evidence=False,
     ),
 )
 
@@ -284,18 +302,32 @@ U4_OBLIGATIONS: Tuple[U4Obligation, ...] = (
 # Static Evidence and Evaluation Guards
 # -----------------------------------------------------------------------------
 
-def is_static_veneer_or_entry_evidence(evidence: EvidenceArtifact) -> bool:
-    """Return True if evidence is static ROM veneer or entry point evidence."""
+def is_static_evidence(evidence: EvidenceArtifact) -> bool:
+    """Classify evidence by provenance fields and properties demonstrated, not addresses.
+
+    Evidence is classified as static if:
+      - is_static is True (explicit provenance flag),
+      - artifact_type indicates static analysis/disassembly (e.g. starts with 'STATIC_'),
+      - how_captured indicates static extraction/inspection (e.g. contains 'static',
+        'rom_disassembly', 'offline_inspection', or 'static_analysis').
+
+    Crucially, referencing anchor addresses (such as 0xFC31BBC4, 0xBFE14A3C, or 0xFC1283AD)
+    does NOT classify evidence as static; genuine runtime traces referencing these addresses
+    remain eligible for evaluation.
+    """
     if evidence.is_static:
         return True
-    if evidence.artifact_type.startswith("STATIC_"):
+    if evidence.artifact_type.upper().startswith("STATIC_"):
         return True
-    if any(addr in STATIC_ANCHOR_ADDRESSES for addr in evidence.associated_addresses):
-        return True
-    desc_upper = evidence.description.upper()
-    if "0XFC31BBC4" in desc_upper or "0XBFE14A3C" in desc_upper or "0XFC1283AD" in desc_upper:
-        return True
+    if evidence.how_captured:
+        hc = evidence.how_captured.lower()
+        if any(term in hc for term in ("static", "rom_disassembly", "offline_inspection", "static_analysis")):
+            return True
     return False
+
+
+# Backward-compatible alias
+is_static_veneer_or_entry_evidence = is_static_evidence
 
 
 def evaluate_obligation(
@@ -308,10 +340,12 @@ def evaluate_obligation(
       1. If evidence is absent, rely strictly on obligation.current_status.
          Any status other than VERIFIED evaluates as NOT_SATISFIED.
       2. If evidence is present, evidence.status must be VERIFIED.
-      3. Static veneer (0xFC31BBC4 -> 0xBFE14A3C) and PhySw entry (0xFC1283AD)
-         evidence must NEVER satisfy runtime hook placement or start ordering obligations.
+      3. Obligations marked with requires_runtime_evidence=True (runtime hook placement,
+         task start ordering, or runtime readiness) reject static evidence. Static veneer
+         (0xFC31BBC4 -> 0xBFE14A3C) and PhySw entry (0xFC1283AD) evidence cannot satisfy
+         these obligations.
       4. Legacy timeout-bypass causal link (OBLIG-U4-07) must stay UNKNOWN unless
-         supported by empirical crash traces.
+         supported by empirical crash traces (STORAGE_CORRUPTION_TRACE).
     """
     # Case 1: No external evidence passed (evaluating current baseline state)
     if evidence is None:
@@ -347,20 +381,20 @@ def evaluate_obligation(
             citation=evidence.citation,
         )
 
-    # Invariant: Static veneer / entry evidence cannot satisfy runtime hook placement or start ordering
-    if obligation.domain in (Domain.RUNTIME_HOOK_PLACEMENT, Domain.LAUNCH_ORDERING):
-        if is_static_veneer_or_entry_evidence(evidence):
-            return ObligationResult(
-                obligation_id=obligation.id,
-                verdict=EvaluationVerdict.NOT_SATISFIED,
-                status=ObligationStatus.UNKNOWN,
-                reason=(
-                    "Static evidence (CreateTask veneer 0xFC31BBC4 -> ATCM 0xBFE14A3C, "
-                    "PhySw Thumb entry 0xFC1283AD) proves static code presence only and "
-                    "cannot satisfy runtime hook placement or launch-ordering obligations."
-                ),
-                citation=evidence.citation,
-            )
+    # Invariant: Static evidence cannot satisfy obligations requiring runtime evidence
+    # (such as runtime hook placement, task start ordering, or runtime readiness).
+    if obligation.requires_runtime_evidence and is_static_evidence(evidence):
+        return ObligationResult(
+            obligation_id=obligation.id,
+            verdict=EvaluationVerdict.NOT_SATISFIED,
+            status=ObligationStatus.UNKNOWN,
+            reason=(
+                "Static evidence (CreateTask veneer 0xFC31BBC4 -> ATCM 0xBFE14A3C, "
+                "PhySw Thumb entry 0xFC1283AD) proves static code presence only and "
+                "cannot satisfy runtime hook placement or launch-ordering obligations."
+            ),
+            citation=evidence.citation,
+        )
 
     # Invariant: Causal link between legacy timeout bypass and corruption/panic stays UNKNOWN
     if obligation.id == "OBLIG-U4-07":
@@ -404,9 +438,48 @@ def evaluate_u4_obligations(
 ) -> U4EvaluationReport:
     """Evaluate all U4 obligations fail closed.
 
+    Enforces that an overall U4 verdict may only be issued when the supplied set
+    exactly matches the canonical IDs OBLIG-U4-01..09.
+    An empty set, a missing ID, a duplicate ID, or an unknown ID raises ValueError.
+
     Returns NOT_SATISFIED if any obligation lacks VERIFIED evidence.
     """
-    target_obligations = obligations if obligations is not None else U4_OBLIGATIONS
+    if obligations is None:
+        target_obligations = U4_OBLIGATIONS
+    else:
+        target_obligations = tuple(obligations)
+
+    if not target_obligations:
+        raise ValueError(
+            "Obligation set cannot be empty; an overall U4 verdict requires "
+            "the complete canonical set of obligations (OBLIG-U4-01..09)."
+        )
+
+    ids = [o.id for o in target_obligations]
+    if len(ids) != len(set(ids)):
+        duplicates = sorted(set(x for x in ids if ids.count(x) > 1))
+        raise ValueError(
+            f"Duplicate obligation ID(s) detected: {duplicates}; "
+            "each canonical obligation must appear exactly once."
+        )
+
+    supplied_ids = set(ids)
+    canonical_set = set(CANONICAL_OBLIGATION_IDS)
+
+    unknown_ids = supplied_ids - canonical_set
+    if unknown_ids:
+        raise ValueError(
+            f"Unknown obligation ID(s) detected: {sorted(unknown_ids)}; "
+            f"only canonical IDs {list(CANONICAL_OBLIGATION_IDS)} are permitted."
+        )
+
+    missing_ids = canonical_set - supplied_ids
+    if missing_ids:
+        raise ValueError(
+            f"Missing canonical obligation ID(s): {sorted(missing_ids)}; "
+            "an overall U4 verdict requires all canonical obligations to be evaluated."
+        )
+
     results: List[ObligationResult] = []
 
     for oblig in target_obligations:
