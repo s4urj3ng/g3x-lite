@@ -28,8 +28,8 @@ This document establishes the canonical repository proof obligations for U4, cod
    Static ROM disassembly—specifically the CreateTask ARM veneer (`0xFC31BBC4 -> relocated ATCM instruction 0xBFE14A3C`) and the PhySw Thumb entry point (`0xFC1283AD`)—establishes **strictly** the static presence and relocation destination of firmware code. It does **NOT** prove runtime hook placement, ATCM instruction cache / branch predictor coherence, IRQ safety, task launch ordering, or filesystem readiness.
 2. **Explicit `requires_runtime_evidence` Obligation Flag:**
    Obligations concerning runtime behaviour (launch ordering, hook placement, readiness, causal effects, continuation, task yield constraints, and restart cleanup: `OBLIG-U4-01`, `OBLIG-U4-02`, `OBLIG-U4-05`, `OBLIG-U4-07`, `OBLIG-U4-09`, `OBLIG-U4-10`, `OBLIG-U4-11`) are explicitly tagged with `requires_runtime_evidence=True`. This requirement is codified as an explicit obligation property rather than derived from technical domain tags. Static evidence submitted against any obligation with this flag evaluates strictly as **`NOT_SATISFIED`**.
-3. **Provenance-Based Evidence Classification:**
-   Evidence artifacts are classified as static or dynamic strictly by provenance fields (`is_static`, `artifact_type`, and `how_captured`) and by demonstrated technical properties, **never** by which addresses are mentioned. A genuine dynamic trace (`is_static=False`) referencing patched ATCM addresses (such as `0xBFE14A3C`) is eligible for evaluation and is not erroneously classified as static.
+3. **Provenance-Based Evidence Classification and Fail-Closed Allowlist:**
+   Evidence artifacts are classified strictly by provenance fields (`is_static`, `artifact_type`, and `how_captured`) and by demonstrated technical properties, **never** by which addresses are referenced. Empirical runtime evidence is governed by an explicit module-level allowlist (`EMPIRICAL_PROVENANCE_ALLOWLIST`). `EvidenceArtifact` defaults fail closed (`is_static=True`, `how_captured=""`). `is_empirical_evidence()` returns `True` only if `is_static` is explicitly `False` and `how_captured` (normalized) is in `EMPIRICAL_PROVENANCE_ALLOWLIST`. Missing, empty, whitespace-only, unknown, simulated, emulated, modelled, or synthetic provenance values fail closed as non-empirical. Genuine dynamic traces (`is_static=False`) referencing patched ATCM addresses (such as `0xBFE14A3C`) with allowlisted provenance are eligible for evaluation and are not erroneously classified as static.
 4. **Canonical Set Completeness Enforcement:**
    An overall U4 verdict may only be issued when the supplied set of obligations exactly matches the canonical set `OBLIG-U4-01..11`. Calling `evaluate_u4_obligations` with an empty set, missing IDs, duplicate IDs, or unknown IDs immediately raises `ValueError`, guaranteeing that partial or truncated obligation sets can never report `SATISFIED`.
 5. **Isolation of the Legacy Timeout-Bypass Causal Link (Finding C06b):**
@@ -162,10 +162,15 @@ $$\text{StaticROM}(0\text{xFC31BBC4} \to 0\text{xBFE14A3C}) \not\implies \text{R
 $$\text{StaticROM}(0\text{xFC1283AD}) \not\implies \text{TaskStartOrderingProven}$$
 $$\text{StaticROM}(\dots) \not\implies \text{FilesystemReadinessGated}$$
 
-### 4.2 Evidence Classification by Provenance
+### 4.2 Evidence Classification by Provenance & Fail-Closed Empirical Allowlist
 Evidence is classified strictly by provenance fields (`is_static`, `artifact_type`, `how_captured`), and **not** by the memory addresses referenced:
-- An artifact with `is_static = True`, `artifact_type` starting with `STATIC_`, or `how_captured` indicating static ROM disassembly is classified as static.
-- Genuine dynamic traces (`is_static = False`) that reference target firmware or ATCM addresses (such as `0xBFE14A3C`) are **not** classified as static and remain fully eligible to satisfy runtime obligations.
+- **Fail-Closed Defaults:** `EvidenceArtifact` defaults to `is_static = True` and `how_captured = ""`. Default construction or omission of provenance fields immediately fails closed as static and non-empirical.
+- **Empirical Provenance Allowlist:** Empirical evidence evaluation enforces an explicit module-level allowlist constant (`EMPIRICAL_PROVENANCE_ALLOWLIST`). `is_empirical_evidence(evidence)` returns `True` strictly if:
+  1. `evidence.is_static is False` (explicitly dynamic), and
+  2. `evidence.how_captured.strip().lower()` belongs to `EMPIRICAL_PROVENANCE_ALLOWLIST` (e.g. `runtime_execution_trace`, `hardware_crash_dump`, `dynamic_execution_trace`, `hardware_trace`, `empirical_reboot_trace`, etc.).
+- **Rejection of Non-Empirical Provenance:** Missing, empty, whitespace-only, unknown, simulated (`how_captured="simulation"`), emulated, modelled, or synthetic provenance strings fail closed and are classified as non-empirical.
+- **Runtime Obligations Guard:** All runtime obligations (`requires_runtime_evidence=True`) evaluate strictly as `NOT_SATISFIED` unless supplied with `VERIFIED` evidence carrying allowlisted empirical provenance. Specifically, `OBLIG-U4-07` (C06b) remains `UNKNOWN` in every case without such evidence.
+- **Address Neutrality:** An artifact with `is_static = True`, `artifact_type` starting with `STATIC_`, or `how_captured` indicating static ROM disassembly is classified as static. Genuine dynamic traces (`is_static = False`) that reference target firmware or ATCM addresses (such as `0xBFE14A3C`) are **not** classified as static and remain fully eligible to satisfy runtime obligations if they carry allowlisted empirical provenance.
 
 ### 4.3 Completeness Invariant and Error Handling
 An overall U4 verdict may only be computed when the obligation set supplied to `evaluate_u4_obligations` exactly matches the 11 canonical IDs (`OBLIG-U4-01..11`):
@@ -190,10 +195,10 @@ The offline model fails closed by design.
 
 The proof obligations and boundary guards are implemented and verified via:
 1. `tools/port13_oblig_u4.py`: Canonical Python standard library module implementing:
-   - Data structures: `U4Obligation` (with explicit `requires_runtime_evidence` flag), `RequiredEvidence`, `EvidenceArtifact` (with `how_captured` provenance field), `ObligationResult`, `U4EvaluationReport`.
+   - Data structures: `U4Obligation` (with explicit `requires_runtime_evidence` flag), `RequiredEvidence`, `EvidenceArtifact` (with fail-closed defaults `is_static=True`, `how_captured=""`), `ObligationResult`, `U4EvaluationReport`.
    - The 11 canonical obligations `OBLIG-U4-01` through `OBLIG-U4-11` (`CANONICAL_OBLIGATION_IDS`).
    - Fail-closed evaluation function `evaluate_u4_obligations()` with canonical set completeness enforcement.
-   - Provenance-based static evidence classifier `is_static_evidence()` and empirical classifier `is_empirical_evidence()`.
+   - Module-level allowlist `EMPIRICAL_PROVENANCE_ALLOWLIST` and classifiers `is_static_evidence()` and `is_empirical_evidence()`.
 2. `tests/test_port13_oblig_u4.py`: Deterministic unit test suite validating:
    - Schema, citation integrity, and exact canonical ID alignment across all 11 obligations (`test_u4_obligations_catalog_structure_and_citations`).
    - Fail-closed baseline evaluation (`test_baseline_evaluator_fails_closed`).
@@ -202,6 +207,8 @@ The proof obligations and boundary guards are implemented and verified via:
    - Static evidence rejection for OBLIG-U4-05 filesystem gating (`test_oblig_u4_05_with_static_evidence_stays_not_satisfied`).
    - Static evidence rejection for OBLIG-U4-09 continuation (`test_oblig_u4_09_with_static_evidence_evaluates_not_satisfied`).
    - Exhaustive rejection of static evidence across all 7 runtime-flagged obligations (`test_all_runtime_flagged_obligations_reject_static_evidence`).
+   - Exhaustive rejection of non-empirical and unprovenanced evidence across all 7 runtime-flagged obligations, verifying that default-constructed artifacts, empty strings, whitespace, arbitrary unknown strings, and `"simulation"` fail closed to `NOT_SATISFIED`, and C06b stays `UNKNOWN` (`test_runtime_obligations_fail_closed_on_non_empirical_provenance`).
+   - Empirical provenance allowlist completeness and non-empirical rejection invariants (`test_empirical_provenance_allowlist_invariants`).
    - Provenance eligibility of genuine runtime hook safety evidence referencing ATCM address `0xBFE14A3C` (`test_genuine_runtime_hook_safety_evidence_referencing_atcm_is_eligible`).
    - Completeness validation raising `ValueError` on empty, missing, duplicate, or unknown IDs (`test_evaluate_u4_obligations_canonical_set_validation`).
    - Isolation of the C06b causal claim as UNKNOWN (never INFERRED) across unverified, static, and non-empirical evidence (`test_timeout_bypass_causal_link_remains_unknown`).

@@ -34,10 +34,12 @@ sys.path.insert(0, str(REPO_ROOT))
 from tools.port13_oblig_u4 import (
     CANONICAL_OBLIGATION_IDS,
     Domain,
+    EMPIRICAL_PROVENANCE_ALLOWLIST,
     EvaluationVerdict,
     EvidenceArtifact,
     ObligationResult,
     ObligationStatus,
+    RECOGNIZED_EMPIRICAL_PROVENANCE,
     RequiredEvidence,
     STATIC_ANCHOR_CREATETASK_VENEER,
     STATIC_ANCHOR_PHYSW_THUMB_ENTRY,
@@ -614,6 +616,181 @@ class TestPort13ObligU4(unittest.TestCase):
         self.assertEqual(report.satisfied_count, 11)
         self.assertEqual(report.not_satisfied_count, 0)
         self.assertFalse(report.is_fail_closed)
+
+    def test_runtime_obligations_fail_closed_on_non_empirical_provenance(self):
+        """Regression Test [P1]: Non-empirical or unprovenanced evidence fails closed on all runtime obligations.
+
+        Verifies that:
+          1. Provenance values "", "   ", an arbitrary unknown string, and "simulation"
+             are classified as non-empirical (is_empirical_evidence() is False).
+          2. A default-constructed EvidenceArtifact has is_static=True and is non-empirical.
+          3. Looping over EVERY runtime-flagged obligation with each of those evidence artifacts
+             evaluates strictly to NOT_SATISFIED.
+          4. For OBLIG-U4-07 (C06b), a STORAGE_CORRUPTION_TRACE artifact carrying each of those
+             values evaluates to NOT_SATISFIED and status stays UNKNOWN (never INFERRED or VERIFIED).
+        """
+        runtime_obligations = [o for o in U4_OBLIGATIONS if o.requires_runtime_evidence]
+        self.assertEqual(len(runtime_obligations), 7, "Expected exactly 7 runtime-flagged obligations.")
+
+        invalid_provenance_values = [
+            "",
+            "   ",
+            "unrecognized_arbitrary_pipeline_v3",
+            "simulation",
+        ]
+
+        # 1. Loop over every runtime obligation with each invalid provenance string (is_static=False)
+        for oblig in runtime_obligations:
+            for prov in invalid_provenance_values:
+                artifact = EvidenceArtifact(
+                    artifact_id=f"NONEMP-{oblig.id}-{abs(hash(prov))}",
+                    artifact_type=oblig.required_evidence.artifact_type,
+                    status=ObligationStatus.VERIFIED,
+                    description=f"Evidence with non-allowlisted provenance: {prov!r}",
+                    citation=oblig.citation,
+                    is_static=False,
+                    how_captured=prov,
+                )
+                self.assertFalse(
+                    is_empirical_evidence(artifact),
+                    f"Provenance {prov!r} must NOT be classified as empirical evidence.",
+                )
+                res = evaluate_obligation(oblig, artifact)
+                self.assertEqual(
+                    res.verdict,
+                    EvaluationVerdict.NOT_SATISFIED,
+                    f"Runtime obligation {oblig.id} must be NOT_SATISFIED with provenance {prov!r}.",
+                )
+                self.assertEqual(
+                    res.status,
+                    ObligationStatus.UNKNOWN,
+                    f"Runtime obligation {oblig.id} must have status UNKNOWN with non-empirical provenance {prov!r}.",
+                )
+
+            # 2. Test default-constructed EvidenceArtifact
+            default_artifact = EvidenceArtifact(
+                artifact_id=f"DEFAULT-{oblig.id}",
+                artifact_type=oblig.required_evidence.artifact_type,
+                status=ObligationStatus.VERIFIED,
+                description=f"Default-constructed evidence attempting to satisfy {oblig.id}",
+                citation=oblig.citation,
+            )
+            self.assertTrue(
+                default_artifact.is_static,
+                "Default EvidenceArtifact must fail closed with is_static=True.",
+            )
+            self.assertEqual(
+                default_artifact.how_captured,
+                "",
+                "Default EvidenceArtifact must fail closed with how_captured=''.",
+            )
+            self.assertFalse(
+                is_empirical_evidence(default_artifact),
+                "Default EvidenceArtifact must not be classified as empirical.",
+            )
+            res_default = evaluate_obligation(oblig, default_artifact)
+            self.assertEqual(
+                res_default.verdict,
+                EvaluationVerdict.NOT_SATISFIED,
+                f"Runtime obligation {oblig.id} must be NOT_SATISFIED with default-constructed EvidenceArtifact.",
+            )
+            self.assertEqual(
+                res_default.status,
+                ObligationStatus.UNKNOWN,
+                f"Runtime obligation {oblig.id} must stay UNKNOWN with default-constructed EvidenceArtifact.",
+            )
+
+        # 3. Explicit assertions for OBLIG-U4-07 (C06b) with STORAGE_CORRUPTION_TRACE
+        oblig_07 = get_obligation("OBLIG-U4-07")
+        self.assertIsNotNone(oblig_07)
+        self.assertEqual(oblig_07.required_evidence.artifact_type, "STORAGE_CORRUPTION_TRACE")
+
+        for prov in invalid_provenance_values:
+            c06b_artifact = EvidenceArtifact(
+                artifact_id=f"C06B-TEST-{abs(hash(prov))}",
+                artifact_type="STORAGE_CORRUPTION_TRACE",
+                status=ObligationStatus.VERIFIED,
+                description=f"C06b trace with provenance {prov!r}",
+                citation="docs/PORT13_REVIEW_U4.md:71-74",
+                is_static=False,
+                how_captured=prov,
+            )
+            self.assertFalse(is_empirical_evidence(c06b_artifact))
+            res_c06b = evaluate_obligation(oblig_07, c06b_artifact)
+            self.assertEqual(
+                res_c06b.verdict,
+                EvaluationVerdict.NOT_SATISFIED,
+                f"C06b must be NOT_SATISFIED with provenance {prov!r}.",
+            )
+            self.assertEqual(
+                res_c06b.status,
+                ObligationStatus.UNKNOWN,
+                f"C06b status must stay UNKNOWN with provenance {prov!r}.",
+            )
+            self.assertNotEqual(res_c06b.status, ObligationStatus.VERIFIED)
+            self.assertNotEqual(res_c06b.status, ObligationStatus.INFERRED)
+
+        # Default-constructed STORAGE_CORRUPTION_TRACE for C06b
+        default_c06b = EvidenceArtifact(
+            artifact_id="C06B-DEFAULT",
+            artifact_type="STORAGE_CORRUPTION_TRACE",
+            status=ObligationStatus.VERIFIED,
+            description="Default-constructed C06b trace",
+            citation="docs/PORT13_REVIEW_U4.md:71-74",
+        )
+        self.assertTrue(default_c06b.is_static)
+        self.assertFalse(is_empirical_evidence(default_c06b))
+        res_default_c06b = evaluate_obligation(oblig_07, default_c06b)
+        self.assertEqual(res_default_c06b.verdict, EvaluationVerdict.NOT_SATISFIED)
+        self.assertEqual(
+            res_default_c06b.status,
+            ObligationStatus.UNKNOWN,
+            "C06b status must stay UNKNOWN with default-constructed EvidenceArtifact.",
+        )
+        self.assertNotEqual(res_default_c06b.status, ObligationStatus.VERIFIED)
+        self.assertNotEqual(res_default_c06b.status, ObligationStatus.INFERRED)
+
+    def test_empirical_provenance_allowlist_invariants(self):
+        """Invariant: EMPIRICAL_PROVENANCE_ALLOWLIST contains recognized runtime methods and excludes non-empirical methods."""
+        self.assertIsInstance(EMPIRICAL_PROVENANCE_ALLOWLIST, frozenset)
+        self.assertEqual(RECOGNIZED_EMPIRICAL_PROVENANCE, EMPIRICAL_PROVENANCE_ALLOWLIST)
+
+        # Recognized methods must be present
+        required_methods = {
+            "runtime_execution_trace",
+            "hardware_crash_dump",
+            "dynamic_execution_trace",
+            "hardware_trace",
+            "hardware_log",
+            "empirical_crash_dump",
+            "empirical_reboot_trace",
+            "runtime_trace",
+            "runtime_log",
+        }
+        for method in required_methods:
+            self.assertIn(method, EMPIRICAL_PROVENANCE_ALLOWLIST, f"Expected {method} in allowlist.")
+
+        # Non-empirical methods must NOT be present
+        forbidden_methods = {
+            "",
+            "   ",
+            "simulation",
+            "simulated",
+            "emulation",
+            "emulated",
+            "model",
+            "theoretical_model",
+            "synthetic",
+            "synthetic_trace",
+            "static",
+            "static_disassembly",
+            "offline_inspection",
+            "inference",
+            "speculation",
+            "unknown",
+        }
+        for forbidden in forbidden_methods:
+            self.assertNotIn(forbidden, EMPIRICAL_PROVENANCE_ALLOWLIST, f"Forbidden {forbidden!r} must not be in allowlist.")
 
     def test_no_new_firmware_addresses_in_obligations_module(self):
         """Invariant: No new firmware addresses or offsets are introduced in port13_oblig_u4.py."""

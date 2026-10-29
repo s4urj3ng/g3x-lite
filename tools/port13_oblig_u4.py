@@ -97,13 +97,21 @@ class U4Obligation:
 
 @dataclass(frozen=True)
 class EvidenceArtifact:
-    """An evidence artifact submitted for evaluation."""
+    """An evidence artifact submitted for evaluation.
+
+    Fail-closed defaults:
+      - is_static defaults to True.
+      - how_captured defaults to "".
+    Without explicit runtime provenance (is_static=False and an allowlisted
+    how_captured value), the artifact is treated as non-empirical and cannot
+    satisfy runtime obligations.
+    """
     artifact_id: str
     artifact_type: str
     status: ObligationStatus
     description: str
     citation: str
-    is_static: bool = False
+    is_static: bool = True
     associated_addresses: Tuple[str, ...] = ()
     how_captured: str = ""
 
@@ -338,11 +346,30 @@ U4_OBLIGATIONS: Tuple[U4Obligation, ...] = (
 # Static Evidence and Evaluation Guards
 # -----------------------------------------------------------------------------
 
+# Explicit allowlist of recognized empirical runtime evidence capture methods.
+# Any provenance value not in this set (including empty, whitespace-only, simulated,
+# emulated, modelled, synthetic, or unrecognized provenance) fails closed and is
+# treated as non-empirical.
+EMPIRICAL_PROVENANCE_ALLOWLIST: frozenset[str] = frozenset({
+    "runtime_execution_trace",
+    "hardware_crash_dump",
+    "dynamic_execution_trace",
+    "hardware_trace",
+    "hardware_log",
+    "empirical_crash_dump",
+    "empirical_reboot_trace",
+    "runtime_trace",
+    "runtime_log",
+    "in_situ_execution_trace",
+})
+RECOGNIZED_EMPIRICAL_PROVENANCE = EMPIRICAL_PROVENANCE_ALLOWLIST
+
+
 def is_static_evidence(evidence: EvidenceArtifact) -> bool:
     """Classify evidence by provenance fields and properties demonstrated, not addresses.
 
     Evidence is classified as static if:
-      - is_static is True (explicit provenance flag),
+      - is_static is True (explicit or default provenance flag),
       - artifact_type indicates static analysis/disassembly (e.g. starts with 'STATIC_'),
       - how_captured indicates static extraction/inspection (e.g. contains 'static',
         'rom_disassembly', 'offline_inspection', or 'static_analysis').
@@ -351,12 +378,12 @@ def is_static_evidence(evidence: EvidenceArtifact) -> bool:
     does NOT classify evidence as static; genuine runtime traces referencing these addresses
     remain eligible for evaluation.
     """
-    if evidence.is_static:
+    if evidence.is_static is True:
         return True
     if evidence.artifact_type.upper().startswith("STATIC_"):
         return True
-    if evidence.how_captured:
-        hc = evidence.how_captured.lower()
+    if evidence.how_captured and isinstance(evidence.how_captured, str):
+        hc = evidence.how_captured.strip().lower()
         if any(term in hc for term in ("static", "rom_disassembly", "offline_inspection", "static_analysis")):
             return True
     return False
@@ -369,30 +396,23 @@ is_static_veneer_or_entry_evidence = is_static_evidence
 def is_empirical_evidence(evidence: EvidenceArtifact) -> bool:
     """Classify whether evidence artifact represents genuine empirical runtime observation.
 
-    Evidence is classified as non-empirical if:
-      - is_static is True or is_static_evidence(evidence) is True,
-      - how_captured indicates non-empirical derivation (e.g. contains 'static',
-        'infer', 'speculat', 'anecdote', 'hypothesis', 'theor', 'assumption',
-        'untested', 'conjecture'),
-      - artifact_type indicates non-empirical data (e.g. contains 'ANECDOTE',
-        'SPECULATION', 'THEORY', 'INFERENCE', 'INFERRED').
+    Fail-closed allowlist evaluation: returns True ONLY if:
+      1. evidence.is_static is explicitly False (is_static is False), AND
+      2. evidence.how_captured, after normalization (strip and lowercase),
+         is present in EMPIRICAL_PROVENANCE_ALLOWLIST.
+
+    Missing, empty, whitespace-only, unknown, simulated, emulated, modelled,
+    or synthetic provenance values return False.
+    Non-empirical artifact types (such as ANECDOTE, SPECULATION, THEORY, INFERENCE)
+    always return False regardless of provenance string.
     """
-    if is_static_evidence(evidence):
+    if evidence.is_static is not False:
         return False
-    if evidence.how_captured:
-        hc = evidence.how_captured.lower()
-        if any(term in hc for term in (
-            "static",
-            "infer",
-            "speculat",
-            "anecdote",
-            "hypothesis",
-            "theor",
-            "assumption",
-            "untested",
-            "conjecture",
-        )):
-            return False
+    if not isinstance(evidence.how_captured, str):
+        return False
+    normalized = evidence.how_captured.strip().lower()
+    if not normalized or normalized not in EMPIRICAL_PROVENANCE_ALLOWLIST:
+        return False
     at = evidence.artifact_type.upper()
     if any(term in at for term in ("ANECDOTE", "SPECULATION", "THEORY", "INFERENCE", "INFERRED")):
         return False
@@ -410,11 +430,15 @@ def evaluate_obligation(
          Any status other than VERIFIED evaluates as NOT_SATISFIED.
       2. If evidence is present, evidence.status must be VERIFIED.
       3. Obligations marked with requires_runtime_evidence=True (runtime hook placement,
-         task start ordering, continuation, readiness, or causal effects) reject static
-         evidence. Static veneer (0xFC31BBC4 -> 0xBFE14A3C) and PhySw entry (0xFC1283AD)
-         evidence cannot satisfy these obligations.
-      4. Legacy timeout-bypass causal link (OBLIG-U4-07) must stay UNKNOWN (never INFERRED)
-         whenever evidence is unverified, static, or non-empirical.
+         task start ordering, continuation, readiness, or causal effects) require
+         VERIFIED evidence with allowlisted empirical runtime provenance.
+         Static evidence (e.g. CreateTask veneer 0xFC31BBC4 -> ATCM 0xBFE14A3C,
+         PhySw Thumb entry 0xFC1283AD) and non-empirical evidence (missing, empty,
+         whitespace, unknown, simulated, synthetic, or unallowlisted provenance)
+         CANNOT satisfy these obligations and evaluate as NOT_SATISFIED.
+      4. Legacy timeout-bypass causal link (OBLIG-U4-07 / Finding C06b) must stay
+         UNKNOWN (never INFERRED or VERIFIED) whenever evidence is unverified, static,
+         or lacks allowlisted empirical provenance.
     """
     # Case 1: No external evidence passed (evaluating current baseline state)
     if evidence is None:
@@ -437,24 +461,9 @@ def evaluate_obligation(
             citation=obligation.citation,
         )
 
-    # Invariant: Static evidence cannot satisfy obligations requiring runtime evidence
-    # (such as runtime hook placement, task start ordering, continuation, readiness, or causal effects).
-    if obligation.requires_runtime_evidence and is_static_evidence(evidence):
-        return ObligationResult(
-            obligation_id=obligation.id,
-            verdict=EvaluationVerdict.NOT_SATISFIED,
-            status=ObligationStatus.UNKNOWN,
-            reason=(
-                "Static evidence (CreateTask veneer 0xFC31BBC4 -> ATCM 0xBFE14A3C, "
-                "PhySw Thumb entry 0xFC1283AD) proves static code presence only and "
-                "cannot satisfy runtime hook placement or launch-ordering obligations."
-            ),
-            citation=evidence.citation,
-        )
-
     # Invariant: C06b causal link between legacy timeout bypass and corruption/panic
-    # must stay UNKNOWN (never INFERRED) whenever evidence is unverified, static,
-    # or non-empirical. Both provenance and artifact type checks are enforced.
+    # must stay UNKNOWN (never INFERRED or VERIFIED) whenever evidence is unverified, static,
+    # non-empirical, or wrong artifact type. Both provenance and artifact type checks are enforced.
     if obligation.id == "OBLIG-U4-07":
         if (
             evidence.status != ObligationStatus.VERIFIED
@@ -479,6 +488,35 @@ def evaluate_obligation(
                         "untested conjecture; status must stay UNKNOWN (never INFERRED) whenever "
                         "evidence is unverified, static, or non-empirical."
                     )
+                ),
+                citation=evidence.citation,
+            )
+
+    # Invariant: Static and non-empirical evidence cannot satisfy obligations requiring runtime evidence
+    # (such as runtime hook placement, task start ordering, continuation, readiness, or causal effects).
+    if obligation.requires_runtime_evidence:
+        if is_static_evidence(evidence):
+            return ObligationResult(
+                obligation_id=obligation.id,
+                verdict=EvaluationVerdict.NOT_SATISFIED,
+                status=ObligationStatus.UNKNOWN,
+                reason=(
+                    "Static evidence (CreateTask veneer 0xFC31BBC4 -> ATCM 0xBFE14A3C, "
+                    "PhySw Thumb entry 0xFC1283AD) proves static code presence only and "
+                    "cannot satisfy runtime hook placement or launch-ordering obligations."
+                ),
+                citation=evidence.citation,
+            )
+        if not is_empirical_evidence(evidence):
+            return ObligationResult(
+                obligation_id=obligation.id,
+                verdict=EvaluationVerdict.NOT_SATISFIED,
+                status=ObligationStatus.UNKNOWN,
+                reason=(
+                    f"Obligation '{obligation.id}' requires verified empirical runtime evidence with "
+                    "allowlisted provenance; non-empirical, simulated, synthetic, or unprovenanced "
+                    f"evidence (how_captured={evidence.how_captured!r}, is_static={evidence.is_static!r}) "
+                    "cannot satisfy runtime obligations."
                 ),
                 citation=evidence.citation,
             )
