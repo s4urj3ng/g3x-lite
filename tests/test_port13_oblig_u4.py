@@ -23,6 +23,7 @@ Standard library only.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 import re
 import sys
@@ -33,6 +34,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from tools.port13_oblig_u4 import (
     CANONICAL_OBLIGATION_IDS,
+    CANONICAL_OBLIGATIONS_BY_ID,
     Domain,
     EMPIRICAL_PROVENANCE_ALLOWLIST,
     EvaluationVerdict,
@@ -49,6 +51,7 @@ from tools.port13_oblig_u4 import (
     evaluate_u4_obligations,
     get_obligation,
     is_empirical_evidence,
+    is_obligation_definition_tampered,
     is_static_evidence,
     is_static_veneer_or_entry_evidence,
 )
@@ -791,6 +794,265 @@ class TestPort13ObligU4(unittest.TestCase):
         }
         for forbidden in forbidden_methods:
             self.assertNotIn(forbidden, EMPIRICAL_PROVENANCE_ALLOWLIST, f"Forbidden {forbidden!r} must not be in allowlist.")
+
+    def test_tampered_runtime_flag_with_static_evidence_evaluates_not_satisfied(self):
+        """Regression Test [P2]: Tampered requires_runtime_evidence=False combined with static evidence fails closed.
+
+        Verifies that:
+          1. For every runtime-flagged canonical obligation, a tampered copy with
+             requires_runtime_evidence=False evaluated against static veneer or entry
+             evidence evaluates strictly as NOT_SATISFIED with status UNKNOWN.
+          2. Specifically for OBLIG-U4-02, a tampered copy evaluated against a VERIFIED
+             static veneer artifact labelled HOOK_SAFETY_EVIDENCE evaluates to NOT_SATISFIED.
+          3. When all runtime obligations are tampered with requires_runtime_evidence=False
+             and provided with static evidence, evaluate_u4_obligations reports overall
+             verdict NOT_SATISFIED and satisfied_count == 0.
+        """
+        runtime_obligations = [o for o in U4_OBLIGATIONS if o.requires_runtime_evidence]
+        self.assertEqual(len(runtime_obligations), 7, "Expected exactly 7 runtime-flagged obligations.")
+
+        for oblig in runtime_obligations:
+            tampered = replace(oblig, requires_runtime_evidence=False)
+            self.assertFalse(tampered.requires_runtime_evidence)
+            self.assertTrue(is_obligation_definition_tampered(tampered, oblig))
+
+            # Test against static veneer evidence
+            static_veneer_ev = EvidenceArtifact(
+                artifact_id=f"STATIC-VENEER-{oblig.id}",
+                artifact_type="STATIC_ROM_DISASSEMBLY",
+                status=ObligationStatus.VERIFIED,
+                description=f"Static CreateTask veneer for {oblig.id}",
+                citation=oblig.citation,
+                is_static=True,
+                associated_addresses=("0xFC31BBC4", "0xBFE14A3C"),
+                how_captured="static_rom_disassembly",
+            )
+            res_veneer = evaluate_obligation(tampered, static_veneer_ev)
+            self.assertEqual(
+                res_veneer.verdict,
+                EvaluationVerdict.NOT_SATISFIED,
+                f"Tampered {oblig.id} with static veneer evidence must evaluate to NOT_SATISFIED.",
+            )
+            self.assertEqual(res_veneer.status, ObligationStatus.UNKNOWN)
+            self.assertIn("Static evidence", res_veneer.reason)
+
+            # Test against static entry evidence
+            static_entry_ev = EvidenceArtifact(
+                artifact_id=f"STATIC-ENTRY-{oblig.id}",
+                artifact_type="STATIC_ENTRY_REFERENCE",
+                status=ObligationStatus.VERIFIED,
+                description=f"Static PhySw entry for {oblig.id}",
+                citation=oblig.citation,
+                is_static=True,
+                associated_addresses=("0xFC1283AD",),
+                how_captured="static_rom_disassembly",
+            )
+            res_entry = evaluate_obligation(tampered, static_entry_ev)
+            self.assertEqual(
+                res_entry.verdict,
+                EvaluationVerdict.NOT_SATISFIED,
+                f"Tampered {oblig.id} with static entry evidence must evaluate to NOT_SATISFIED.",
+            )
+            self.assertEqual(res_entry.status, ObligationStatus.UNKNOWN)
+            self.assertIn("Static evidence", res_entry.reason)
+
+        # Explicit test for OBLIG-U4-02 with static HOOK_SAFETY_EVIDENCE
+        oblig_02 = get_obligation("OBLIG-U4-02")
+        self.assertIsNotNone(oblig_02)
+        tampered_02 = replace(oblig_02, requires_runtime_evidence=False)
+        static_hook_ev = EvidenceArtifact(
+            artifact_id="STATIC-HOOK-02",
+            artifact_type="HOOK_SAFETY_EVIDENCE",
+            status=ObligationStatus.VERIFIED,
+            description="Static veneer artifact labelled HOOK_SAFETY_EVIDENCE",
+            citation="docs/PORT13_REVIEW_U4.md:41-46",
+            is_static=True,
+            associated_addresses=("0xFC31BBC4", "0xBFE14A3C"),
+            how_captured="static_rom_disassembly",
+        )
+        res_hook = evaluate_obligation(tampered_02, static_hook_ev)
+        self.assertEqual(
+            res_hook.verdict,
+            EvaluationVerdict.NOT_SATISFIED,
+            "Static veneer artifact labelled HOOK_SAFETY_EVIDENCE must NOT satisfy tampered OBLIG-U4-02.",
+        )
+        self.assertEqual(res_hook.status, ObligationStatus.UNKNOWN)
+        self.assertIn("Static evidence", res_hook.reason)
+
+        # Overall verdict test: catalog of tampered obligations with static evidence
+        tampered_catalog = tuple(
+            replace(o, requires_runtime_evidence=False) if o.requires_runtime_evidence else o
+            for o in U4_OBLIGATIONS
+        )
+        static_map = {
+            o.id: EvidenceArtifact(
+                artifact_id=f"STATIC-{o.id}",
+                artifact_type=o.required_evidence.artifact_type,
+                status=ObligationStatus.VERIFIED,
+                description=f"Static evidence for {o.id}",
+                citation=o.citation,
+                is_static=True,
+                how_captured="static_rom_disassembly",
+            )
+            for o in U4_OBLIGATIONS
+        }
+        report = evaluate_u4_obligations(obligations=tampered_catalog, evidence_map=static_map)
+        self.assertEqual(
+            report.verdict,
+            EvaluationVerdict.NOT_SATISFIED,
+            "Overall U4 verdict must stay NOT_SATISFIED when tampered obligations receive static evidence.",
+        )
+        self.assertTrue(report.is_fail_closed)
+        self.assertEqual(report.satisfied_count, 0)
+        self.assertEqual(report.not_satisfied_count, len(U4_OBLIGATIONS))
+
+    def test_tampered_policy_fields_cannot_produce_satisfied(self):
+        """Regression Test [P2]: Tampering with status, required evidence kind, or domain fails closed.
+
+        Verifies that:
+          1. Tampering current_status=VERIFIED without evidence evaluates to NOT_SATISFIED for all obligations.
+          2. evaluate_u4_obligations with all obligations tampered to VERIFIED evaluates to NOT_SATISFIED.
+          3. Tampering required_evidence.artifact_type with matching verified evidence evaluates to NOT_SATISFIED.
+          4. Tampering domain evaluates to NOT_SATISFIED.
+        """
+        # 1. Tamper current_status=VERIFIED without evidence
+        for oblig in U4_OBLIGATIONS:
+            tampered = replace(oblig, current_status=ObligationStatus.VERIFIED)
+            self.assertTrue(is_obligation_definition_tampered(tampered, oblig))
+            res = evaluate_obligation(tampered)
+            self.assertEqual(
+                res.verdict,
+                EvaluationVerdict.NOT_SATISFIED,
+                f"Tampering current_status=VERIFIED on {oblig.id} must evaluate to NOT_SATISFIED.",
+            )
+            self.assertNotEqual(res.verdict, EvaluationVerdict.SATISFIED)
+
+        # 2. evaluate_u4_obligations with all obligations tampered to VERIFIED
+        tampered_all_verified = tuple(
+            replace(o, current_status=ObligationStatus.VERIFIED) for o in U4_OBLIGATIONS
+        )
+        report = evaluate_u4_obligations(obligations=tampered_all_verified)
+        self.assertEqual(
+            report.verdict,
+            EvaluationVerdict.NOT_SATISFIED,
+            "evaluate_u4_obligations with tampered VERIFIED status must evaluate to NOT_SATISFIED.",
+        )
+        self.assertTrue(report.is_fail_closed)
+        self.assertEqual(report.satisfied_count, 0)
+        self.assertEqual(report.not_satisfied_count, len(U4_OBLIGATIONS))
+
+        # 3. Tamper required_evidence.artifact_type
+        for oblig in U4_OBLIGATIONS:
+            tampered = replace(
+                oblig,
+                required_evidence=RequiredEvidence(
+                    artifact_type="UNAUTHORIZED_TYPE",
+                    what_it_must_show="bogus specification",
+                ),
+            )
+            self.assertTrue(is_obligation_definition_tampered(tampered, oblig))
+            bogus_ev = EvidenceArtifact(
+                artifact_id=f"BOGUS-{oblig.id}",
+                artifact_type="UNAUTHORIZED_TYPE",
+                status=ObligationStatus.VERIFIED,
+                description="Bogus verified evidence matching tampered type",
+                citation=oblig.citation,
+                is_static=False,
+                how_captured="runtime_execution_trace",
+            )
+            res = evaluate_obligation(tampered, bogus_ev)
+            self.assertEqual(
+                res.verdict,
+                EvaluationVerdict.NOT_SATISFIED,
+                f"Tampered required_evidence on {oblig.id} must NOT produce SATISFIED.",
+            )
+            self.assertNotEqual(res.verdict, EvaluationVerdict.SATISFIED)
+
+        # 4. Tamper domain
+        for oblig in U4_OBLIGATIONS:
+            alt_domain = (
+                Domain.SCHEDULER_POLICY
+                if oblig.domain != Domain.SCHEDULER_POLICY
+                else Domain.MEMORY_OWNERSHIP
+            )
+            tampered = replace(oblig, domain=alt_domain)
+            self.assertTrue(is_obligation_definition_tampered(tampered, oblig))
+            res = evaluate_obligation(tampered)
+            self.assertEqual(
+                res.verdict,
+                EvaluationVerdict.NOT_SATISFIED,
+                f"Tampered domain on {oblig.id} must evaluate to NOT_SATISFIED.",
+            )
+            self.assertNotEqual(res.verdict, EvaluationVerdict.SATISFIED)
+
+    def test_c06b_stays_unknown_under_tampering(self):
+        """Regression Test [P2]: OBLIG-U4-07 (Finding C06b) strictly remains UNKNOWN under tampering.
+
+        Verifies that tampering with current_status, requires_runtime_evidence, or
+        required_evidence cannot move C06b out of status UNKNOWN or produce SATISFIED.
+        """
+        oblig_07 = get_obligation("OBLIG-U4-07")
+        self.assertIsNotNone(oblig_07)
+
+        # Case 1: Tampered current_status=VERIFIED without evidence
+        tampered_ver = replace(oblig_07, current_status=ObligationStatus.VERIFIED)
+        self.assertTrue(is_obligation_definition_tampered(tampered_ver, oblig_07))
+        res_ver = evaluate_obligation(tampered_ver)
+        self.assertEqual(res_ver.verdict, EvaluationVerdict.NOT_SATISFIED)
+        self.assertEqual(res_ver.status, ObligationStatus.UNKNOWN)
+        self.assertNotEqual(res_ver.status, ObligationStatus.VERIFIED)
+        self.assertNotEqual(res_ver.status, ObligationStatus.INFERRED)
+
+        # Case 2: Tampered current_status=INFERRED without evidence
+        tampered_inf = replace(oblig_07, current_status=ObligationStatus.INFERRED)
+        self.assertTrue(is_obligation_definition_tampered(tampered_inf, oblig_07))
+        res_inf = evaluate_obligation(tampered_inf)
+        self.assertEqual(res_inf.verdict, EvaluationVerdict.NOT_SATISFIED)
+        self.assertEqual(res_inf.status, ObligationStatus.UNKNOWN)
+        self.assertNotEqual(res_inf.status, ObligationStatus.INFERRED)
+        self.assertNotEqual(res_inf.status, ObligationStatus.VERIFIED)
+
+        # Case 3: Tampered requires_runtime_evidence=False with static evidence
+        tampered_rt = replace(oblig_07, requires_runtime_evidence=False)
+        self.assertTrue(is_obligation_definition_tampered(tampered_rt, oblig_07))
+        static_ev = EvidenceArtifact(
+            artifact_id="STATIC-C06B",
+            artifact_type="STORAGE_CORRUPTION_TRACE",
+            status=ObligationStatus.VERIFIED,
+            description="Static inspection attempting to verify C06b causal claim",
+            citation=oblig_07.citation,
+            is_static=True,
+            how_captured="static_rom_disassembly",
+        )
+        res_rt = evaluate_obligation(tampered_rt, static_ev)
+        self.assertEqual(res_rt.verdict, EvaluationVerdict.NOT_SATISFIED)
+        self.assertEqual(res_rt.status, ObligationStatus.UNKNOWN)
+        self.assertNotEqual(res_rt.status, ObligationStatus.VERIFIED)
+        self.assertNotEqual(res_rt.status, ObligationStatus.INFERRED)
+
+        # Case 4: Tampered required_evidence kind with non-matching evidence
+        tampered_req = replace(
+            oblig_07,
+            required_evidence=RequiredEvidence(
+                artifact_type="INFORMAL_CORRELATION_CLAIM",
+                what_it_must_show="unproven correlation",
+            ),
+        )
+        self.assertTrue(is_obligation_definition_tampered(tampered_req, oblig_07))
+        ev = EvidenceArtifact(
+            artifact_id="INF-C06B",
+            artifact_type="INFORMAL_CORRELATION_CLAIM",
+            status=ObligationStatus.VERIFIED,
+            description="Informal correlation claim",
+            citation=oblig_07.citation,
+            is_static=False,
+            how_captured="runtime_execution_trace",
+        )
+        res_req = evaluate_obligation(tampered_req, ev)
+        self.assertEqual(res_req.verdict, EvaluationVerdict.NOT_SATISFIED)
+        self.assertEqual(res_req.status, ObligationStatus.UNKNOWN)
+        self.assertNotEqual(res_req.status, ObligationStatus.VERIFIED)
+        self.assertNotEqual(res_req.status, ObligationStatus.INFERRED)
 
     def test_no_new_firmware_addresses_in_obligations_module(self):
         """Invariant: No new firmware addresses or offsets are introduced in port13_oblig_u4.py."""

@@ -36,6 +36,8 @@ This document establishes the canonical repository proof obligations for U4, cod
    Upstream CHDK (`core/main.c:136, 156`) implemented a 10-second timeout bypass that permitted SpyTask to execute without verified filesystem readiness. While the bypass behavior is verified, asserting that this bypass *caused* storage corruption and kernel panics is an untested inference (`docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md:204` [F5]). This causal relationship must strictly remain **`UNKNOWN`** (never `INFERRED`) whenever evidence is unverified, static, or non-empirical; provenance checks are enforced alongside artifact matching.
 6. **Fail-Closed Evaluator Model:**
    Any proof obligation lacking `VERIFIED` evidence evaluates as **`NOT_SATISFIED`**. If even a single obligation is `NOT_SATISFIED`, the overall U4 verdict evaluates as **`NOT_SATISFIED`**. For GM1.10C today, all runtime obligations are `UNKNOWN`, ensuring that the overall U4 evaluation verdict is strictly **`NOT_SATISFIED`**.
+7. **Canonical Obligation Authority & Tampering Fail-Closed Invariant:**
+   Obligation policy fields (`requires_runtime_evidence`, `required_evidence`, `current_status`, `domain`, `statement`, `citation`) are strictly authoritative from the module's canonical catalog (`U4_OBLIGATIONS`). Caller-supplied obligation definitions cannot override policy: any tampered copy (e.g. setting `requires_runtime_evidence=False`, tampering with `current_status`, or modifying `required_evidence`) fails closed as **`NOT_SATISFIED`**. The static-evidence guard is applied unconditionally to runtime-hook (`OBLIG-U4-02`) and launch-ordering (`OBLIG-U4-01`) obligations and to every obligation canonically marked as runtime, whatever flag the caller passes. The overall U4 verdict strictly remains **`NOT_SATISFIED`** under caller tampering.
 
 ---
 
@@ -178,6 +180,7 @@ An overall U4 verdict may only be computed when the obligation set supplied to `
 - **Missing IDs (e.g. subset of obligations):** Raises `ValueError`.
 - **Duplicate IDs:** Raises `ValueError`.
 - **Unknown IDs:** Raises `ValueError`.
+- **Authoritative Canonical Policy & Caller Tampering Fail-Closed:** Obligation definitions and policy fields are authoritative from `U4_OBLIGATIONS`. If a caller attempts to supply tampered obligations (e.g. replacing `requires_runtime_evidence=True` with `False`, changing `current_status`, altering `required_evidence`, or changing `domain`), the evaluator compares policy-relevant fields against canonical counterparts and fails closed (`NOT_SATISFIED`, status `UNKNOWN`). The static-evidence guard is applied unconditionally to runtime-hook and launch-ordering obligations and to every obligation canonically marked as runtime, whatever flag the caller passes.
 
 This fail-closed design prevents truncated or manipulated obligation sets from producing a false `SATISFIED` verdict.
 
@@ -213,6 +216,9 @@ The proof obligations and boundary guards are implemented and verified via:
    - Completeness validation raising `ValueError` on empty, missing, duplicate, or unknown IDs (`test_evaluate_u4_obligations_canonical_set_validation`).
    - Isolation of the C06b causal claim as UNKNOWN (never INFERRED) across unverified, static, and non-empirical evidence (`test_timeout_bypass_causal_link_remains_unknown`).
    - Unresolved C17 and C18 obligations blocking the overall U4 verdict (`test_unresolved_c17_or_c18_obligations_block_overall_u4_verdict`).
+   - Rejection of static evidence on tampered obligations: for every runtime-flagged canonical obligation, a tampered copy with `requires_runtime_evidence=False` evaluated against static veneer/entry evidence (including `HOOK_SAFETY_EVIDENCE` for `OBLIG-U4-02`) evaluates strictly as `NOT_SATISFIED`, and overall verdict stays `NOT_SATISFIED` (`test_tampered_runtime_flag_with_static_evidence_evaluates_not_satisfied`).
+   - Rejection of tampered policy fields: tampering with `current_status=VERIFIED`, `required_evidence.artifact_type`, or `domain` cannot produce `SATISFIED` (`test_tampered_policy_fields_cannot_produce_satisfied`).
+   - Tamper containment for C06b: `OBLIG-U4-07` strictly remains `UNKNOWN` under tampering with `current_status`, `requires_runtime_evidence`, or `required_evidence` (`test_c06b_stays_unknown_under_tampering`).
    - Negative controls on unverified evidence, mismatched artifact types, and partial satisfaction (10 of 11 satisfied).
    - Positive synthetic path when all 11 obligations receive valid runtime artifacts.
    - Address containment proving zero new firmware addresses are introduced.

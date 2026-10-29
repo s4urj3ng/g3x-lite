@@ -341,6 +341,21 @@ U4_OBLIGATIONS: Tuple[U4Obligation, ...] = (
     ),
 )
 
+CANONICAL_OBLIGATIONS_BY_ID: Dict[str, U4Obligation] = {o.id: o for o in U4_OBLIGATIONS}
+
+
+def is_obligation_definition_tampered(obligation: U4Obligation, canonical: U4Obligation) -> bool:
+    """Check whether a caller-supplied obligation alters any canonical policy field."""
+    return (
+        obligation.requires_runtime_evidence != canonical.requires_runtime_evidence
+        or obligation.required_evidence.artifact_type != canonical.required_evidence.artifact_type
+        or obligation.required_evidence.what_it_must_show != canonical.required_evidence.what_it_must_show
+        or obligation.current_status != canonical.current_status
+        or obligation.domain != canonical.domain
+        or obligation.statement != canonical.statement
+        or obligation.citation != canonical.citation
+    )
+
 
 # -----------------------------------------------------------------------------
 # Static Evidence and Evaluation Guards
@@ -426,53 +441,92 @@ def evaluate_obligation(
     """Evaluate an individual U4 obligation fail-closed.
 
     Rules:
-      1. If evidence is absent, rely strictly on obligation.current_status.
+      1. Policy fields are strictly authoritative from the module's canonical catalog
+         (U4_OBLIGATIONS). Caller-supplied obligation definitions cannot override policy.
+         Any policy tampering (modifying requires_runtime_evidence, required_evidence,
+         current_status, domain, statement, or citation) fails closed as NOT_SATISFIED.
+      2. If evidence is absent, rely strictly on canonical.current_status.
          Any status other than VERIFIED evaluates as NOT_SATISFIED.
-      2. If evidence is present, evidence.status must be VERIFIED.
-      3. Obligations marked with requires_runtime_evidence=True (runtime hook placement,
-         task start ordering, continuation, readiness, or causal effects) require
-         VERIFIED evidence with allowlisted empirical runtime provenance.
+      3. Obligations marked in the canonical catalog with requires_runtime_evidence=True
+         (and unconditionally OBLIG-U4-01 launch ordering and OBLIG-U4-02 runtime hook
+         placement) require VERIFIED evidence with allowlisted empirical runtime provenance.
          Static evidence (e.g. CreateTask veneer 0xFC31BBC4 -> ATCM 0xBFE14A3C,
          PhySw Thumb entry 0xFC1283AD) and non-empirical evidence (missing, empty,
          whitespace, unknown, simulated, synthetic, or unallowlisted provenance)
-         CANNOT satisfy these obligations and evaluate as NOT_SATISFIED.
+         CANNOT satisfy these obligations and evaluate as NOT_SATISFIED, whatever flag
+         the caller passes in the obligation object.
       4. Legacy timeout-bypass causal link (OBLIG-U4-07 / Finding C06b) must stay
          UNKNOWN (never INFERRED or VERIFIED) whenever evidence is unverified, static,
-         or lacks allowlisted empirical provenance.
+         non-empirical, or if the obligation definition was tampered.
+      5. Unknown obligation IDs not in CANONICAL_OBLIGATION_IDS fail closed as NOT_SATISFIED.
     """
-    # Case 1: No external evidence passed (evaluating current baseline state)
-    if evidence is None:
-        if obligation.current_status == ObligationStatus.VERIFIED:
-            return ObligationResult(
-                obligation_id=obligation.id,
-                verdict=EvaluationVerdict.SATISFIED,
-                status=obligation.current_status,
-                reason="Obligation has VERIFIED evidence in repository baseline.",
-                citation=obligation.citation,
-            )
+    canonical = get_obligation(obligation.id)
+    if canonical is None:
         return ObligationResult(
             obligation_id=obligation.id,
             verdict=EvaluationVerdict.NOT_SATISFIED,
-            status=obligation.current_status,
+            status=ObligationStatus.UNKNOWN,
+            reason=f"Unknown obligation ID '{obligation.id}' not in canonical catalog; fail closed.",
+            citation=obligation.citation,
+        )
+
+    # Determine runtime requirement authoritatively from canonical catalog.
+    # Unconditionally enforce for launch ordering and runtime hook placement.
+    requires_runtime = (
+        canonical.requires_runtime_evidence
+        or canonical.id in ("OBLIG-U4-01", "OBLIG-U4-02")
+        or canonical.domain in (Domain.RUNTIME_HOOK_PLACEMENT, Domain.LAUNCH_ORDERING)
+        or obligation.id in ("OBLIG-U4-01", "OBLIG-U4-02")
+        or obligation.domain in (Domain.RUNTIME_HOOK_PLACEMENT, Domain.LAUNCH_ORDERING)
+    )
+
+    tampered = is_obligation_definition_tampered(obligation, canonical)
+
+    # Case 1: No external evidence passed (evaluating current baseline state)
+    if evidence is None:
+        if tampered:
+            return ObligationResult(
+                obligation_id=canonical.id,
+                verdict=EvaluationVerdict.NOT_SATISFIED,
+                status=ObligationStatus.UNKNOWN,
+                reason=(
+                    f"Obligation '{canonical.id}' policy definition differs from canonical catalog; "
+                    "evaluator fails closed against caller tampering without VERIFIED evidence."
+                ),
+                citation=canonical.citation,
+            )
+        if canonical.current_status == ObligationStatus.VERIFIED:
+            return ObligationResult(
+                obligation_id=canonical.id,
+                verdict=EvaluationVerdict.SATISFIED,
+                status=canonical.current_status,
+                reason="Obligation has VERIFIED evidence in repository baseline.",
+                citation=canonical.citation,
+            )
+        return ObligationResult(
+            obligation_id=canonical.id,
+            verdict=EvaluationVerdict.NOT_SATISFIED,
+            status=canonical.current_status,
             reason=(
-                f"Obligation status is {obligation.current_status.value}; "
+                f"Obligation status is {canonical.current_status.value}; "
                 "evaluator fails closed without VERIFIED evidence."
             ),
-            citation=obligation.citation,
+            citation=canonical.citation,
         )
 
     # Invariant: C06b causal link between legacy timeout bypass and corruption/panic
     # must stay UNKNOWN (never INFERRED or VERIFIED) whenever evidence is unverified, static,
-    # non-empirical, or wrong artifact type. Both provenance and artifact type checks are enforced.
-    if obligation.id == "OBLIG-U4-07":
+    # non-empirical, wrong artifact type, or if obligation policy is tampered.
+    if canonical.id == "OBLIG-U4-07" or obligation.id == "OBLIG-U4-07":
         if (
             evidence.status != ObligationStatus.VERIFIED
             or is_static_evidence(evidence)
             or not is_empirical_evidence(evidence)
-            or evidence.artifact_type != "STORAGE_CORRUPTION_TRACE"
+            or evidence.artifact_type != canonical.required_evidence.artifact_type
+            or tampered
         ):
             return ObligationResult(
-                obligation_id=obligation.id,
+                obligation_id=canonical.id,
                 verdict=EvaluationVerdict.NOT_SATISFIED,
                 status=ObligationStatus.UNKNOWN,
                 reason=(
@@ -486,7 +540,7 @@ def evaluate_obligation(
                     else (
                         "The legacy timeout-bypass -> storage corruption/kernel panic link is "
                         "untested conjecture; status must stay UNKNOWN (never INFERRED) whenever "
-                        "evidence is unverified, static, or non-empirical."
+                        "evidence is unverified, static, non-empirical, or if obligation policy is tampered."
                     )
                 ),
                 citation=evidence.citation,
@@ -494,10 +548,12 @@ def evaluate_obligation(
 
     # Invariant: Static and non-empirical evidence cannot satisfy obligations requiring runtime evidence
     # (such as runtime hook placement, task start ordering, continuation, readiness, or causal effects).
-    if obligation.requires_runtime_evidence:
+    # This guard is applied to every obligation canonically marked as runtime (and unconditionally
+    # for runtime hook placement and launch ordering), whatever flag the caller passes.
+    if requires_runtime:
         if is_static_evidence(evidence):
             return ObligationResult(
-                obligation_id=obligation.id,
+                obligation_id=canonical.id,
                 verdict=EvaluationVerdict.NOT_SATISFIED,
                 status=ObligationStatus.UNKNOWN,
                 reason=(
@@ -509,11 +565,11 @@ def evaluate_obligation(
             )
         if not is_empirical_evidence(evidence):
             return ObligationResult(
-                obligation_id=obligation.id,
+                obligation_id=canonical.id,
                 verdict=EvaluationVerdict.NOT_SATISFIED,
                 status=ObligationStatus.UNKNOWN,
                 reason=(
-                    f"Obligation '{obligation.id}' requires verified empirical runtime evidence with "
+                    f"Obligation '{canonical.id}' requires verified empirical runtime evidence with "
                     "allowlisted provenance; non-empirical, simulated, synthetic, or unprovenanced "
                     f"evidence (how_captured={evidence.how_captured!r}, is_static={evidence.is_static!r}) "
                     "cannot satisfy runtime obligations."
@@ -521,10 +577,23 @@ def evaluate_obligation(
                 citation=evidence.citation,
             )
 
+    # Invariant: Fail closed if caller tampered with canonical obligation policy fields
+    if tampered:
+        return ObligationResult(
+            obligation_id=canonical.id,
+            verdict=EvaluationVerdict.NOT_SATISFIED,
+            status=ObligationStatus.UNKNOWN,
+            reason=(
+                f"Obligation '{canonical.id}' policy definition differs from canonical catalog; "
+                "evaluator fails closed against caller tampering."
+            ),
+            citation=evidence.citation,
+        )
+
     # Case 2: Evidence artifact provided
     if evidence.status != ObligationStatus.VERIFIED:
         return ObligationResult(
-            obligation_id=obligation.id,
+            obligation_id=canonical.id,
             verdict=EvaluationVerdict.NOT_SATISFIED,
             status=evidence.status,
             reason=(
@@ -534,21 +603,21 @@ def evaluate_obligation(
             citation=evidence.citation,
         )
 
-    # Invariant: Artifact type must match required type
-    if evidence.artifact_type != obligation.required_evidence.artifact_type:
+    # Invariant: Artifact type must match canonical required type
+    if evidence.artifact_type != canonical.required_evidence.artifact_type:
         return ObligationResult(
-            obligation_id=obligation.id,
+            obligation_id=canonical.id,
             verdict=EvaluationVerdict.NOT_SATISFIED,
             status=evidence.status,
             reason=(
                 f"Evidence artifact type '{evidence.artifact_type}' does not match "
-                f"required artifact type '{obligation.required_evidence.artifact_type}'."
+                f"required artifact type '{canonical.required_evidence.artifact_type}'."
             ),
             citation=evidence.citation,
         )
 
     return ObligationResult(
-        obligation_id=obligation.id,
+        obligation_id=canonical.id,
         verdict=EvaluationVerdict.SATISFIED,
         status=ObligationStatus.VERIFIED,
         reason=f"Satisfied by verified artifact '{evidence.artifact_id}'.",
@@ -565,8 +634,10 @@ def evaluate_u4_obligations(
     Enforces that an overall U4 verdict may only be issued when the supplied set
     exactly matches the canonical IDs OBLIG-U4-01..11.
     An empty set, a missing ID, a duplicate ID, or an unknown ID raises ValueError.
+    Obligation policy fields are authoritative from the canonical catalog; caller tampering
+    fails closed.
 
-    Returns NOT_SATISFIED if any obligation lacks VERIFIED evidence.
+    Returns NOT_SATISFIED if any obligation lacks VERIFIED evidence or was tampered.
     """
     if obligations is None:
         target_obligations = U4_OBLIGATIONS
@@ -630,11 +701,8 @@ def evaluate_u4_obligations(
 
 
 def get_obligation(obligation_id: str) -> Optional[U4Obligation]:
-    """Retrieve an obligation by ID."""
-    for oblig in U4_OBLIGATIONS:
-        if oblig.id == obligation_id:
-            return oblig
-    return None
+    """Retrieve an obligation by ID from the canonical catalog."""
+    return CANONICAL_OBLIGATIONS_BY_ID.get(obligation_id)
 
 
 def main() -> int:
