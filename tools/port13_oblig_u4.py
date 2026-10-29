@@ -437,6 +437,21 @@ def evaluate_obligation(
             citation=obligation.citation,
         )
 
+    # Invariant: Static evidence cannot satisfy obligations requiring runtime evidence
+    # (such as runtime hook placement, task start ordering, continuation, readiness, or causal effects).
+    if obligation.requires_runtime_evidence and is_static_evidence(evidence):
+        return ObligationResult(
+            obligation_id=obligation.id,
+            verdict=EvaluationVerdict.NOT_SATISFIED,
+            status=ObligationStatus.UNKNOWN,
+            reason=(
+                "Static evidence (CreateTask veneer 0xFC31BBC4 -> ATCM 0xBFE14A3C, "
+                "PhySw Thumb entry 0xFC1283AD) proves static code presence only and "
+                "cannot satisfy runtime hook placement or launch-ordering obligations."
+            ),
+            citation=evidence.citation,
+        )
+
     # Invariant: C06b causal link between legacy timeout bypass and corruption/panic
     # must stay UNKNOWN (never INFERRED) whenever evidence is unverified, static,
     # or non-empirical. Both provenance and artifact type checks are enforced.
@@ -452,9 +467,18 @@ def evaluate_obligation(
                 verdict=EvaluationVerdict.NOT_SATISFIED,
                 status=ObligationStatus.UNKNOWN,
                 reason=(
-                    "The legacy timeout-bypass -> storage corruption/kernel panic link is "
+                    "Static evidence (CreateTask veneer 0xFC31BBC4 -> ATCM 0xBFE14A3C, "
+                    "PhySw Thumb entry 0xFC1283AD) proves static code presence only and "
+                    "cannot satisfy runtime hook placement or launch-ordering obligations; "
+                    "the legacy timeout-bypass -> storage corruption/kernel panic link is "
                     "untested conjecture; status must stay UNKNOWN (never INFERRED) whenever "
                     "evidence is unverified, static, or non-empirical."
+                    if is_static_evidence(evidence)
+                    else (
+                        "The legacy timeout-bypass -> storage corruption/kernel panic link is "
+                        "untested conjecture; status must stay UNKNOWN (never INFERRED) whenever "
+                        "evidence is unverified, static, or non-empirical."
+                    )
                 ),
                 citation=evidence.citation,
             )
@@ -468,21 +492,6 @@ def evaluate_obligation(
             reason=(
                 f"Provided evidence status is {evidence.status.value}; "
                 "evaluator fails closed without VERIFIED evidence."
-            ),
-            citation=evidence.citation,
-        )
-
-    # Invariant: Static evidence cannot satisfy obligations requiring runtime evidence
-    # (such as runtime hook placement, task start ordering, continuation, readiness, or causal effects).
-    if obligation.requires_runtime_evidence and is_static_evidence(evidence):
-        return ObligationResult(
-            obligation_id=obligation.id,
-            verdict=EvaluationVerdict.NOT_SATISFIED,
-            status=ObligationStatus.UNKNOWN,
-            reason=(
-                "Static evidence (CreateTask veneer 0xFC31BBC4 -> ATCM 0xBFE14A3C, "
-                "PhySw Thumb entry 0xFC1283AD) proves static code presence only and "
-                "cannot satisfy runtime hook placement or launch-ordering obligations."
             ),
             citation=evidence.citation,
         )
