@@ -120,6 +120,8 @@ RULE_ADDRESS_NOT_TRACKED = "RULE_ADDRESS_NOT_TRACKED"
 RULE_EMPTY_DATASET = "RULE_EMPTY_DATASET"
 RULE_INCOMPLETE_OBLIGATION_SET = "RULE_INCOMPLETE_OBLIGATION_SET"
 RULE_ARTIFACT_TYPE_MISMATCH = "RULE_ARTIFACT_TYPE_MISMATCH"
+RULE_NONCANONICAL_OBLIGATION = "RULE_NONCANONICAL_OBLIGATION"
+RULE_UNTRUSTED_RUNTIME_PROVENANCE = "RULE_UNTRUSTED_RUNTIME_PROVENANCE"
 
 
 # -----------------------------------------------------------------------------
@@ -265,6 +267,23 @@ ORIGIN_MAIN_TRACKED_FILES: frozenset[str] = frozenset({
     "vendor/g3x-platform/platform/g3x/platform_kbd.h",
     "vendor/g3x-platform/platform/g3x/shooting.c",
 })
+
+
+# -----------------------------------------------------------------------------
+# Trusted Runtime Witnesses Registry (Positive Allowlist)
+# -----------------------------------------------------------------------------
+# Positive allowlist of approved runtime witness artifacts and citations.
+# In Phase 0 offline verification, NO runtime execution witnesses exist on origin/main.
+# Any existing tracked document, source file, review, or static analysis must never
+# discharge a runtime obligation, regardless of caller-supplied labels or metadata.
+#
+# This registry is strictly EMPTY in shipped code. Populating any entry in this
+# registry requires physical hardware execution, dynamic telemetry capture, and
+# a separately authorized, human-reviewed pull request following phase transition.
+#
+# Because this registry is empty, aggregate ready is structurally unreachable
+# from shipped data or any caller-supplied artifacts citing repository files.
+TRUSTED_RUNTIME_WITNESSES: frozenset[str] = frozenset()
 
 
 # -----------------------------------------------------------------------------
@@ -788,6 +807,7 @@ DEFAULT_U2_OBLIGATIONS: Tuple[U2Obligation, ...] = (
 )
 
 CANONICAL_U2_OBLIGATION_IDS: Tuple[str, ...] = tuple(ob.id for ob in DEFAULT_U2_OBLIGATIONS)
+CANONICAL_OBLIGATIONS_MAP: Dict[str, U2Obligation] = {ob.id: ob for ob in DEFAULT_U2_OBLIGATIONS}
 
 PORT9A_SIX_STAGE_CORRESPONDENCE: Dict[str, Dict[str, Any]] = {
     "task_created": {
@@ -947,6 +967,21 @@ def evaluate_obligation(
     root = Path(repo_root).resolve() if repo_root is not None else REPO_ROOT_DEFAULT.resolve()
     active_pins = PINNED_FILE_HASHES if pinned_hashes is None else pinned_hashes
     ob_findings: List[ObligationFinding] = []
+
+    # 0. Canonical definition equality check if obligation claims a canonical ID
+    canonical_def = CANONICAL_OBLIGATIONS_MAP.get(obligation.id)
+    if canonical_def is not None and obligation != canonical_def:
+        ob_findings.append(
+            ObligationFinding(
+                rule_id=RULE_NONCANONICAL_OBLIGATION,
+                obligation_id=obligation.id,
+                severity="ERROR",
+                message=(
+                    f"Obligation '{obligation.id}' does not match frozen canonical definition by full value equality "
+                    f"(definitional fields have been modified)"
+                ),
+            )
+        )
 
     # 1. Validate obligation supporting citations
     if not obligation.citations:
@@ -1161,6 +1196,30 @@ def evaluate_obligation(
                 )
             )
 
+        # E. Runtime provenance allowlist check
+        # Existing tracked docs, source files, reviews, or tools on origin/main
+        # can never discharge a runtime obligation. Only artifacts registered
+        # in the TRUSTED_RUNTIME_WITNESSES positive allowlist can discharge runtime obligations.
+        if obligation.is_runtime:
+            ev_cit_path = ev_artifact.citation.path.strip().replace("\\", "/") if ev_artifact.citation else ""
+            if (
+                ev_artifact.artifact_id not in TRUSTED_RUNTIME_WITNESSES
+                and ev_cit_path not in TRUSTED_RUNTIME_WITNESSES
+            ):
+                ob_findings.append(
+                    ObligationFinding(
+                        rule_id=RULE_UNTRUSTED_RUNTIME_PROVENANCE,
+                        obligation_id=obligation.id,
+                        severity="ERROR",
+                        message=(
+                            f"Runtime obligation '{obligation.id}' cannot be discharged by "
+                            f"untrusted artifact '{ev_artifact.artifact_id}' citing '{ev_cit_path}'. "
+                            f"Artifact/citation is not in TRUSTED_RUNTIME_WITNESSES allowlist. "
+                            f"Tracked documentation and static files can never discharge runtime obligations."
+                        ),
+                    )
+                )
+
         has_errors = any(f.severity == "ERROR" for f in ob_findings)
         if not has_errors:
             is_satisfied = True
@@ -1267,24 +1326,35 @@ def evaluate(
             )
 
     # 2. Check canonical set requirement for aggregate readiness
+    # Aggregate readiness strictly requires full value equality with DEFAULT_U2_OBLIGATIONS.
     supplied_ids = tuple(ob.id for ob in target_obligations)
-    is_canonical_set = (
-        set(supplied_ids) == set(CANONICAL_U2_OBLIGATION_IDS)
-        and len(supplied_ids) == len(CANONICAL_U2_OBLIGATION_IDS)
-    )
+    is_canonical_set = (target_obligations == DEFAULT_U2_OBLIGATIONS)
     if not is_canonical_set:
-        findings.append(
-            ObligationFinding(
-                rule_id=RULE_INCOMPLETE_OBLIGATION_SET,
-                obligation_id="AGGREGATE",
-                severity="ERROR",
-                message=(
-                    f"Aggregate filesystem readiness requires the complete canonical obligation set "
-                    f"({len(CANONICAL_U2_OBLIGATION_IDS)} obligations: {list(CANONICAL_U2_OBLIGATION_IDS)}). "
-                    f"Supplied set has {len(supplied_ids)} obligations: {list(supplied_ids)}."
-                ),
+        if supplied_ids != CANONICAL_U2_OBLIGATION_IDS:
+            findings.append(
+                ObligationFinding(
+                    rule_id=RULE_INCOMPLETE_OBLIGATION_SET,
+                    obligation_id="AGGREGATE",
+                    severity="ERROR",
+                    message=(
+                        f"Aggregate filesystem readiness requires the complete canonical obligation set "
+                        f"({len(CANONICAL_U2_OBLIGATION_IDS)} obligations: {list(CANONICAL_U2_OBLIGATION_IDS)}). "
+                        f"Supplied set has {len(supplied_ids)} obligations: {list(supplied_ids)}."
+                    ),
+                )
             )
-        )
+        else:
+            findings.append(
+                ObligationFinding(
+                    rule_id=RULE_NONCANONICAL_OBLIGATION,
+                    obligation_id="AGGREGATE",
+                    severity="ERROR",
+                    message=(
+                        "Supplied obligation set does not match frozen canonical definitions by full value equality "
+                        "(obligations have been substituted or modified)."
+                    ),
+                )
+            )
 
     # 3. Evaluate each obligation
     for ob in target_obligations:

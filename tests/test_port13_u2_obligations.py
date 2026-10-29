@@ -16,6 +16,7 @@ Verifies:
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 from pathlib import Path
@@ -32,6 +33,7 @@ if str(REPO_ROOT / "tools") not in sys.path:
 
 import tools.port13_u2_obligations as u2
 from tools.port13_u2_obligations import (
+    CANONICAL_OBLIGATIONS_MAP,
     CANONICAL_U2_OBLIGATION_IDS,
     Citation,
     DEFAULT_U2_OBLIGATIONS,
@@ -51,11 +53,14 @@ from tools.port13_u2_obligations import (
     RULE_INCOMPLETE_OBLIGATION_SET,
     RULE_MISSING_CITED_PATH,
     RULE_MISSING_CITATIONS,
+    RULE_NONCANONICAL_OBLIGATION,
     RULE_PRECONDITION_INVARIANT_VIOLATED,
     RULE_STATIC_CANNOT_DISCHARGE_RUNTIME,
     RULE_STATUS_UNVERIFIED,
     RULE_UNTRACKED_PATH,
+    RULE_UNTRUSTED_RUNTIME_PROVENANCE,
     TRACKED_ADDRESS_CITATIONS,
+    TRUSTED_RUNTIME_WITNESSES,
     U2Obligation,
     evaluate,
     evaluate_obligation,
@@ -592,6 +597,152 @@ class TestAddressProvenanceAndIntegrity(unittest.TestCase):
         )
         for addr in critical_addrs:
             self.assertIn(addr, TRACKED_ADDRESS_CITATIONS, f"Critical address {addr} not registered")
+
+
+class TestReviewerExploitsAndPositiveAllowlist(unittest.TestCase):
+    """Regression tests for reviewer-identified fail-closed bypasses and positive allowlist.
+
+    Addresses:
+      - [P1-a] Canonical obligation set substitution exploit and kind manipulation.
+      - [P1-b] Relabeled runtime artifacts citing tracked documents exploit and
+               positive runtime allowlist enforcement.
+    """
+
+    def test_canonical_obligation_substitution_exploit_fails(self):
+        """[P1-a] Substituting all canonical obligations with copies of OBLIG-U2-01 fails closed.
+
+        Reviewer exploit:
+          tuple(dataclasses.replace(DEFAULT_U2_OBLIGATIONS[0], id=ob.id) for ob in DEFAULT_U2_OBLIGATIONS)
+        This gave 8 copies of the VERIFIED static obligation under canonical IDs.
+        Must now fail with RULE_NONCANONICAL_OBLIGATION and return not-ready.
+        """
+        tampered_obs = tuple(
+            dataclasses.replace(DEFAULT_U2_OBLIGATIONS[0], id=ob.id)
+            for ob in DEFAULT_U2_OBLIGATIONS
+        )
+        res = evaluate(tampered_obs, repo_root=REPO_ROOT)
+        self.assertFalse(res.is_ready, "Substitution exploit must fail aggregate readiness")
+        self.assertEqual(res.status, "not-ready")
+        rule_ids = [f.rule_id for f in res.findings]
+        self.assertIn(RULE_NONCANONICAL_OBLIGATION, rule_ids)
+
+        # Obligations 2 through 8 must fail individual evaluation due to non-canonical definition
+        for ob in tampered_obs[1:]:
+            self.assertFalse(
+                res.obligation_evaluations[ob.id].is_satisfied,
+                f"Tampered obligation {ob.id} must not be satisfied in aggregate evaluation",
+            )
+            single_eval = evaluate_obligation(ob, repo_root=REPO_ROOT)
+            self.assertFalse(
+                single_eval.is_satisfied,
+                f"Tampered obligation {ob.id} must fail evaluate_obligation in isolation",
+            )
+            self.assertIn(RULE_NONCANONICAL_OBLIGATION, [f.rule_id for f in single_eval.findings])
+
+    def test_single_obligation_kind_flipped_fails(self):
+        """[P1-a] Flipping kind from RUNTIME to STATIC on a single obligation fails closed."""
+        ob2 = get_obligation("OBLIG-U2-02")
+        self.assertIsNotNone(ob2)
+        tampered_ob2 = dataclasses.replace(ob2, kind=ObligationKind.STATIC)
+
+        tampered_obs = list(DEFAULT_U2_OBLIGATIONS)
+        tampered_obs[1] = tampered_ob2
+
+        res = evaluate(tampered_obs, repo_root=REPO_ROOT)
+        self.assertFalse(res.is_ready, "Flipping kind to STATIC must fail aggregate readiness")
+        self.assertEqual(res.status, "not-ready")
+        rule_ids = [f.rule_id for f in res.findings]
+        self.assertIn(RULE_NONCANONICAL_OBLIGATION, rule_ids)
+
+        single_eval = evaluate_obligation(tampered_ob2, repo_root=REPO_ROOT)
+        self.assertFalse(single_eval.is_satisfied)
+        self.assertIn(RULE_NONCANONICAL_OBLIGATION, [f.rule_id for f in single_eval.findings])
+
+    def test_relabelled_runtime_artifacts_exploit_fails(self):
+        """[P1-b] Supplying 7 relabeled artifacts citing tracked docs fails closed.
+
+        Reviewer exploit:
+          For each of the 7 runtime obligations, supply an EvidenceArtifact with
+          status=VERIFIED, kind=RUNTIME, matching artifact_type, and citation='docs/PORT13_REVIEW_U2.md:24'.
+        Must fail with RULE_UNTRUSTED_RUNTIME_PROVENANCE and evaluate to not-ready.
+        """
+        runtime_obs = [ob for ob in DEFAULT_U2_OBLIGATIONS if ob.is_runtime]
+        self.assertEqual(len(runtime_obs), 7)
+
+        relabelled_evidence = {}
+        for ob in runtime_obs:
+            relabelled_evidence[ob.id] = EvidenceArtifact(
+                artifact_id=f"WITNESS-{ob.id}",
+                artifact_type=ob.required_evidence.artifact_type,
+                status=ObligationStatus.VERIFIED,
+                kind=ObligationKind.RUNTIME,
+                citation=Citation(path="docs/PORT13_REVIEW_U2.md", line=24),
+            )
+
+        res = evaluate(DEFAULT_U2_OBLIGATIONS, evidence=relabelled_evidence, repo_root=REPO_ROOT)
+        self.assertFalse(res.is_ready, "Relabeled artifacts citing tracked docs must evaluate to not-ready")
+        self.assertEqual(res.status, "not-ready")
+        rule_ids = [f.rule_id for f in res.findings]
+        self.assertIn(RULE_UNTRUSTED_RUNTIME_PROVENANCE, rule_ids)
+
+        # Every runtime obligation must be unsatisfied
+        for ob in runtime_obs:
+            self.assertFalse(
+                res.is_obligation_satisfied(ob.id),
+                f"Obligation {ob.id} must not be satisfied by relabeled tracked document citation",
+            )
+            single_eval = evaluate_obligation(ob, evidence=relabelled_evidence[ob.id], repo_root=REPO_ROOT)
+            self.assertFalse(
+                single_eval.is_satisfied,
+                f"Obligation {ob.id} must fail isolation evaluation with untrusted runtime provenance",
+            )
+            self.assertIn(
+                RULE_UNTRUSTED_RUNTIME_PROVENANCE,
+                [f.rule_id for f in single_eval.findings],
+            )
+
+    def test_sample_of_tracked_docs_and_tools_rejected_as_runtime_citations(self):
+        """[P1-b] Sample of existing tracked docs/tools as runtime citations are all rejected."""
+        sample_paths = (
+            "docs/PORT13_REVIEW_U2.md",
+            "docs/PORT11A_GM110C_ROM_EVIDENCE.md",
+            "tools/port9a_runtime_lifecycle.py",
+            "tools/port9b_runtime_contract.py",
+            "README.md",
+            "docs/SAFETY.md",
+            "docs/RESTART_SD_HOST_AUDIT.md",
+            "docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md",
+            "tools/port13_u2_obligations.py",
+            "AGENTS.md",
+        )
+        ob2 = get_obligation("OBLIG-U2-02")
+        self.assertIsNotNone(ob2)
+
+        for p in sample_paths:
+            with self.subTest(path=p):
+                art = EvidenceArtifact(
+                    artifact_id=f"SAMPLE-{p.replace('/', '_')}",
+                    artifact_type=ob2.required_evidence.artifact_type,
+                    status=ObligationStatus.VERIFIED,
+                    kind=ObligationKind.RUNTIME,
+                    citation=Citation(path=p, line=1),
+                )
+                single_eval = evaluate_obligation(ob2, evidence=art, repo_root=REPO_ROOT)
+                self.assertFalse(
+                    single_eval.is_satisfied,
+                    f"Citation to '{p}' must be rejected for runtime obligation {ob2.id}",
+                )
+                rule_ids = [f.rule_id for f in single_eval.findings]
+                self.assertIn(
+                    RULE_UNTRUSTED_RUNTIME_PROVENANCE,
+                    rule_ids,
+                    f"Expected RULE_UNTRUSTED_RUNTIME_PROVENANCE when citing '{p}'",
+                )
+
+    def test_trusted_runtime_witnesses_is_empty_in_shipped_code(self):
+        """[P1-b] TRUSTED_RUNTIME_WITNESSES must be strictly empty in shipped code."""
+        self.assertEqual(len(TRUSTED_RUNTIME_WITNESSES), 0)
+        self.assertEqual(TRUSTED_RUNTIME_WITNESSES, frozenset())
 
 
 class TestSecurityAndScopeBoundaries(unittest.TestCase):
