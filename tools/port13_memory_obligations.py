@@ -104,6 +104,7 @@ RULE_DUPLICATE_OBLIGATION_ID = "RULE_DUPLICATE_OBLIGATION_ID"
 RULE_UNKNOWN_OBLIGATION_ID = "RULE_UNKNOWN_OBLIGATION_ID"
 RULE_UNREGISTERED_CITATION = "RULE_UNREGISTERED_CITATION"
 RULE_PROVENANCE_CONFLICT = "RULE_PROVENANCE_CONFLICT"
+RULE_REQUIREMENT_CONFLICT = "RULE_REQUIREMENT_CONFLICT"
 RULE_NON_PRODUCTION_EVIDENCE_CONFIG = "RULE_NON_PRODUCTION_EVIDENCE_CONFIG"
 
 
@@ -631,6 +632,191 @@ CITATION_PROVENANCE_REGISTRY: MappingProxyType[Tuple[str, int], CitationProvenan
 
 
 # -----------------------------------------------------------------------------
+# Trusted Obligation Requirements Registry
+# -----------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ObligationRequirement:
+    """Trusted proof requirement bound immutably to a canonical obligation ID."""
+    required_evidence_type: str
+    acceptable_tracked_sources: Tuple[Union[str, Tuple[str, int]], ...]
+    pending_pr: Optional[str] = None
+
+
+# Authoritative proof requirements registry keyed by canonical obligation ID.
+# Immutable MappingProxyType: evaluate() must use this registry as the authority
+# and ignore caller-supplied requirements. Caller conflicts force fail-closed evaluation.
+_OBLIGATION_REQUIREMENTS_REGISTRY_RAW: Dict[str, ObligationRequirement] = {
+    "OBLIG-MEM-01": ObligationRequirement(
+        required_evidence_type=ProvenanceType.ROM_VERIFIED.value,
+        acceptable_tracked_sources=(
+            "docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md",
+            "docs/GM110C_MEMORY_MAP.md",
+        ),
+        pending_pr=None,
+    ),
+    "OBLIG-MEM-02": ObligationRequirement(
+        required_evidence_type=ProvenanceType.ROM_VERIFIED.value,
+        acceptable_tracked_sources=(
+            "docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md",
+            "chdk-port/platform/g3x/sub/110c/boot_prototype.c",
+        ),
+        pending_pr=None,
+    ),
+    "OBLIG-MEM-03": ObligationRequirement(
+        required_evidence_type=ProvenanceType.ROM_VERIFIED.value,
+        acceptable_tracked_sources=(
+            "docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md",
+            "docs/PROJECT_STATE.md",
+            "docs/PORT11A_GM110C_ROM_EVIDENCE.md",
+        ),
+        pending_pr=None,
+    ),
+    "OBLIG-MEM-04": ObligationRequirement(
+        required_evidence_type=ProvenanceType.ROM_VERIFIED.value,
+        acceptable_tracked_sources=(
+            "chdk-port/platform/g3x/sub/110c/boot_prototype.c",
+            "docs/PROJECT_STATE.md",
+            "docs/HANDOFF.md",
+        ),
+        pending_pr="PR #23",
+    ),
+    "OBLIG-MEM-05": ObligationRequirement(
+        required_evidence_type=ProvenanceType.ROM_VERIFIED.value,
+        acceptable_tracked_sources=(
+            "chdk-port/platform/g3x/sub/110c/boot_prototype.c",
+            "docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md",
+        ),
+        pending_pr=None,
+    ),
+    "OBLIG-MEM-06": ObligationRequirement(
+        required_evidence_type=ProvenanceType.ROM_VERIFIED.value,
+        acceptable_tracked_sources=(
+            "docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md",
+            "chdk-port/platform/g3x/sub/110c/boot_prototype.c",
+        ),
+        pending_pr=None,
+    ),
+    "OBLIG-MEM-07": ObligationRequirement(
+        required_evidence_type=ProvenanceType.ROM_VERIFIED.value,
+        acceptable_tracked_sources=(
+            "docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md",
+            "chdk-port/platform/g3x/sub/110c/boot_prototype.c",
+        ),
+        pending_pr=None,
+    ),
+    "OBLIG-MEM-08": ObligationRequirement(
+        required_evidence_type=ProvenanceType.ROM_VERIFIED.value,
+        acceptable_tracked_sources=(
+            "docs/PROJECT_STATE.md",
+            "docs/HANDOFF.md",
+            "chdk-port/platform/g3x/sub/110c/boot_prototype.c",
+            "docs/PORT5A_RANMA_PORT_RECOVERY.md",
+        ),
+        pending_pr=None,
+    ),
+    "OBLIG-MEM-09": ObligationRequirement(
+        required_evidence_type=ProvenanceType.ROM_VERIFIED.value,
+        acceptable_tracked_sources=(
+            "docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md",
+            "docs/PROJECT_STATE.md",
+            "docs/HANDOFF.md",
+        ),
+        pending_pr=None,
+    ),
+    "OBLIG-MEM-10": ObligationRequirement(
+        required_evidence_type=ProvenanceType.ROM_VERIFIED.value,
+        acceptable_tracked_sources=(
+            "docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md",
+        ),
+        pending_pr=None,
+    ),
+    "OBLIG-MEM-11": ObligationRequirement(
+        required_evidence_type=ProvenanceType.ROM_VERIFIED.value,
+        acceptable_tracked_sources=(
+            "docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md",
+        ),
+        pending_pr=None,
+    ),
+    "OBLIG-MEM-12": ObligationRequirement(
+        required_evidence_type=ProvenanceType.ROM_VERIFIED.value,
+        acceptable_tracked_sources=(
+            "docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md",
+        ),
+        pending_pr="PR #23",
+    ),
+    "OBLIG-MEM-13": ObligationRequirement(
+        required_evidence_type=ProvenanceType.ROM_VERIFIED.value,
+        acceptable_tracked_sources=(
+            "docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md",
+        ),
+        pending_pr=None,
+    ),
+    "OBLIG-MEM-14": ObligationRequirement(
+        required_evidence_type=ProvenanceType.ROM_VERIFIED.value,
+        acceptable_tracked_sources=(
+            "chdk-port/platform/g3x/sub/110c/boot_prototype.c",
+            "docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md",
+        ),
+        pending_pr=None,
+    ),
+    "OBLIG-MEM-15": ObligationRequirement(
+        required_evidence_type=ProvenanceType.ROM_VERIFIED.value,
+        acceptable_tracked_sources=(
+            "vendor/g3x-platform/platform/g3x/platform_camera.h",
+            "docs/PROJECT_STATE.md",
+            "docs/HANDOFF.md",
+        ),
+        pending_pr="PR #23",
+    ),
+    "OBLIG-MEM-16A": ObligationRequirement(
+        required_evidence_type=ProvenanceType.ROM_VERIFIED.value,
+        acceptable_tracked_sources=(
+            "docs/PORT11A_GM110C_ROM_EVIDENCE.md",
+            "docs/G3X_HISTORICAL_SYMBOL_RECONCILIATION.md",
+        ),
+        pending_pr=None,
+    ),
+    "OBLIG-MEM-16B": ObligationRequirement(
+        required_evidence_type=ProvenanceType.ROM_VERIFIED.value,
+        acceptable_tracked_sources=(
+            "docs/PORT11A_GM110C_ROM_EVIDENCE.md",
+            "docs/G3X_HISTORICAL_SYMBOL_RECONCILIATION.md",
+        ),
+        pending_pr=None,
+    ),
+    "OBLIG-MEM-17": ObligationRequirement(
+        required_evidence_type=ProvenanceType.ROM_VERIFIED.value,
+        acceptable_tracked_sources=(
+            "vendor/g3x-platform/platform/g3x/platform_camera.h",
+            "docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md",
+        ),
+        pending_pr=None,
+    ),
+}
+
+OBLIGATION_REQUIREMENTS_REGISTRY: MappingProxyType[str, ObligationRequirement] = MappingProxyType(
+    _OBLIGATION_REQUIREMENTS_REGISTRY_RAW
+)
+
+
+def is_citation_acceptable(
+    cit: Citation,
+    acceptable_sources: Sequence[Union[str, Tuple[str, int]]],
+) -> bool:
+    """Check whether a citation matches an acceptable source entry (by path string or (path, line) tuple)."""
+    for entry in acceptable_sources:
+        if isinstance(entry, str):
+            if cit.path == entry:
+                return True
+        elif isinstance(entry, (tuple, list)) and len(entry) == 2:
+            entry_path, entry_line = entry
+            if cit.path == entry_path and cit.line == entry_line:
+                return True
+    return False
+
+
+# -----------------------------------------------------------------------------
 # Data Models
 # -----------------------------------------------------------------------------
 
@@ -665,7 +851,7 @@ class MemoryObligation:
     id: str
     statement: str
     required_evidence_type: str
-    acceptable_tracked_sources: Tuple[str, ...]
+    acceptable_tracked_sources: Tuple[Union[str, Tuple[str, int]], ...]
     current_status: ObligationStatus
     citations: Tuple[Citation, ...]
     pending_pr: Optional[str] = None
@@ -1260,6 +1446,66 @@ def _evaluate_obligation(
     ob_findings: List[ObligationFinding] = []
     has_error = False
 
+    trusted_req = OBLIGATION_REQUIREMENTS_REGISTRY.get(oblig.id)
+
+    if trusted_req is not None:
+        effective_acceptable_sources = trusted_req.acceptable_tracked_sources
+        effective_pending_pr = trusted_req.pending_pr
+        effective_evidence_type = trusted_req.required_evidence_type
+
+        # Check for caller-supplied conflicts against authoritative registry
+        if (
+            len(oblig.acceptable_tracked_sources) != len(trusted_req.acceptable_tracked_sources)
+            or set(oblig.acceptable_tracked_sources) != set(trusted_req.acceptable_tracked_sources)
+        ):
+            ob_findings.append(
+                ObligationFinding(
+                    rule_id=RULE_REQUIREMENT_CONFLICT,
+                    obligation_id=oblig.id,
+                    severity="ERROR",
+                    message=(
+                        f"Caller-supplied acceptable_tracked_sources {oblig.acceptable_tracked_sources!r} "
+                        f"conflicts with trusted registry {trusted_req.acceptable_tracked_sources!r} "
+                        f"for obligation '{oblig.id}'"
+                    ),
+                )
+            )
+            has_error = True
+
+        if oblig.required_evidence_type != trusted_req.required_evidence_type:
+            ob_findings.append(
+                ObligationFinding(
+                    rule_id=RULE_REQUIREMENT_CONFLICT,
+                    obligation_id=oblig.id,
+                    severity="ERROR",
+                    message=(
+                        f"Caller-supplied required_evidence_type {oblig.required_evidence_type!r} "
+                        f"conflicts with trusted registry {trusted_req.required_evidence_type!r} "
+                        f"for obligation '{oblig.id}'"
+                    ),
+                )
+            )
+            has_error = True
+
+        if oblig.pending_pr != trusted_req.pending_pr:
+            ob_findings.append(
+                ObligationFinding(
+                    rule_id=RULE_REQUIREMENT_CONFLICT,
+                    obligation_id=oblig.id,
+                    severity="ERROR",
+                    message=(
+                        f"Caller-supplied pending_pr {oblig.pending_pr!r} "
+                        f"conflicts with trusted registry {trusted_req.pending_pr!r} "
+                        f"for obligation '{oblig.id}'"
+                    ),
+                )
+            )
+            has_error = True
+    else:
+        effective_acceptable_sources = oblig.acceptable_tracked_sources
+        effective_pending_pr = oblig.pending_pr
+        effective_evidence_type = oblig.required_evidence_type
+
     # 1. Citations existence and tracking validation
     if not oblig.citations:
         ob_findings.append(
@@ -1373,16 +1619,17 @@ def _evaluate_obligation(
                 )
                 has_error = True
 
-        # Check 1d: Explicitly in obligation's acceptable tracked sources
-        if cit.path not in oblig.acceptable_tracked_sources:
+        # Check 1d: Explicitly in obligation's trusted acceptable tracked sources
+        if not is_citation_acceptable(cit, effective_acceptable_sources):
             ob_findings.append(
                 ObligationFinding(
                     rule_id=RULE_UNACCEPTABLE_SOURCE,
                     obligation_id=oblig.id,
                     severity="ERROR",
                     message=(
-                        f"Cited source '{cit.path}' is not listed in acceptable_tracked_sources "
-                        f"{oblig.acceptable_tracked_sources}"
+                        f"Cited source '{cit.path}'"
+                        + (f":{cit.line}" if cit.line is not None else "")
+                        + f" is not in trusted acceptable_tracked_sources {effective_acceptable_sources}"
                     ),
                 )
             )
@@ -1467,20 +1714,25 @@ def _evaluate_obligation(
             )
             has_error = True
 
-        # Check 1f: Pending PR evidence cannot be VERIFIED
-        if oblig.pending_pr and oblig.current_status == ObligationStatus.VERIFIED:
-            ob_findings.append(
-                ObligationFinding(
-                    rule_id=RULE_PENDING_PR_CANNOT_VERIFY,
-                    obligation_id=oblig.id,
-                    severity="ERROR",
-                    message=(
-                        f"Obligation cites evidence found only in unmerged {oblig.pending_pr}; "
-                        f"cannot be VERIFIED"
-                    ),
-                )
+    # Check 1f: PR #23-dependent obligations can never be VERIFIED from origin/main data
+    is_pr_dependent = (
+        (trusted_req is not None and trusted_req.pending_pr is not None)
+        or (oblig.pending_pr is not None)
+    )
+    if is_pr_dependent and oblig.current_status == ObligationStatus.VERIFIED:
+        pr_name = (trusted_req.pending_pr if trusted_req and trusted_req.pending_pr else oblig.pending_pr)
+        ob_findings.append(
+            ObligationFinding(
+                rule_id=RULE_PENDING_PR_CANNOT_VERIFY,
+                obligation_id=oblig.id,
+                severity="ERROR",
+                message=(
+                    f"Obligation '{oblig.id}' depends on unmerged {pr_name}; "
+                    f"cannot be VERIFIED from origin/main data"
+                ),
             )
-            has_error = True
+        )
+        has_error = True
 
     # 2. Obligation status categorization and readiness impact
     if oblig.current_status == ObligationStatus.UNKNOWN:

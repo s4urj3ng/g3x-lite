@@ -21,6 +21,7 @@ Following the independent review of Draft PR #23 ([`docs/PORT13_REVIEW_PR23.md`]
 5. **Authoritative Immutable Digest Pins & Non-Production Rejection**: File existence and path whitelists do not establish provenance. For every cited evidence file, [`tools/port13_memory_obligations.py`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-13-offline-p13-oblig-mem/tools/port13_memory_obligations.py) pins the cryptographic SHA-256 digest of its `origin/main` content at commit `581b1a4bb30456bf18c46dc4bcf61b0375aee251` as an immutable `MappingProxyType`. Any test hook usage (`pinned_hashes` override, custom `file_reader`, or alternate `repo_root`) immediately forces `is_ready = False` with `RULE_NON_PRODUCTION_EVIDENCE_CONFIG`.
 6. **Pending PR Quarantine**: Evidence originating solely from unmerged Draft PR #23 is quarantined with status `UNKNOWN` and explicitly annotated with its pending PR reference.
 7. **Zero New Firmware Addresses**: Every memory address appearing in [`tools/port13_memory_obligations.py`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-13-offline-p13-oblig-mem/tools/port13_memory_obligations.py) and this document is already present in a tracked `origin/main` document, cited `file:line`.
+8. **Trusted Obligation Requirements Binding (`OBLIGATION_REQUIREMENTS_REGISTRY`)**: Canonical obligation IDs are bound to immutable proof requirements via module constant `OBLIGATION_REQUIREMENTS_REGISTRY`. For each ID, the registry dictates the required evidence type, the exact acceptable tracked sources (by path string or `(path, line)` tuple), and PR #23 dependency. `evaluate()` treats this registry as the sole authority, ignoring caller-supplied requirement fields and raising `RULE_REQUIREMENT_CONFLICT` if a caller attempts to rewrite acceptable sources, change evidence types, or clear `pending_pr` on PR #23-dependent obligations.
 
 ---
 
@@ -34,6 +35,7 @@ The evaluation function `evaluate()` in [`tools/port13_memory_obligations.py`](f
 | **`RULE_DUPLICATE_OBLIGATION_ID`** | `ERROR` | Duplicate obligation IDs provided to `evaluate()`. | Aggregate `is_ready` forced to `False`. |
 | **`RULE_UNKNOWN_OBLIGATION_ID`** | `ERROR` | An unrecognized obligation ID outside `REQUIRED_OBLIGATION_IDS` is supplied. | Aggregate `is_ready` forced to `False`. |
 | **`RULE_NON_PRODUCTION_EVIDENCE_CONFIG`** | `ERROR` | Test hooks active (`pinned_hashes` override, custom `file_reader`, or alternate `repo_root`). | Production readiness forced to `False`. |
+| **`RULE_REQUIREMENT_CONFLICT`** | `ERROR` | Caller-supplied required evidence type, acceptable sources, or pending PR status conflicts with trusted `OBLIGATION_REQUIREMENTS_REGISTRY`. | Obligation disqualified; `is_ready` forced to `False`. |
 | **`RULE_UNREGISTERED_CITATION`** | `ERROR` | Citation `(path, line)` is not in `CITATION_PROVENANCE_REGISTRY`. | Obligation disqualified; `is_ready` forced to `False`. |
 | **`RULE_PROVENANCE_CONFLICT`** | `ERROR` | Caller-supplied citation flags conflict with trusted provenance registry entries. | Obligation disqualified; `is_ready` forced to `False`. |
 | **`RULE_MISSING_CITED_PATH`** | `ERROR` | A cited file path does not exist on disk or in the injected file reader. | Obligation disqualified; `is_ready` forced to `False`. |
@@ -41,9 +43,9 @@ The evaluation function `evaluate()` in [`tools/port13_memory_obligations.py`](f
 | **`RULE_UNTRACKED_SOURCE`** | `ERROR` | A cited path is not in the whitelist of 103 files tracked on `origin/main`. | Obligation disqualified; `is_ready` forced to `False`. |
 | **`RULE_UNPINNED_SOURCE`** | `ERROR` | A cited path lacks a cryptographic SHA-256 digest pin in `PINNED_ORIGIN_MAIN_FILE_HASHES`. | Obligation disqualified; `is_ready` forced to `False`. |
 | **`RULE_CONTENT_HASH_MISMATCH`** | `ERROR` | Local file SHA-256 digest differs from pinned `origin/main` digest. | Obligation disqualified; `is_ready` forced to `False`. |
-| **`RULE_UNACCEPTABLE_SOURCE`** | `ERROR` | A cited path is not explicitly listed in the obligation's `acceptable_tracked_sources`. | Obligation disqualified; `is_ready` forced to `False`. |
+| **`RULE_UNACCEPTABLE_SOURCE`** | `ERROR` | A cited path is not in the obligation's trusted acceptable tracked sources in `OBLIGATION_REQUIREMENTS_REGISTRY`. | Obligation disqualified; `is_ready` forced to `False`. |
 | **`RULE_HISTORICAL_CANNOT_VERIFY`** | `ERROR` | Citation line is historical, cites historical-only paths, or lacks verified `GM1.10C` provenance while obligation is marked `VERIFIED`. | Obligation disqualified; `is_ready` forced to `False`. |
-| **`RULE_PENDING_PR_CANNOT_VERIFY`** | `ERROR` | An obligation claims `VERIFIED` status despite relying on evidence found only in an unmerged PR (`pending_pr`). | Obligation disqualified; `is_ready` forced to `False`. |
+| **`RULE_PENDING_PR_CANNOT_VERIFY`** | `ERROR` | An obligation claims `VERIFIED` status despite relying on evidence found only in an unmerged PR (`pending_pr` in registry or obligation). | Obligation disqualified; `is_ready` forced to `False`. |
 | **`RULE_STATUS_NOT_VERIFIED`** | `WARNING` | An obligation has status `UNKNOWN` or `INFERRED`. | Aggregate `is_ready` forced to `False`. |
 | **`RULE_EMPTY_CITATIONS`** | `ERROR` | An obligation has an empty citations tuple. | Obligation disqualified; `is_ready` forced to `False`. |
 | **`RULE_EMPTY_DATASET`** | `ERROR` | Zero obligations provided to `evaluate()`. | `is_ready` forced to `False`. |
@@ -250,5 +252,9 @@ python3 -B -m unittest tests.test_port13_memory_obligations
 - `test_no_subprocess_imported`: **PASS** (`subprocess` strictly absent from tool imports)
 - `test_stdlib_only`: **PASS** (No third-party packages imported)
 - `test_all_obligations_serialize_to_dict`: **PASS** (JSON serialization integrity confirmed)
+- `test_p1_canonical_ids_bound_to_trusted_requirements_fails_closed`: **PASS** (Reviewer reproduction with mutated obligations fails closed with `RULE_UNACCEPTABLE_SOURCE`, `RULE_REQUIREMENT_CONFLICT`, `RULE_PENDING_PR_CANNOT_VERIFY`)
+- `test_property_reassign_citations_to_other_ids_trusted_sources_stays_not_ready`: **PASS** (Reassigning citations to any other ID's trusted sources keeps readiness False)
+- `test_caller_requirement_conflict_fails_closed`: **PASS** (Caller-supplied conflicting requirement fields trigger `RULE_REQUIREMENT_CONFLICT`)
+- `test_immutable_module_constants`: **PASS** (Immutability enforced on all MappingProxyType registries including `OBLIGATION_REQUIREMENTS_REGISTRY`)
 
-**Total**: **27 executed, 27 PASS, 0 FAIL, 0 ERR** (0.029s).
+**Total**: **40 executed, 40 PASS, 0 FAIL, 0 ERR** (1.10s).

@@ -38,6 +38,8 @@ from tools.port13_memory_obligations import (
     HISTORICAL_ONLY_PATHS,
     MemoryObligation,
     ObligationFinding,
+    ObligationRequirement,
+    OBLIGATION_REQUIREMENTS_REGISTRY,
     ObligationStatus,
     ORIGIN_MAIN_PIN_COMMIT,
     ORIGIN_MAIN_TRACKED_FILES,
@@ -53,6 +55,7 @@ from tools.port13_memory_obligations import (
     RULE_NON_PRODUCTION_EVIDENCE_CONFIG,
     RULE_PENDING_PR_CANNOT_VERIFY,
     RULE_PROVENANCE_CONFLICT,
+    RULE_REQUIREMENT_CONFLICT,
     RULE_STATUS_NOT_VERIFIED,
     RULE_UNACCEPTABLE_SOURCE,
     RULE_UNKNOWN_OBLIGATION_ID,
@@ -65,6 +68,7 @@ from tools.port13_memory_obligations import (
     TRACKED_ADDRESS_CITATIONS,
     evaluate,
     evaluate_single_obligation,
+    is_citation_acceptable,
     is_supported_firmware,
     normalize_firmware,
     verify_address_provenance,
@@ -717,6 +721,46 @@ class TestReviewerDefectRegressions(unittest.TestCase):
         self.assertIn(RULE_NON_PRODUCTION_EVIDENCE_CONFIG, rules)
         self.assertGreaterEqual(res.error_count, 1)
 
+    def test_p1_canonical_ids_bound_to_trusted_requirements_fails_closed(self):
+        """[Reviewer P1] Mutating all obligations to VERIFIED with PORT11A:20 citations,
+
+        rewritten acceptable sources, and cleared pending_pr MUST fail closed with is_ready=False.
+        Authoritative requirements cannot be overridden by caller-supplied fields.
+        """
+        # Reviewer's exact mutation starting from mock obligations at line 688:
+        # All 18 canonical IDs and statements kept, every status VERIFIED, all citing
+        # PORT11A:20, acceptable_tracked_sources rewritten to match, pending_pr cleared.
+        mock_obligations = []
+        for ob in DEFAULT_MEMORY_OBLIGATIONS:
+            reg_cit = Citation(
+                path="docs/PORT11A_GM110C_ROM_EVIDENCE.md",
+                line=20,
+                firmware="GM1.10C",
+                is_historical=False,
+            )
+            mock_obligations.append(
+                MemoryObligation(
+                    id=ob.id,
+                    statement=ob.statement,
+                    required_evidence_type="ROM_VERIFIED",
+                    acceptable_tracked_sources=("docs/PORT11A_GM110C_ROM_EVIDENCE.md",),
+                    current_status=ObligationStatus.VERIFIED,
+                    citations=(reg_cit,),
+                    pending_pr=None,
+                )
+            )
+
+        # Production defaults: do NOT use injected readers, hash overrides, or alternate repo_root
+        res = evaluate(mock_obligations)
+        self.assertFalse(res.is_ready)
+        self.assertGreater(res.error_count, 0)
+        self.assertEqual(res.verified_count, 0)
+
+        rules = [f.rule_id for f in res.findings]
+        self.assertIn(RULE_UNACCEPTABLE_SOURCE, rules)
+        self.assertIn(RULE_REQUIREMENT_CONFLICT, rules)
+        self.assertIn(RULE_PENDING_PR_CANNOT_VERIFY, rules)
+
 
 class TestPropertyNoPathToTrueFromShippedData(unittest.TestCase):
     """Property-style test suite establishing that no manipulation of shipped data reaches True."""
@@ -756,6 +800,94 @@ class TestPropertyNoPathToTrueFromShippedData(unittest.TestCase):
             res_sub = evaluate(subset, repo_root=REPO_ROOT)
             self.assertFalse(res_sub.is_ready)
             self.assertIn(RULE_INCOMPLETE_OBLIGATION_SET, [f.rule_id for f in res_sub.findings])
+
+    def test_property_reassign_citations_to_other_ids_trusted_sources_stays_not_ready(self):
+        """[Reviewer P1 Property] For every ID, reassign its citations to any other ID's
+
+        trusted sources, and confirm readiness stays False.
+        """
+        for target_id in sorted(REQUIRED_OBLIGATION_IDS):
+            for source_id in sorted(REQUIRED_OBLIGATION_IDS):
+                if target_id == source_id:
+                    continue
+
+                source_req = OBLIGATION_REQUIREMENTS_REGISTRY[source_id]
+                first_src = source_req.acceptable_tracked_sources[0]
+                src_path = first_src[0] if isinstance(first_src, (tuple, list)) else first_src
+
+                matching_lines = [
+                    line for (p, line) in CITATION_PROVENANCE_REGISTRY.keys()
+                    if p == src_path
+                ]
+                line_to_cite = matching_lines[0] if matching_lines else 1
+
+                reassigned_cit = Citation(
+                    path=src_path,
+                    line=line_to_cite,
+                )
+
+                # Test A: Target obligation promoted to VERIFIED with reassigned citation
+                mutated_set = []
+                for ob in DEFAULT_MEMORY_OBLIGATIONS:
+                    if ob.id == target_id:
+                        mutated_set.append(
+                            MemoryObligation(
+                                id=ob.id,
+                                statement=ob.statement,
+                                required_evidence_type=ob.required_evidence_type,
+                                acceptable_tracked_sources=ob.acceptable_tracked_sources,
+                                current_status=ObligationStatus.VERIFIED,
+                                citations=(reassigned_cit,),
+                                pending_pr=ob.pending_pr,
+                                notes=ob.notes,
+                            )
+                        )
+                    else:
+                        mutated_set.append(ob)
+
+                res = evaluate(mutated_set)
+                self.assertFalse(
+                    res.is_ready,
+                    f"Promoting {target_id} with citations from {source_id} "
+                    f"({src_path}:{line_to_cite}) erroneously produced is_ready=True",
+                )
+
+                # Test B: All obligations set to VERIFIED while target_id has reassigned citation
+                all_verified_set = []
+                for ob in DEFAULT_MEMORY_OBLIGATIONS:
+                    if ob.id == target_id:
+                        all_verified_set.append(
+                            MemoryObligation(
+                                id=ob.id,
+                                statement=ob.statement,
+                                required_evidence_type=ob.required_evidence_type,
+                                acceptable_tracked_sources=ob.acceptable_tracked_sources,
+                                current_status=ObligationStatus.VERIFIED,
+                                citations=(reassigned_cit,),
+                                pending_pr=ob.pending_pr,
+                                notes=ob.notes,
+                            )
+                        )
+                    else:
+                        all_verified_set.append(
+                            MemoryObligation(
+                                id=ob.id,
+                                statement=ob.statement,
+                                required_evidence_type=ob.required_evidence_type,
+                                acceptable_tracked_sources=ob.acceptable_tracked_sources,
+                                current_status=ObligationStatus.VERIFIED,
+                                citations=ob.citations,
+                                pending_pr=ob.pending_pr,
+                                notes=ob.notes,
+                            )
+                        )
+
+                res_all = evaluate(all_verified_set)
+                self.assertFalse(
+                    res_all.is_ready,
+                    f"Setting all VERIFIED with {target_id} citing {source_id} "
+                    f"({src_path}:{line_to_cite}) erroneously produced is_ready=True",
+                )
 
 
 class TestProvenanceRegistryAndObligationSetIntegrity(unittest.TestCase):
@@ -863,6 +995,55 @@ class TestProvenanceRegistryAndObligationSetIntegrity(unittest.TestCase):
         rules = [f.rule_id for f in res.findings]
         self.assertIn(RULE_UNKNOWN_OBLIGATION_ID, rules)
 
+    def test_caller_requirement_conflict_fails_closed(self):
+        """Caller-supplied requirements conflicting with trusted registry must fail closed."""
+        base_16a = [ob for ob in DEFAULT_MEMORY_OBLIGATIONS if ob.id == "OBLIG-MEM-16A"][0]
+
+        # Conflict in acceptable_tracked_sources
+        ob_conflict_sources = MemoryObligation(
+            id=base_16a.id,
+            statement=base_16a.statement,
+            required_evidence_type=base_16a.required_evidence_type,
+            acceptable_tracked_sources=("docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md",),
+            current_status=base_16a.current_status,
+            citations=base_16a.citations,
+            pending_pr=base_16a.pending_pr,
+        )
+        res_sources = evaluate_single_obligation(ob_conflict_sources, repo_root=REPO_ROOT)
+        self.assertFalse(res_sources.is_verified)
+        self.assertIn(RULE_REQUIREMENT_CONFLICT, [f.rule_id for f in res_sources.findings])
+
+        # Conflict in required_evidence_type
+        ob_conflict_type = MemoryObligation(
+            id=base_16a.id,
+            statement=base_16a.statement,
+            required_evidence_type="HISTORICAL_CHDK",
+            acceptable_tracked_sources=base_16a.acceptable_tracked_sources,
+            current_status=base_16a.current_status,
+            citations=base_16a.citations,
+            pending_pr=base_16a.pending_pr,
+        )
+        res_type = evaluate_single_obligation(ob_conflict_type, repo_root=REPO_ROOT)
+        self.assertFalse(res_type.is_verified)
+        self.assertIn(RULE_REQUIREMENT_CONFLICT, [f.rule_id for f in res_type.findings])
+
+        # Conflict in pending_pr: clearing PR #23 on OBLIG-MEM-04
+        base_04 = [ob for ob in DEFAULT_MEMORY_OBLIGATIONS if ob.id == "OBLIG-MEM-04"][0]
+        ob_cleared_pr = MemoryObligation(
+            id=base_04.id,
+            statement=base_04.statement,
+            required_evidence_type=base_04.required_evidence_type,
+            acceptable_tracked_sources=base_04.acceptable_tracked_sources,
+            current_status=ObligationStatus.VERIFIED,
+            citations=base_04.citations,
+            pending_pr=None,
+        )
+        res_pr = evaluate_single_obligation(ob_cleared_pr, repo_root=REPO_ROOT)
+        self.assertFalse(res_pr.is_verified)
+        rules_pr = [f.rule_id for f in res_pr.findings]
+        self.assertIn(RULE_REQUIREMENT_CONFLICT, rules_pr)
+        self.assertIn(RULE_PENDING_PR_CANNOT_VERIFY, rules_pr)
+
     def test_immutable_module_constants(self):
         """Module constants MappingProxyType cannot be mutated."""
         with self.assertRaises(TypeError):
@@ -873,6 +1054,12 @@ class TestProvenanceRegistryAndObligationSetIntegrity(unittest.TestCase):
 
         with self.assertRaises(TypeError):
             TRACKED_ADDRESS_CITATIONS["0x12345678"] = pmo.AddressCitation("0x12345678", "docs/SAFETY.md", 1, "test")  # type: ignore
+
+        with self.assertRaises(TypeError):
+            OBLIGATION_REQUIREMENTS_REGISTRY["OBLIG-MEM-01"] = ObligationRequirement(
+                required_evidence_type="ROM_VERIFIED",
+                acceptable_tracked_sources=("docs/SAFETY.md",),
+            )  # type: ignore
 
 
 if __name__ == "__main__":
