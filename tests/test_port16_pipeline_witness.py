@@ -521,5 +521,44 @@ class TestInspectorBindingVerification(unittest.TestCase):
             self.assertIn(f"candidate ELF witness is 0x{bcp.EXPECTED_BOOT_WITNESS_ADDR:08X}", err)
 
 
+class TestBuilderToValidatorCoherence(unittest.TestCase):
+    """Test builder-to-validator coherence across PORT-16 candidate pipeline."""
+
+    def test_builder_and_validator_expected_witness_address_coherence(self):
+        """Assert EXPECTED_BOOT_WITNESS_ADDR matches in builder and validator."""
+        import validate_candidate_port2a as vcp
+
+        self.assertEqual(
+            bcp.EXPECTED_BOOT_WITNESS_ADDR,
+            vcp.EXPECTED_BOOT_WITNESS_ADDR,
+            "Builder and validator must share identical EXPECTED_BOOT_WITNESS_ADDR",
+        )
+        self.assertEqual(vcp.EXPECTED_BOOT_WITNESS_ADDR, 0x0035F7A0)
+
+    def test_corrected_builder_symbols_pass_validator(self):
+        """Corrected builder symbol table output passes validate_candidate_core_symbols."""
+        import validate_candidate_port2a as vcp
+
+        syms = vcp.verify_candidate_core_symbols(MOCK_NM_MATCH)
+        self.assertEqual(syms["boot_witness"], bcp.EXPECTED_BOOT_WITNESS_ADDR)
+        self.assertEqual(syms["boot_witness"], 0x0035F7A0)
+        self.assertEqual(syms["_end"], vcp.EXPECTED_CORE_END_ADDR)
+
+    def test_historical_0035f780_symbols_fail_validator(self):
+        """Historical 0x0035F780 builder symbol table output is rejected by validator fail-closed."""
+        import validate_candidate_port2a as vcp
+
+        captured_stderr = io.StringIO()
+        with patch("sys.stderr", captured_stderr):
+            with self.assertRaises(SystemExit) as ctx:
+                vcp.verify_candidate_core_symbols(MOCK_NM_MISMATCH)
+
+        self.assertNotEqual(ctx.exception.code, 0)
+        err = captured_stderr.getvalue()
+        self.assertIn("Symbol 'boot_witness' address mismatch", err)
+        self.assertIn("expected=0x0035F7A0", err)
+        self.assertIn("actual=0x0035F780", err)
+
+
 if __name__ == "__main__":
     unittest.main()
