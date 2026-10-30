@@ -51,7 +51,7 @@ class TestG3XWitnessInspector(unittest.TestCase):
         self.assertEqual(res.returncode, 0, f"Validator failed:\n{res.stdout.decode()}\n{res.stderr.decode()}")
         out = res.stdout.decode()
         self.assertIn("ALL CANON BASIC WITNESS INSPECTOR CHECKS PASSED", out)
-        # Dynamically check the derived symbol address rather than hardcoded 0x0035F780
+        # Dynamically check the derived symbol address rather than historical pre-correction 0x0035F780
         self.assertIn(f"Witness target address 0x{expected_addr:08X} verified consistent with ELF & metadata", out)
         self.assertIn("Raw .bin MOVW/MOVT opcodes verified identical to object .text bit-for-bit", out)
         self.assertIn("Stage 1 classified as LOADER_REACHED / FRESHNESS_UNVERIFIED", out)

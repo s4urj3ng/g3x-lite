@@ -15,10 +15,10 @@ This document records the exact derivation and verification of the `boot_witness
 - **Derived `boot_witness` Symbol Address**: **`0x0035F7A0`** `[VERIFIED: prototype_main.elf nm / prototype_main.map]`
 - **Symbol Properties**: Section `.data`, Type `D`, Size `0x20` (32 bytes), Alignment 16-byte boundary `[VERIFIED: boot_prototype.c:27; prototype_main.map:1431-1432]`
 - **Comparison with Candidate Assertion (`0x0035F780`)**:
-  - `tools/build_candidate_port2a.py:223` asserts `witness_addr == 0x0035F780` `[VERIFIED: tools/build_candidate_port2a.py:223]`.
+  - Historically (pre-PORT-16), `tools/build_candidate_port2a.py:223` asserted `witness_addr == 0x0035F780` `[VERIFIED: historical tools/build_candidate_port2a.py:223]`.
   - The derived prototype address `0x0035F7A0` differs by exactly **`+0x20` (+32 bytes)** from `0x0035F780` `[VERIFIED]`.
-  - **Stale Builder Assertion vs. Preserved Historical Artifacts**:
-    - The candidate build script `tools/build_candidate_port2a.py` compiles the **CURRENT** working-tree source files `boot_prototype.c` and `stubs_prototype.S` (`tools/build_candidate_port2a.py:70-71, 127-144`), overwriting the candidate core outputs (`candidate_main.elf`, `candidate_main.bin`), and asserts the old address `assert witness_addr == 0x0035F780` at line 223 `[VERIFIED: tools/build_candidate_port2a.py:70-71, 127-144, 223]`. Because the builder compiles the current corrected source (which yields `boot_witness` at `0x0035F7A0`), the `0x0035F780` assertion is **STALE against the corrected source** and would fail or mismatch if executed `[VERIFIED: tools/build_candidate_port2a.py:216-224]`.
+  - **Builder Assertion Update (PORT-16) vs. Preserved Historical Artifacts**:
+    - The candidate build script `tools/build_candidate_port2a.py` compiles the current working-tree source files `boot_prototype.c` and `stubs_prototype.S`. Prior to PORT-16, line 223 asserted the stale address `assert witness_addr == 0x0035F780`. In PORT-16 (`tools/build_candidate_port2a.py:59, 85-145, 317`), the builder was updated to define `EXPECTED_BOOT_WITNESS_ADDR = 0x0035F7A0` in one clearly named place and dynamically verify `boot_witness` against the built ELF symbol table via `verify_witness_addr_from_elf`, exiting non-zero with a clear expected-vs-actual error if the symbol is missing, mismatched, or unparseable `[VERIFIED: tools/build_candidate_port2a.py:59, 85-145, 317]`.
     - Separately, preserved historical candidate artifacts (e.g. pinned candidate hashes in `docs/REPRODUCIBILITY_MANIFEST.md:71-78` and tracked documentation in `docs/PROJECT_STATE.md:60`) preserve the original pre-correction candidate baseline (116,784-byte core, witness at `0x0035F780`) from the original build prior to PR #2 `[VERIFIED: docs/REPRODUCIBILITY_MANIFEST.md:71-78; docs/PROJECT_STATE.md:60]`.
 - **Comparison with Tracked Prototype Documentation (`0x0035F7A0`)**:
   - `docs/RESTART_SD_HOST_AUDIT.md:248` records: `boot_witness relocated from 0x0035F780 to 0x0035F7A0 (16-byte aligned, type D)` `[VERIFIED: docs/RESTART_SD_HOST_AUDIT.md:248]`.
@@ -192,23 +192,25 @@ The map confirms:
 
 ## 5. Address Comparisons
 
-### 5.1 Comparison with `0x0035F780` Assertion in `tools/build_candidate_port2a.py`
-In `tools/build_candidate_port2a.py:223`, the candidate builder script asserts:
+### 5.1 Comparison with Historical `0x0035F780` Assertion in `tools/build_candidate_port2a.py`
+Historically (prior to PORT-16), the candidate builder script `tools/build_candidate_port2a.py:223` asserted:
 ```python
 assert witness_addr == 0x0035F780, f"Expected boot_witness at 0x0035F780, got {witness_addr}"
 ```
-`[VERIFIED: tools/build_candidate_port2a.py:223]`
+`[VERIFIED: historical tools/build_candidate_port2a.py:223]`
 
-Additionally, `tools/validate_candidate_port2a.py:112` asserts:
+In PORT-16, `tools/build_candidate_port2a.py:59, 85-145, 317` was updated to define `EXPECTED_BOOT_WITNESS_ADDR = 0x0035F7A0` in one clearly named place and dynamically verify `boot_witness` against the ELF symbol table via `verify_witness_addr_from_elf` with fail-closed error handling `[VERIFIED: tools/build_candidate_port2a.py:59, 85-145, 317]`.
+
+Additionally, the untracked local validator `tools/validate_candidate_port2a.py:112` historically asserted:
 ```python
 assert syms.get("boot_witness") == 0x0035F780, f"boot_witness must be 0x0035F780, got {hex(syms.get('boot_witness', 0))}"
 ```
-`[VERIFIED: tools/validate_candidate_port2a.py:112]`
+`[VERIFIED: tools/validate_candidate_port2a.py:112]` (scheduled for remediation under task `p16-validator-fix`).
 
 | Metric | Preserved Historical Candidate Baseline | Corrected Prototype Build (`sub/110c/`) | Delta |
 |---|---|---|---|
 | Target Core ELF | `candidate_port2a/candidate_main.elf` | `chdk-port/platform/g3x/sub/110c/prototype_main.elf` | — |
-| `boot_witness` Address | `0x0035F780` `[VERIFIED: tools/build_candidate_port2a.py:223]` | **`0x0035F7A0`** `[VERIFIED: prototype_main.elf nm]` | **`+0x20` (+32 B)** |
+| `boot_witness` Address | `0x0035F780` `[VERIFIED: historical tools/build_candidate_port2a.py:223]` | **`0x0035F7A0`** `[VERIFIED: prototype_main.elf nm]` | **`+0x20` (+32 B)** |
 | Core Binary Size | 116,784 B `[VERIFIED: docs/REPRODUCIBILITY_MANIFEST.md:77]` | 116,816 B `[VERIFIED: docs/REPRODUCIBILITY_MANIFEST.md:80]` | **+32 B** |
 | Core ELF Size | 211,416 B `[VERIFIED: docs/REPRODUCIBILITY_MANIFEST.md:78]` | 211,608 B `[VERIFIED: prototype build size]` | **+192 B** |
 | Section Bounds (`link_data_start`) | `0x0035AEA0` `[INFERRED]` | `0x0035AEC0` `[VERIFIED: prototype_main.map:1315]` | **`+0x20` (+32 B)** |
@@ -216,17 +218,16 @@ assert syms.get("boot_witness") == 0x0035F780, f"boot_witness must be 0x0035F780
 | Section Bounds (`_end`) | `0x00366C90` `[VERIFIED: docs/PROJECT_STATE.md:178]` | `0x00366CB0` `[VERIFIED: prototype_main.map:1506]` | **`+0x20` (+32 B)** |
 
 **Analysis of Builder Behavior vs. Preserved Historical Artifacts**:
-1. **The `0x0035F780` Assertion is Stale Against Corrected Source**:
+1. **The Historical `0x0035F780` Assertion Was Stale Against Corrected Source (Resolved in PORT-16)**:
    The script `tools/build_candidate_port2a.py` does not compile a separate frozen snapshot of old source; it compiles the **CURRENT** working-tree source files:
-   - `chdk-port/platform/g3x/sub/110c/boot_prototype.c` (`tools/build_candidate_port2a.py:70, 78-126`)
-   - `chdk-port/platform/g3x/sub/110c/stubs_prototype.S` (`tools/build_candidate_port2a.py:71, 129-144`)
-   It archives these into `candidate_port2a/libplatformsub_candidate.a` (line 173), links `candidate_port2a/candidate_main.elf` (lines 176-196), and writes `candidate_port2a/candidate_main.bin` (line 199), overwriting the candidate core outputs.
-   At lines 216-224, it inspects the newly linked core ELF using `arm-none-eabi-nm -n` and executes:
+   - `chdk-port/platform/g3x/sub/110c/boot_prototype.c` (`tools/build_candidate_port2a.py:171, 180-228`)
+   - `chdk-port/platform/g3x/sub/110c/stubs_prototype.S` (`tools/build_candidate_port2a.py:172, 230-246`)
+   It archives these into `candidate_port2a/libplatformsub_candidate.a` (line 247), links `candidate_port2a/candidate_main.elf` (lines 255-298), and writes `candidate_port2a/candidate_main.bin` (line 300), overwriting the candidate core outputs.
+   Historically, line 223 executed:
    ```python
    assert witness_addr == 0x0035F780, f"Expected boot_witness at 0x0035F780, got {witness_addr}"
    ```
-   (`tools/build_candidate_port2a.py:223`).
-   Because the builder compiles the current corrected source (which contains the PR #2 additions), linking places `boot_witness` at `0x0035F7A0`. Consequently, the builder's own assertion at line 223 is **STALE against the corrected source**: executing `tools/build_candidate_port2a.py` today would fail with an assertion mismatch (`AssertionError: Expected boot_witness at 0x0035F780, got 3536800`) `[VERIFIED: tools/build_candidate_port2a.py:70-71, 127-144, 216-224]`.
+   Because the builder compiles the current corrected source (which contains the PR #2 additions), linking places `boot_witness` at `0x0035F7A0`. Prior to PORT-16, the builder's own assertion was stale against the corrected source and failed if executed. In PORT-16, `tools/build_candidate_port2a.py:59, 85-145, 317` was updated to define `EXPECTED_BOOT_WITNESS_ADDR = 0x0035F7A0` and assert it against the build's own ELF symbol table with fail-closed error handling `[VERIFIED: tools/build_candidate_port2a.py:59, 85-145, 317]`.
 
 2. **Distinct Preserved Historical Artifacts and Documentation**:
    The `0x0035F780` address originated from the pre-correction candidate baseline built prior to PR #2. The repository separately tracks and protects those historical artifacts:
@@ -664,10 +665,10 @@ The side-by-side link outputs prove that:
 | 3 | ARM Toolchain Version | GCC 5.4.1 20160919 (release) [ARM/embedded-5-branch revision 240496] | `VERIFIED` |
 | 4 | Build Command | `python3 -B tools/bootstrap_chdk_platform.py && python3 -B tools/build_prototype.py` | `VERIFIED` |
 | 5 | Derived `boot_witness` Address | `0x0035F7A0` (type `D`, size 32 B, 16-byte aligned in `.data`) | `VERIFIED` |
-| 6 | Candidate Builder Assertion | `assert witness_addr == 0x0035F780` (`tools/build_candidate_port2a.py:223`) | `VERIFIED` |
-| 7 | Candidate Validator Assertion | `assert syms.get("boot_witness") == 0x0035F780` (`tools/validate_candidate_port2a.py:112`) | `VERIFIED` |
+| 6 | Candidate Builder Assertion | Historically (pre-PORT-16) `assert witness_addr == 0x0035F780` (`tools/build_candidate_port2a.py:223`); updated in PORT-16 to `EXPECTED_BOOT_WITNESS_ADDR = 0x0035F7A0` (`tools/build_candidate_port2a.py:59`) | `VERIFIED` |
+| 7 | Candidate Validator Assertion | Historically `assert syms.get("boot_witness") == 0x0035F780` (`tools/validate_candidate_port2a.py:112`); scheduled for remediation in `p16-validator-fix` | `VERIFIED` |
 | 8 | Numerical Address Divergence | Current prototype witness (`0x0035F7A0`) differs by `+0x20` (+32 B) from historical candidate assertion (`0x0035F780`) | `VERIFIED` |
-| 8b | Stale Builder Assertion | `tools/build_candidate_port2a.py:223` asserts `0x0035F780` but compiles current source (`lines 70-71, 127-144`), causing an assertion mismatch against current source | `VERIFIED` |
+| 8b | Stale Builder Assertion (Historical) | Historical `tools/build_candidate_port2a.py:223` asserted `0x0035F780` against current source; updated in PORT-16 to fail-closed check against `0x0035F7A0` | `VERIFIED` |
 | 9 | Tracked SD Audit Claim | `boot_witness relocated from 0x0035F780 to 0x0035F7A0` (`docs/RESTART_SD_HOST_AUDIT.md:248`) | `VERIFIED` |
 | 10 | Tracked Manifest Claim | `boot_witness @ 0x0035F7A0` (`docs/REPRODUCIBILITY_MANIFEST.md:80`) | `VERIFIED` |
 | 11 | Tracked State & Handoff Claim | `boot_witness moved from 0x0035F780 to 0x0035F7A0` (`docs/PROJECT_STATE.md:133`, `docs/HANDOFF.md:228`) | `VERIFIED` |
@@ -695,7 +696,7 @@ The side-by-side link outputs prove that:
 
 1. **Derived Address**: Direct build of the corrected boot prototype from `chdk-port/platform/g3x/sub/110c/` using the pinned toolchain (`gcc-arm-none-eabi-5_4-2016q3`) verifies `boot_witness` at **`0x0035F7A0`** (`.data` section, 16-byte aligned) `[VERIFIED: prototype_main.elf nm; prototype_main.map:1431-1432]`.
 2. **Comparison with Candidate Assertion (`0x0035F780`)**:
-   - The assertion `witness_addr == 0x0035F780` in `tools/build_candidate_port2a.py:223` is **stale against the corrected source**. The builder compiles the current working-tree source files (`tools/build_candidate_port2a.py:70-71, 127-144`), which produces `0x0035F7A0`, so its own assertion would fail or mismatch if run `[VERIFIED: tools/build_candidate_port2a.py:70-71, 127-144, 216-224]`.
-   - Distinct from the builder's current compilation behavior, preserved historical candidate artifacts (`candidate_port2a/candidate_main.elf`, `candidate_port2a/candidate_main.bin`, `docs/REPRODUCIBILITY_MANIFEST.md:71-78`, `docs/PROJECT_STATE.md:60`) preserve the original pre-correction baseline (`0x0035F780`) from prior to PR #2 `[VERIFIED]`.
+   - Historically (pre-PORT-16), `tools/build_candidate_port2a.py:223` asserted `witness_addr == 0x0035F780`, which was stale against the corrected source. In PORT-16 (`p16-pipeline-fix`), `tools/build_candidate_port2a.py:59, 85-145, 317` was updated to define `EXPECTED_BOOT_WITNESS_ADDR = 0x0035F7A0` and verify the ELF symbol table dynamically via `verify_witness_addr_from_elf` with fail-closed error handling `[VERIFIED: tools/build_candidate_port2a.py:59, 85-145, 317]`.
+   - Distinct from the builder's compilation behavior, preserved historical candidate artifacts (`candidate_port2a/candidate_main.elf`, `candidate_port2a/candidate_main.bin`, `docs/REPRODUCIBILITY_MANIFEST.md:71-78`, `docs/PROJECT_STATE.md:60`) preserve the original pre-correction baseline (`0x0035F780`) from prior to PR #2 `[VERIFIED]`.
 3. **Comparison with Tracked Documentation (`0x0035F7A0`)**: The derived address matches all tracked prototype documentation with 100% precision (`docs/RESTART_SD_HOST_AUDIT.md:248`, `docs/REPRODUCIBILITY_MANIFEST.md:80`, `docs/PROJECT_STATE.md:133`, `docs/HANDOFF.md:228`, `docs/PORT3C_RESTART_READINESS_MATRIX.md:231`, `docs/CODEX_INDEPENDENT_RESTART_REVIEW.md:66`) `[VERIFIED]`.
 4. **Relocation Attribution**: PR #2 added Thumb-2 instructions in `boot_prototype.c` and stubs in `stubs_prototype.S` (`VERIFIED: git show 2590036`). The causal attribution that these additions expanded `.text` and shifted `link_text_end`/`link_data_start` forward by `+0x20` (moving `boot_witness` from `0x0035F780` to `0x0035F7A0`), together with the internal byte accounting breakdown ($14 + 16 + 2 = 32$ B), is `INFERRED`. In PORT-5E (PR #5), comparative prototype builds at the pre-PORT-5E commit (`fa2a094`) and PORT-5E commit (`f8cc7a9`) verify that assembled section sizes were byte-for-byte identical ($\Delta = 0$ B) and `boot_witness` remained at `0x0035F7A0` (`VERIFIED: comparative build link outputs §6.4`).
