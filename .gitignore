@@ -48,3 +48,24 @@ chdk-port/platform/g3x/sub/110c/*
 !chdk-port/platform/g3x/sub/110c/boot_prototype.c
 !chdk-port/platform/g3x/sub/110c/stubs_prototype.S
 !chdk-port/platform/g3x/sub/110c/boot_witness.h
+# PORT-16: owner-local firmware/tools files, never commit (AgentBridge auto-commit hygiene)
+firmware/tools/boot001a_loader_gm110c.m
+firmware/tools/boot001a_payload.S
+firmware/tools/boot001a_payload.bin
+firmware/tools/boot001b_diag_loader_gm110c.m
+firmware/tools/boot001b_loader_gm110c.m
+firmware/tools/boot001b_payload.S
+firmware/tools/boot001b_payload.bin
+firmware/tools/ui001a_loader_gm110c.m
+firmware/tools/ui001a_payload.S
+firmware/tools/ui001a_payload.bin
+firmware/tools/ui001b0_loader_gm110c.m
+firmware/tools/ui001b0_payload.S
+firmware/tools/ui001b0_payload.bin
+firmware/tools/ui001b1_loader_gm110c.m
+firmware/tools/ui001b1_payload.S
+firmware/tools/ui001b1_payload.bin
+firmware/tools/video001_limits_probe_gm110c.m
+firmware/tools/video001a0_loader_gm110c.m
+firmware/tools/video001a0_payload.S
+firmware/tools/video001a0_payload.bin
