@@ -8,9 +8,10 @@
 
 ## 1. Repository Base, `origin/main`, and Merge-Base Header
 
-- **Claim**: After `git fetch`, the worktree base (`HEAD`) is `db115c6dd3f7ad69fbd839447df8a3ff68f79822`, `origin/main` is `581b1a4bb30456bf18c46dc4bcf61b0375aee251`, and the merge-base of `HEAD` and `origin/main` is `581b1a4bb30456bf18c46dc4bcf61b0375aee251` (`origin/main` is a direct ancestor of `HEAD`) `[VERIFIED]`.
+- **Claim 1.1 (Worktree Integration Base & Attempt 1 `HEAD`)**: At initial worktree creation (`agentbridge/g3x-lite/port-15-offline/integration`, Attempt 1 `HEAD`, Attempt 2 `HEAD~1`), the worktree base SHA is `db115c6dd3f7ad69fbd839447df8a3ff68f79822`, `origin/main` after `git fetch` is `581b1a4bb30456bf18c46dc4bcf61b0375aee251`, and the merge-base of the two is `581b1a4bb30456bf18c46dc4bcf61b0375aee251` (`origin/main` is a direct ancestor of the worktree base) `[VERIFIED]`.
+- **Claim 1.2 (Attempt 2 `HEAD`)**: At the start of Attempt 2 (following AgentBridge's automatic commit of Attempt 1 on `agentbridge/g3x-lite/port-15-offline/p15-ledger`), `git rev-parse HEAD` is `7b618c3bcf85fc7e23ea8749af1c93a8eaabc304`, `git rev-parse origin/main` after `git fetch` is `581b1a4bb30456bf18c46dc4bcf61b0375aee251`, and `git merge-base HEAD origin/main` is `581b1a4bb30456bf18c46dc4bcf61b0375aee251` `[VERIFIED]`.
 
-### Verbatim Command Output
+### Verbatim Command Output (Worktree Integration Base / Attempt 1 `HEAD`)
 
 ```text
 $ git fetch
@@ -19,6 +20,24 @@ db115c6dd3f7ad69fbd839447df8a3ff68f79822
 $ git rev-parse origin/main
 581b1a4bb30456bf18c46dc4bcf61b0375aee251
 $ git merge-base HEAD origin/main
+581b1a4bb30456bf18c46dc4bcf61b0375aee251
+```
+
+### Verbatim Command Output (Attempt 2 `HEAD` & Integration Base Ref)
+
+```text
+$ git fetch
+$ git rev-parse HEAD
+7b618c3bcf85fc7e23ea8749af1c93a8eaabc304
+$ git rev-parse HEAD~1
+db115c6dd3f7ad69fbd839447df8a3ff68f79822
+$ git rev-parse agentbridge/g3x-lite/port-15-offline/integration
+db115c6dd3f7ad69fbd839447df8a3ff68f79822
+$ git rev-parse origin/main
+581b1a4bb30456bf18c46dc4bcf61b0375aee251
+$ git merge-base HEAD origin/main
+581b1a4bb30456bf18c46dc4bcf61b0375aee251
+$ git merge-base HEAD~1 origin/main
 581b1a4bb30456bf18c46dc4bcf61b0375aee251
 ```
 
@@ -110,10 +129,44 @@ a9ead89aa735845cee66e2ed270e33c7688c5b71 docs(audit): add reproducibility manife
 
 ---
 
-### 2.2 `PORT-7A` & `PORT-7B` — Platform Configuration & Playback ALT Override Mask Correction
+### 2.2 `PORT-7A` — Platform Configuration Validation
 
-- **Doc Mentions**: `docs/PROJECT_STATE.md:27, 487-488`; `docs/HANDOFF.md:44, 46-48` (`PORT-7A` is cited inside the `PORT-7B` ledger entry and status summary) `[VERIFIED]`.
-- **Milestone Summary Claim**: All 8 files explicitly claimed for `PORT-7A` / `PORT-7B` in `docs/PROJECT_STATE.md:27` and `docs/HANDOFF.md:47` (plus companion doc `docs/PORT7A_PLATFORM_CONFIGURATION_VALIDATION.md` added in the same commit) are present at both `origin/main` and the worktree base (`HEAD`), with status **`MERGED`** (`a0a33a4323b6ae65801f593cd44636f7b5629ac6` on `origin/main`) `[VERIFIED]`.
+- **Doc Mentions**: `docs/PROJECT_STATE.md:27, 488`; `docs/HANDOFF.md:47-48` (`PORT-7A` is cited inside the `PORT-7B` entry and in the status summary; note that no `PORT-6*` milestone is mentioned anywhere in `docs/PROJECT_STATE.md` or `docs/HANDOFF.md`) `[VERIFIED]`.
+- **Milestone Summary Claim**: Both `tests/test_port7a_platform_configuration.py` (claimed at `docs/PROJECT_STATE.md:27` and `docs/HANDOFF.md:47`) and its companion report `docs/PORT7A_PLATFORM_CONFIGURATION_VALIDATION.md` (added in the same commit on `origin/main`) are present at `origin/main` and at the worktree base (`HEAD`), with status **`MERGED`** (`a0a33a4323b6ae65801f593cd44636f7b5629ac6` on `origin/main`) `[VERIFIED]`.
+
+| Claimed Deliverable File | Doc Citations (`file:line`) | First Add Commit on `origin/main` (`--diff-filter=A`) | Status | Label |
+|---|---|---|---|---|
+| `tests/test_port7a_platform_configuration.py` | `docs/PROJECT_STATE.md:27`; `docs/HANDOFF.md:47` | `a0a33a4323b6ae65801f593cd44636f7b5629ac6 PORT-7B: Playback ALT override mask correction (KEYS_MASK0 0x000533F9) via patch + clean-clone fixtures (#6)` | `MERGED` | `VERIFIED` |
+| `docs/PORT7A_PLATFORM_CONFIGURATION_VALIDATION.md` *(companion `PORT-7A` report added in `a0a33a4`)* | `docs/PROJECT_STATE.md:27, 488`; `docs/HANDOFF.md:48` *(milestone cited)* | `a0a33a4323b6ae65801f593cd44636f7b5629ac6 PORT-7B: Playback ALT override mask correction (KEYS_MASK0 0x000533F9) via patch + clean-clone fixtures (#6)` | `MERGED` | `VERIFIED` |
+
+#### Verbatim Git Evidence (`PORT-7A`)
+
+```text
+$ git ls-files --with-tree=origin/main -- tests/test_port7a_platform_configuration.py
+tests/test_port7a_platform_configuration.py
+$ git show origin/main:tests/test_port7a_platform_configuration.py | head -1
+"""PORT-7A: source-only GM1.10C configuration regression checks.
+$ git ls-files -- tests/test_port7a_platform_configuration.py
+tests/test_port7a_platform_configuration.py
+$ git log origin/main --diff-filter=A --format='%H %s' -- tests/test_port7a_platform_configuration.py
+a0a33a4323b6ae65801f593cd44636f7b5629ac6 PORT-7B: Playback ALT override mask correction (KEYS_MASK0 0x000533F9) via patch + clean-clone fixtures (#6)
+
+$ git ls-files --with-tree=origin/main -- docs/PORT7A_PLATFORM_CONFIGURATION_VALIDATION.md
+docs/PORT7A_PLATFORM_CONFIGURATION_VALIDATION.md
+$ git show origin/main:docs/PORT7A_PLATFORM_CONFIGURATION_VALIDATION.md | head -1
+# PORT-7A — G3 X platform configuration validation
+$ git ls-files -- docs/PORT7A_PLATFORM_CONFIGURATION_VALIDATION.md
+docs/PORT7A_PLATFORM_CONFIGURATION_VALIDATION.md
+$ git log origin/main --diff-filter=A --format='%H %s' -- docs/PORT7A_PLATFORM_CONFIGURATION_VALIDATION.md
+a0a33a4323b6ae65801f593cd44636f7b5629ac6 PORT-7B: Playback ALT override mask correction (KEYS_MASK0 0x000533F9) via patch + clean-clone fixtures (#6)
+```
+
+---
+
+### 2.2b `PORT-7B` — Playback ALT Override Mask Correction
+
+- **Doc Mentions**: `docs/PROJECT_STATE.md:27, 487-488`; `docs/HANDOFF.md:44, 46-48` `[VERIFIED]`.
+- **Milestone Summary Claim**: All 8 files explicitly claimed for `PORT-7B` in `docs/PROJECT_STATE.md:27` and `docs/HANDOFF.md:47` are present at both `origin/main` and the worktree base (`HEAD`), with status **`MERGED`** (`a0a33a4323b6ae65801f593cd44636f7b5629ac6` on `origin/main`) `[VERIFIED]`.
 
 | Claimed Deliverable File | Doc Citations (`file:line`) | First Add Commit on `origin/main` (`--diff-filter=A`) | Status | Label |
 |---|---|---|---|---|
@@ -126,7 +179,7 @@ a9ead89aa735845cee66e2ed270e33c7688c5b71 docs(audit): add reproducibility manife
 | `tests/fixtures/port7b/platform_kbd.h.preimage` | `docs/PROJECT_STATE.md:27` (`tests/fixtures/port7b/*`); `docs/HANDOFF.md:47` | `a0a33a4323b6ae65801f593cd44636f7b5629ac6 PORT-7B: Playback ALT override mask correction (KEYS_MASK0 0x000533F9) via patch + clean-clone fixtures (#6)` | `MERGED` | `VERIFIED` |
 | `tests/fixtures/port7b/shooting.c` | `docs/PROJECT_STATE.md:27` (`tests/fixtures/port7b/*`); `docs/HANDOFF.md:47` | `a0a33a4323b6ae65801f593cd44636f7b5629ac6 PORT-7B: Playback ALT override mask correction (KEYS_MASK0 0x000533F9) via patch + clean-clone fixtures (#6)` | `MERGED` | `VERIFIED` |
 
-#### Verbatim Git Evidence (`PORT-7A` / `PORT-7B`)
+#### Verbatim Git Evidence (`PORT-7B`)
 
 ```text
 $ git ls-files --with-tree=origin/main -- docs/PORT7B_PLAYBACK_MASK_CORRECTION.md
