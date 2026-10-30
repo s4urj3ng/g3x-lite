@@ -694,7 +694,7 @@ class TestContentAuthenticationAndDigestPinning(unittest.TestCase):
 
         verified_ids = (
             [ob.id for ob in DEFAULT_MEMORY_OBLIGATIONS if ob.current_status == ObligationStatus.VERIFIED]
-            + [ob.id for ob in pu2.DEFAULT_U2_OBLIGATIONS if ob.current_status == pu2.ObligationStatus.VERIFIED]
+            + [ob.id for ob in pu2.DEFAULT_U2_OBLIGATIONS if ob.status == pu2.ObligationStatus.VERIFIED]
             + [ob.id for ob in pu4.U4_OBLIGATIONS if ob.current_status == pu4.ObligationStatus.VERIFIED]
         )
         self.assertEqual(verified_ids, ["OBLIG-MEM-16A", "OBLIG-U2-01"])
