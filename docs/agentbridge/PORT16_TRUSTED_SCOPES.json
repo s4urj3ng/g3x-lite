@@ -1,0 +1,18 @@
+{
+  "policy_version": "1.0.0",
+  "policy_authority": "UNVERIFIED_EXTERNAL_POLICY (External consistency check policy; out-of-band owner approval required)",
+  "authorization_scopes": [
+    {
+      "scope_id": "SCOPE-PORT16-U",
+      "firmware_revision": "GM1.10C",
+      "approved_ranges": [],
+      "max_bytes_total": 4096,
+      "allowed_classifications": [
+        "STATIC_VERIFIED",
+        "INFERRED",
+        "UNKNOWN"
+      ],
+      "description": "PORT-16 U1-U4 first-boot triage scope (0 bytes approved; all NEEDED items not ROM-closable per docs/agentbridge/PORT16_U_CLOSE_RANGES.md)"
+    }
+  ]
+}
