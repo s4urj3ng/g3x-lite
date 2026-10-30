@@ -11,7 +11,7 @@
 
 The Canon PowerShot G3 X (`GM1.10C`) CHDK first-boot candidate codebase exhibits an address divergence for the non-persistent RAM witness structure `boot_witness`:
 
-1. **Candidate Target Address (`0x0035F780`)**: Preserved first-boot candidate artifacts in `candidate_port2a/` (`candidate_main.elf`, `candidate_main.bin`, `candidate_loader.bin`, `DISKBOOT.BIN`) and builder script `tools/build_candidate_port2a.py` assert `boot_witness` at `0x0035F780` `[VERIFIED: candidate_manifest.json; tools/build_candidate_port2a.py:223, 382; docs/REPRODUCIBILITY_MANIFEST.md:76-77]`.
+1. **Candidate Target Address (`0x0035F780`)**: Preserved first-boot candidate documentation and inspector metadata target `boot_witness` at `0x0035F780` `[VERIFIED: docs/REPRODUCIBILITY_MANIFEST.md:76-77; docs/PROJECT_STATE.md:93, 135; docs/HANDOFF.md:186, 340; firmware/tools/witness_inspector_metadata.json:4]`.
 2. **Remediated Prototype Target Address (`0x0035F7A0`)**: Adding 14 bytes of Thumb-2 instructions for `SD1stInit` task creation (`sub_fc05c4e0` gate check + `sub_fc31b1f4` ARM veneer invocation) in `chdk-port/platform/g3x/sub/110c/boot_prototype.c` and `stubs_prototype.S` expanded the `.text` segment, shifting the 16-byte-aligned `.data` section forward by +32 bytes (`+0x20`), which relocated `boot_witness` from `0x0035F780` to `0x0035F7A0` in `prototype_main.elf` `[VERIFIED: docs/RESTART_SD_HOST_AUDIT.md:247-250; docs/PROJECT_STATE.md:133-134; docs/HANDOFF.md:228-229]`.
 3. **Pre-Correction Invariance**: `candidate_port2a/` artifacts were generated during milestone `CHDK-PORT-2A` (2026-10-24) prior to `SD1stInit` remediation (PR #2) and prior to `PORT-5E` early boot literal corrections (PR #5). Under strict Phase 0 invariants, these candidate artifacts remain frozen **PRE-CORRECTION** artifacts and must not be mutated or claimed to represent the remediated prototype source `[VERIFIED: docs/REPRODUCIBILITY_MANIFEST.md:71-74; docs/PROJECT_STATE.md:60; docs/HANDOFF.md:67]`.
 4. **Dynamic Address Decoupling**: In commit `5d644cbd` (PR #1), the hardcoded address dependency was eliminated from offline tooling: `tools/build_witness_inspector.py` and `tools/validate_witness_inspector.py` resolve the witness address dynamically from the active target ELF (`arm-none-eabi-nm`) and enforce 3-way consistency across the ELF symbol, metadata JSON, and inspector binary opcodes `[VERIFIED: docs/PROJECT_STATE.md:93; docs/HANDOFF.md:186-192; tools/build_witness_inspector.py:39-76; tools/validate_witness_inspector.py:89-108]`.
@@ -86,34 +86,14 @@ Across all Git-tracked files in the repository, exactly **26** line occurrences 
 
 2. **Shift of `.data` by +32 Bytes (`+0x20`)**:
    - Because `boot_witness` is declared with `__attribute__((aligned(16), section(".data")))` (`chdk-port/platform/g3x/sub/110c/boot_prototype.c:27`), and because `.data` is linked after `.text`, expanding `.text` by 14 bytes crossed a 16-byte alignment boundary, advancing the start of `.data` and all symbols within it by +32 bytes (`0x20` bytes) `[VERIFIED: docs/RESTART_SD_HOST_AUDIT.md:247-250]`.
-   - Section bounds shift in `docs/RESTART_SD_HOST_AUDIT.md:250`:
+   - Section bounds shift recorded in `docs/RESTART_SD_HOST_AUDIT.md:250`:
      - `link_data_start = 0x0035AEC0`
      - `link_bss_start = 0x00365204`
      - `_end = 0x00366CB0` (shifted from candidate `0x00366C90` by exactly +32 bytes) `[VERIFIED]`.
-   - Binary size shift in `docs/REPRODUCIBILITY_MANIFEST.md:77, 80`:
+   - Binary size shift recorded in `docs/REPRODUCIBILITY_MANIFEST.md:77, 80`:
      - Candidate core (`candidate_main.bin`): `116,784` bytes (`boot_witness` @ `0x0035F780`) `[VERIFIED]`.
      - Prototype core (`prototype_main.bin`): `116,816` bytes (`boot_witness` @ `0x0035F7A0`) `[VERIFIED]`.
      - Exact difference: `116,816 - 116,784 = 32` bytes (`+0x20` bytes) `[VERIFIED]`.
-
-3. **Untracked Working-Tree Build and Validation Scripts Asserting `0x0035F780`**:
-   The candidate builder and validator files are untracked working-tree scripts ignored by Git. Their untracked and git-ignored status is verified via `git ls-files --error-unmatch` and `git check-ignore -v`:
-   - `tools/build_candidate_port2a.py`:
-     - Verification command: `git ls-files --error-unmatch tools/build_candidate_port2a.py`
-     - Command output: `error: pathspec 'tools/build_candidate_port2a.py' did not match any file(s) known to git` (exit code 1) `[VERIFIED]`
-     - Ignore check command: `git check-ignore -v tools/build_candidate_port2a.py`
-     - Ignore check output: `/srv/agentbridge/repos/g3x-lite/.git/info/exclude:1954:/tools/build_candidate_port2a.py tools/build_candidate_port2a.py` (exit code 0) `[VERIFIED]`
-     - Line citations (working-tree file, untracked):
-       - Line 223: `assert witness_addr == 0x0035F780, f"Expected boot_witness at 0x0035F780, got {witness_addr}"` `[VERIFIED: working-tree file]`
-       - Line 382: `"boot_witness_addr": "0x0035F780",` in `candidate_manifest.json` generation `[VERIFIED: working-tree file]`
-   - `tools/validate_candidate_port2a.py`:
-     - Verification command: `git ls-files --error-unmatch tools/validate_candidate_port2a.py`
-     - Command output: `error: pathspec 'tools/validate_candidate_port2a.py' did not match any file(s) known to git` (exit code 1) `[VERIFIED]`
-     - Ignore check command: `git check-ignore -v tools/validate_candidate_port2a.py`
-     - Ignore check output: `/srv/agentbridge/repos/g3x-lite/.git/info/exclude:1965:/tools/validate_candidate_port2a.py tools/validate_candidate_port2a.py` (exit code 0) `[VERIFIED]`
-     - Line citations (working-tree file, untracked):
-       - Line 112: `assert syms.get("boot_witness") == 0x0035F780, f"boot_witness must be 0x0035F780, got {hex(syms.get('boot_witness', 0))}"` `[VERIFIED: working-tree file]`
-       - Line 121: `print(f"  [OK] Core symbols verified (_start=0x003489B4, boot_witness=0x0035F780, _end=0x00366C90)")` `[VERIFIED: working-tree file]`
-       - Line 200: `# Boot Witness:     0x0035F780 .. 0x0035F7A0` (annotating the 32-byte window `0x20` bytes) `[VERIFIED: working-tree file]`
 
 ---
 
@@ -136,93 +116,77 @@ The corrected address (`0x0035F7A0`) and its underlying early boot literal corre
 
 1. **`SD1stInit` Task Creation Addition (PR #2)**:
    - In stock firmware, `StartDiskboot` (`0xFC05BBEA`) spawns `"SD1stInit"` via veneer `0xFC31B1F4` before loading `DISKBOOT.BIN` `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:387-390; tests/test_restart_sd_audit.py:77]`.
-   - The initial CHDK port prototype (`boot.c`) omitted `StartDiskboot` to bypass reloading the bootloader, but inadvertently left `SD1stInit` unspawned, leaving the SD controller un-reinitialized on restart `[VERIFIED: docs/RESTART_SD_HOST_AUDIT.md:68-88]`.
+   - The initial CHDK port prototype (`boot.c`) omitted `StartDiskboot` to bypass reloading the bootloader, leaving `SD1stInit` unspawned on the restart path `[VERIFIED: docs/RESTART_SD_HOST_AUDIT.md:68]`. The consequence that the SD controller is left un-reinitialized is `UNKNOWN`, as `docs/RESTART_SD_HOST_AUDIT.md:71-73` itself leaves compensating initialisation (`0xFC07564E` → `0x010E1A92`) and the actual runtime effect of the omission unverified `[UNKNOWN]`.
    - PR #2 added the gated call to `sub_fc31b1f4` in `boot_prototype.c:392-398` and stub `STUB2(fc31b1f4)` in `stubs_prototype.S:65` (14 bytes added to `.text`) `[VERIFIED]`.
-   - This 14-byte code growth pushed `.data` across a 16-byte alignment boundary by +32 bytes (`+0x20`), shifting `boot_witness` from `0x0035F780` to `0x0035F7A0` `[VERIFIED: docs/RESTART_SD_HOST_AUDIT.md:247-250]`.
+   - This 14-byte code growth pushed `.data` across a 16-byte alignment boundary by +32 bytes (`+0x20`), shifting `boot_witness` from `0x0035F780` to `0x0035F7A0` in `prototype_main.elf` `[VERIFIED: docs/RESTART_SD_HOST_AUDIT.md:247-250]`.
 
 2. **PORT-5E Early Boot Literal Corrections (PR #5)**:
    - Corrected 10 literals in `sub_fc05b558_my` in `boot_prototype.c:268-288` (check words `0x80EC` / `0x8074` and strings `0xFC05B600..0xFC05B674`), eliminating a systematic +4 transcription offset from earlier drafts `[VERIFIED: docs/CHDK_PORT1C1_CRITICAL_AUDIT.md:185, 244; tests/test_early_boot_literals.py:47-60]`.
-   - These literal changes were value corrections within existing literal pools and did not alter `.text` size or change the `0x0035F7A0` address `[VERIFIED: docs/agentbridge/PORT15_LEDGER.md:60-65]`.
+   - These literal changes were value corrections in-place within the existing literal pool in `boot_prototype.c:268-288` without adding or removing instructions; `.text` size is therefore `INFERRED` to remain unchanged based on instruction count invariance. However, because no tracked post-PORT-5E ELF or symbol map exists in the repository for that exact revision (`docs/agentbridge/PORT15_LEDGER.md:60-65` shows only merge and file provenance), the post-correction `boot_witness` placement remains `UNKNOWN` until a rebuild confirms it `[INFERRED / UNKNOWN]`.
    - `docs/REPRODUCIBILITY_MANIFEST.md:71-74` explicitly classified `candidate_port2a/` artifacts as **PRE-CORRECTION** artifacts built prior to both PR #2 and PR #5, freezing them at `0x0035F780` to preserve build reproducibility `[VERIFIED]`.
 
 ---
 
 ## 3. Tools and Tests Consuming or Validating the Candidate
 
-The following table categorizes all tools and tests in the repository that consume, validate, or reference the candidate or prototype witness, noting git tracking status and exact lines hard-coding any address.
+### 3.1 Untracked Candidate Build and Validation Scripts
 
-> **Note on Untracked Tools & Tests**: Lines citing `tools/build_candidate_port2a.py`, `tools/validate_candidate_port2a.py`, `tests/test_validate_candidate_port2a.py`, and `tools/validate_boot_witness.py` refer to working-tree files that are NOT tracked in Git. Their status has been verified using `git ls-files --error-unmatch` and `git check-ignore -v`:
-> - `tools/build_candidate_port2a.py`: `error: pathspec 'tools/build_candidate_port2a.py' did not match any file(s) known to git` (exit 1); git-ignored via `/srv/agentbridge/repos/g3x-lite/.git/info/exclude:1954` `[VERIFIED]`
-> - `tools/validate_candidate_port2a.py`: `error: pathspec 'tools/validate_candidate_port2a.py' did not match any file(s) known to git` (exit 1); git-ignored via `/srv/agentbridge/repos/g3x-lite/.git/info/exclude:1965` `[VERIFIED]`
-> - `tests/test_validate_candidate_port2a.py`: `error: pathspec 'tests/test_validate_candidate_port2a.py' did not match any file(s) known to git` (exit 1); git-ignored via `/srv/agentbridge/repos/g3x-lite/.git/info/exclude:1944` `[VERIFIED]`
-> - `tools/validate_boot_witness.py`: `error: pathspec 'tools/validate_boot_witness.py' did not match any file(s) known to git` (exit 1); git-ignored via `/srv/agentbridge/repos/g3x-lite/.git/info/exclude:1964` `[VERIFIED]`
+The candidate builder script `tools/build_candidate_port2a.py` and validator script `tools/validate_candidate_port2a.py` are untracked and git-ignored working-tree files:
+
+1. **Untracked Status (`git ls-files --error-unmatch`)**:
+   ```bash
+   $ git ls-files --error-unmatch tools/build_candidate_port2a.py
+   error: pathspec 'tools/build_candidate_port2a.py' did not match any file(s) known to git
+   Did you forget to 'git add'?
+   [exit code: 1]
+
+   $ git ls-files --error-unmatch tools/validate_candidate_port2a.py
+   error: pathspec 'tools/validate_candidate_port2a.py' did not match any file(s) known to git
+   Did you forget to 'git add'?
+   [exit code: 1]
+   ```
+   `[VERIFIED]`
+
+2. **Git-Ignored Status (`git check-ignore -v`)**:
+   ```bash
+   $ git check-ignore -v tools/build_candidate_port2a.py
+   /srv/agentbridge/repos/g3x-lite/.git/info/exclude:1954:/tools/build_candidate_port2a.py	tools/build_candidate_port2a.py
+
+   $ git check-ignore -v tools/validate_candidate_port2a.py
+   /srv/agentbridge/repos/g3x-lite/.git/info/exclude:1965:/tools/validate_candidate_port2a.py	tools/validate_candidate_port2a.py
+   ```
+   `[VERIFIED]`
+
+3. **Status of Script Contents, Hard-Coded Addresses, and Build Inputs**:
+   Because `tools/build_candidate_port2a.py` and `tools/validate_candidate_port2a.py` are untracked and git-ignored, their file contents, any addresses they hard-code, and the build inputs they select are `UNKNOWN` for this tracked-only inventory and are deferred to the first-boot milestone `[UNKNOWN]`.
+
+### 3.2 Tracked Tools and Tests Consuming or Validating the Candidate
+
+The following table lists all Git-tracked tools, tests, and data files in the repository that consume, validate, or reference the candidate or prototype witness, noting the exact lines hard-coding any address `[VERIFIED: git ls-files]`:
 
 | Tool / Test Path | Tracked in Git? | Role Regarding Candidate / Prototype | Hard-Coded Lines (`file:line`) & Quoted Text | Dynamic vs Hardcoded Behavior | Classification |
 |---|---|---|---|---|---|
-| `tools/build_candidate_port2a.py` | **No** (working tree, ignored via `.git/info/exclude:1954`) | Builds `candidate_port2a/` artifacts (`candidate_main.elf`, `candidate_loader.bin`, `DISKBOOT.BIN`) | - Line 223: `assert witness_addr == 0x0035F780, f"Expected boot_witness at 0x0035F780, got {witness_addr}"`<br>- Line 382: `"boot_witness_addr": "0x0035F780",` | **Hardcoded**: strictly asserts `boot_witness == 0x0035F780` from `arm-none-eabi-nm` output and writes it to candidate manifest. | `VERIFIED: working-tree file` |
-| `tools/validate_candidate_port2a.py` | **No** (working tree, ignored via `.git/info/exclude:1965`) | Validates candidate artifacts against locked `candidate_manifest.json` | - Line 112: `assert syms.get("boot_witness") == 0x0035F780, f"boot_witness must be 0x0035F780, got {hex(syms.get('boot_witness', 0))}"`<br>- Line 121: `print(f"  [OK] Core symbols verified (_start=0x003489B4, boot_witness=0x0035F780, _end=0x00366C90)")`<br>- Line 200: `# Boot Witness:     0x0035F780 .. 0x0035F7A0` | **Hardcoded**: asserts symbol `boot_witness == 0x0035F780` in candidate ELF. | `VERIFIED: working-tree file` |
-| `tests/test_validate_candidate_port2a.py` | **No** (working tree, ignored via `.git/info/exclude:1944`) | Unit tests executing candidate build & validator | None in test body (delegates assertions to `validate_candidate_port2a.py`) | **Indirectly Hardcoded**: relies on `tools/validate_candidate_port2a.py`. | `VERIFIED: working-tree file` |
 | `tools/build_witness_inspector.py` | **Yes** (`git ls-files`) | Assembles Canon Basic witness inspector payload with dynamic address injection | **None**: Line 180 supplies `-DBOOT_WITNESS_ADDR=0x{witness_addr:08X}` from dynamic ELF resolution | **Dynamic**: extracts `boot_witness` from ELF via `arm-none-eabi-nm` (lines 39-76, 172); does NOT hardcode `0x0035F780` or `0x0035F7A0`. | `VERIFIED` |
 | `tools/validate_witness_inspector.py` | **Yes** (`git ls-files`) | Validates 3-way consistency across ELF symbol, inspector `.bin` opcodes, and metadata JSON | **None**: Line 554 provides CLI option `--expected-addr` (default `None`) | **Dynamic**: extracts address from binary MOVW/MOVT opcodes (lines 111-155), ELF symbol (lines 89-108), and metadata JSON (lines 204-215); verifies 3-way equality. | `VERIFIED` |
 | `tests/test_validate_witness_inspector.py` | **Yes** (`git ls-files`) | Unit test suite (8 tests) validating witness inspector tooling | - Line 54 (comment only): `# Dynamically check the derived symbol address rather than hardcoded 0x0035F780` | **Dynamic**: extracts `expected_addr` dynamically from `CANDIDATE_MAIN_ELF` (lines 47, 65, 152, 183, 246, 267, 290, 325); tests mutation detection using dynamic offsets (`+0x1000`). | `VERIFIED` |
 | `firmware/tools/witness_inspector_metadata.json` | **Yes** (`git ls-files`) | Metadata file accompanying candidate inspector binary | - Line 4: `"witness_address": "0x0035F780",`<br>- Line 5: `"witness_address_int": 3536768,` | **Hardcoded (Data)**: records address `0x0035F780` matching candidate core ELF. | `VERIFIED` |
 | `firmware/tools/witness_inspector_payload.bin` | **Yes** (`git ls-files`) | Pre-assembled 444-byte inspector binary payload | Byte offsets `0x0A..0x0D` (MOVW) and `0x0E..0x11` (MOVT) encode `0x0035F780` | **Hardcoded (Binary)**: assembled with `-DBOOT_WITNESS_ADDR=0x0035F780`. | `VERIFIED` |
 | `firmware/tools/witness_inspector_payload.S` | **Yes** (`git ls-files`) | Assembly source for witness inspector | Lines 57-58: `movw r7, #:lower16:BOOT_WITNESS_ADDR` / `movt r7, #:upper16:BOOT_WITNESS_ADDR` | **Dynamic Macro**: requires `-DBOOT_WITNESS_ADDR` from builder; no literal address in source. | `VERIFIED` |
-| `tools/validate_boot_witness.py` | **No** (working tree, ignored via `.git/info/exclude:1964`) | Validates `boot_witness` placement in `prototype_main.elf` | Lines 140-179: extracts address dynamically; asserts alignment (`addr % 16 == 0`) and bounds (`data_start <= addr < bss_start`) | **Dynamic**: no hardcoded address literal. | `VERIFIED: working-tree file` |
 | `tests/test_restart_sd_audit.py` | **Yes** (`git ls-files`) | Unit tests for SD1stInit audit and prototype source presence | Lines 44, 121: references `chdk-port/platform/g3x/sub/110c/boot_witness.h` | **Indirect**: asserts presence of `boot_witness.h` header; does not pin address. | `VERIFIED` |
 
 ---
 
 ## 4. Files Under `chdk-port/platform/g3x/sub/110c/` Used by Candidate Build
 
-According to `tools/build_candidate_port2a.py` (working-tree file), the candidate build uses the following files under `chdk-port/platform/g3x/sub/110c/` (`SUB_DIR`, defined at line 42 as `os.path.join(CHDK_PORT, "platform", "g3x", "sub", "110c")`) `[VERIFIED: tools/build_candidate_port2a.py:42]`:
-
-### 4.1 C/Assembly Sources Compiled During Candidate Build
-
-1. **`chdk-port/platform/g3x/sub/110c/boot_prototype.c`** (`TRACKED` in Git):
-   - Defined at line 70: `boot_proto_c = os.path.join(SUB_DIR, "boot_prototype.c")` `[VERIFIED: tools/build_candidate_port2a.py:70]`.
-   - Compiled to `candidate_port2a/boot_prototype.o` at lines 79–127 using GCC flags `-march=armv7-r -mthumb -DTHUMB_FW -Iplatform/g3x/sub/110c -DMEMISOSTART=0x3489b4` `[VERIFIED: tools/build_candidate_port2a.py:79-127]`.
-2. **`chdk-port/platform/g3x/sub/110c/stubs_prototype.S`** (`TRACKED` in Git):
-   - Defined at line 71: `stubs_proto_s = os.path.join(SUB_DIR, "stubs_prototype.S")` `[VERIFIED: tools/build_candidate_port2a.py:71]`.
-   - Compiled to `candidate_port2a/stubs_prototype.o` at lines 130–144 using `-Iplatform/g3x/sub/110c` `[VERIFIED: tools/build_candidate_port2a.py:130-144]`.
-3. **`chdk-port/platform/g3x/sub/110c/boot_witness.h`** (`TRACKED` in Git):
-   - Included via preprocessor search path `-Iplatform/g3x/sub/110c` (lines 92, 138, 264) and `#include "boot_witness.h"` at `boot_prototype.c:21` `[VERIFIED: tools/build_candidate_port2a.py:92, 138, 264; boot_prototype.c:21]`.
-
-### 4.2 Pre-Compiled Object Files Archived into `libplatformsub_candidate.a`
-
-Lines 147–173 of `tools/build_candidate_port2a.py` create archive `libplatformsub_candidate.a` by combining `boot_prototype.o` (line 148), `stubs_prototype.o` (line 149), and **22** pre-existing object files under `SUB_DIR` (`chdk-port/platform/g3x/sub/110c/`). All 22 object files are **untracked** in Git and ignored by `.gitignore:47:chdk-port/platform/g3x/sub/110c/*` `[VERIFIED]`:
-
-| Line | Path Under `SUB_DIR` (`platform/g3x/sub/110c/`) | Object Role in Subplatform Archive | Git Tracking Status |
-|---|---|---|---|
-| 150 | `stubs_min.o` | Minimal stubs table | Untracked (ignored via `.gitignore:47`) |
-| 151 | `stubs_entry.o` | Subplatform function entry stubs (part 1) | Untracked (ignored via `.gitignore:47`) |
-| 152 | `stubs_entry_2.o` | Subplatform function entry stubs (part 2) | Untracked (ignored via `.gitignore:47`) |
-| 153 | `capt_seq.o` | Capture sequence handling | Untracked (ignored via `.gitignore:47`) |
-| 154 | `movie_rec.o` | Video recording routines | Untracked (ignored via `.gitignore:47`) |
-| 155 | `filewrite.o` | File writing subsystem | Untracked (ignored via `.gitignore:47`) |
-| 156 | `main.thm.o` | Subplatform initialization (Thumb) | Untracked (ignored via `.gitignore:47`) |
-| 157 | `gui_draw.thm.o` | GUI drawing routines | Untracked (ignored via `.gitignore:47`) |
-| 158 | `memmgmt.thm.o` | Memory management hooks | Untracked (ignored via `.gitignore:47`) |
-| 159 | `gui.thm.o` | GUI event handling | Untracked (ignored via `.gitignore:47`) |
-| 160 | `kbd_process.thm.o` | Keyboard processing routines | Untracked (ignored via `.gitignore:47`) |
-| 161 | `kbd_common.thm.o` | Common keyboard handler | Untracked (ignored via `.gitignore:47`) |
-| 162 | `conf.thm.o` | Configuration storage | Untracked (ignored via `.gitignore:47`) |
-| 163 | `gui_osd.thm.o` | OSD display routines | Untracked (ignored via `.gitignore:47`) |
-| 164 | `raw.thm.o` | Raw buffer handling | Untracked (ignored via `.gitignore:47`) |
-| 165 | `usb_sync.thm.o` | USB synchronization | Untracked (ignored via `.gitignore:47`) |
-| 166 | `shooting.thm.o` | Shooting parameters | Untracked (ignored via `.gitignore:47`) |
-| 167 | `camera_info.thm.o` | Camera metadata accessors | Untracked (ignored via `.gitignore:47`) |
-| 168 | `remotecap.thm.o` | Remote capture routines | Untracked (ignored via `.gitignore:47`) |
-| 169 | `lib_thumb.thm.o` | Subplatform library helper routines | Untracked (ignored via `.gitignore:47`) |
-| 170 | `lang_str.thm.o` | Language string tables | Untracked (ignored via `.gitignore:47`) |
-| 171 | `ptp.thm.o` | PTP protocol handler | Untracked (ignored via `.gitignore:47`) |
-
-### 4.3 Files Checked for Invariance (NOT Compiled into Candidate)
-
-- **`chdk-port/platform/g3x/sub/110c/boot.c`** (Untracked; ignored via `.gitignore:47`):
-  - Defined at line 48: `PROD_BOOT_C = os.path.join(SUB_DIR, "boot.c")` `[VERIFIED: tools/build_candidate_port2a.py:48]`.
-  - Line 353 checks SHA-256 for production invariance: `"platform/g3x/sub/110c/boot.c": sha256_file(PROD_BOOT_C)` `[VERIFIED: tools/build_candidate_port2a.py:353]`.
-  - Canonical `boot.c` is **NOT** compiled or linked into the candidate build; the candidate explicitly compiles `boot_prototype.c` instead to maintain strict isolation `[VERIFIED: tools/build_candidate_port2a.py:70, 78-127, 349-354]`.
+- **Status**: `UNKNOWN` `[UNKNOWN]`.
+- **Reasoning**: The candidate builder script `tools/build_candidate_port2a.py` is an untracked, git-ignored file. No tracked makefile, build script, or configuration file in the Git repository specifies which files under `chdk-port/platform/g3x/sub/110c/` the candidate build consumes `[VERIFIED: git ls-files tools/ chdk-port/]`.
+- **Tracked Files Under `sub/110c`**:
+  While the repository tracks three files under `chdk-port/platform/g3x/sub/110c/`:
+  1. `chdk-port/platform/g3x/sub/110c/boot_prototype.c` (`git ls-files`)
+  2. `chdk-port/platform/g3x/sub/110c/boot_witness.h` (`git ls-files`)
+  3. `chdk-port/platform/g3x/sub/110c/stubs_prototype.S` (`git ls-files`)
+  whether the candidate build compiles these files, links pre-compiled object files, or references canonical `boot.c` cannot be proven from tracked files or historical commits alone.
+- **Milestone Deferral**: The exact selection of `sub/110c` files used by the candidate build is therefore reported as `UNKNOWN` for this tracked-only inventory and is deferred to the first-boot milestone `[UNKNOWN]`.
 
 ---
 
@@ -258,7 +222,7 @@ In `tools/port13_oblig_u4.py:167-342`, all **11** obligations are open (`UNKNOWN
 | **`OBLIG-U4-06`** | `UNKNOWN` | `tools/port13_oblig_u4.py:248-262` | Fail-closed gate timeout enforcement eliminating upstream CHDK legacy bypass (which launched `SpyTask` on 10s timeout even when filesystem mount failed). | `docs/PORT13_NEXT_QUESTIONS.md:164`; `docs/PORT13_OBLIG_U4.md:55, 104-107`; `tools/port9a_runtime_lifecycle.py:863-875` | `VERIFIED` |
 | **`OBLIG-U4-07`** | `UNKNOWN` | `tools/port13_oblig_u4.py:263-278` | Isolation of legacy timeout-bypass causal claim: evaluates whether timeout bypass caused storage media corruption or kernel panics vs unsupported correlation. | `docs/PORT13_NEXT_QUESTIONS.md:165`; `docs/PORT13_OBLIG_U4.md:56, 109-114`; `docs/PORT13_REVIEW_U4.md:71-74` | `VERIFIED` |
 | **`OBLIG-U4-08`** | `UNKNOWN` | `tools/port13_oblig_u4.py:280-294` | Task execution CPU mode and interrupt mask conformance: proof that `SpyTask` executes in Privileged Supervisor Mode (`M = 0x13`) with initial CPSR `0x000000F3`. | `docs/PORT13_NEXT_QUESTIONS.md:11, 22, 60-84`; `docs/PORT14_Q_U4_08.md:1-260`; `docs/PORT13_OBLIG_U4.md:57, 116-124` | `VERIFIED` |
-| **`OBLIG-U4-09`** | `UNKNOWN` | `tools/port13_oblig_u4.py:296-309` | Continuation branch runtime safety: verifying tail branch `b.w sub_fc0d0126` in `task_Startup_my` continues camera initialization without stack corruption. | `docs/PORT13_NEXT_QUESTIONS.md:166`; `docs/PORT13_OBLIG_U4.md:58, 126-129`; `chdk-port/platform/g3x/sub/110c/boot_prototype.c:433` | `VERIFIED` |
+| **`OBLIG-U4-09`** | `UNKNOWN` | `tools/port13_oblig_u4.py:296-309` | Continuation branch runtime safety: verifying tail branch `b.w sub_fc0d0126` in `task_Startup_my` continues camera initialization without stack corruption. | `docs/PORT13_NEXT_QUESTIONS.md:166`; `docs/PORT13_OBLIG_U4.md:58, 126-129`; `chdk-port/platform/g3x/sub/110c/boot_prototype.c:434` | `VERIFIED` |
 | **`OBLIG-U4-10`** | `UNKNOWN` | `tools/port13_oblig_u4.py:311-325` | `SpyTask` cooperative yield behavior and global-interrupt disable constraints: ensuring `SpyTask` does not monopolize CPU or execute prolonged interrupt-disabled sections. | `docs/PORT13_NEXT_QUESTIONS.md:167`; `docs/PORT13_OBLIG_U4.md:59, 131-134`; `docs/CODEX_INDEPENDENT_RESTART_REVIEW.md:48-52` | `VERIFIED` |
 | **`OBLIG-U4-11`** | `UNKNOWN` | `tools/port13_oblig_u4.py:327-341` | Isolation of warm-restart semaphore-freeze hypothesis: verifying whether semaphores allocated prior to DISKBOOT persist across soft reboot and cause scheduler deadlock. | `docs/PORT13_NEXT_QUESTIONS.md:168`; `docs/PORT13_OBLIG_U4.md:60, 136-140`; `docs/PORT3C_RESTART_READINESS_MATRIX.md:80` | `VERIFIED` |
 
@@ -272,18 +236,19 @@ While dedicated numbered modules exist for U2 (`port13_u2_obligations.py`) and U
    - Connected to first boot: any premature runtime patching of `CreateTask` without verifying I-cache invalidation or IRQ masking risks crashing early DryOS initialization before the witness is recorded `[VERIFIED: docs/PORT11B_RUNTIME_SAFETY_MODEL.md:22-25; docs/PORT15_PORT9B_GAP.md:93-118]`.
 2. **Fact U3 (`physw_entry_verified`)**:
    - Registered at `tools/port9b_runtime_contract.py:81-82`: `"PhySw creator, entry and CreateTaskStrictly chain are STATIC_VERIFIED; runtime replacement and stack safety: UNKNOWN"` `[VERIFIED]`.
-   - Connected to first boot: in `boot_prototype.c:405-408`, `task_Startup_my` deliberately calls the stock `PhySw` creator (`sub_fc1283d2`) rather than attempting runtime replacement, because `kbd_task` stack sizing and replacement execution safety are unverified (`UNKNOWN`) `[VERIFIED: docs/PROJECT_STATE.md:35, 159; docs/PORT15_PORT9B_GAP.md:85-88]`.
+   - Connected to first boot: in `boot_prototype.c:405-409`, `task_Startup_my` deliberately calls the stock `PhySw` creator (`sub_fc1283d2`) rather than attempting runtime replacement, because `kbd_task` stack sizing and replacement execution safety are unverified (`UNKNOWN`) `[VERIFIED: docs/PROJECT_STATE.md:35, 159; docs/PORT15_PORT9B_GAP.md:85-88]`.
 
 ### 5.4 First-Boot Hardening Integration Invariant
 
-The tracked documentation across `docs/PROJECT_STATE.md:35`, `docs/HANDOFF.md:67`, `docs/PORT14_Q_U4_08.md:23, 135, 181`, and `docs/PORT13_REVIEW_U4.md:133` establishes the core first-boot safety invariant:
+The tracked documentation across `docs/PROJECT_STATE.md:35`, `docs/HANDOFF.md:67`, `docs/PORT14_Q_U4_08.md:23, 135, 181`, and `docs/PORT13_REVIEW_U4.md:133` establishes the first-boot hardening state:
 
-> **First-Boot Hardening Invariant**: In both the first-boot candidate build (`candidate_port2a/`) and the remediated prototype source (`boot_prototype.c`), all runtime hooks and background tasks are kept dormant:
+> **First-Boot Hardening State**: In the first-boot prototype source (`boot_prototype.c`), CHDK task and hook activation is disabled `[VERIFIED: docs/PROJECT_STATE.md:35; docs/HANDOFF.md:67]`:
 > - `CreateTask_spytask` invocation is commented out (`boot_prototype.c:416`) `[VERIFIED]`.
-> - Stock `PhySw` creator `sub_fc1283d2` is called directly without interception (`boot_prototype.c:407`) `[VERIFIED]`.
-> - Candidate architectural invariants enforce `spytask_active = False`, `gui_hooks_active = False`, and `keyboard_hooks_active = False` (`tools/build_candidate_port2a.py:391-393`) `[VERIFIED]`.
+> - Stock `PhySw` creator `sub_fc1283d2` is called directly without interception (`boot_prototype.c:409`) `[VERIFIED]`.
 >
-> This ensures that even when first-boot execution reaches `task_Startup_my`, no code is executed that depends on open proof obligations `OBLIG-U2-02..08`, `OBLIG-U4-01..11`, `U1`, or `U3` `[VERIFIED]`.
+> **Unresolved Active Obligations**: While CHDK background tasks and hooks are disabled, active execution paths in `boot_prototype.c` still execute code associated with open obligations:
+> 1. **`OBLIG-U4-09`**: The continuation tail branch `b.w sub_fc0d0126` at `boot_prototype.c:434` is on the active execution path of `task_Startup_my`, so continuation branch runtime safety remains applicable and unresolved `[UNKNOWN: tools/port13_oblig_u4.py:296-309; boot_prototype.c:434]`.
+> 2. **`OBLIG-U2-08`**: The warm-restart SD host/card preconditions on the active `SD1stInit` call path (`boot_prototype.c:392-398`, invoking `sub_fc31b1f4` when `sub_fc05c4e0` gate passes) remain applicable and unresolved `[UNKNOWN: tools/port13_u2_obligations.py:782-806; boot_prototype.c:392-398]`.
 
 ---
 
@@ -295,6 +260,6 @@ The tracked documentation across `docs/PROJECT_STATE.md:35`, `docs/HANDOFF.md:67
 | **1** | Tracked `0x0035F7A0` Occurrences | Exactly 9 lines across 6 tracked files | `docs/CODEX_INDEPENDENT_RESTART_REVIEW.md:66`; `docs/HANDOFF.md:228, 229`; `docs/PORT3C_RESTART_READINESS_MATRIX.md:231`; `docs/PROJECT_STATE.md:133, 134`; `docs/REPRODUCIBILITY_MANIFEST.md:80`; `docs/RESTART_SD_HOST_AUDIT.md:248, 251` |
 | **1** | `SD1stInit` Offsets | +14 bytes Thumb-2 code added in `.text` shifts 16-byte-aligned `.data` by +32 bytes (`+0x20`) | `docs/RESTART_SD_HOST_AUDIT.md:247-250`; `docs/HANDOFF.md:228`; `docs/PROJECT_STATE.md:133`; `patches/0001-sd1stinit-restart-prototype.patch:49-56`; `chdk-port/platform/g3x/sub/110c/boot_prototype.c:392-398` |
 | **2** | Corrected Provenance Commits | `860d873c` (investigation), `e418ccfe` (prototype), `25900369` (PR #2 merge), `5d644cbd` (dynamic tooling), `f8cc7a97` (PORT-5E PR #5) | Git log commits on `origin/main`; `docs/REPRODUCIBILITY_MANIFEST.md:71-74` |
-| **3** | Candidate Build & Validation Tools | `build_candidate_port2a.py` (untracked working-tree file, asserts @ 223, 382); `validate_candidate_port2a.py` (untracked working-tree file, asserts @ 112, 121); `build_witness_inspector.py` (tracked, dynamic NM); `validate_witness_inspector.py` (tracked, dynamic 3-way check); `test_validate_witness_inspector.py` (tracked, dynamic NM checks) | `tools/build_candidate_port2a.py:223, 382`; `tools/validate_candidate_port2a.py:112, 121`; `tools/build_witness_inspector.py:39-76`; `tools/validate_witness_inspector.py:89-108, 359-434`; `tests/test_validate_witness_inspector.py:47-68` |
-| **4** | Platform Sub Files Used by Candidate | `boot_prototype.c` (line 70, tracked), `stubs_prototype.S` (line 71, tracked), `boot_witness.h` (included via `-I`, tracked), plus 22 pre-compiled `.o`/`.thm.o` files archived into `libplatformsub_candidate.a` (lines 147-172, untracked/ignored) | `tools/build_candidate_port2a.py:70-71, 92, 125, 138, 142, 147-172, 264, 353` |
-| **5** | Open U1–U4 Obligations | 7 open U2 obligations (`OBLIG-U2-02..08`); 11 open U4 obligations (`OBLIG-U4-01..11`); 2 open runtime facts (U1 hook safety, U3 PhySw replacement). All left unresolved (`UNKNOWN`). | `tools/port13_u2_obligations.py:628-806`; `tools/port13_oblig_u4.py:168-341`; `tools/port9b_runtime_contract.py:77-84`; `docs/PORT13_NEXT_QUESTIONS.md:21-23, 144-168` |
+| **3** | Candidate Build & Validation Tools | Builder script `build_candidate_port2a.py` and validator script `validate_candidate_port2a.py` are untracked (`git ls-files --error-unmatch` exits 1) and git-ignored (`.git/info/exclude`), so their hardcoded addresses and contents are `UNKNOWN` for tracked inventory. Tracked tooling: `build_witness_inspector.py` (dynamic NM symbol resolution), `validate_witness_inspector.py` (dynamic 3-way check), `test_validate_witness_inspector.py` (dynamic tests; comment line 54), `witness_inspector_metadata.json` (hardcoded 0x0035F780 at line 4), `witness_inspector_payload.bin` (hardcoded 0x0035F780 in MOVW/MOVT opcodes). | `tools/build_witness_inspector.py:39-76`; `tools/validate_witness_inspector.py:89-108, 359-434`; `tests/test_validate_witness_inspector.py:47-68`; `firmware/tools/witness_inspector_metadata.json:4-5`; `firmware/tools/witness_inspector_payload.bin:0x0A..0x11` |
+| **4** | Platform Sub Files Used by Candidate | Reported `UNKNOWN`. `tools/build_candidate_port2a.py` is untracked and git-ignored; no tracked build script or configuration specifies which `sub/110c` files the candidate build uses. Deferred to first-boot milestone. | `git ls-files tools/ chdk-port/`; `chdk-port/platform/g3x/sub/110c/` |
+| **5** | Open U1–U4 Obligations | 7 open U2 obligations (`OBLIG-U2-02..08`); 11 open U4 obligations (`OBLIG-U4-01..11`); 2 open runtime facts (U1 hook safety, U3 PhySw replacement). All left unresolved (`UNKNOWN`). Active path obligations `OBLIG-U4-09` (continuation branch at `boot_prototype.c:434`) and `OBLIG-U2-08` (SD1stInit restart conditions at `boot_prototype.c:392-398`) remain applicable and unresolved. | `tools/port13_u2_obligations.py:628-806`; `tools/port13_oblig_u4.py:168-341`; `tools/port9b_runtime_contract.py:77-84`; `docs/PORT13_NEXT_QUESTIONS.md:21-23, 144-168`; `chdk-port/platform/g3x/sub/110c/boot_prototype.c:392-398, 434` |
