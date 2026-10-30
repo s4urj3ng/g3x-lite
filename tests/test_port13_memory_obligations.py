@@ -43,7 +43,7 @@ from tools.port13_memory_obligations import (
     ObligationStatus,
     ORIGIN_MAIN_PIN_COMMIT,
     ORIGIN_MAIN_TRACKED_FILES,
-    PINNED_ORIGIN_MAIN_FILE_HASHES,
+    PINNED_ORIGIN_MAIN_FILE_HASHES, PINNED_ORIGIN_MAIN_PREFIX_LENGTHS, APPEND_TOLERANT_PINNED_FILES,
     REQUIRED_OBLIGATION_IDS,
     RULE_CONTENT_HASH_MISMATCH,
     RULE_DUPLICATE_OBLIGATION_ID,
@@ -71,7 +71,7 @@ from tools.port13_memory_obligations import (
     is_citation_acceptable,
     is_supported_firmware,
     normalize_firmware,
-    verify_address_provenance,
+    verify_address_provenance, verify_pinned_content_bytes,
 )
 
 
@@ -514,12 +514,198 @@ class TestContentAuthenticationAndDigestPinning(unittest.TestCase):
         for rel_path, expected_hash in PINNED_ORIGIN_MAIN_FILE_HASHES.items():
             full_path = REPO_ROOT / rel_path
             self.assertTrue(full_path.is_file(), f"Pinned file '{rel_path}' missing on disk")
-            actual_sha = hashlib.sha256(full_path.read_bytes()).hexdigest()
+            disk_bytes = full_path.read_bytes()
+            if rel_path in PINNED_ORIGIN_MAIN_PREFIX_LENGTHS:
+                pinned_len = PINNED_ORIGIN_MAIN_PREFIX_LENGTHS[rel_path]
+                self.assertGreaterEqual(
+                    len(disk_bytes),
+                    pinned_len,
+                    f"Append-tolerant file '{rel_path}' shorter than pinned prefix length {pinned_len}",
+                )
+                target_bytes = disk_bytes[:pinned_len]
+            else:
+                target_bytes = disk_bytes
+            actual_sha = hashlib.sha256(target_bytes).hexdigest()
             self.assertEqual(
                 actual_sha.lower(),
                 expected_hash.lower(),
                 f"Digest mismatch for '{rel_path}' against pinned commit {ORIGIN_MAIN_PIN_COMMIT}",
             )
+            ok, msg = verify_pinned_content_bytes(rel_path, disk_bytes)
+            self.assertTrue(ok, msg)
+
+    def test_append_tolerant_set_and_recorded_lengths(self):
+        """(1) The append-tolerant set is exactly {docs/PROJECT_STATE.md, docs/HANDOFF.md} with recorded lengths."""
+        expected_set = {"docs/PROJECT_STATE.md", "docs/HANDOFF.md"}
+        self.assertEqual(set(PINNED_ORIGIN_MAIN_PREFIX_LENGTHS.keys()), expected_set)
+        self.assertEqual(APPEND_TOLERANT_PINNED_FILES, frozenset(expected_set))
+        self.assertEqual(PINNED_ORIGIN_MAIN_PREFIX_LENGTHS["docs/PROJECT_STATE.md"], 158558)
+        self.assertEqual(PINNED_ORIGIN_MAIN_PREFIX_LENGTHS["docs/HANDOFF.md"], 231832)
+        self.assertEqual(
+            PINNED_ORIGIN_MAIN_FILE_HASHES["docs/PROJECT_STATE.md"],
+            "3b700ed093a4e2d37c9dc57e3cf8e296e679946ac618017f95ec9eb43cad8121",
+        )
+        self.assertEqual(
+            PINNED_ORIGIN_MAIN_FILE_HASHES["docs/HANDOFF.md"],
+            "6c0c19054e6c6c68f71821ed300f456d41d8180569c48224e4660bc1e116a0d5",
+        )
+
+    def test_append_tolerant_prefix_modified_byte_truncated_and_appended(self):
+        """(2) Modified byte inside prefix fails, truncated file fails, and appended bytes pass."""
+        cases = (
+            ("docs/PROJECT_STATE.md", "OBLIG-MEM-03"),
+            ("docs/HANDOFF.md", "OBLIG-MEM-04"),
+        )
+        for rel_path, ob_id in cases:
+            with self.subTest(rel_path=rel_path):
+                pinned_len = PINNED_ORIGIN_MAIN_PREFIX_LENGTHS[rel_path]
+                disk_bytes = (REPO_ROOT / rel_path).read_bytes()
+                prefix_bytes = disk_bytes[:pinned_len]
+                target_ob = [ob for ob in DEFAULT_MEMORY_OBLIGATIONS if ob.id == ob_id][0]
+
+                # Exact N-byte prefix and N-byte prefix + appended bytes pass content authentication
+                for valid_payload in (prefix_bytes, prefix_bytes + b"\n## Appended state sync note\n"):
+                    ok, msg = verify_pinned_content_bytes(rel_path, valid_payload)
+                    self.assertTrue(ok, msg)
+
+                    def reader_valid(p: pathlib.Path, payload: bytes = valid_payload, target: str = rel_path) -> bytes:
+                        if p.as_posix().endswith(target):
+                            return payload
+                        return p.read_bytes()
+
+                    single_ok = evaluate_single_obligation(target_ob, repo_root=REPO_ROOT, file_reader=reader_valid)
+                    self.assertNotIn(
+                        RULE_CONTENT_HASH_MISMATCH,
+                        [f.rule_id for f in single_ok.findings],
+                    )
+
+                # Modified byte inside the prefix (first, middle, last byte, with and without appended bytes) fails
+                for flip_idx in (0, pinned_len // 2, pinned_len - 1):
+                    mutated = bytearray(prefix_bytes)
+                    mutated[flip_idx] ^= 1
+                    for bad_payload in (bytes(mutated), bytes(mutated) + b"\n## Appended after tampered prefix\n"):
+                        ok, _ = verify_pinned_content_bytes(rel_path, bad_payload)
+                        self.assertFalse(ok)
+
+                        def reader_mod(p: pathlib.Path, payload: bytes = bad_payload, target: str = rel_path) -> bytes:
+                            if p.as_posix().endswith(target):
+                                return payload
+                            return p.read_bytes()
+
+                        single_mod = evaluate_single_obligation(target_ob, repo_root=REPO_ROOT, file_reader=reader_mod)
+                        self.assertIn(
+                            RULE_CONTENT_HASH_MISMATCH,
+                            [f.rule_id for f in single_mod.findings],
+                        )
+
+                # Truncated file (shorter than N) fails
+                for truncated_payload in (prefix_bytes[:pinned_len - 1], prefix_bytes[:100], b""):
+                    ok, _ = verify_pinned_content_bytes(rel_path, truncated_payload)
+                    self.assertFalse(ok)
+
+                    def reader_trunc(p: pathlib.Path, payload: bytes = truncated_payload, target: str = rel_path) -> bytes:
+                        if p.as_posix().endswith(target):
+                            return payload
+                        return p.read_bytes()
+
+                    single_trunc = evaluate_single_obligation(target_ob, repo_root=REPO_ROOT, file_reader=reader_trunc)
+                    self.assertIn(
+                        RULE_CONTENT_HASH_MISMATCH,
+                        [f.rule_id for f in single_trunc.findings],
+                    )
+
+                # Temp-file verification (appended passes content auth; truncated and modified-prefix fail)
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    tmp_root = pathlib.Path(tmp_dir)
+                    for cit in target_ob.citations:
+                        dst = tmp_root / cit.path
+                        dst.parent.mkdir(parents=True, exist_ok=True)
+                        dst.write_bytes((REPO_ROOT / cit.path).read_bytes())
+
+                    target_file = tmp_root / rel_path
+                    target_file.write_bytes(prefix_bytes + b"\n## Temp appended content\n")
+                    res_appended = evaluate_single_obligation(target_ob, repo_root=tmp_root)
+                    self.assertNotIn(
+                        RULE_CONTENT_HASH_MISMATCH,
+                        [f.rule_id for f in res_appended.findings],
+                    )
+
+                    target_file.write_bytes(prefix_bytes[:pinned_len - 1])
+                    res_truncated = evaluate_single_obligation(target_ob, repo_root=tmp_root)
+                    self.assertIn(
+                        RULE_CONTENT_HASH_MISMATCH,
+                        [f.rule_id for f in res_truncated.findings],
+                    )
+
+                    tampered_prefix = bytearray(prefix_bytes)
+                    tampered_prefix[0] ^= 1
+                    target_file.write_bytes(bytes(tampered_prefix) + b"\n## Temp appended content\n")
+                    res_tampered = evaluate_single_obligation(target_ob, repo_root=tmp_root)
+                    self.assertIn(
+                        RULE_CONTENT_HASH_MISMATCH,
+                        [f.rule_id for f in res_tampered.findings],
+                    )
+
+    def test_non_append_tolerant_files_require_exact_full_file_match(self):
+        """(3) All non-append-tolerant files still require an exact full-file match."""
+        non_append_paths = sorted(
+            set(PINNED_ORIGIN_MAIN_FILE_HASHES.keys()) - {"docs/PROJECT_STATE.md", "docs/HANDOFF.md"}
+        )
+        self.assertEqual(len(non_append_paths), 11)
+        for rel_path in non_append_paths:
+            with self.subTest(rel_path=rel_path):
+                self.assertNotIn(rel_path, PINNED_ORIGIN_MAIN_PREFIX_LENGTHS)
+                disk_bytes = (REPO_ROOT / rel_path).read_bytes()
+                ok_exact, msg_exact = verify_pinned_content_bytes(rel_path, disk_bytes)
+                self.assertTrue(ok_exact, msg_exact)
+
+                # Appending even a single byte must fail closed
+                ok_appended, _ = verify_pinned_content_bytes(rel_path, disk_bytes + b"\n")
+                self.assertFalse(ok_appended, f"Non-append-tolerant file '{rel_path}' accepted appended bytes")
+
+                # Truncating or modifying a byte must fail closed
+                ok_trunc, _ = verify_pinned_content_bytes(rel_path, disk_bytes[:-1])
+                self.assertFalse(ok_trunc)
+                mutated = bytearray(disk_bytes)
+                mutated[0] ^= 1
+                ok_mod, _ = verify_pinned_content_bytes(rel_path, bytes(mutated))
+                self.assertFalse(ok_mod)
+
+        # Verify evaluate_single_obligation on OBLIG-MEM-16A rejects appended bytes on PORT11A
+        ob_16a = [ob for ob in DEFAULT_MEMORY_OBLIGATIONS if ob.id == "OBLIG-MEM-16A"][0]
+        port11a_bytes = (REPO_ROOT / "docs/PORT11A_GM110C_ROM_EVIDENCE.md").read_bytes()
+
+        def appended_port11a_reader(p: pathlib.Path) -> bytes:
+            return port11a_bytes + b"\n"
+
+        res_16a = evaluate_single_obligation(ob_16a, repo_root=REPO_ROOT, file_reader=appended_port11a_reader)
+        self.assertFalse(res_16a.is_verified)
+        self.assertIn(RULE_CONTENT_HASH_MISMATCH, [f.rule_id for f in res_16a.findings])
+
+    def test_canonical_37_obligation_counts_and_statuses_unchanged(self):
+        """Every obligation status stays unchanged: 37 canonical IDs and 2 VERIFIED, OBLIG-MEM-03 INFERRED."""
+        import tools.port13_u2_obligations as pu2
+        import tools.port13_oblig_u4 as pu4
+
+        mem_ids = {ob.id for ob in DEFAULT_MEMORY_OBLIGATIONS}
+        u2_ids = {ob.id for ob in pu2.DEFAULT_U2_OBLIGATIONS}
+        u4_ids = {ob.id for ob in pu4.U4_OBLIGATIONS}
+        self.assertEqual(len(mem_ids) + len(u2_ids) + len(u4_ids), 37)
+
+        verified_ids = (
+            [ob.id for ob in DEFAULT_MEMORY_OBLIGATIONS if ob.current_status == ObligationStatus.VERIFIED]
+            + [ob.id for ob in pu2.DEFAULT_U2_OBLIGATIONS if ob.current_status == pu2.ObligationStatus.VERIFIED]
+            + [ob.id for ob in pu4.U4_OBLIGATIONS if ob.current_status == pu4.ObligationStatus.VERIFIED]
+        )
+        self.assertEqual(verified_ids, ["OBLIG-MEM-16A", "OBLIG-U2-01"])
+
+        ob_mem03 = [ob for ob in DEFAULT_MEMORY_OBLIGATIONS if ob.id == "OBLIG-MEM-03"][0]
+        self.assertEqual(ob_mem03.current_status, ObligationStatus.INFERRED)
+
+        ob_u408 = [ob for ob in pu4.U4_OBLIGATIONS if ob.id == "OBLIG-U4-08"][0]
+        self.assertEqual(ob_u408.current_status, pu4.ObligationStatus.UNKNOWN)
+
+        self.assertFalse(evaluate(repo_root=REPO_ROOT).is_ready)
 
     def test_altered_content_at_allowed_path_fails_via_injectable_reader(self):
         """Content alteration at an allowed path must be rejected fail-closed via file_reader."""
@@ -1048,6 +1234,9 @@ class TestProvenanceRegistryAndObligationSetIntegrity(unittest.TestCase):
         """Module constants MappingProxyType cannot be mutated."""
         with self.assertRaises(TypeError):
             PINNED_ORIGIN_MAIN_FILE_HASHES["new_file"] = "fake_hash"  # type: ignore
+
+        with self.assertRaises(TypeError):
+            PINNED_ORIGIN_MAIN_PREFIX_LENGTHS["docs/HANDOFF.md"] = 1  # type: ignore
 
         with self.assertRaises(TypeError):
             CITATION_PROVENANCE_REGISTRY[("path", 1)] = CitationProvenance("GM1.10C", False)  # type: ignore
