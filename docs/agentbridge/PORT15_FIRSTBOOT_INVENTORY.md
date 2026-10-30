@@ -20,7 +20,7 @@ The Canon PowerShot G3 X (`GM1.10C`) CHDK first-boot candidate codebase exhibits
 
 ## 1. Tracked Locations Stating, Asserting, or Deriving `boot_witness` Address and Offsets
 
-Across all Git-tracked files in the repository, exactly **26** line occurrences reference `0x0035F780` and **9** line occurrences reference `0x0035F7A0` (with 5 lines referencing both, yielding 30 distinct lines) `[VERIFIED: git grep -n]`.
+Across all Git-tracked files in the repository (excluding this document), exactly **26** line occurrences across **9** tracked files reference `0x0035F780` and **9** line occurrences across **6** tracked files reference `0x0035F7A0` (with 5 lines referencing both, yielding 30 distinct lines) `[VERIFIED: git grep -n]`.
 
 ### 1.1 Complete Census of Tracked References to `0x0035F780`
 
@@ -82,7 +82,7 @@ Across all Git-tracked files in the repository, exactly **26** line occurrences 
      "1:\n"
      ```
      Total inline assembly instructions added: 2 + 4 + 2 + 2 + 4 = **14 bytes** `[VERIFIED]`.
-   - `chdk-port/platform/g3x/sub/110c/stubs_prototype.S:65`: `STUB2(fc31b1f4)` registers the ARM veneer call `[VERIFIED]`.
+   - `chdk-port/platform/g3x/sub/110c/stubs_prototype.S:56`: `STUB2(fc31b1f4)` registers the ARM veneer call `[VERIFIED]`.
 
 2. **Shift of `.data` by +32 Bytes (`+0x20`)**:
    - Because `boot_witness` is declared with `__attribute__((aligned(16), section(".data")))` (`chdk-port/platform/g3x/sub/110c/boot_prototype.c:27`), and because `.data` is linked after `.text`, expanding `.text` by 14 bytes crossed a 16-byte alignment boundary, advancing the start of `.data` and all symbols within it by +32 bytes (`0x20` bytes) `[VERIFIED: docs/RESTART_SD_HOST_AUDIT.md:247-250]`.
@@ -117,7 +117,7 @@ The corrected address (`0x0035F7A0`) and its underlying early boot literal corre
 1. **`SD1stInit` Task Creation Addition (PR #2)**:
    - In stock firmware, `StartDiskboot` (`0xFC05BBEA`) spawns `"SD1stInit"` via veneer `0xFC31B1F4` before loading `DISKBOOT.BIN` `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:387-390; tests/test_restart_sd_audit.py:77]`.
    - The initial CHDK port prototype (`boot.c`) omitted `StartDiskboot` to bypass reloading the bootloader, leaving `SD1stInit` unspawned on the restart path `[VERIFIED: docs/RESTART_SD_HOST_AUDIT.md:68]`. The consequence that the SD controller is left un-reinitialized is `UNKNOWN`, as `docs/RESTART_SD_HOST_AUDIT.md:71-73` itself leaves compensating initialisation (`0xFC07564E` → `0x010E1A92`) and the actual runtime effect of the omission unverified `[UNKNOWN]`.
-   - PR #2 added the gated call to `sub_fc31b1f4` in `boot_prototype.c:392-398` and stub `STUB2(fc31b1f4)` in `stubs_prototype.S:65` (14 bytes added to `.text`) `[VERIFIED]`.
+   - PR #2 added the gated call to `sub_fc31b1f4` in `boot_prototype.c:392-398` and stub `STUB2(fc31b1f4)` in `stubs_prototype.S:56` (14 bytes added to `.text`) `[VERIFIED]`.
    - This 14-byte code growth pushed `.data` across a 16-byte alignment boundary by +32 bytes (`+0x20`), shifting `boot_witness` from `0x0035F780` to `0x0035F7A0` in `prototype_main.elf` `[VERIFIED: docs/RESTART_SD_HOST_AUDIT.md:247-250]`.
 
 2. **PORT-5E Early Boot Literal Corrections (PR #5)**:
@@ -221,7 +221,7 @@ In `tools/port13_oblig_u4.py:167-342`, all **11** obligations are open (`UNKNOWN
 | **`OBLIG-U4-05`** | `UNKNOWN` | `tools/port13_oblig_u4.py:232-247` | Filesystem readiness gating and monotonic latch synchronization (Contract I3): `SpyTask` must wait for all 6 filesystem stages without latched fault before I/O. | `docs/PORT13_NEXT_QUESTIONS.md:163`; `docs/PORT13_OBLIG_U4.md:54, 98-102`; `tools/port9a_runtime_lifecycle.py:841-860` | `VERIFIED` |
 | **`OBLIG-U4-06`** | `UNKNOWN` | `tools/port13_oblig_u4.py:248-262` | Fail-closed gate timeout enforcement eliminating upstream CHDK legacy bypass (which launched `SpyTask` on 10s timeout even when filesystem mount failed). | `docs/PORT13_NEXT_QUESTIONS.md:164`; `docs/PORT13_OBLIG_U4.md:55, 104-107`; `tools/port9a_runtime_lifecycle.py:863-875` | `VERIFIED` |
 | **`OBLIG-U4-07`** | `UNKNOWN` | `tools/port13_oblig_u4.py:263-278` | Isolation of legacy timeout-bypass causal claim: evaluates whether timeout bypass caused storage media corruption or kernel panics vs unsupported correlation. | `docs/PORT13_NEXT_QUESTIONS.md:165`; `docs/PORT13_OBLIG_U4.md:56, 109-114`; `docs/PORT13_REVIEW_U4.md:71-74` | `VERIFIED` |
-| **`OBLIG-U4-08`** | `UNKNOWN` | `tools/port13_oblig_u4.py:280-294` | Task execution CPU mode and interrupt mask conformance: proof that `SpyTask` executes in Privileged Supervisor Mode (`M = 0x13`) with initial CPSR `0x000000F3`. | `docs/PORT13_NEXT_QUESTIONS.md:11, 22, 60-84`; `docs/PORT14_Q_U4_08.md:1-260`; `docs/PORT13_OBLIG_U4.md:57, 116-124` | `VERIFIED` |
+| **`OBLIG-U4-08`** | `UNKNOWN` | `tools/port13_oblig_u4.py:280-294` | Task execution CPU mode and interrupt mask conformance: proof that `SpyTask` executes in Privileged Supervisor Mode (`M = 0x13`) with initial CPSR `0x000000F3`. | `docs/PORT13_NEXT_QUESTIONS.md:11, 22, 60-84`; `docs/PORT14_Q_U4_08.md:1-242`; `docs/PORT13_OBLIG_U4.md:57, 116-124` | `VERIFIED` |
 | **`OBLIG-U4-09`** | `UNKNOWN` | `tools/port13_oblig_u4.py:296-309` | Continuation branch runtime safety: verifying tail branch `b.w sub_fc0d0126` in `task_Startup_my` continues camera initialization without stack corruption. | `docs/PORT13_NEXT_QUESTIONS.md:166`; `docs/PORT13_OBLIG_U4.md:58, 126-129`; `chdk-port/platform/g3x/sub/110c/boot_prototype.c:434` | `VERIFIED` |
 | **`OBLIG-U4-10`** | `UNKNOWN` | `tools/port13_oblig_u4.py:311-325` | `SpyTask` cooperative yield behavior and global-interrupt disable constraints: ensuring `SpyTask` does not monopolize CPU or execute prolonged interrupt-disabled sections. | `docs/PORT13_NEXT_QUESTIONS.md:167`; `docs/PORT13_OBLIG_U4.md:59, 131-134`; `docs/CODEX_INDEPENDENT_RESTART_REVIEW.md:48-52` | `VERIFIED` |
 | **`OBLIG-U4-11`** | `UNKNOWN` | `tools/port13_oblig_u4.py:327-341` | Isolation of warm-restart semaphore-freeze hypothesis: verifying whether semaphores allocated prior to DISKBOOT persist across soft reboot and cause scheduler deadlock. | `docs/PORT13_NEXT_QUESTIONS.md:168`; `docs/PORT13_OBLIG_U4.md:60, 136-140`; `docs/PORT3C_RESTART_READINESS_MATRIX.md:80` | `VERIFIED` |
@@ -256,7 +256,7 @@ The tracked documentation across `docs/PROJECT_STATE.md:35`, `docs/HANDOFF.md:67
 
 | Item | Subject | Verified Finding | Key Citations (`file:line`) |
 |---|---|---|---|
-| **1** | Tracked `0x0035F780` Occurrences | Exactly 26 lines across 7 tracked files | `docs/CODEX_INDEPENDENT_RESTART_REVIEW.md:66`; `docs/HANDOFF.md:186, 188, 189, 192, 228, 340, 388, 398, 426, 455`; `docs/PORT14_Q_MEM03_BSS.md:124`; `docs/PORT3C_RESTART_READINESS_MATRIX.md:231`; `docs/PROJECT_STATE.md:93, 133, 135, 179, 191, 199, 206`; `docs/REPRODUCIBILITY_MANIFEST.md:76, 77`; `docs/RESTART_SD_HOST_AUDIT.md:248, 253`; `firmware/tools/witness_inspector_metadata.json:4`; `tests/test_validate_witness_inspector.py:54` |
+| **1** | Tracked `0x0035F780` Occurrences | Exactly 26 lines across 9 tracked files | `docs/CODEX_INDEPENDENT_RESTART_REVIEW.md:66`; `docs/HANDOFF.md:186, 188, 189, 192, 228, 340, 388, 398, 426, 455`; `docs/PORT14_Q_MEM03_BSS.md:124`; `docs/PORT3C_RESTART_READINESS_MATRIX.md:231`; `docs/PROJECT_STATE.md:93, 133, 135, 179, 191, 199, 206`; `docs/REPRODUCIBILITY_MANIFEST.md:76, 77`; `docs/RESTART_SD_HOST_AUDIT.md:248, 253`; `firmware/tools/witness_inspector_metadata.json:4`; `tests/test_validate_witness_inspector.py:54` |
 | **1** | Tracked `0x0035F7A0` Occurrences | Exactly 9 lines across 6 tracked files | `docs/CODEX_INDEPENDENT_RESTART_REVIEW.md:66`; `docs/HANDOFF.md:228, 229`; `docs/PORT3C_RESTART_READINESS_MATRIX.md:231`; `docs/PROJECT_STATE.md:133, 134`; `docs/REPRODUCIBILITY_MANIFEST.md:80`; `docs/RESTART_SD_HOST_AUDIT.md:248, 251` |
 | **1** | `SD1stInit` Offsets | +14 bytes Thumb-2 code added in `.text` shifts 16-byte-aligned `.data` by +32 bytes (`+0x20`) | `docs/RESTART_SD_HOST_AUDIT.md:247-250`; `docs/HANDOFF.md:228`; `docs/PROJECT_STATE.md:133`; `patches/0001-sd1stinit-restart-prototype.patch:49-56`; `chdk-port/platform/g3x/sub/110c/boot_prototype.c:392-398` |
 | **2** | Corrected Provenance Commits | `860d873c` (investigation), `e418ccfe` (prototype), `25900369` (PR #2 merge), `5d644cbd` (dynamic tooling), `f8cc7a97` (PORT-5E PR #5) | Git log commits on `origin/main`; `docs/REPRODUCIBILITY_MANIFEST.md:71-74` |
