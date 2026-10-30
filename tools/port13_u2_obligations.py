@@ -149,7 +149,8 @@ SUPPORTED_FIRMWARE: str = "GM1.10C"
 PINNED_FILE_HASHES: Dict[str, str] = {
     "docs/PORT11A_GM110C_ROM_EVIDENCE.md": "45928b29efc2062796ae51a326fcfec2f650e9589944f530158b7a9dcaaec8da",
     "tools/port9a_runtime_lifecycle.py": "77da2bfa5fb018590ec60215afc440b48d2fe1d618e6ce121f4253d21b667d93",
-    "tools/port9b_runtime_contract.py": "d51d03e01e2df820b03e659782fb5814f1dadc00cea95ba3760bbaaf4e7b3a4b",
+    # tools/port9b_runtime_contract.py updated with PROTOTYPE_SHA256 for boot_prototype.c by p17-trace-integration-r4
+    "tools/port9b_runtime_contract.py": "5936511e42b813e0d360370d25ade40c89b8cb37b79dc2b11c9e4135132a4edb",
     "docs/PORT13_REVIEW_U2.md": "6b7f5080db6a31a34da3a3c62ae52b3d6efe2449b82f322cfb0d836665ec666e",
     "docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md": "9855a2316aba777065547f7e8f30a3aabff5cff8ce94be48deb3c10406df281c",
     "docs/PORT5A_RANMA_PORT_RECOVERY.md": "6c68897320b97c6d67a2ad6f6554c41a98d11105d8ab45394186a738364400e8",

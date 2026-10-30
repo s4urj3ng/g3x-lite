@@ -8,10 +8,19 @@
 // Subsystem: Early-boot & post-continuation telemetry ring buffer and stage markers
 // Safety Scope: Phase 0 host static analysis / offline build (docs/SAFETY.md)
 // Evidence Base: docs/PORT17_TRACE_EVIDENCE.md
-// Scope Note: This module is NOT yet wired into the build or called by boot code.
-// Build wiring (tools/build_candidate_port2a.py, platform Makefile) and marker call
-// sites (boot_prototype.c) belong to the separate task p17-trace-integration and
-// are out of scope here.
+// Scope Note: Wiring into candidate build is opt-in via tools/build_candidate_port2a.py
+// (--trace or G3X_TRACE=1). With tracing OFF, candidate build is byte-for-byte identical
+// to the PORT-16 baseline (_start=0x003489B4, boot_witness=0x0035F7A0, _end=0x00366CB0,
+// DISKBOOT.BIN SHA-256 9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136).
+// With tracing ON, boot_prototype.c and g3x_trace.c are both compiled with -DG3X_TRACE=1
+// and g3x_trace.c is linked into the candidate. The recorder code, its rodata and the
+// boot_prototype.c marker hook go into a loaded .g3x_trace_text section placed after
+// .data, so boot_witness stays at 0x0035F7A0 in the trace build as well. .bss starts
+// after that section and g3x_trace_ring (2080 B, 16-byte aligned) is the last .bss
+// object, so _end moves by the trace text size plus the ring. The exact trace-build
+// values are pinned in tests/test_port17_trace_integration.py. Trace build artifacts
+// are isolated under candidate_trace/ and marked NOT trial-ready (no matching inspector;
+// flush/LED off; Q-P17-01, Q-P17-04).
 //
 // Byte Layout & Endianness Specification:
 // ---------------------------------------
@@ -60,7 +69,24 @@
 #define G3X_TRACE_RING_SIZE         (G3X_TRACE_HEADER_SIZE + (G3X_TRACE_CAPACITY * G3X_TRACE_RECORD_SIZE)) // 2080 B
 
 // -----------------------------------------------------------------------------
-// Stage Identifiers
+// Stage Identifiers & Stage Marker Citations / TODOs (Q-P17-01, Q-P17-04)
+// -----------------------------------------------------------------------------
+// Stage markers in candidate boot flow (chdk-port/platform/g3x/sub/110c/boot_prototype.c,
+// trace build only; the call sites are guarded by #if defined(G3X_TRACE) && G3X_TRACE):
+// - Stage 2 (RELOC, G3X_STAGE_RELOC): called from g3x_trace_boot_post_bss, which boot()
+//   branches to right after the Canon BSS zeroing loop (boot_prototype.c:144-153, 155-160;
+//   docs/PORT17_TRACE_EVIDENCE.md:205-251).
+// - Stage 1 (ENTRY, G3X_STAGE_ENTRY): emitted as the first record at that same post-BSS
+//   point, so its timing is post-BSS. A C call earlier in boot() would clobber r0-r3/lr
+//   before sub_fc02007e (boot_prototype.c:98), whose register-input contract is not
+//   recorded. An earlier ENTRY marker stays open under Q-P17-01.
+// - Stage 3 (TASK_HOOK, G3X_STAGE_TASK_HOOK): TODO (Q-P17-01, Q-P17-04), no call site.
+//   CHDK SpyTask is disabled for first-boot hardening (boot_prototype.c:415-420;
+//   docs/PORT16_FIRSTBOOT_U_TRIAGE.md:131, 511-513).
+// - Stage 4 (KBD, G3X_STAGE_KBD): TODO (Q-P17-01), no call site. The keyboard hook is
+//   disabled; stock task_PhySw runs unhooked via sub_fc1283d2 (boot_prototype.c:13, 412-413).
+// - Stage 5 (DISPLAY, G3X_STAGE_DISPLAY): TODO (Q-P17-01), no call site. The display hook
+//   is disabled (boot_prototype.c:13); no framebuffer hook exists in the prototype.
 // -----------------------------------------------------------------------------
 #define G3X_STAGE_NONE              0x00000000U  // Empty / uninitialized record
 #define G3X_STAGE_ENTRY             0x00000001U  // Stage 1: Core entry

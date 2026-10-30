@@ -59,7 +59,9 @@ import port9a_runtime_lifecycle as rt  # noqa: E402
 
 REPO_ROOT = boot.REPO_ROOT
 PROTOTYPE = "platform/g3x/sub/110c/boot_prototype.c"
-PROTOTYPE_SHA256 = "f7884eb2078e93a0098299e2665c1069ecbc65c7759d8993fa31e38fbb232e68"
+# chdk-port/platform/g3x/sub/110c/boot_prototype.c with guarded stage-marker call sites added by p17-trace-integration-r4;
+# tracing-off binary identity is proven in test_port17_trace_integration.py.
+PROTOTYPE_SHA256 = "c3bcbbd3b0891b34d05a64cbae559d0487aeda1ec88e961fddd6cece64479b61"
 
 VERIFIED_SOURCE = "VERIFIED_SOURCE"
 STATIC_VERIFIED = "STATIC_VERIFIED"
