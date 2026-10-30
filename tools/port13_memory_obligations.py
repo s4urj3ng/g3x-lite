@@ -168,12 +168,12 @@ _PINNED_ORIGIN_MAIN_FILE_HASHES_RAW: Dict[str, str] = {
     "chdk-port/platform/g3x/sub/110c/boot_prototype.c": "f7884eb2078e93a0098299e2665c1069ecbc65c7759d8993fa31e38fbb232e68",
     "docs/G3X_HISTORICAL_SYMBOL_RECONCILIATION.md": "c04e83dec333fb6c41b4a854394a11f3fc36ce71c0eda6f3ef212da6a03bf74d",
     "docs/GM110C_MEMORY_MAP.md": "74561df2bd43b233ea35763df9689076791f67fcedf24291fb72f17571efdf05",
-    "docs/HANDOFF.md": "d165b760a39a3ee310632b29db4ace0e8afd40aef10301854fbef94ac02e2bbb",
+    "docs/HANDOFF.md": "6967e1d8313d5d16070addb8e87ed0adb178c70fa9743b2f3a24c32160e72a67",
     "docs/PATCH_AUDIT_110E.md": "6606f6c8b41bdb02748d12bac067079ebbbaf3b8912d24b85b27bfa63414cdfa",
     "docs/PORT11A_GM110C_ROM_EVIDENCE.md": "45928b29efc2062796ae51a326fcfec2f650e9589944f530158b7a9dcaaec8da",
     "docs/PORT5A_RANMA_PORT_RECOVERY.md": "6c68897320b97c6d67a2ad6f6554c41a98d11105d8ab45394186a738364400e8",
     "docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md": "9855a2316aba777065547f7e8f30a3aabff5cff8ce94be48deb3c10406df281c",
-    "docs/PROJECT_STATE.md": "1392294ee1d48370b8db3d4b9da197003582c12013f5595d86aad377dd2353e0",
+    "docs/PROJECT_STATE.md": "6b8000b03e1c4c0b290111a17763f4adeb1a493f9e0385f6d9fa47f6743e74ab",
     "docs/SAFETY.md": "c50f25b07500a844a374193b839028ca82de6007e6778eeb3a04049ffaaaa30d",
     "research/historical/g3x/g3x_100c_historical_symbols.csv": "6289e65e0c1f9d3c137315aacdd368a9da6f8eb4c9438d03464f5ac0342205c6",
     "research/historical/g3x/g3x_100c_historical_symbols.json": "13524f24b855dddc9eb44ab5141020e5c8d34eb8a4a7f50c8e5914269a6bb86d",
@@ -1442,8 +1442,8 @@ DEFAULT_MEMORY_OBLIGATIONS: Tuple[MemoryObligation, ...] = (
 # as a prefix) and fails closed if a file is shorter than N, is missing, or its prefix digest
 # differs. Every other pinned file requires an exact full-file SHA-256 match.
 _PINNED_ORIGIN_MAIN_PREFIX_LENGTHS_RAW: Dict[str, int] = {
-    "docs/HANDOFF.md": 232961,
-    "docs/PROJECT_STATE.md": 159466,
+    "docs/HANDOFF.md": 244363,
+    "docs/PROJECT_STATE.md": 171564,
 }
 
 PINNED_ORIGIN_MAIN_PREFIX_LENGTHS: MappingProxyType[str, int] = MappingProxyType(
