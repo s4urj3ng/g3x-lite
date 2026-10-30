@@ -72,6 +72,34 @@ class TestCandidateWitnessVerification(unittest.TestCase):
             "EXPECTED_BOOT_WITNESS_ADDR must be 0x0035F7A0 per docs/PORT16_WITNESS_ADDRESS.md",
         )
 
+    def test_import_or_reload_preserves_os_environ(self):
+        """Assert that importing or reloading build_candidate_port2a does not alter os.environ."""
+        import importlib
+
+        original_env = dict(os.environ)
+        try:
+            # Verify reload with existing environment
+            importlib.reload(bcp)
+            self.assertEqual(
+                dict(os.environ),
+                original_env,
+                "importlib.reload(bcp) modified os.environ",
+            )
+
+            # Verify reload when TMPDIR is unset does not inject TMPDIR into os.environ
+            if "TMPDIR" in os.environ:
+                del os.environ["TMPDIR"]
+            env_without_tmpdir = dict(os.environ)
+            importlib.reload(bcp)
+            self.assertEqual(
+                dict(os.environ),
+                env_without_tmpdir,
+                "importlib.reload(bcp) injected TMPDIR into os.environ when unset",
+            )
+        finally:
+            os.environ.clear()
+            os.environ.update(original_env)
+
     def test_extract_witness_addr_from_nm_match(self):
         """extract_witness_addr_from_nm extracts 0x0035F7A0 from valid nm text."""
         addr = bcp.extract_witness_addr_from_nm(MOCK_NM_MATCH)
@@ -127,15 +155,15 @@ class TestCandidateWitnessVerification(unittest.TestCase):
         self.assertNotEqual(ctx.exception.code, 0)
         err = captured_stderr.getvalue()
         self.assertIn("boot_witness symbol address mismatch", err)
-        self.assertIn("expected 0x0035F7A0", err)
-        self.assertIn("got 0x0035F780", err)
+        self.assertIn("expected=0x0035F7A0", err)
+        self.assertIn("actual=0x0035F780", err)
 
     @patch("subprocess.run")
     @patch("os.path.isfile", return_value=True)
     def test_verify_witness_addr_missing_symbol_fails_closed(
         self, mock_isfile, mock_run
     ):
-        """Missing-symbol case: exits non-zero with message naming expected address."""
+        """Missing-symbol case: exits non-zero with message naming expected address and actual status."""
         mock_proc = MagicMock()
         mock_proc.returncode = 0
         mock_proc.stdout = MOCK_NM_MISSING_SYMBOL
@@ -152,14 +180,15 @@ class TestCandidateWitnessVerification(unittest.TestCase):
         self.assertNotEqual(ctx.exception.code, 0)
         err = captured_stderr.getvalue()
         self.assertIn("boot_witness symbol not found", err)
-        self.assertIn("expected 0x0035F7A0", err)
+        self.assertIn("expected=0x0035F7A0", err)
+        self.assertIn("actual=unavailable", err)
 
     @patch("subprocess.run")
     @patch("os.path.isfile", return_value=True)
     def test_verify_witness_addr_malformed_nm_fails_closed(
         self, mock_isfile, mock_run
     ):
-        """Malformed nm output case: exits non-zero with parsing error and expected address."""
+        """Malformed nm output case: exits non-zero with parsing error, expected address and actual status."""
         mock_proc = MagicMock()
         mock_proc.returncode = 0
         mock_proc.stdout = MOCK_NM_MALFORMED
@@ -176,14 +205,15 @@ class TestCandidateWitnessVerification(unittest.TestCase):
         self.assertNotEqual(ctx.exception.code, 0)
         err = captured_stderr.getvalue()
         self.assertIn("Malformed hex address", err)
-        self.assertIn("expected 0x0035F7A0", err)
+        self.assertIn("expected=0x0035F7A0", err)
+        self.assertIn("actual=unavailable", err)
 
     @patch("subprocess.run")
     @patch("os.path.isfile", return_value=True)
     def test_verify_witness_addr_nm_process_error_fails_closed(
         self, mock_isfile, mock_run
     ):
-        """nm subprocess returning non-zero exit code causes immediate non-zero exit."""
+        """nm subprocess returning non-zero exit code causes immediate non-zero exit naming expected and actual."""
         mock_proc = MagicMock()
         mock_proc.returncode = 2
         mock_proc.stdout = ""
@@ -198,9 +228,45 @@ class TestCandidateWitnessVerification(unittest.TestCase):
         self.assertNotEqual(ctx.exception.code, 0)
         err = captured_stderr.getvalue()
         self.assertIn("nm exited with code 2", err)
+        self.assertIn("expected=0x0035F7A0", err)
+        self.assertIn("actual=unavailable", err)
+
+    @patch("subprocess.run", side_effect=FileNotFoundError("arm-none-eabi-nm not found"))
+    @patch("os.path.isfile", return_value=True)
+    def test_verify_witness_addr_nm_launch_filenotfound_fails_closed(
+        self, mock_isfile, mock_run
+    ):
+        """Subprocess launch raising FileNotFoundError causes immediate non-zero exit naming expected and actual."""
+        captured_stderr = io.StringIO()
+        with patch("sys.stderr", captured_stderr):
+            with self.assertRaises(SystemExit) as ctx:
+                bcp.verify_witness_addr_from_elf("dummy_core.elf")
+
+        self.assertNotEqual(ctx.exception.code, 0)
+        err = captured_stderr.getvalue()
+        self.assertIn("Failed to run nm", err)
+        self.assertIn("expected=0x0035F7A0", err)
+        self.assertIn("actual=unavailable", err)
+
+    @patch("subprocess.run", side_effect=OSError("Exec format error"))
+    @patch("os.path.isfile", return_value=True)
+    def test_verify_witness_addr_nm_launch_oserror_fails_closed(
+        self, mock_isfile, mock_run
+    ):
+        """Subprocess launch raising OSError causes immediate non-zero exit naming expected and actual."""
+        captured_stderr = io.StringIO()
+        with patch("sys.stderr", captured_stderr):
+            with self.assertRaises(SystemExit) as ctx:
+                bcp.verify_witness_addr_from_elf("dummy_core.elf")
+
+        self.assertNotEqual(ctx.exception.code, 0)
+        err = captured_stderr.getvalue()
+        self.assertIn("Failed to run nm", err)
+        self.assertIn("expected=0x0035F7A0", err)
+        self.assertIn("actual=unavailable", err)
 
     def test_verify_witness_addr_missing_elf_file_fails_closed(self):
-        """Non-existent ELF file path causes immediate non-zero exit."""
+        """Non-existent ELF file path causes immediate non-zero exit naming expected and actual."""
         captured_stderr = io.StringIO()
         with patch("sys.stderr", captured_stderr):
             with self.assertRaises(SystemExit) as ctx:
@@ -211,6 +277,8 @@ class TestCandidateWitnessVerification(unittest.TestCase):
         self.assertNotEqual(ctx.exception.code, 0)
         err = captured_stderr.getvalue()
         self.assertIn("ELF file not found", err)
+        self.assertIn("expected=0x0035F7A0", err)
+        self.assertIn("actual=unavailable", err)
 
     def test_dancingbits_row13_synthetic_roundtrip(self):
         """Verify pure-Python dancingbits row 13 encoding round-trips with reference decoder.

@@ -26,11 +26,6 @@ import struct
 import subprocess
 import sys
 
-# Ensure TMPDIR points to a valid writable directory (fallback to /dev/shm if /tmp is unavailable)
-if "TMPDIR" not in os.environ or not os.path.isdir(os.environ.get("TMPDIR", "")):
-    if os.path.isdir("/dev/shm") and os.access("/dev/shm", os.W_OK):
-        os.environ["TMPDIR"] = "/dev/shm"
-
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 CHDK_PORT = os.path.join(REPO_ROOT, "chdk-port")
 TOOLCHAIN_BIN = os.path.join(
@@ -99,7 +94,11 @@ def verify_witness_addr_from_elf(
     Returns the verified integer address.
     """
     if not os.path.isfile(elf_path):
-        print(f"ERROR: ELF file not found: {elf_path}", file=sys.stderr)
+        print(
+            f"ERROR: ELF file not found: {elf_path} "
+            f"(expected=0x{expected_addr:08X}, actual=unavailable: file not found)",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     try:
@@ -112,14 +111,17 @@ def verify_witness_addr_from_elf(
         )
     except Exception as exc:
         print(
-            f"ERROR: Failed to run nm ({nm_bin}) on {elf_path}: {exc}",
+            f"ERROR: Failed to run nm ({nm_bin}) on {elf_path}: {exc} "
+            f"(expected=0x{expected_addr:08X}, actual=unavailable: nm execution failed: {exc})",
             file=sys.stderr,
         )
         sys.exit(1)
 
     if proc.returncode != 0:
+        err_msg = proc.stderr.strip()
         print(
-            f"ERROR: nm exited with code {proc.returncode} for {elf_path}:\n{proc.stderr.strip()}",
+            f"ERROR: nm exited with code {proc.returncode} for {elf_path}: {err_msg} "
+            f"(expected=0x{expected_addr:08X}, actual=unavailable: nm exited with code {proc.returncode})",
             file=sys.stderr,
         )
         sys.exit(proc.returncode if proc.returncode != 0 else 1)
@@ -129,7 +131,7 @@ def verify_witness_addr_from_elf(
     except ValueError as exc:
         print(
             f"ERROR: Failed to resolve boot_witness from {elf_path} symbol table: {exc} "
-            f"(expected 0x{expected_addr:08X})",
+            f"(expected=0x{expected_addr:08X}, actual=unavailable: {exc})",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -137,7 +139,7 @@ def verify_witness_addr_from_elf(
     if witness_addr != expected_addr:
         print(
             f"ERROR: boot_witness symbol address mismatch in {elf_path}: "
-            f"expected 0x{expected_addr:08X}, got 0x{witness_addr:08X}",
+            f"expected=0x{expected_addr:08X}, actual=0x{witness_addr:08X}",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -441,9 +443,14 @@ def encode_candidate_diskboot(loader_bin):
     encoded = None
     if os.path.exists(DANCINGBITS):
         try:
+            env = dict(os.environ)
+            if "TMPDIR" not in env or not os.path.isdir(env.get("TMPDIR", "")):
+                if os.path.isdir("/dev/shm") and os.access("/dev/shm", os.W_OK):
+                    env["TMPDIR"] = "/dev/shm"
             res = subprocess.run(
                 [DANCINGBITS, loader_bin, diskboot_out, "13"],
                 cwd=CHDK_PORT,
+                env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
