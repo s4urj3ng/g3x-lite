@@ -1171,3 +1171,65 @@ de792bd73b643e778dea3f3a80c53c8f2fdb0ead docs(port12c): U4 SpyTask scheduling co
 ---
 
 ## Static test counts (p15-test-count)
+
+- **Static Inspection Policy**: All counts in this section represent static occurrences of test method definitions matching `^\s*def test_` in tracked `tests/test_port*.py` files at worktree `HEAD` `[VERIFIED]`.
+- **Non-Execution Notice**: These numbers are **static source counts, NOT a dynamic test run** `[VERIFIED]`. Static counts do not execute test logic, test harness fixtures, or assertions, and do not indicate pass, fail, or skip status `[VERIFIED]`.
+- **Pass/Fail Citation**: Refer to the AgentBridge `port_tests` validation run of this task for dynamic test execution pass/fail results `[VERIFIED]`.
+
+### Verbatim Command and Output
+
+```text
+$ git grep -c -E '^\s*def test_' -- 'tests/test_port*.py'
+tests/test_port11b_adversarial.py:21
+tests/test_port11c_evidence_validator.py:49
+tests/test_port13_memory_obligations.py:44
+tests/test_port13_oblig_u4.py:21
+tests/test_port13_u2_obligations.py:36
+tests/test_port7a_platform_configuration.py:18
+tests/test_port7b_reproducibility.py:8
+tests/test_port7c_platform_validation.py:23
+tests/test_port8a_platform_bootstrap.py:23
+tests/test_port9a_runtime_lifecycle.py:61
+tests/test_port9b_runtime_contract.py:56
+```
+
+### Static Test Count Table
+
+| Tracked Test File (`tests/test_port*.py`) | Static `def test_` Count | Status / Verification |
+|---|---|---|
+| `tests/test_port11b_adversarial.py` | 21 | `VERIFIED` |
+| `tests/test_port11c_evidence_validator.py` | 49 | `VERIFIED` |
+| `tests/test_port13_memory_obligations.py` | 44 | `VERIFIED` |
+| `tests/test_port13_oblig_u4.py` | 21 | `VERIFIED` |
+| `tests/test_port13_u2_obligations.py` | 36 | `VERIFIED` |
+| `tests/test_port7a_platform_configuration.py` | 18 | `VERIFIED` |
+| `tests/test_port7b_reproducibility.py` | 8 | `VERIFIED` |
+| `tests/test_port7c_platform_validation.py` | 23 | `VERIFIED` |
+| `tests/test_port8a_platform_bootstrap.py` | 23 | `VERIFIED` |
+| `tests/test_port9a_runtime_lifecycle.py` | 61 | `VERIFIED` |
+| `tests/test_port9b_runtime_contract.py` | 56 | `VERIFIED` |
+| **Total** | **360** | `VERIFIED` |
+
+### Comparison and Milestone Reconciliation
+
+#### PORT-11C Test Count Discrepancy (49 vs 43)
+
+- **Claim 5.1 (PORT-11C Test File Identification)**: The unit test file for milestone `PORT-11C` is `tests/test_port11c_evidence_validator.py` `[VERIFIED: docs/PROJECT_STATE.md:4, 9, 22]`.
+- **Claim 5.2 (PROJECT_STATE.md File:Line Citations)**:
+  - `docs/PROJECT_STATE.md:9` cites **49** tests: `"tests/test_port11c_evidence_validator.py: Comprehensive test suite with 49 deterministic tests verifying duplicate ID detection, malformed ranges, classification limits..."` `[VERIFIED: docs/PROJECT_STATE.md:9]`.
+  - `docs/PROJECT_STATE.md:18` cites **43** tests: `"- **Verification**: 43/43 unit tests pass (0.05s); full repository test_port*.py suite passes (220/220 PASS)."` `[VERIFIED: docs/PROJECT_STATE.md:18]`.
+- **Claim 5.3 (Static Count Reconciliation)**: `git grep -c -E '^\s*def test_' -- tests/test_port11c_evidence_validator.py` yields **49** at worktree `HEAD` `[VERIFIED]`. Therefore, the **49** count in `docs/PROJECT_STATE.md:9` matches the static count, whereas the **43** count in `docs/PROJECT_STATE.md:18` is discrepant and reflects an intermediate development state before the addition of 6 security audit regression tests in PR #17 (commit `a028ef981542eeaddd3a317d9cdb8e908601724e`) `[VERIFIED]`.
+
+#### PORT-9B Test Count Comparison (51 Claim vs Static Count)
+
+- **Claim 5.4 (PORT-9B Test File Presence)**: The file `tests/test_port9b_runtime_contract.py` is present and tracked at worktree `HEAD` `[VERIFIED]`.
+- **Claim 5.5 (PORT-9B 51-Test Claim Citations)**:
+  - `docs/PROJECT_STATE.md:32`: `"PR #11 (4206ec5, head c127c4c) — PORT-9B (docs/PORT9B_RUNTIME_CONTRACT.md, tools/port9b_runtime_contract.py, tests/test_port9b_runtime_contract.py): Added an offline contract validator (51/51 PASS)..."` `[VERIFIED: docs/PROJECT_STATE.md:32]`.
+  - `docs/HANDOFF.md:62`: `"Implemented an offline contract validator (51/51 PASS)..."` `[VERIFIED: docs/HANDOFF.md:62]`.
+  - `docs/PORT9B_RUNTIME_CONTRACT.md:17, 65, 70`: records 51 unit tests `[VERIFIED: docs/PORT9B_RUNTIME_CONTRACT.md:17, 65, 70]`.
+- **Claim 5.6 (Static Count Reconciliation)**:
+  - `git grep -c -E '^\s*def test_' -- tests/test_port9b_runtime_contract.py` yields **56** at worktree `HEAD` `[VERIFIED]`.
+  - At commit `4206ec5` (PR #11 merge commit where PORT-9B was delivered), `git grep -c -E '^\s*def test_' 4206ec5 -- tests/test_port9b_runtime_contract.py` yielded exactly **51** `[VERIFIED]`.
+  - The static count increased from 51 to 56 in commit `7f39946010b802a4440b92f20e0cfd8fb9eb8916` (PR #16 `feat(port11b): refine offline runtime safety model and contract with PORT-11A static evidence`), which added 5 regression tests (`test_b3_hypothetical_never_substitutes_caller_supplied_unknown_contracts`, `test_port11b_static_vs_runtime_contract_checks_present`, `test_port11b_prematurely_claiming_hook_runtime_satisfied_fails_c6`, `test_n1_partial_promotion_of_hook_runtime_fields_fails_c6`, and `test_port11b_prematurely_claiming_u2_or_u4_verified_fails_c6`) to `tests/test_port9b_runtime_contract.py` `[VERIFIED]`.
+  - Therefore, the claim of 51 tests is historically verified for PORT-9B at the time of PR #11 (`4206ec5`), but does not match the current static count of 56 at `HEAD` due to the subsequent PORT-11B test additions `[VERIFIED]`.
+
