@@ -1436,6 +1436,68 @@ DEFAULT_MEMORY_OBLIGATIONS: Tuple[MemoryObligation, ...] = (
 # Internal Obligation Evaluator & Public Per-Obligation Helper
 # -----------------------------------------------------------------------------
 
+# Git-derived byte lengths on origin/main @ 581b1a4bb30456bf18c46dc4bcf61b0375aee251 for the
+# append-tolerant state/handoff logs only. Digest authentication for these two files hashes
+# the first N bytes on disk (proving the origin/main baseline content is preserved verbatim
+# as a prefix) and fails closed if a file is shorter than N, is missing, or its prefix digest
+# differs. Every other pinned file requires an exact full-file SHA-256 match.
+_PINNED_ORIGIN_MAIN_PREFIX_LENGTHS_RAW: Dict[str, int] = {
+    "docs/HANDOFF.md": 231832,
+    "docs/PROJECT_STATE.md": 158558,
+}
+
+PINNED_ORIGIN_MAIN_PREFIX_LENGTHS: MappingProxyType[str, int] = MappingProxyType(
+    _PINNED_ORIGIN_MAIN_PREFIX_LENGTHS_RAW
+)
+
+APPEND_TOLERANT_PINNED_FILES: frozenset[str] = frozenset(
+    _PINNED_ORIGIN_MAIN_PREFIX_LENGTHS_RAW.keys()
+)
+
+
+def verify_pinned_content_bytes(
+    rel_path: str,
+    content_bytes: bytes,
+    active_pins: MappingProxyType[str, str] | Dict[str, str] = PINNED_ORIGIN_MAIN_FILE_HASHES,
+    prefix_lengths: MappingProxyType[str, int] | Dict[str, int] = PINNED_ORIGIN_MAIN_PREFIX_LENGTHS,
+) -> Tuple[bool, str]:
+    """Authenticate file bytes against pinned origin/main SHA-256 digests.
+
+    For paths in prefix_lengths (strictly docs/PROJECT_STATE.md and docs/HANDOFF.md),
+    fails closed if len(content_bytes) < N and otherwise hashes content_bytes[:N].
+    For all other pinned paths, hashes the entire content_bytes.
+    """
+    if rel_path not in active_pins:
+        return (
+            False,
+            f"Cited path '{rel_path}' is not pinned in PINNED_ORIGIN_MAIN_FILE_HASHES "
+            f"(origin/main commit {ORIGIN_MAIN_PIN_COMMIT})",
+        )
+    expected_sha256 = active_pins[rel_path]
+    if rel_path in prefix_lengths:
+        pinned_len = prefix_lengths[rel_path]
+        if len(content_bytes) < pinned_len:
+            return (
+                False,
+                f"Content authentication failed for '{rel_path}': "
+                f"file length {len(content_bytes)} is shorter than pinned origin/main prefix length "
+                f"{pinned_len} (origin/main commit {ORIGIN_MAIN_PIN_COMMIT})",
+            )
+        target_bytes = content_bytes[:pinned_len]
+    else:
+        target_bytes = content_bytes
+
+    local_sha256 = hashlib.sha256(target_bytes).hexdigest()
+    if local_sha256.lower() != expected_sha256.lower():
+        return (
+            False,
+            f"Content authentication failed for '{rel_path}': "
+            f"local SHA-256 {local_sha256} does not match pinned {expected_sha256} "
+            f"(origin/main commit {ORIGIN_MAIN_PIN_COMMIT})",
+        )
+    return (True, "")
+
+
 def _evaluate_obligation(
     oblig: MemoryObligation,
     resolved_root: Path,
@@ -1602,19 +1664,18 @@ def _evaluate_obligation(
             )
             has_error = True
         elif content_bytes is not None:
-            local_sha256 = hashlib.sha256(content_bytes).hexdigest()
-            expected_sha256 = active_pins[cit.path]
-            if local_sha256.lower() != expected_sha256.lower():
+            auth_ok, auth_msg = verify_pinned_content_bytes(
+                rel_path=cit.path,
+                content_bytes=content_bytes,
+                active_pins=active_pins,
+            )
+            if not auth_ok:
                 ob_findings.append(
                     ObligationFinding(
                         rule_id=RULE_CONTENT_HASH_MISMATCH,
                         obligation_id=oblig.id,
                         severity="ERROR",
-                        message=(
-                            f"Content authentication failed for '{cit.path}': "
-                            f"local SHA-256 {local_sha256} does not match pinned {expected_sha256} "
-                            f"(origin/main commit {ORIGIN_MAIN_PIN_COMMIT})"
-                        ),
+                        message=auth_msg,
                     )
                 )
                 has_error = True
@@ -2031,8 +2092,12 @@ def verify_address_provenance(
 
         try:
             content_bytes = doc_path.read_bytes()
-            doc_sha = hashlib.sha256(content_bytes).hexdigest()
-            if doc_sha.lower() != PINNED_ORIGIN_MAIN_FILE_HASHES[citation.document_ref].lower():
+            auth_ok, _ = verify_pinned_content_bytes(
+                rel_path=citation.document_ref,
+                content_bytes=content_bytes,
+                active_pins=PINNED_ORIGIN_MAIN_FILE_HASHES,
+            )
+            if not auth_ok:
                 errors.append(
                     f"Address {addr_str} cited document '{citation.document_ref}' failed content authentication"
                 )
