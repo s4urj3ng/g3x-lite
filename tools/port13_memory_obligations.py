@@ -165,7 +165,10 @@ def is_supported_firmware(val: Optional[str]) -> bool:
 # Computed via read-only git show origin/main:<path> piped into python3 hashlib.
 # Authoritative and immutable via MappingProxyType.
 _PINNED_ORIGIN_MAIN_FILE_HASHES_RAW: Dict[str, str] = {
-    "chdk-port/platform/g3x/sub/110c/boot_prototype.c": "f7884eb2078e93a0098299e2665c1069ecbc65c7759d8993fa31e38fbb232e68",
+    # chdk-port/platform/g3x/sub/110c/boot_prototype.c with guarded stage-marker call sites added by p17-trace-integration-r4;
+    # pins the PORT-17 branch source (p17-trace-integration-r4), not origin/main;
+    # tracing-off binary identity is proven in test_port17_trace_integration.py.
+    "chdk-port/platform/g3x/sub/110c/boot_prototype.c": "c3bcbbd3b0891b34d05a64cbae559d0487aeda1ec88e961fddd6cece64479b61",
     "docs/G3X_HISTORICAL_SYMBOL_RECONCILIATION.md": "c04e83dec333fb6c41b4a854394a11f3fc36ce71c0eda6f3ef212da6a03bf74d",
     "docs/GM110C_MEMORY_MAP.md": "74561df2bd43b233ea35763df9689076791f67fcedf24291fb72f17571efdf05",
     "docs/HANDOFF.md": "6967e1d8313d5d16070addb8e87ed0adb178c70fa9743b2f3a24c32160e72a67",

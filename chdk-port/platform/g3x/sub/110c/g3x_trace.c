@@ -22,22 +22,22 @@
 //   to avoid section type conflicts and ensure placement in .bss rather than .data.
 // - Placed in .bss, downstream of boot_witness (.data) (docs/PORT16_WITNESS_ADDRESS.md:15;
 //   docs/PORT17_TRACE_EVIDENCE.md:218-219, 287). With G3X_TRACE OFF this file is
-//   empty and boot_witness stays at 0x0035F7A0. With it ON, the recorder's .text
-//   precedes .data and moves boot_witness up; pinning the ON layout (dedicated
-//   .g3x_trace section) is p17-trace-integration work under Q-P17-01.
-// - Expands _end = link_bss_end by ALIGN_UP(sizeof(g3x_trace_ring_t), 16)
-//   (docs/PORT17_TRACE_EVIDENCE.md:222, 239).
+//   empty and boot_witness stays at 0x0035F7A0. With it ON, the candidate trace
+//   link script (tools/build_candidate_port2a.py) puts this file's .text/.rodata
+//   in a loaded .g3x_trace_text section after .data, so boot_witness keeps
+//   0x0035F7A0 and the ring is the last .bss object (Q-P17-01).
+// - Expands _end = link_bss_end by the trace text size plus
+//   ALIGN_UP(sizeof(g3x_trace_ring_t), 16) (docs/PORT17_TRACE_EVIDENCE.md:222, 239).
 // - new_sa = &_end shifts the DryOS heap base forward, preventing heap clobber
-//   (chdk-port/platform/g3x/sub/110c/boot_prototype.c:24, 206-210; docs/PORT17_TRACE_EVIDENCE.md:225).
+//   (chdk-port/platform/g3x/sub/110c/boot_prototype.c:24, 210-215; docs/PORT17_TRACE_EVIDENCE.md:225).
 // - Size S = 2080 B (0x820) is well within headroom ceiling 0x002B5364 B (~2,772 KiB)
 //   (docs/PORT17_TRACE_EVIDENCE.md:248).
-// - Citations: chdk-port/platform/g3x/sub/110c/boot_prototype.c:24, 180-184;
+// - Citations: chdk-port/platform/g3x/sub/110c/boot_prototype.c:24, 184-188;
 //   docs/PORT16_WITNESS_ADDRESS.md:15, 218; docs/PORT17_TRACE_EVIDENCE.md:205-251.
 // - Open Question: Q-P17-01 (Trace Ring Linker Placement & Section Mechanics).
 // -----------------------------------------------------------------------------
 volatile g3x_trace_ring_t g3x_trace_ring __attribute__((aligned(16)));
 
-static volatile uint32_t g3x_trace_tick_seq = 0;
 
 void g3x_trace_init(void)
 {
@@ -72,11 +72,13 @@ void g3x_trace_record(uint32_t stage_id, uint32_t tick, uint32_t pc_lr_val, cons
         g3x_trace_init();
     }
 
+    idx = g3x_trace_ring.header.write_idx;
+
     if (tick == 0) {
-        tick = ++g3x_trace_tick_seq;
+        // Fallback monotonic tick uses write_idx + 1 to avoid an extra BSS sequence variable.
+        tick = idx + 1;
     }
 
-    idx = g3x_trace_ring.header.write_idx;
     slot = idx % G3X_TRACE_CAPACITY;
     rec = &g3x_trace_ring.records[slot];
 

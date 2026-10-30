@@ -56,9 +56,9 @@ ARM_CC = os.path.join(TOOLCHAIN_BIN, "arm-none-eabi-gcc")
 ARM_AR = os.path.join(TOOLCHAIN_BIN, "arm-none-eabi-ar")
 ARM_NM = os.path.join(TOOLCHAIN_BIN, "arm-none-eabi-nm")
 
-# boot_prototype.c must stay byte-identical in this task; call sites come from
-# p17-trace-integration.
-BOOT_PROTO_SHA256 = "f7884eb2078e93a0098299e2665c1069ecbc65c7759d8993fa31e38fbb232e68"
+# boot_prototype.c pinned SHA-256 with guarded call sites added by p17-trace-integration-r4;
+# tracing-off byte identity is verified in test_boot_prototype_unchanged.
+BOOT_PROTO_SHA256 = "c3bcbbd3b0891b34d05a64cbae559d0487aeda1ec88e961fddd6cece64479b61"
 
 # Candidate core CFLAGS, copied from tools/build_candidate_port2a.py
 # build_candidate_core() step 1 (includes -DLOW_LEVEL). Run with cwd=chdk-port.
@@ -551,11 +551,91 @@ class TestPort17TraceCore(unittest.TestCase):
         self.assertIn("STUB(fc0d0126)", stubs_content)
 
     def test_boot_prototype_unchanged(self):
-        """boot_prototype.c must stay byte-identical (call sites belong to p17-trace-integration)."""
+        """boot_prototype.c matches pinned digest; tracing-off view is byte-identical to parent."""
         with open(BOOT_PROTO_PATH, "rb") as f:
             digest = hashlib.sha256(f.read()).hexdigest()
         self.assertEqual(digest, BOOT_PROTO_SHA256)
-        self.assertNotIn("g3x_trace", self.boot_c)
+
+        lines = self.boot_c.splitlines(keepends=True)
+
+        # (a) Parse boot_prototype.c line by line. Each region opened by exactly
+        # `#if defined(G3X_TRACE) && G3X_TRACE` must be balanced, with an optional `#else`
+        # and a closing `#endif`. Assert that there are exactly 2 such regions and that
+        # no other preprocessor conditional mentions G3X_TRACE.
+        for line_no, line in enumerate(lines, 1):
+            s = line.strip()
+            if s.startswith("#") and any(s.startswith(f"#{kw}") for kw in ("if", "ifdef", "ifndef", "elif")):
+                if "G3X_TRACE" in s:
+                    self.assertEqual(
+                        s,
+                        "#if defined(G3X_TRACE) && G3X_TRACE",
+                        f"Line {line_no}: conditional mentioning G3X_TRACE must be exactly '#if defined(G3X_TRACE) && G3X_TRACE'",
+                    )
+
+        regions = []
+        in_region = False
+        in_else = False
+        current_region_lines = []
+        region_line_numbers = set()
+        tracing_off_lines = []
+
+        for line_no, line in enumerate(lines, 1):
+            s = line.strip()
+            if s == "#if defined(G3X_TRACE) && G3X_TRACE":
+                self.assertFalse(in_region, f"Line {line_no}: nested #if defined(G3X_TRACE) && G3X_TRACE not allowed")
+                in_region = True
+                in_else = False
+                region_line_numbers.add(line_no)
+                current_region_lines = [line_no]
+                continue
+            elif in_region and s == "#else":
+                self.assertFalse(in_else, f"Line {line_no}: duplicate #else in region")
+                in_else = True
+                region_line_numbers.add(line_no)
+                continue
+            elif in_region and s == "#endif":
+                in_region = False
+                region_line_numbers.add(line_no)
+                regions.append(current_region_lines)
+                current_region_lines = []
+                continue
+
+            if in_region:
+                region_line_numbers.add(line_no)
+                if in_else:
+                    tracing_off_lines.append(line)
+            else:
+                tracing_off_lines.append(line)
+
+        self.assertFalse(in_region, "Unclosed #if defined(G3X_TRACE) && G3X_TRACE region at EOF")
+        self.assertEqual(len(regions), 2, f"Expected exactly 2 G3X_TRACE regions, found {len(regions)}")
+
+        # (b) Assert that every occurrence of the substring g3x_trace / G3X_TRACE is inside
+        # such a region or on its directive lines.
+        for line_no, line in enumerate(lines, 1):
+            if "g3x_trace" in line or "G3X_TRACE" in line:
+                self.assertIn(
+                    line_no,
+                    region_line_numbers,
+                    f"Line {line_no} contains g3x_trace/G3X_TRACE outside of a guarded region: {line!r}",
+                )
+
+        # (c) Build the tracing-off view: drop the directive lines and the #if-branch lines,
+        # and keep the #else-branch lines. Assert that the SHA-256 of that view, as bytes,
+        # EXACTLY equals the parent commit's boot_prototype.c digest
+        # f7884eb2078e93a0098299e2665c1069ecbc65c7759d8993fa31e38fbb232e68.
+        tracing_off_view = "".join(tracing_off_lines)
+        view_digest = hashlib.sha256(tracing_off_view.encode("utf-8")).hexdigest()
+        self.assertEqual(
+            view_digest,
+            "f7884eb2078e93a0098299e2665c1069ecbc65c7759d8993fa31e38fbb232e68",
+            "Tracing-off view SHA-256 must exactly equal parent commit boot_prototype.c digest",
+        )
+
+        # (d) Keep assertNotIn("g3x_trace", tracing_off_view), and assert that the view contains
+        # `b.w     sub_fc05b3c8_my` exactly as in the parent.
+        self.assertNotIn("g3x_trace", tracing_off_view)
+        self.assertIn("b.w     sub_fc05b3c8_my", tracing_off_view)
 
     def test_trace_not_wired_into_candidate_build(self):
         """g3x_trace.c must not be wired into the candidate builder in this task."""
