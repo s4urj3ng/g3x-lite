@@ -1,0 +1,4 @@
+ .data          0x0035f7a0       0x20 /path/to/boot_prototype.o
+                0x0035f7a0                boot_witness
+ .bss           0x00366c90        0x0
+                0x00366c90                _end = .

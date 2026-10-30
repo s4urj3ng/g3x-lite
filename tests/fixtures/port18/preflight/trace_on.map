@@ -1,0 +1,7 @@
+ .data          0x0035f7a0       0x20 /path/to/boot_prototype.o
+                0x0035f7a0                boot_witness
+ .g3x_trace_text
+                0x0035aec0       0x40
+ .bss           0x00366ea0      0x820
+                0x00366ea0                g3x_trace_ring
+                0x003676c0                _end = .
