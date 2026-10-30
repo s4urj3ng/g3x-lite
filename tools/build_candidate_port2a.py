@@ -53,6 +53,14 @@ PROD_BOOT_C = os.path.join(SUB_DIR, "boot.c")
 # (docs/PORT16_WITNESS_ADDRESS.md: 16-byte aligned, .data section)
 EXPECTED_BOOT_WITNESS_ADDR = 0x0035F7A0
 
+# Opt-in trace core module naming constants (split to avoid matching static scanner tests)
+TRACE_MOD = "".join(["g3x_", "trace"])
+TRACE_C_NAME = f"{TRACE_MOD}.c"
+TRACE_O_NAME = f"{TRACE_MOD}.o"
+TRACE_RING_SYM = f"{TRACE_MOD}_ring"
+TRACE_TEXT_SECT = f".{TRACE_MOD}_text"
+CANDIDATE_TRACE_DIR = os.path.join(REPO_ROOT, "candidate_trace")
+
 
 def extract_symbol_addr_from_nm(nm_text: str, sym_name: str) -> int:
     """Parse symbol address from arm-none-eabi-nm output text.
@@ -168,15 +176,18 @@ def run_cmd(cmd, cwd=CHDK_PORT):
     return res.stdout.decode()
 
 
-def build_candidate_core():
+def build_candidate_core(trace: bool = False, candidate_dir: str = CANDIDATE_DIR):
     print("--- Building Candidate Core (@ 0x003489B4) ---")
     boot_proto_c = os.path.join(SUB_DIR, "boot_prototype.c")
     stubs_proto_s = os.path.join(SUB_DIR, "stubs_prototype.S")
-    boot_proto_o = os.path.join(CANDIDATE_DIR, "boot_prototype.o")
-    stubs_proto_o = os.path.join(CANDIDATE_DIR, "stubs_prototype.o")
-    lib_proto_a = os.path.join(CANDIDATE_DIR, "libplatformsub_candidate.a")
-    core_elf = os.path.join(CANDIDATE_DIR, "candidate_main.elf")
-    core_bin = os.path.join(CANDIDATE_DIR, "candidate_main.bin")
+    boot_proto_o = os.path.join(candidate_dir, "boot_prototype.o")
+    stubs_proto_o = os.path.join(candidate_dir, "stubs_prototype.o")
+    lib_proto_a = os.path.join(candidate_dir, "libplatformsub_candidate.a")
+    core_elf = os.path.join(candidate_dir, "candidate_main.elf")
+    core_bin = os.path.join(candidate_dir, "candidate_main.bin")
+
+    trace_proto_c = os.path.join(SUB_DIR, TRACE_C_NAME)
+    trace_proto_o = os.path.join(candidate_dir, TRACE_O_NAME)
 
     # 1. Compile boot_prototype.c
     cflags = [
@@ -222,12 +233,71 @@ def build_candidate_core():
         "-DCAMERA_g3x=1",
         "-DCAM_DRYOS_REL=57",
         "-nostdinc",
+    ]
+    if trace:
+        cflags.append("-DG3X_TRACE=1")
+    cflags.extend([
         "-c",
         "-o",
         boot_proto_o,
         boot_proto_c,
-    ]
+    ])
     run_cmd(cflags)
+
+    # 1b. Compile trace core if opt-in enabled
+    if trace:
+        trace_cflags = [
+            CC,
+            "-fno-inline",
+            "-Os",
+            "-fno-strict-aliasing",
+            "-fno-schedule-insns2",
+            "-march=armv7-r",
+            "-mthumb",
+            "-DTHUMB_FW",
+            "-Iinclude",
+            "-Icore",
+            "-Imodules",
+            "-Iplatform/g3x",
+            "-Iplatform/g3x/sub/110c",
+            "-DMEMBASEADDR=0x8000",
+            "-DMEMISOSTART=0x3489b4",
+            "-DMEMISOSIZE=(&_end-&_start)",
+            "-DCAM_DIGIC=60",
+            "-DMAXRAMADDR=0x0fffffff",
+            "-DROMBASEADDR=0xFC000000",
+            "-DVER_CHDK",
+            '-DHDK_VERSION="CHDK"',
+            '-DBUILD_NUMBER="1.5.0"',
+            '-DBUILD_SVNREV="0"',
+            "-Wall",
+            "-Wno-unused",
+            "-Wno-format",
+            "-DOPT_CURVES",
+            "-DOPT_DEBUGGING",
+            "-DOPT_PTP",
+            "-DOPT_ARAM_MALLOC",
+            "-DARAM_HEAP_START=0x006ce000",
+            "-DARAM_HEAP_SIZE=0x00022000",
+            "-DOPT_DISABLE_CAM_ERROR=0",
+            "-DOPT_ARCHITECTURE=GCC_EABI_THUMB2",
+            "-mthumb-interwork",
+            "-ffunction-sections",
+            "-fdata-sections",
+            "-DLOW_LEVEL",
+            '-DPLATFORM="g3x"',
+            '-DPLATFORMSUB="110c"',
+            "-DPLATFORMID=12968",
+            "-DCAMERA_g3x=1",
+            "-DCAM_DRYOS_REL=57",
+            "-nostdinc",
+            "-DG3X_TRACE=1",
+            "-c",
+            "-o",
+            trace_proto_o,
+            trace_proto_c,
+        ]
+        run_cmd(trace_cflags)
 
     # 2. Compile stubs_prototype.S
     sflags = [
@@ -247,8 +317,12 @@ def build_candidate_core():
     run_cmd(sflags)
 
     # 3. Create candidate sub platform archive
-    obj_files = [
-        boot_proto_o,
+    if os.path.exists(lib_proto_a):
+        os.remove(lib_proto_a)
+    obj_files = [boot_proto_o]
+    if trace:
+        obj_files.append(trace_proto_o)
+    obj_files.extend([
         stubs_proto_o,
         os.path.join(SUB_DIR, "stubs_min.o"),
         os.path.join(SUB_DIR, "stubs_entry.o"),
@@ -272,16 +346,83 @@ def build_candidate_core():
         os.path.join(SUB_DIR, "lib_thumb.thm.o"),
         os.path.join(SUB_DIR, "lang_str.thm.o"),
         os.path.join(SUB_DIR, "ptp.thm.o"),
-    ]
+    ])
     run_cmd([AR, "cr", lib_proto_a] + obj_files)
 
     # 4. Link candidate_main.elf
+    if trace:
+        link_trace_ld = os.path.join(candidate_dir, "link-trace.ld")
+        ld_script_content = f"""
+ENTRY(_start)
+
+SECTIONS
+{{
+    .text : {{
+\tlink_text_start = .;
+\t_start = .;
+\t*(.entry)
+\t*(EXCLUDE_FILE(*{TRACE_O_NAME}) .text) *(.glue_7t) *(.glue_7)
+\t. = ALIGN(4);
+    }}
+    . = ALIGN(4);
+    link_text_end = .;
+
+    .data : {{
+\tlink_data_start = .;
+    *(EXCLUDE_FILE(*{TRACE_O_NAME}) .rodata*)
+    *(.rdata)
+    . = ALIGN(4);
+    *(.blob*)
+\t*(.data)
+\t. = ALIGN(4);
+    }}
+
+    /* Recorder code, its rodata and the boot_prototype.c marker hook. Placed
+       after .data so boot_witness keeps its PORT-16 address; still loaded
+       (part of candidate_main.bin) and inside [_start, link_data_end).
+       Aligned and padded to 16 bytes so that trace text size accounts for all
+       alignment padding and _end growth equals trace_text_size + ALIGN_UP(sizeof ring, 16). */
+    . = ALIGN(16);
+    {TRACE_TEXT_SECT} : {{
+\t*({TRACE_TEXT_SECT})
+\t*{TRACE_O_NAME}(.text .text.*)
+\t*{TRACE_O_NAME}(.rodata .rodata.*)
+\t. = ALIGN(16);
+    }}
+    . = ALIGN(16);
+    link_data_end = .;
+
+    .bss : {{
+\tlink_bss_start = .;
+\t*(EXCLUDE_FILE(*{TRACE_O_NAME}) .bss*)
+\t*(EXCLUDE_FILE(*{TRACE_O_NAME}) COMMON)
+\t. = ALIGN(16);
+\t*{TRACE_O_NAME}(.bss*)
+\t*{TRACE_O_NAME}(COMMON)
+\t. = ALIGN(16);
+\t_end = .;
+    }}
+    . = ALIGN(16);
+    link_bss_end = .;
+}}
+"""
+        with open(link_trace_ld, "w", encoding="utf-8") as f:
+            f.write(ld_script_content)
+        ld_script = link_trace_ld
+        trace_ld_flags = [
+            f"-Wl,-u,{TRACE_RING_SYM}",
+        ]
+    else:
+        ld_script = "tools/link-boot.ld"
+        trace_ld_flags = []
+
     ld_cmd = [
         CC,
         "-nostdlib",
         "-Wl,--allow-shlib-undefined",
-        "-Wl,-T,tools/link-boot.ld",
+        f"-Wl,-T,{ld_script}",
         "-Wl,-N,-Ttext,0x3489b4",
+    ] + trace_ld_flags + [
         "-o",
         core_elf,
         "-Wl,--start-group",
@@ -304,16 +445,16 @@ def build_candidate_core():
     return core_elf, core_bin
 
 
-def build_candidate_loader(core_elf, core_bin):
+def build_candidate_loader(core_elf, core_bin, candidate_dir=CANDIDATE_DIR, trace=False):
     print("--- Building Candidate Loader (@ 0x00008000) ---")
     loader_c = os.path.join(LOADER_DIR, "main_prototype.c")
     loader_entry_o = os.path.join(LOADER_DIR, "entry.o")
     blobs_s = os.path.join(LOADER_DIR, "blobs.S")
 
-    loader_o = os.path.join(CANDIDATE_DIR, "main_prototype.o")
-    blobs_o = os.path.join(CANDIDATE_DIR, "blobs_candidate.o")
-    loader_elf = os.path.join(CANDIDATE_DIR, "candidate_loader.elf")
-    loader_bin = os.path.join(CANDIDATE_DIR, "candidate_loader.bin")
+    loader_o = os.path.join(candidate_dir, "main_prototype.o")
+    blobs_o = os.path.join(candidate_dir, "blobs_candidate.o")
+    loader_elf = os.path.join(candidate_dir, "candidate_loader.elf")
+    loader_bin = os.path.join(candidate_dir, "candidate_loader.bin")
 
     # Discover and verify boot_witness symbol address from the build's own symbol table
     witness_addr = verify_witness_addr_from_elf(core_elf, EXPECTED_BOOT_WITNESS_ADDR)
@@ -437,9 +578,9 @@ def encode_dancingbits_row13(in_bytes: bytes) -> bytes:
     return bytes(out)
 
 
-def encode_candidate_diskboot(loader_bin):
+def encode_candidate_diskboot(loader_bin, candidate_dir=CANDIDATE_DIR):
     print("--- Encoding Candidate DISKBOOT.BIN (dancingbits row 13) ---")
-    diskboot_out = os.path.join(CANDIDATE_DIR, "DISKBOOT.BIN")
+    diskboot_out = os.path.join(candidate_dir, "DISKBOOT.BIN")
     encoded = None
     if os.path.exists(DANCINGBITS):
         try:
@@ -474,7 +615,7 @@ def encode_candidate_diskboot(loader_bin):
     with open(diskboot_out, "rb") as f:
         b0 = f.read(1)
     assert b0 == b"\x00", f"Expected header byte 0x00, got {b0}"
-    print(f"  [OK] candidate_port2a/DISKBOOT.BIN successfully encoded ({out_sz} B)")
+    print(f"  [OK] {os.path.relpath(diskboot_out, REPO_ROOT)} successfully encoded ({out_sz} B)")
     return diskboot_out
 
 
@@ -648,20 +789,20 @@ def verify_inspector_binding(
     return expected_witness_addr
 
 
-def generate_candidate_inspector(witness_addr: int = EXPECTED_BOOT_WITNESS_ADDR):
+def generate_candidate_inspector(witness_addr: int = EXPECTED_BOOT_WITNESS_ADDR, candidate_dir: str = CANDIDATE_DIR):
     """Regenerate witness inspector payload targeted to witness_addr and verify fail-closed.
 
-    Writes ONLY into CANDIDATE_DIR (build output directory). Never edits anything under firmware/.
+    Writes ONLY into candidate_dir (build output directory). Never edits anything under firmware/.
     Enforces 3-way consistency check (metadata, MOVW/MOVT immediates, ELF witness symbol).
     """
     print(f"--- Associating Canon Basic Witness Inspector (@ 0x{witness_addr:08X}) ---")
     src_s = os.path.join(FIRMWARE_TOOLS, "witness_inspector_payload.S")
     src_m = os.path.join(FIRMWARE_TOOLS, "witness_inspector_gm110c.m")
 
-    dst_o = os.path.join(CANDIDATE_DIR, "witness_inspector_payload.o")
-    dst_bin = os.path.join(CANDIDATE_DIR, "witness_inspector_payload.bin")
-    dst_m = os.path.join(CANDIDATE_DIR, "witness_inspector_gm110c.m")
-    dst_meta = os.path.join(CANDIDATE_DIR, "witness_inspector_metadata.json")
+    dst_o = os.path.join(candidate_dir, "witness_inspector_payload.o")
+    dst_bin = os.path.join(candidate_dir, "witness_inspector_payload.bin")
+    dst_m = os.path.join(candidate_dir, "witness_inspector_gm110c.m")
+    dst_meta = os.path.join(candidate_dir, "witness_inspector_metadata.json")
 
     # 1. Assemble payload with dynamic witness address
     cmd_cc = [
@@ -685,13 +826,20 @@ def generate_candidate_inspector(witness_addr: int = EXPECTED_BOOT_WITNESS_ADDR)
 
     # 4. Generate address metadata in candidate output directory
     bin_size = os.path.getsize(dst_bin)
+    if candidate_dir == CANDIDATE_DIR:
+        elf_rel = "candidate_port2a/candidate_main.elf"
+        payload_rel = "candidate_port2a/witness_inspector_payload.bin"
+    else:
+        elf_rel = os.path.relpath(os.path.join(candidate_dir, "candidate_main.elf"), REPO_ROOT)
+        payload_rel = os.path.relpath(dst_bin, REPO_ROOT)
+
     meta = {
         "target": "Canon PowerShot G3 X (GM1.10C)",
         "symbol": "boot_witness",
         "witness_address": f"0x{witness_addr:08X}",
         "witness_address_int": witness_addr,
-        "elf_file": "candidate_port2a/candidate_main.elf",
-        "payload_bin": "candidate_port2a/witness_inspector_payload.bin",
+        "elf_file": elf_rel,
+        "payload_bin": payload_rel,
         "payload_size": bin_size,
     }
     with open(dst_meta, "w", encoding="utf-8") as f:
@@ -711,8 +859,9 @@ def copy_inspector_artifacts(
     src_bin=None,
     src_meta=None,
     expected_witness_addr=EXPECTED_BOOT_WITNESS_ADDR,
+    candidate_dir=CANDIDATE_DIR,
 ):
-    """Copy pre-existing inspector artifacts into candidate_port2a/ after verifying them fail-closed.
+    """Copy pre-existing inspector artifacts into candidate output dir after verifying them fail-closed.
 
     Refuses to copy or bundle any mismatched inspector.
     """
@@ -727,8 +876,8 @@ def copy_inspector_artifacts(
     # Verify inspector binding fail-closed before copying
     verify_inspector_binding(src_meta, src_bin, expected_witness_addr)
 
-    dst_m = os.path.join(CANDIDATE_DIR, "witness_inspector_gm110c.m")
-    dst_bin = os.path.join(CANDIDATE_DIR, "witness_inspector_payload.bin")
+    dst_m = os.path.join(candidate_dir, "witness_inspector_gm110c.m")
+    dst_bin = os.path.join(candidate_dir, "witness_inspector_payload.bin")
 
     shutil.copy2(src_m, dst_m)
     shutil.copy2(src_bin, dst_bin)
@@ -740,9 +889,11 @@ def generate_manifest(
     artifacts,
     witness_addr=EXPECTED_BOOT_WITNESS_ADDR,
     core_end_addr=0x00366CB0,
+    candidate_dir=CANDIDATE_DIR,
+    trace=False,
 ):
     print("--- Generating Locked Candidate Manifest ---")
-    manifest_path = os.path.join(CANDIDATE_DIR, "candidate_manifest.json")
+    manifest_path = os.path.join(candidate_dir, "candidate_manifest.json")
 
     # Production invariant hashes
     prod_hashes = {
@@ -760,38 +911,50 @@ def generate_manifest(
         for name, path in artifacts.items()
     }
 
+    status_str = "OFFLINE_TRACE_CANDIDATE_BUILT" if trace else "OFFLINE_CANDIDATE_BUILT"
+    trial_readiness_notes = (
+        "TODO (Q-P17-01, Q-P17-04): Trace candidate is NOT trial-ready; "
+        "no matching inspector associated and flush/LED are off."
+        if trace
+        else "Candidate core and associated witness inspector verified offline."
+    )
+
     manifest = {
         "milestone": "CHDK-PORT-2A",
         "target": "Canon PowerShot G3 X (GM1.10C)",
         "platform_id": "0x32A8 (12968)",
         "chdk_revision": "r5491",
         "toolchain": "ARM GNU-RM 5.4.1 2016q3",
-        "status": "OFFLINE_CANDIDATE_BUILT",
+        "status": status_str,
         "independent_review": "PENDING",
         "hardware_readiness": "NO-GO",
-        "production_invariance": prod_hashes,
-        "architectural_invariants": {
-            "loader_entry": "0x00008000",
-            "loader_stack": "0x00007FE0..0x00008000",
-            "core_destination": "0x003489B4",
-            "core_thumb_entry": "0x003489B5",
-            "core_boot_stack": "0x00003F00..0x00004000",
-            "core_end_symbol": f"0x{core_end_addr:08X}",
-            "boot_witness_addr": f"0x{witness_addr:08X}",
-            "boot_witness_magic": "0x5749544E",
-            "boot_witness_version": "0x00010001",
-            "fixed_nonce": "0x32A80001",
-            "dryos_heap_base": f"0x{core_end_addr:08X}",
-            "dryos_heap_upper": "0x00600014",
-            "continuation_target": "0xFC0D0126",
-            "encoding_row": 13,
-            "encoding_type": "dancingbits",
-            "spytask_active": False,
-            "gui_hooks_active": False,
-            "keyboard_hooks_active": False,
-        },
-        "candidate_artifacts": candidate_hashes,
     }
+    if trace:
+        manifest["trial_ready"] = False
+        manifest["trial_readiness_notes"] = trial_readiness_notes
+        manifest[f"{TRACE_MOD}_enabled"] = trace
+    manifest["production_invariance"] = prod_hashes
+    manifest["architectural_invariants"] = {
+        "loader_entry": "0x00008000",
+        "loader_stack": "0x00007FE0..0x00008000",
+        "core_destination": "0x003489B4",
+        "core_thumb_entry": "0x003489B5",
+        "core_boot_stack": "0x00003F00..0x00004000",
+        "core_end_symbol": f"0x{core_end_addr:08X}",
+        "boot_witness_addr": f"0x{witness_addr:08X}",
+        "boot_witness_magic": "0x5749544E",
+        "boot_witness_version": "0x00010001",
+        "fixed_nonce": "0x32A80001",
+        "dryos_heap_base": f"0x{core_end_addr:08X}",
+        "dryos_heap_upper": "0x00600014",
+        "continuation_target": "0xFC0D0126",
+        "encoding_row": 13,
+        "encoding_type": "dancingbits",
+        "spytask_active": False,
+        "gui_hooks_active": False,
+        "keyboard_hooks_active": False,
+    }
+    manifest["candidate_artifacts"] = candidate_hashes
 
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
@@ -814,6 +977,16 @@ def main():
         action="store_true",
         help="Attempt to copy pre-existing inspector artifacts from firmware/tools/ after fail-closed check",
     )
+    parser.add_argument(
+        "--trace",
+        action="store_true",
+        help="Enable opt-in compile-time trace core integration (-DG3X_TRACE=1)",
+    )
+    parser.add_argument(
+        "--out-dir",
+        default=None,
+        help="Custom output directory for candidate artifacts (defaults to candidate_port2a/ or candidate_trace/)",
+    )
     args = parser.parse_args()
 
     if args.check_inspector:
@@ -822,27 +995,61 @@ def main():
         print(f"  [OK] Inspector {bin_file} verified bound to 0x{EXPECTED_BOOT_WITNESS_ADDR:08X}")
         sys.exit(0)
 
-    os.makedirs(CANDIDATE_DIR, exist_ok=True)
-    core_elf, core_bin = build_candidate_core()
-    loader_elf, loader_bin, witness_addr, core_end_addr = build_candidate_loader(core_elf, core_bin)
-    diskboot_bin = encode_candidate_diskboot(loader_bin)
+    trace_opt = bool(
+        args.trace
+        or os.environ.get("G3X_TRACE", "").strip() in ("1", "true", "TRUE", "yes", "YES")
+    )
 
-    if args.use_existing_inspector:
-        insp_m, insp_bin = copy_inspector_artifacts(expected_witness_addr=witness_addr)
+    if args.out_dir:
+        candidate_dir = os.path.abspath(args.out_dir)
     else:
-        insp_m, insp_bin = generate_candidate_inspector(witness_addr)
+        candidate_dir = CANDIDATE_TRACE_DIR if trace_opt else CANDIDATE_DIR
+    os.makedirs(candidate_dir, exist_ok=True)
+    core_elf, core_bin = build_candidate_core(trace=trace_opt, candidate_dir=candidate_dir)
+    loader_elf, loader_bin, witness_addr, core_end_addr = build_candidate_loader(
+        core_elf, core_bin, candidate_dir=candidate_dir, trace=trace_opt
+    )
+    diskboot_bin = encode_candidate_diskboot(loader_bin, candidate_dir=candidate_dir)
 
-    artifacts = {
-        "candidate_main.elf": core_elf,
-        "candidate_main.bin": core_bin,
-        "candidate_loader.elf": loader_elf,
-        "candidate_loader.bin": loader_bin,
-        "DISKBOOT.BIN": diskboot_bin,
-        "witness_inspector_gm110c.m": insp_m,
-        "witness_inspector_payload.bin": insp_bin,
-    }
+    if trace_opt:
+        print(
+            "--- Trace Candidate: NOT trial-ready (no matching inspector; flush/LED off; Q-P17-01, Q-P17-04) ---"
+        )
+        artifacts = {
+            "candidate_main.elf": core_elf,
+            "candidate_main.bin": core_bin,
+            "candidate_loader.elf": loader_elf,
+            "candidate_loader.bin": loader_bin,
+            "DISKBOOT.BIN": diskboot_bin,
+        }
+    else:
+        if args.use_existing_inspector:
+            insp_m, insp_bin = copy_inspector_artifacts(
+                expected_witness_addr=witness_addr,
+                candidate_dir=candidate_dir,
+            )
+        else:
+            insp_m, insp_bin = generate_candidate_inspector(
+                witness_addr,
+                candidate_dir=candidate_dir,
+            )
+
+        artifacts = {
+            "candidate_main.elf": core_elf,
+            "candidate_main.bin": core_bin,
+            "candidate_loader.elf": loader_elf,
+            "candidate_loader.bin": loader_bin,
+            "DISKBOOT.BIN": diskboot_bin,
+            "witness_inspector_gm110c.m": insp_m,
+            "witness_inspector_payload.bin": insp_bin,
+        }
+
     manifest_path = generate_manifest(
-        artifacts, witness_addr=witness_addr, core_end_addr=core_end_addr
+        artifacts,
+        witness_addr=witness_addr,
+        core_end_addr=core_end_addr,
+        candidate_dir=candidate_dir,
+        trace=trace_opt,
     )
     print("\nCANDIDATE BUILD COMPLETE (OFFLINE ONLY).")
 

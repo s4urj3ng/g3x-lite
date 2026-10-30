@@ -153,7 +153,11 @@ void __attribute__((naked,noinline)) boot(void)
         "    blo     loc_zero_bss\n"
 
         // Branch to DryOS Kernel Heap Reservation Trampoline
+#if defined(G3X_TRACE) && G3X_TRACE
+        "    b.w     g3x_trace_boot_post_bss\n"   // PORT-17 ENTRY/RELOC markers, see end of file
+#else
         "    b.w     sub_fc05b3c8_my\n"
+#endif
     );
 }
 
@@ -434,3 +438,50 @@ void __attribute__((naked,noinline)) task_Startup_my(void)
         "    b.w     sub_fc0d0126\n"
     );
 }
+#if defined(G3X_TRACE) && G3X_TRACE
+
+// -----------------------------------------------------------------------------
+// PORT-17 stage markers (trace build only; this whole block and the branch in
+// boot() at boot_prototype.c:155-160 are compiled out when G3X_TRACE is 0 or
+// undefined, so the tracing-off preprocessed source is unchanged).
+//
+// RELOC (G3X_STAGE_RELOC): boot() branches here instead of sub_fc05b3c8_my
+// right after the Canon BSS zeroing loop completes (boot_prototype.c:144-153;
+// docs/PORT17_TRACE_EVIDENCE.md:205-251, 256).
+//
+// ENTRY (G3X_STAGE_ENTRY): ENTRY timing is post-BSS, emitted as the first record
+// at the same post-BSS point, not boot() entry (boot_prototype.c:89-91).
+// Reason: boot() reaches sub_fc02007e (boot_prototype.c:98) with r0-r3 still
+// holding the sp setup and startup() values, and the register-input contract of
+// sub_fc02007e is not recorded here or in docs/PORT16_FIRSTBOOT_U_TRIAGE.md:53;
+// an AAPCS C call before it would clobber r0-r3, r12 and lr.
+// At the post-BSS point the next routine, sub_fc05b3c8_my, saves lr and calls C
+// (witness_record_core, boot_prototype.c:171-174) before it reads any argument
+// register, so a C call here leaves its inputs unchanged. Ring survival: the
+// ring is in CHDK .bss, which startup() zeroes before it calls boot()
+// (chdk-port/platform/g3x/main.c:17-20), and the Canon BSS loop stops at
+// 0x003489B4 = MEMISOSTART (boot_prototype.c:144-147), below the CHDK image.
+// An earlier ENTRY marker stays open under Q-P17-01.
+//
+// TASK_HOOK (G3X_STAGE_TASK_HOOK): TODO (Q-P17-01, Q-P17-04), no call site.
+// CHDK SpyTask is disabled for first-boot hardening (boot_prototype.c:415-420).
+// KBD (G3X_STAGE_KBD): TODO (Q-P17-01), no call site. The keyboard hook is
+// disabled; stock task_PhySw runs unhooked (boot_prototype.c:13, 412-413).
+// DISPLAY (G3X_STAGE_DISPLAY): TODO (Q-P17-01), no call site. The display hook
+// is disabled (boot_prototype.c:13); no framebuffer hook exists in this file.
+//
+// Placed in section .g3x_trace_text (trace text section), which the trace
+// link script puts after .data, so boot_witness keeps its PORT-16 address in
+// the trace build too.
+// -----------------------------------------------------------------------------
+void __attribute__((naked,noinline,section(".g3x_trace_text"))) g3x_trace_boot_post_bss(void)
+{
+    asm volatile (
+        "    push    {r4, lr}\n"
+        "    bl      g3x_trace_mark_entry\n"
+        "    bl      g3x_trace_mark_reloc\n"
+        "    pop.w   {r4, lr}\n"
+        "    b.w     sub_fc05b3c8_my\n"
+    );
+}
+#endif
