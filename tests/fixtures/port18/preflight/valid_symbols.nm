@@ -1,0 +1,6 @@
+003489b4 T _start
+0035aec0 D link_text_end
+0035f7a0 D boot_witness
+00365204 B link_data_end
+00366cb0 B _end
+00366cb0 B link_bss_end

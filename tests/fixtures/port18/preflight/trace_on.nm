@@ -1,0 +1,5 @@
+003489b4 T _start
+0035f7a0 D boot_witness
+0035aec0 T g3x_trace_init
+00366cb0 B _end
+00366ea0 B g3x_trace_ring

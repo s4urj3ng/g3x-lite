@@ -1,0 +1,7 @@
+ .data          0x0035f798        0x4 /path/to/wrappers.o
+ *fill*         0x0035f79c        0x4 
+ .data          0x0035f7a0       0x20 /path/to/boot_prototype.o
+                0x0035f7a0                boot_witness
+ .bss           0x00366cb0        0x0
+                0x00366cb0                _end = .
+                0x00366cb0                link_bss_end
