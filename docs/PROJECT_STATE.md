@@ -715,7 +715,7 @@ python3 -B tools/port18_trial_report.py private/port18/trial_report.md --out pri
   - `tools/port17_trace_parser.py`: offline standard-library parser for `TRACE.LOG` files and raw ring dumps `[VERIFIED: tools/port17_trace_parser.py:2, 22-25]`.
   - `docs/PORT17_TRACE_EVIDENCE.md`: evidence for stream `Fut` wrapper entry addresses `[VERIFIED: docs/PORT17_TRACE_EVIDENCE.md:320-323]`.
   - `tests/test_port17_trace_core.py` (24 static tests), `tests/test_port17_trace_integration.py` (12 static tests), `tests/test_port17_trace_parser.py` (33 static tests) `[VERIFIED: count of lines matching ^\s*def test_ in each file; recomputed by tests/test_port18_docs_consistency.py]`.
-- **Outstanding Owner Actions**: None for standard trials; tracing remains opt-in and non-trial-ready; owner action required only if trace logging is requested for post-crash diagnosis `[VERIFIED: tools/build_candidate_port2a.py:914-934, 1014-1017]`.
+- **Outstanding Owner Actions**: None for standard trials; tracing remains opt-in and non-trial-ready; owner action required only if trace logging is requested for post-crash diagnosis `[VERIFIED: tools/build_candidate_port2a.py:944-948, 1068]`.
 
 ### PORT-18 — Owner Trial Packet & Verification Tools
 - **Status**: `MERGED` on `origin/main` `[VERIFIED: git merge-base --is-ancestor f9c1bdc origin/main]`.
@@ -749,28 +749,29 @@ python3 -B tools/port18_trial_report.py private/port18/trial_report.md --out pri
 - **PR Number**: PR #70 `[VERIFIED: git log -1 --format='%H %s' e2aea4dfb67ddf70dc05cf5ffeaeb7d91cb61d15]`.
 - **Merge State**: `MERGED` into `main` at commit `e2aea4dfb67ddf70dc05cf5ffeaeb7d91cb61d15` on 2026-10-31 `[VERIFIED: git log -1 --format='%H %ci' e2aea4dfb67ddf70dc05cf5ffeaeb7d91cb61d15]`. (Actual merge state matches ledger: confirmed merged on `main`).
 - **Main Deliverables**:
-  - `chdk-port/platform/g3x/sub/110c/loader_entry_led.S`: standalone ARM assembly sequence blinking AF-assist lamp via MMIO `0xD20B0994` before core relocation `[VERIFIED: chdk-port/platform/g3x/sub/110c/loader_entry_led.S:10-40]`.
-  - `tools/build_candidate_port2a.py`: opt-in `--led` flag assembling `loader_entry_led.S` and emitting `candidate_led/DISKBOOT.BIN` (118,041 bytes, SHA-256 `757dfb...`) `[VERIFIED: tools/build_candidate_port2a.py; docs/PORT20_LED_CANDIDATE.md:71]`.
-  - `docs/PORT20_LED_EVIDENCE.md`: offline evidence for LED GPIO register `0xD20B0994` and MPU Region 2 writeability `[VERIFIED: docs/PORT20_LED_EVIDENCE.md:10-80]`.
-  - `docs/PORT20_LED_CANDIDATE.md`: candidate implementation design and safety qualification `[VERIFIED: docs/PORT20_LED_CANDIDATE.md:10-120]`.
-  - `docs/PORT20_OWNER_SESSION.md`: one-page owner session sheet for manual execution of the LED candidate `[VERIFIED: docs/PORT20_OWNER_SESSION.md:10-50]`.
-  - `docs/PORT18_OWNER_TRIAL_PLAN.md`: updated referencing LED candidate option `[VERIFIED: docs/PORT18_OWNER_TRIAL_PLAN.md:25]`.
+  - `chdk-port/platform/g3x/sub/110c/loader_entry_led.S`: standalone ARM assembly sequence driving rear green status LED via MMIO `0xD20B0884` (GPIO pin 33) before core relocation `[VERIFIED: chdk-port/platform/g3x/sub/110c/loader_entry_led.S:5, 30-31, 42; docs/PORT20_LED_CANDIDATE.md:14-16, 158]`.
+  - `tools/build_candidate_port2a.py`: opt-in `--led` flag assembling `loader_entry_led.S` and emitting `candidate_led/DISKBOOT.BIN` (118,041 bytes, SHA-256 `757dfb...`) `[VERIFIED: tools/build_candidate_port2a.py:63, 1024; docs/PORT20_LED_CANDIDATE.md:71]`.
+  - `docs/PORT20_LED_EVIDENCE.md`: offline evidence for LED GPIO register `0xD20B0884` (GPIO pin 33) and MPU Region 2 writeability `[VERIFIED: docs/PORT20_LED_EVIDENCE.md:23-28, 32-34; docs/PORT20_LED_CANDIDATE.md:14-16, 158]`.
+  - `docs/PORT20_LED_CANDIDATE.md`: candidate implementation design and safety qualification `[VERIFIED: docs/PORT20_LED_CANDIDATE.md:22-30, 122-151, 156-170]`.
+  - `docs/PORT20_OWNER_SESSION.md`: one-page owner session sheet for manual execution of the LED candidate `[VERIFIED: docs/PORT20_OWNER_SESSION.md:12-43, 49-59]`.
+  - `docs/PORT18_OWNER_TRIAL_PLAN.md`: updated referencing LED candidate session sheet `[VERIFIED: docs/PORT18_OWNER_TRIAL_PLAN.md:267]`.
   - `docs/agentbridge/PORT20_EVIDENCE_MANIFEST.json` `[VERIFIED: docs/agentbridge/PORT20_EVIDENCE_MANIFEST.json:2]`.
   - `tests/test_port20_led_candidate.py` (8 static tests), `tests/test_port20_led_evidence.py` (74 static tests) `[VERIFIED: count of lines matching ^\s*def test_ in each file; recomputed by tests/test_port18_docs_consistency.py]`.
-- **Outstanding Owner Actions**: Perform manual LED boot-signal trial by generating `candidate_led/DISKBOOT.BIN` (`--led`), preparing SD card, and recording whether the AF-assist LED blinks upon power-on `[VERIFIED: docs/PORT20_OWNER_SESSION.md:10-50]`. (Integrated into the morning discrimination session in PORT-21).
+- **Outstanding Owner Actions**: Perform manual LED boot-signal trial by generating `candidate_led/DISKBOOT.BIN` (`--led`), preparing SD card, and recording whether the rear green status LED changes state upon power-on `[VERIFIED: docs/PORT20_OWNER_SESSION.md:12-43, 49-59; docs/PORT20_LED_CANDIDATE.md:14-16, 158]`. (Integrated into the morning discrimination session in PORT-21).
 
 ### PORT-21 — Overnight Discrimination & Owner Session Plan
 - **Status**: `MERGED` on `origin/main` `[VERIFIED: git merge-base --is-ancestor 760f0f7 origin/main]`.
 - **PR Number**: PR #73 `[VERIFIED: git log -1 --format='%H %s' 760f0f74577bf6b360ef516ce849c716e257ebc2]`.
 - **Merge State**: `MERGED` into `main` at commit `760f0f74577bf6b360ef516ce849c716e257ebc2` on 2026-10-31 `[VERIFIED: git log -1 --format='%H %ci' 760f0f74577bf6b360ef516ce849c716e257ebc2]`. (Actual merge state matches ledger: confirmed merged on `main`).
 - **Main Deliverables**:
-  - `docs/PORT21_RAM_LIFETIME.md` (T1): stock-boot lifetime analysis of core region `0x003489B4..0x00366CB0` and uncached DRAM `0x40008000` `[VERIFIED: docs/PORT21_RAM_LIFETIME.md:10-60]`.
-  - `docs/PORT21_DISKBOOT_TIMING.md` (T2): analysis of locked vs unlocked SD card start-up timing delay and `StartDiskboot` gate execution `[VERIFIED: docs/PORT21_DISKBOOT_TIMING.md:10-50]`.
-  - `docs/PORT21_WITNESS_AUDIT.md` (T3): boot witness roundtrip audit, ruling out witness format corruption (H4) and identifying target address discrepancy (`0x0035F780` vs `0x0035F7A0`) `[VERIFIED: docs/PORT21_WITNESS_AUDIT.md:10-50]`.
-  - `docs/PORT21_OWNER_SESSION_PLAN.md` (T4): discrimination plan for morning session (2026-11-01) separating hypotheses H1–H4 with manual readings `[VERIFIED: docs/PORT21_OWNER_SESSION_PLAN.md:10-50]`.
+  - `docs/PORT21_RAM_LIFETIME.md` (T1): stock-boot lifetime analysis of core region `0x003489B4..0x00366CB0` and uncached DRAM `0x40008000` `[VERIFIED: docs/PORT21_RAM_LIFETIME.md:5-7, 26-28, 36-47, 221]`.
+  - `docs/PORT21_DISKBOOT_TIMING.md` (T2): analysis of locked vs unlocked SD card start-up timing delay and `StartDiskboot` gate execution `[VERIFIED: docs/PORT21_DISKBOOT_TIMING.md:17-44]`.
+  - `docs/PORT21_WITNESS_AUDIT.md` (T3): boot witness roundtrip audit: no writer/parser mismatch was found in the record format `[VERIFIED: docs/PORT21_WITNESS_AUDIT.md:24-25]`; which payload the owner ran is UNKNOWN `[UNKNOWN: docs/PORT21_WITNESS_AUDIT.md:13, 27]`, and O6 alone cannot tell H1–H4 apart `[INFERRED: docs/PORT21_WITNESS_AUDIT.md:32]`; distinguishing H4 is left to the owner session `[INFERRED: docs/PORT21_OWNER_SESSION_PLAN.md:204, 235]`.
+  - `docs/PORT21_OWNER_SESSION_PLAN.md` (T4): discrimination plan for morning session (2026-11-01) separating hypotheses H1–H4 with manual readings `[VERIFIED: docs/PORT21_OWNER_SESSION_PLAN.md:4, 150-160, 169-175]`.
   - `docs/agentbridge/PORT21_EVIDENCE_MANIFEST.json` `[VERIFIED: docs/agentbridge/PORT21_EVIDENCE_MANIFEST.json:2]`.
   - `tests/test_port21_diskboot_timing.py` (15 static tests), `tests/test_port21_owner_session_plan.py` (14 static tests), `tests/test_port21_ram_lifetime.py` (28 static tests), `tests/test_port21_witness_roundtrip.py` (11 static tests) `[VERIFIED: count of lines matching ^\s*def test_ in each file; recomputed by tests/test_port18_docs_consistency.py]`.
-- **Outstanding Owner Actions**: The owner executes the PORT-21 morning session (2026-11-01) by hand per `docs/PORT21_OWNER_SESSION_PLAN.md`, recording the five observation readings `(r_led, r_osd, r_l4, r_w7a, r_w78)` `[VERIFIED: docs/PORT21_OWNER_SESSION_PLAN.md:10-50]`.
+- **Outstanding Owner Actions**: The owner executes the PORT-21 morning session (2026-11-01) by hand per `docs/PORT21_OWNER_SESSION_PLAN.md`, recording the physical LED behaviour (GPIO 33, `0xD20B0884`), the inspector OSD readout (`extend.m`), and the five RAMCMP observation readings (`r_l8`, `r_l4`, `r_c4`, `r_ct`, `r_wm`) `[VERIFIED: docs/PORT21_OWNER_SESSION_PLAN.md:4, 169-175]`.
 
 ### Current Next Step
-- **Current next step**: The owner runs the PORT-21 morning session (2026-11-01) by hand and reports the readings, then the readings are classified with tools&#47;port22_session_classify.py (PORT-22 T1), and then the next candidate is chosen using docs&#47;PORT22_REMEDIATION_PLAN.md (PORT-22 T2). Both tools&#47;port22_session_classify.py and docs&#47;PORT22_REMEDIATION_PLAN.md are planned PORT-22 outputs.
+- **Current next step**: The owner runs the PORT-21 morning session (2026-11-01) by hand and reports the readings `[VERIFIED: docs/PORT21_OWNER_SESSION_PLAN.md:4]`, then the readings are classified with tools/port22_session_classify.py (PORT-22 T1) `[UNKNOWN: planned PORT-22 T1 output]`, and then the next candidate is chosen using docs/PORT22_REMEDIATION_PLAN.md (PORT-22 T2) `[UNKNOWN: planned PORT-22 T2 output]`. Refer to the T1 and T2 deliverables by path as planned PORT-22 outputs that do not exist on main yet `[UNKNOWN: planned PORT-22 milestone deliverables]`.
+
