@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -26,20 +27,26 @@ OBJCOPY = os.path.join(TOOLCHAIN_BIN, "arm-none-eabi-objcopy")
 NM = os.path.join(TOOLCHAIN_BIN, "arm-none-eabi-nm")
 OBJDUMP = os.path.join(TOOLCHAIN_BIN, "arm-none-eabi-objdump")
 
+CANDIDATE_DIR = os.path.join(REPO_ROOT, "candidate_port2a")
 FIRMWARE_TOOLS = os.path.join(REPO_ROOT, "firmware", "tools")
+
+DEFAULT_CANDIDATE_ELF = os.path.join(CANDIDATE_DIR, "candidate_main.elf")
+
 PAYLOAD_S = os.path.join(FIRMWARE_TOOLS, "witness_inspector_payload.S")
-PAYLOAD_O = os.path.join(FIRMWARE_TOOLS, "witness_inspector_payload.o")
-PAYLOAD_BIN = os.path.join(FIRMWARE_TOOLS, "witness_inspector_payload.bin")
-LOADER_SCRIPT = os.path.join(FIRMWARE_TOOLS, "witness_inspector_gm110c.m")
-METADATA_JSON = os.path.join(FIRMWARE_TOOLS, "witness_inspector_metadata.json")
+PAYLOAD_O = os.path.join(CANDIDATE_DIR, "witness_inspector_payload.o")
+PAYLOAD_BIN = os.path.join(CANDIDATE_DIR, "witness_inspector_payload.bin")
+LOADER_SCRIPT = os.path.join(CANDIDATE_DIR, "witness_inspector_gm110c.m")
+METADATA_JSON = os.path.join(CANDIDATE_DIR, "witness_inspector_metadata.json")
 
-DEFAULT_CANDIDATE_ELF = os.path.join(REPO_ROOT, "candidate_port2a", "candidate_main.elf")
+# Pinned boot_witness symbol RAM address per docs/PORT16_WITNESS_ADDRESS.md:15
+EXPECTED_BOOT_WITNESS_ADDR = 0x0035F7A0
 
 
-def extract_witness_addr_from_elf(elf_path, nm_tool=NM):
+def extract_witness_addr_from_elf(elf_path, nm_tool=NM, expected_addr=None):
     """Read boot_witness symbol address from ELF using ARM toolchain.
     
-    Rejects missing ELF, missing symbol, incorrect section, or misaligned address.
+    Rejects missing ELF, missing symbol, incorrect section, misaligned address,
+    or mismatch with expected_addr (if specified).
     """
     if not os.path.exists(elf_path):
         raise FileNotFoundError(f"ELF file not found: {elf_path}")
@@ -71,6 +78,11 @@ def extract_witness_addr_from_elf(elf_path, nm_tool=NM):
     if witness_addr % 4 != 0:
         raise ValueError(
             f"Symbol 'boot_witness' address 0x{witness_addr:08X} is not 4-byte aligned in {elf_path}"
+        )
+    if expected_addr is not None and witness_addr != expected_addr:
+        raise ValueError(
+            f"Symbol 'boot_witness' address mismatch in {elf_path}: "
+            f"expected 0x{expected_addr:08X}, got 0x{witness_addr:08X}"
         )
 
     return witness_addr
@@ -144,6 +156,7 @@ def build_witness_inspector(
     payload_bin=PAYLOAD_BIN,
     loader_script=LOADER_SCRIPT,
     metadata_json=METADATA_JSON,
+    expected_witness_addr=EXPECTED_BOOT_WITNESS_ADDR,
     cc=CC,
     objcopy=OBJCOPY,
     nm=NM,
@@ -152,14 +165,21 @@ def build_witness_inspector(
     """Build the Canon Basic witness inspector payload with dynamic witness address.
     
     Fails closed: if elf_path is None, DEFAULT_CANDIDATE_ELF must exist.
+    Verifies that the resolved symbol address matches expected_witness_addr.
     """
     if not os.path.exists(cc) or not os.path.exists(objcopy) or not os.path.exists(nm):
         raise RuntimeError("Required ARM toolchain binaries (gcc, objcopy, nm) not found")
 
     if not os.path.exists(payload_s):
         raise FileNotFoundError(f"Payload assembly source not found: {payload_s}")
+
     if loader_script is not None and not os.path.exists(loader_script):
-        raise FileNotFoundError(f"Loader script not found: {loader_script}")
+        template_m = os.path.join(FIRMWARE_TOOLS, "witness_inspector_gm110c.m")
+        if os.path.exists(template_m):
+            os.makedirs(os.path.dirname(os.path.abspath(loader_script)), exist_ok=True)
+            shutil.copy2(template_m, loader_script)
+        else:
+            raise FileNotFoundError(f"Loader script not found: {loader_script}")
 
     if elf_path is None:
         if not os.path.exists(DEFAULT_CANDIDATE_ELF):
@@ -169,8 +189,13 @@ def build_witness_inspector(
             )
         elf_path = DEFAULT_CANDIDATE_ELF
 
-    witness_addr = extract_witness_addr_from_elf(elf_path, nm_tool=nm)
+    witness_addr = extract_witness_addr_from_elf(elf_path, nm_tool=nm, expected_addr=expected_witness_addr)
     print(f"Resolved boot_witness symbol address from {elf_path}: 0x{witness_addr:08X}")
+
+    os.makedirs(os.path.dirname(os.path.abspath(payload_o)), exist_ok=True)
+    os.makedirs(os.path.dirname(os.path.abspath(payload_bin)), exist_ok=True)
+    if metadata_json:
+        os.makedirs(os.path.dirname(os.path.abspath(metadata_json)), exist_ok=True)
 
     # Assemble payload with dynamic witness address
     cmd_cc = [
@@ -218,8 +243,14 @@ def main():
     parser.add_argument("--payload-bin", default=PAYLOAD_BIN, help="Path to payload .bin output")
     parser.add_argument("--loader-script", default=LOADER_SCRIPT, help="Path to Canon Basic .m script")
     parser.add_argument("--metadata", default=METADATA_JSON, help="Path to metadata .json output")
+    parser.add_argument(
+        "--expected-addr",
+        default=f"0x{EXPECTED_BOOT_WITNESS_ADDR:08X}",
+        help="Expected witness address (hex, default: pinned 0x0035F7A0)",
+    )
     args = parser.parse_args()
 
+    exp_addr = int(args.expected_addr, 16) if args.expected_addr else None
     try:
         build_witness_inspector(
             elf_path=args.elf,
@@ -228,6 +259,7 @@ def main():
             payload_bin=args.payload_bin,
             loader_script=args.loader_script,
             metadata_json=args.metadata,
+            expected_witness_addr=exp_addr,
         )
     except Exception as e:
         print(f"ERROR: {e}", file=sys.stderr)
