@@ -1,0 +1,2 @@
+ .text          0x003489b4      0x100 /path/to/entry.o
+                0x003489b4                _start
