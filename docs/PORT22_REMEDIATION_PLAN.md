@@ -22,7 +22,7 @@ Labels: `[VERIFIED]` means the cited lines state the fact. `[INFERRED]` means re
 ### 2.1 Hypothesis Definition
 - **Definition**: "`StartDiskboot` never reached loader (ROM rejected binary or skipped loading)", offline verdict FITS / UNTESTED `[VERIFIED: docs/PORT21_OWNER_SESSION_PLAN.md:38]`.
 - **Reject path**: if `sub_fc54de38` fails Gate 1 (byte 0 not zero, `0xFC54DE3C`) or Gate 2 (`gaonisoy` match, `0xFC54DE4C`), `StartDiskboot` prints "not executable" at `0xFC05BC68`, frees the buffer at `0xFC05BC70` and returns to `task_Startup` at `0xFC05BC38` without running the loader `[VERIFIED: docs/PORT21_DISKBOOT_TIMING.md:32-38; docs/agentbridge/PORT21_EVIDENCE_MANIFEST.json:215]`.
-- **Skip path**: if the `BOOTDISK` VBR marker is missing, `StartDiskboot` returns before reading the file `[VERIFIED: docs/PORT21_DISKBOOT_TIMING.md:105-107]`. The docs give conflicting marker offsets: `0x40` (FAT16) or `0x52` (FAT32) in one place, and `0x1E0` on FAT32 or `0x40` on FAT12/FAT16 in another. Which is correct is `[UNKNOWN: docs/PORT21_DISKBOOT_TIMING.md:106; docs/PORT18_OWNER_TRIAL_PLAN.md:230]` (U-03).
+- **Skip path**: if the `BOOTDISK` VBR marker is missing, `StartDiskboot` returns before reading the file `[VERIFIED: docs/PORT21_DISKBOOT_TIMING.md:105-107]`. The docs give conflicting marker offsets: `0x40` (FAT16) or `0x52` (FAT32) in one place, and `0x1E0` on FAT32 or `0x40` on FAT12/FAT16 in another. Which is correct is `[UNKNOWN: docs/PORT21_DISKBOOT_TIMING.md:106; docs/PORT18_OWNER_TRIAL_PLAN.md:228]` (U-03).
 - **Timing**: the reject path still reads all 118,001 bytes from the card, so "slower only when locked" does not rule out H1 `[INFERRED: docs/PORT21_DISKBOOT_TIMING.md:22-30]`.
 
 ### 2.2 Next Candidate Change
@@ -136,7 +136,7 @@ Labels: `[VERIFIED]` means the cited lines state the fact. `[INFERRED]` means re
 
 - **U-01**: whether the `DISKBOOT.BIN` on the O6 card matched the host build `[UNKNOWN: docs/PORT21_DISKBOOT_TIMING.md:58, 244]`.
 - **U-02**: whether the GM1.10C reader needs anything beyond the two gates and the `BOOTDISK` marker (header fields, card layout) `[UNKNOWN: docs/PORT21_OWNER_SESSION_PLAN.md:218; docs/PORT21_DISKBOOT_TIMING.md:58]`.
-- **U-03**: the correct `BOOTDISK` marker offset per filesystem; two tracked docs disagree `[UNKNOWN: docs/PORT21_DISKBOOT_TIMING.md:106; docs/PORT18_OWNER_TRIAL_PLAN.md:230]`.
+- **U-03**: the correct `BOOTDISK` marker offset per filesystem; two tracked docs disagree `[UNKNOWN: docs/PORT21_DISKBOOT_TIMING.md:106; docs/PORT18_OWNER_TRIAL_PLAN.md:228]`.
 - **U-04**: whether loader data at the uncached alias survives a reboot (T1 vs T2 conflict over `r_l4`) `[UNKNOWN: docs/PORT21_OWNER_SESSION_PLAN.md:44-48; docs/PORT21_RAM_LIFETIME.md:221; docs/PORT21_DISKBOOT_TIMING.md:298-302]`.
 - **U-05**: whether a watchdog or fault reset follows a `blink()` hang `[UNKNOWN: docs/PORT21_RAM_LIFETIME.md:286; docs/PORT21_DISKBOOT_TIMING.md:251]`.
 - **U-06**: the platform-ID source address, the compat table base and the expected values `check_pid`/`ver_cmp` compare. No value is recorded in PORT16–PORT21 docs or manifests `[UNKNOWN: docs/PORT20_LED_CANDIDATE.md:113-129; docs/PORT21_RAM_LIFETIME.md:59-63]`.

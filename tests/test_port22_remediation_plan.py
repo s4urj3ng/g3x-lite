@@ -13,8 +13,9 @@ Validates that:
    in git (``git ls-files``) with at least that many lines. Untracked local files never count.
 4. No hex address appears without an epistemic label and citation, unless it is labelled UNKNOWN.
 5. Evidence citations adhere strictly to the allowed source boundary (PORT16-PORT21 docs and manifests),
-   and every hex literal (UNKNOWN lines included) is cited from an allowed source on the same line,
-   so no guessed value can appear.
+   and every hex literal appears within the cited line range (±3 lines) of an allowed-source
+   citation on the same line; UNKNOWN lines are exempt from the range check but the value must
+   still occur in a cited allowed source, so no guessed value can appear.
 6. Proposed changes are never labelled VERIFIED.
 """
 
@@ -33,6 +34,7 @@ HEX_PATTERN = re.compile(r"\b0x[0-9a-fA-F]+\b")
 CITATION_PATTERN = re.compile(r"([a-zA-Z0-9_\-./]+?\.[a-zA-Z0-9]+):(\d+(?:-\d+)?(?:\s*,\s*\d+(?:-\d+)?)*)")
 LABEL_PATTERN = re.compile(r"\[(VERIFIED|INFERRED|UNKNOWN)[^\]]*\]")
 ALLOWED_SOURCE_PATTERN = re.compile(r"^(docs/PORT(1[6-9]|2[0-1])_.*\.md|docs/agentbridge/PORT.*_EVIDENCE_MANIFEST\.json)$")
+HEX_LINE_TOLERANCE = 3
 
 
 def parse_citations(text: str) -> list[tuple[str, list[tuple[int, int]]]]:
@@ -55,6 +57,58 @@ def parse_citations(text: str) -> list[tuple[str, list[tuple[int, int]]]]:
             parsed_ranges.append((s, e))
         results.append((fpath, parsed_ranges))
     return results
+
+
+def _read_repo_lines(rel_path: str) -> list[str]:
+    return (REPO_ROOT / rel_path).read_text(encoding="utf-8").splitlines()
+
+
+def hex_backing_violations(lines, tracked_files, read_lines=_read_repo_lines, tolerance=HEX_LINE_TOLERANCE):
+    """Returns hex literals in ``lines`` that no allowed citation on the same line backs.
+
+    On lines without UNKNOWN, a value is backed only if it appears within a cited line range
+    widened by ``tolerance`` lines. On UNKNOWN lines the range check is waived, but the value must
+    still appear somewhere in a cited allowed source. Values compare numerically.
+    """
+    cache: dict[str, list[set[int]]] = {}
+
+    def line_values(rel_path: str) -> list[set[int]]:
+        if rel_path not in cache:
+            cache[rel_path] = [
+                {int(h, 16) for h in HEX_PATTERN.findall(text)} for text in read_lines(rel_path)
+            ]
+        return cache[rel_path]
+
+    def backed(value: int, rel_path: str, ranges, check_range: bool) -> bool:
+        per_line = line_values(rel_path)
+        if not check_range:
+            return any(value in vals for vals in per_line)
+        for s, e in ranges:
+            lo = max(1, s - tolerance)
+            hi = min(len(per_line), e + tolerance)
+            if any(value in per_line[n - 1] for n in range(lo, hi + 1)):
+                return True
+        return False
+
+    violations = []
+    for i, line in enumerate(lines, start=1):
+        literals = HEX_PATTERN.findall(line)
+        if not literals:
+            continue
+        citations = [
+            (fpath, ranges)
+            for fpath, ranges in parse_citations(line)
+            if ALLOWED_SOURCE_PATTERN.match(fpath) and fpath in tracked_files
+        ]
+        if not citations:
+            violations.append(f"Line {i}: hex {literals} without an allowed-source citation")
+            continue
+        check_range = "UNKNOWN" not in line
+        for h in literals:
+            if not any(backed(int(h, 16), fpath, ranges, check_range) for fpath, ranges in citations):
+                scope = "cited line ranges" if check_range else "cited sources"
+                violations.append(f"Line {i}: hex {h} not found in {scope} {citations}")
+    return violations
 
 
 class TestPort22RemediationPlan(unittest.TestCase):
@@ -399,42 +453,44 @@ class TestPort22RemediationPlan(unittest.TestCase):
         )
 
     def test_every_hex_literal_is_cited_from_allowed_source_on_same_line(self):
-        """Verifies every hex literal appears in an allowed PORT16-PORT21 source cited on its line.
+        """Verifies every hex literal appears in the cited line range of an allowed source on its line.
 
-        This applies to UNKNOWN lines too: an UNKNOWN item names no value, so any hex value in the
-        document must come from a cited PORT16-PORT21 doc or evidence manifest. Values are compared
-        numerically so that case and leading zeros do not matter.
+        For lines not labelled UNKNOWN, the value must appear within the cited line range (widened by
+        HEX_LINE_TOLERANCE lines) of at least one allowed PORT16-PORT21 citation on the same line.
+        UNKNOWN lines are exempt from the range check but must still cite an allowed source that
+        contains the value somewhere, so no guessed value can appear.
         """
-        hex_cache: dict[str, set[int]] = {}
-
-        def hex_values(rel_path: str) -> set[int]:
-            if rel_path not in hex_cache:
-                text = (REPO_ROOT / rel_path).read_text(encoding="utf-8")
-                hex_cache[rel_path] = {int(h, 16) for h in HEX_PATTERN.findall(text)}
-            return hex_cache[rel_path]
-
-        violations = []
-        for i, line in enumerate(self.lines, start=1):
-            literals = HEX_PATTERN.findall(line)
-            if not literals:
-                continue
-            sources = [
-                fpath
-                for fpath, _ in parse_citations(line)
-                if ALLOWED_SOURCE_PATTERN.match(fpath) and fpath in self.tracked_files
-            ]
-            if not sources:
-                violations.append(f"Line {i}: hex {literals} without an allowed-source citation")
-                continue
-            for h in literals:
-                if not any(int(h, 16) in hex_values(src) for src in sources):
-                    violations.append(f"Line {i}: hex {h} not found in cited sources {sources}")
-
+        violations = hex_backing_violations(self.lines, self.tracked_files)
         self.assertEqual(
             violations,
             [],
             "Hex literals not backed by a cited PORT16-PORT21 source:\n" + "\n".join(violations),
         )
+
+    def test_hex_range_check_rejects_citation_to_wrong_lines(self):
+        """Synthetic check: a hex value cited to lines that do not contain it must be rejected."""
+        sources = {
+            "docs/PORT18_FAKE.md": [f"line {n}" for n in range(1, 21)],
+        }
+        sources["docs/PORT18_FAKE.md"][9] = "offset 0x1E0 on FAT32"  # line 10
+
+        def reader(rel_path: str) -> list[str]:
+            return sources[rel_path]
+
+        tracked = set(sources)
+        good = ["- value `0x1E0` [VERIFIED: docs/PORT18_FAKE.md:10]"]
+        near = ["- value `0x1E0` [VERIFIED: docs/PORT18_FAKE.md:13]"]
+        wrong = ["- value `0x1E0` [VERIFIED: docs/PORT18_FAKE.md:14-16]"]
+        absent = ["- value `0x52` [VERIFIED: docs/PORT18_FAKE.md:10]"]
+        unknown_ok = ["- value `0x1E0` [UNKNOWN: docs/PORT18_FAKE.md:18]"]
+        unknown_absent = ["- value `0x52` [UNKNOWN: docs/PORT18_FAKE.md:18]"]
+
+        self.assertEqual(hex_backing_violations(good, tracked, reader), [])
+        self.assertEqual(hex_backing_violations(near, tracked, reader), [])
+        self.assertEqual(len(hex_backing_violations(wrong, tracked, reader)), 1)
+        self.assertEqual(len(hex_backing_violations(absent, tracked, reader)), 1)
+        self.assertEqual(hex_backing_violations(unknown_ok, tracked, reader), [])
+        self.assertEqual(len(hex_backing_violations(unknown_absent, tracked, reader)), 1)
 
 
 if __name__ == "__main__":
