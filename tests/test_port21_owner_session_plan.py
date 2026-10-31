@@ -12,12 +12,17 @@ Validates that:
    - Section 5: Stop conditions and recovery plan (battery pull, card removal, quiescence, stock verification).
 2. The prediction table covers H1-H4 and includes both RAMCMP and LED candidate predictions.
 3. Every cell in the prediction table has an epistemic label (VERIFIED / INFERRED / UNKNOWN) and citation.
-4. The session sequence separates every pair among {H1, H2, H3, H4}.
-5. Scope integrity: no PORT-20-owned files and no binaries are modified or added.
+4. The session sequence separates every pair among {H1, H2, H3, H4}, or explicitly documents inseparable pairs.
+5. Every citation to PORT21_*.md points to valid line numbers in the cited file.
+6. Every 64-hex SHA-256 quoted next to a tracked file matches hashlib.sha256 of that file.
+7. No cell in rows H1-H4 labels a docs/PORT20_* citation VERIFIED.
+8. The plan explicitly mentions the T1/T2 r_l4 (0x40008000) conflict.
+9. Scope integrity: no PORT-20-owned files and no binaries are modified or added.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -192,6 +197,100 @@ class TestPort21OwnerSessionPlanDoc(unittest.TestCase):
         self.assertIn("Cold Quiescence", sec5)
         self.assertIn("UNLOCKED", sec5)
         self.assertIn("Stock Boot Verification", sec5)
+
+    def test_port21_citations_valid_line_ranges(self):
+        """Verifies that every PORT21_*.md:N or :N-M citation points to lines inside the cited file."""
+        pattern = re.compile(r"(?:docs/)?(PORT21_[A-Z_]+\.md):(\d+)(?:-(\d+))?")
+        matches = pattern.findall(self.content)
+        self.assertGreaterEqual(len(matches), 10, "Must find PORT21 citations in the plan")
+
+        checked_files = {}
+        for fname, s, e in matches:
+            p = REPO_ROOT / "docs" / fname
+            self.assertTrue(p.is_file(), f"Cited doc does not exist: {p}")
+            if fname not in checked_files:
+                checked_files[fname] = len(p.read_text(encoding="utf-8").splitlines())
+            total_lines = checked_files[fname]
+            start_line = int(s)
+            end_line = int(e) if e else start_line
+            self.assertGreaterEqual(
+                start_line,
+                1,
+                f"Citation {fname}:{s} has line < 1",
+            )
+            self.assertLessEqual(
+                start_line,
+                total_lines,
+                f"Citation {fname}:{s} exceeds total lines ({total_lines})",
+            )
+            self.assertLessEqual(
+                end_line,
+                total_lines,
+                f"Citation {fname}:{s}-{e} exceeds total lines ({total_lines})",
+            )
+
+    def test_tracked_file_hashes_match(self):
+        """Verifies that every 64-hex SHA-256 quoted next to a tracked file path matches hashlib.sha256."""
+        lines = self.content.splitlines()
+        sha_pattern = re.compile(r"\b([0-9a-f]{64})\b")
+        file_pattern = re.compile(r"`([a-zA-Z0-9_\-./]+?\.[a-zA-Z0-9]+)`")
+
+        hashes_checked = 0
+        for line in lines:
+            sha_match = sha_pattern.search(line)
+            if not sha_match:
+                continue
+            quoted_sha = sha_match.group(1)
+            file_matches = file_pattern.findall(line)
+            for fpath in file_matches:
+                p = REPO_ROOT / fpath
+                if p.is_file():
+                    res = subprocess.run(
+                        ["git", "ls-files", str(fpath)],
+                        cwd=REPO_ROOT,
+                        stdout=subprocess.PIPE,
+                        text=True,
+                    )
+                    if res.stdout.strip():
+                        actual_sha = hashlib.sha256(p.read_bytes()).hexdigest()
+                        self.assertEqual(
+                            quoted_sha,
+                            actual_sha,
+                            f"SHA-256 mismatch for tracked file {fpath}: quoted {quoted_sha} != actual {actual_sha}",
+                        )
+                        hashes_checked += 1
+                        break
+        self.assertGreaterEqual(hashes_checked, 1, "Must check at least one tracked file hash")
+
+    def test_no_port20_citation_labeled_verified_in_prediction_table(self):
+        """Verifies that no cell in the H1-H4 rows of the prediction table labels a docs/PORT20_* citation VERIFIED."""
+        sec3 = self.content.split("## 3. Comprehensive Prediction Table", 1)[1].split("## 4. Decision Tree", 1)[0]
+        table_lines = [l for l in sec3.splitlines() if l.strip().startswith("|") and not l.strip().startswith("|:---")]
+
+        for line in table_lines:
+            cells = [c.strip() for c in line.split("|")[1:-1]]
+            if not cells:
+                continue
+            first_cell = cells[0]
+            for h in ("H1", "H2", "H3", "H4"):
+                if f"**{h}**" in first_cell:
+                    for idx, cell in enumerate(cells[1:], start=1):
+                        if "PORT20" in cell:
+                            self.assertNotIn(
+                                "VERIFIED",
+                                cell,
+                                f"Row {h} cell {idx} must not label PORT-20 citation as VERIFIED: '{cell}'",
+                            )
+
+    def test_plan_mentions_t1_t2_rl4_conflict(self):
+        """Verifies that the plan explicitly mentions the T1/T2 conflict over r_l4 (0x40008000)."""
+        self.assertIn("0x40008000", self.content)
+        self.assertIn("r_l4", self.content)
+        lower_content = self.content.lower()
+        self.assertTrue(
+            "conflict" in lower_content and ("t1" in lower_content or "ram_lifetime" in lower_content),
+            "Plan must explicitly mention the T1/T2 conflict over r_l4",
+        )
 
 
 class TestPort21ScopeIntegrity(unittest.TestCase):
