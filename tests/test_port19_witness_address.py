@@ -14,8 +14,10 @@ Verifies fail-closed behavior:
 
 from __future__ import annotations
 
+import ast
 import json
 import os
+import shutil
 import struct
 import subprocess
 import sys
@@ -29,6 +31,7 @@ CANDIDATE_DIR = REPO_ROOT / "candidate_port2a"
 TOOLCHAIN_BIN = REPO_ROOT / "toolchains" / "gcc-arm-none-eabi-5_4-2016q3" / "bin"
 NM = TOOLCHAIN_BIN / "arm-none-eabi-nm"
 READELF = TOOLCHAIN_BIN / "arm-none-eabi-readelf"
+CC = TOOLCHAIN_BIN / "arm-none-eabi-gcc"
 
 sys.path.insert(0, str(TOOLS_DIR))
 import build_candidate_port2a as bcp
@@ -322,7 +325,7 @@ class TestPort19WitnessAddress(unittest.TestCase):
                     }
                 )
             )
-            with self.assertRaises(AssertionError) as ctx:
+            with self.assertRaises((ValueError, AssertionError)) as ctx:
                 vwi.validate_payload_binary(
                     payload_bin=str(payload_bin),
                     payload_elf=str(payload_o),
@@ -332,11 +335,11 @@ class TestPort19WitnessAddress(unittest.TestCase):
                 )
             self.assertIn("0x0035F780", str(ctx.exception))
 
-        # Stale payload binary targeting 0x0035F780 raises AssertionError
+        # Stale payload binary targeting 0x0035F780 raises ValueError
         with tempfile.TemporaryDirectory() as td:
             stale_payload = Path(td) / "stale_payload.bin"
             stale_payload.write_bytes(create_mock_payload_bytes(STALE_PRECORRECTION_ADDR))
-            with self.assertRaises(AssertionError) as ctx:
+            with self.assertRaises((ValueError, AssertionError)) as ctx:
                 vwi.validate_payload_binary(
                     payload_bin=str(stale_payload),
                     payload_elf=str(payload_o),
@@ -421,7 +424,10 @@ class TestPort19WitnessAddress(unittest.TestCase):
             self.assertFalse(check["pass"])
             self.assertEqual(check["actual"], "None")
             self.assertEqual(check["status"], "FAIL")
-            self.assertEqual(check["reason"], "Failed to decode MOVW/MOVT opcodes")
+            self.assertTrue(
+                "Invalid Thumb-2 MOVW" in check["reason"] or "Failed to decode" in check["reason"],
+                f"Unexpected failure reason: {check['reason']}",
+            )
 
     # =========================================================================
     # Regression Tests: Inspector Metadata witness_address_int Validation
@@ -694,6 +700,236 @@ class TestPort19WitnessAddress(unittest.TestCase):
             self.assertNotEqual(res.returncode, 0)
             self.assertIn("Output collision error", res.stderr)
             self.assertEqual(bin_target.read_bytes(), payload_bytes, "Inspector binary bytes must be unchanged")
+
+    # =========================================================================
+    # Hardening Tests: Pinned Verification Integrity (-O / AST / Thumb-2 Bit 15)
+    # =========================================================================
+
+    def test_validator_contains_no_assert_statements(self):
+        """Inspector validator contains zero assert statements (enforces invariants under python -O)."""
+        validator_path = TOOLS_DIR / "validate_witness_inspector.py"
+        source = validator_path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(validator_path))
+        assert_nodes = [node for node in ast.walk(tree) if isinstance(node, ast.Assert)]
+        self.assertEqual(
+            len(assert_nodes),
+            0,
+            f"Found assert statement(s) in {validator_path}: {[node.lineno for node in assert_nodes]}",
+        )
+
+    def test_validator_rejects_self_consistent_0035f780_under_python_optimize(self):
+        """Validator rejects a self-consistent 0x0035F780 fixture when run under -O / PYTHONOPTIMIZE=1."""
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            mock_c = td_path / "mock.c"
+            mock_c.write_text(
+                "void _start(void) {}\n"
+                "__attribute__((aligned(16), section(\".data\"))) char boot_witness[32] = {0};\n"
+            )
+            mock_elf = td_path / "mock_780.elf"
+            subprocess.run(
+                [str(CC), "-nostdlib", "-Wl,-Ttext,0x350000,-Tdata,0x0035f780", str(mock_c), "-o", str(mock_elf)],
+                check=True,
+            )
+
+            mock_addr = bwi.extract_witness_addr_from_elf(str(mock_elf))
+            self.assertEqual(mock_addr, STALE_PRECORRECTION_ADDR)
+
+            fixture_o = td_path / "payload.o"
+            fixture_bin = td_path / "payload.bin"
+            fixture_script = td_path / "script.m"
+            fixture_meta = td_path / "meta.json"
+
+            shutil.copyfile(
+                REPO_ROOT / "firmware" / "tools" / "witness_inspector_gm110c.m",
+                fixture_script,
+            )
+
+            bwi.build_witness_inspector(
+                elf_path=str(mock_elf),
+                payload_o=str(fixture_o),
+                payload_bin=str(fixture_bin),
+                loader_script=str(fixture_script),
+                metadata_json=str(fixture_meta),
+                expected_witness_addr=STALE_PRECORRECTION_ADDR,
+            )
+
+            # Confirm fixture is internally self-consistent on 0x0035F780
+            bin_addr = vwi.extract_witness_addr_from_binary_bytes(str(fixture_bin))
+            self.assertEqual(bin_addr, STALE_PRECORRECTION_ADDR)
+            with open(fixture_meta, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            self.assertEqual(meta["witness_address_int"], STALE_PRECORRECTION_ADDR)
+
+            # Test 1: Subprocess invocation with python3 -O
+            cmd_opt = [
+                sys.executable,
+                "-O",
+                str(TOOLS_DIR / "validate_witness_inspector.py"),
+                "--elf", str(mock_elf),
+                "--payload-bin", str(fixture_bin),
+                "--payload-elf", str(fixture_o),
+                "--loader-script", str(fixture_script),
+                "--metadata", str(fixture_meta),
+            ]
+            res_opt = subprocess.run(cmd_opt, capture_output=True, text=True)
+            self.assertNotEqual(
+                res_opt.returncode,
+                0,
+                f"Validator unexpectedly passed on 0x0035F780 under -O:\nSTDOUT: {res_opt.stdout}\nSTDERR: {res_opt.stderr}",
+            )
+            self.assertIn("0x0035F780", res_opt.stderr)
+
+            # Test 2: Subprocess invocation with PYTHONOPTIMIZE=1
+            env_opt = os.environ.copy()
+            env_opt["PYTHONOPTIMIZE"] = "1"
+            cmd_env = [
+                sys.executable,
+                str(TOOLS_DIR / "validate_witness_inspector.py"),
+                "--elf", str(mock_elf),
+                "--payload-bin", str(fixture_bin),
+                "--payload-elf", str(fixture_o),
+                "--loader-script", str(fixture_script),
+                "--metadata", str(fixture_meta),
+            ]
+            res_env = subprocess.run(cmd_env, capture_output=True, text=True, env=env_opt)
+            self.assertNotEqual(
+                res_env.returncode,
+                0,
+                f"Validator unexpectedly passed on 0x0035F780 under PYTHONOPTIMIZE=1:\nSTDOUT: {res_env.stdout}\nSTDERR: {res_env.stderr}",
+            )
+            self.assertIn("0x0035F780", res_env.stderr)
+
+    def test_preflight_movw_movt_thumb2_opcode_and_bit15_validation(self):
+        """Decoder fully validates Thumb-2 T3 MOVW / T1 MOVT: opcode bits and second halfword bit 15 == 0.
+
+        Tests:
+        - 0xF7A0 variant alone (bit 15 set in MOVW second halfword) -> clean FAIL
+        - 0x8735 variant alone (bit 15 set in MOVT second halfword) -> clean FAIL
+        - Both 0xF7A0 and 0x8735 together -> clean FAIL
+        - Correct pinned encoding (0x77A0 / 0x0735) -> PASS
+        """
+        diskboot = CANDIDATE_DIR / "DISKBOOT.BIN"
+        core_elf = CANDIDATE_DIR / "candidate_main.elf"
+
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            symbols_txt = td_path / "symbols.nm"
+            with open(symbols_txt, "w") as f:
+                subprocess.run([str(NM), "-n", str(core_elf)], stdout=f, check=True)
+
+            canonical_payload = bytearray(create_mock_payload_bytes(PINNED_BOOT_WITNESS_ADDR))
+
+            # Verify baseline: correct pinned encoding (0x77A0 / 0x0735) gives PASS
+            bin_canonical = td_path / "payload_canonical.bin"
+            bin_canonical.write_bytes(bytes(canonical_payload))
+            exit_code_ok, report_ok = ptp.run_preflight(
+                binary_path=str(diskboot),
+                symbols_path=str(symbols_txt),
+                inspector_bin_path=str(bin_canonical),
+            )
+            self.assertEqual(exit_code_ok, 0, f"Canonical pinned encoding failed preflight: {report_ok}")
+            self.assertEqual(report_ok["verdict"], "PASS")
+            check_ok = report_ok["checks_by_name"]["inspector_payload_witness"]
+            self.assertTrue(check_ok["pass"])
+            self.assertEqual(check_ok["status"], "PASS")
+            self.assertEqual(check_ok["actual"], "0x0035F7A0")
+            self.assertIsNone(check_ok["reason"])
+
+            # Variant 1: 0xF7A0 alone (bit 15 set in MOVW second halfword, 0xF7A0 instead of 0x77A0)
+            payload_f7a0 = bytearray(canonical_payload)
+            payload_f7a0[12:14] = struct.pack("<H", 0xF7A0)
+            bin_f7a0 = td_path / "payload_f7a0.bin"
+            bin_f7a0.write_bytes(bytes(payload_f7a0))
+
+            # Direct decoder check
+            addr_v1, err_v1 = ptp.decode_inspector_payload_witness_addr_details(bytes(payload_f7a0))
+            self.assertIsNone(addr_v1)
+            self.assertIsNotNone(err_v1)
+            self.assertIn("bit 15", err_v1)
+            self.assertIn("0xF7A0", err_v1)
+
+            # Preflight tool check
+            exit_code_v1, report_v1 = ptp.run_preflight(
+                binary_path=str(diskboot),
+                symbols_path=str(symbols_txt),
+                inspector_bin_path=str(bin_f7a0),
+            )
+            self.assertEqual(exit_code_v1, 1, "0xF7A0 alone must fail preflight")
+            self.assertEqual(report_v1["verdict"], "FAIL")
+            check_v1 = report_v1["checks_by_name"]["inspector_payload_witness"]
+            self.assertFalse(check_v1["pass"])
+            self.assertEqual(check_v1["status"], "FAIL")
+            self.assertEqual(check_v1["actual"], "None")
+            self.assertIn("bit 15", check_v1["reason"])
+            self.assertIn("0xF7A0", check_v1["reason"])
+
+            # Validator binary check
+            with self.assertRaises(ValueError):
+                vwi.extract_witness_addr_from_binary_bytes(str(bin_f7a0))
+
+            # Variant 2: 0x8735 alone (bit 15 set in MOVT second halfword, 0x8735 instead of 0x0735)
+            payload_8735 = bytearray(canonical_payload)
+            payload_8735[16:18] = struct.pack("<H", 0x8735)
+            bin_8735 = td_path / "payload_8735.bin"
+            bin_8735.write_bytes(bytes(payload_8735))
+
+            # Direct decoder check
+            addr_v2, err_v2 = ptp.decode_inspector_payload_witness_addr_details(bytes(payload_8735))
+            self.assertIsNone(addr_v2)
+            self.assertIsNotNone(err_v2)
+            self.assertIn("bit 15", err_v2)
+            self.assertIn("0x8735", err_v2)
+
+            # Preflight tool check
+            exit_code_v2, report_v2 = ptp.run_preflight(
+                binary_path=str(diskboot),
+                symbols_path=str(symbols_txt),
+                inspector_bin_path=str(bin_8735),
+            )
+            self.assertEqual(exit_code_v2, 1, "0x8735 alone must fail preflight")
+            self.assertEqual(report_v2["verdict"], "FAIL")
+            check_v2 = report_v2["checks_by_name"]["inspector_payload_witness"]
+            self.assertFalse(check_v2["pass"])
+            self.assertEqual(check_v2["status"], "FAIL")
+            self.assertEqual(check_v2["actual"], "None")
+            self.assertIn("bit 15", check_v2["reason"])
+            self.assertIn("0x8735", check_v2["reason"])
+
+            # Validator binary check
+            with self.assertRaises(ValueError):
+                vwi.extract_witness_addr_from_binary_bytes(str(bin_8735))
+
+            # Variant 3: both 0xF7A0 and 0x8735 together
+            payload_both = bytearray(canonical_payload)
+            payload_both[12:14] = struct.pack("<H", 0xF7A0)
+            payload_both[16:18] = struct.pack("<H", 0x8735)
+            bin_both = td_path / "payload_both.bin"
+            bin_both.write_bytes(bytes(payload_both))
+
+            # Direct decoder check
+            addr_v3, err_v3 = ptp.decode_inspector_payload_witness_addr_details(bytes(payload_both))
+            self.assertIsNone(addr_v3)
+            self.assertIsNotNone(err_v3)
+            self.assertIn("bit 15", err_v3)
+
+            # Preflight tool check
+            exit_code_v3, report_v3 = ptp.run_preflight(
+                binary_path=str(diskboot),
+                symbols_path=str(symbols_txt),
+                inspector_bin_path=str(bin_both),
+            )
+            self.assertEqual(exit_code_v3, 1, "Both 0xF7A0 and 0x8735 together must fail preflight")
+            self.assertEqual(report_v3["verdict"], "FAIL")
+            check_v3 = report_v3["checks_by_name"]["inspector_payload_witness"]
+            self.assertFalse(check_v3["pass"])
+            self.assertEqual(check_v3["status"], "FAIL")
+            self.assertEqual(check_v3["actual"], "None")
+            self.assertIn("bit 15", check_v3["reason"])
+
+            # Validator binary check
+            with self.assertRaises(ValueError):
+                vwi.extract_witness_addr_from_binary_bytes(str(bin_both))
 
 
 if __name__ == "__main__":

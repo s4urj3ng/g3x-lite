@@ -20,7 +20,7 @@ This task resolves conflict P6 host-side with zero ROM reads:
    - `candidate_port2a/witness_inspector_payload.bin`: MOVW/MOVT opcodes decode to `0x0035F7A0`.
 3. **Inspector Tooling Fixes (`tools/build_witness_inspector.py`, `tools/validate_witness_inspector.py`)**:
    - `tools/build_witness_inspector.py`: Pinned `EXPECTED_BOOT_WITNESS_ADDR = 0x0035F7A0`. Enforces `witness_addr == expected_addr`, raising `ValueError` on any mismatch (hard error, never silently accepted). Output defaults to `candidate_port2a/` to protect `firmware/tools/` from being overwritten.
-   - `tools/validate_witness_inspector.py`: Pinned `EXPECTED_BOOT_WITNESS_ADDR = 0x0035F7A0`. Resolves candidate inspector artifacts from `candidate_port2a/` by default. Strictly checks that payload binary MOVW/MOVT, ELF symbol, and address metadata all equal `0x0035F7A0`, raising `AssertionError` if `0x0035F780` or any other mismatched address is encountered.
+   - `tools/validate_witness_inspector.py`: Pinned `EXPECTED_BOOT_WITNESS_ADDR = 0x0035F7A0`. Resolves candidate inspector artifacts from `candidate_port2a/` by default. Strictly checks that payload binary MOVW/MOVT, ELF symbol, and address metadata all equal `0x0035F7A0`, raising `ValueError` if `0x0035F780` or any other mismatched address is encountered. Replaced all `assert` statements throughout the validator with explicit `if ...: raise ValueError(...)` so `python -O` / `PYTHONOPTIMIZE=1` cannot bypass validation. Enforces bit 15 of MOVW/MOVT second halfwords must be 0.
 4. **Preflight Tool Integration (`tools/port18_trial_preflight.py`)**:
    - `EXPECTED_BOOT_WITNESS_ADDR: int = 0x0035F7A0` is pinned in the preflight tool (line 50).
    - Added optional `--inspector-metadata` / `--metadata` and `--inspector-bin` checks to verify candidate inspector alignment against the pinned witness address `0x0035F7A0`, failing closed with exit code 1 if mismatched (e.g. `0x0035F780`).
@@ -28,8 +28,9 @@ This task resolves conflict P6 host-side with zero ROM reads:
    - Extended output collision protection: `--out` is checked against all inputs including `--inspector-metadata` and `--inspector-bin`. Direct equality, symlink aliases (`os.path.realpath`), and hardlink aliases (`st_dev`/`st_ino`) are rejected before any report is written, preserving input artifact bytes.
    - Fix (b): When `witness_address` is missing in inspector metadata, reports a clean `FAIL` without crashing (safe string formatting).
    - Fix (c): In inspector payload check, uses `payload_addr is not None` rather than truthiness when selecting the diagnostic reason text.
+   - Full Thumb-2 MOVW/MOVT encoding validation: Validates opcode bits and requires bit 15 of each instruction's second halfword to be 0, returning clean FAIL for malformed variants (such as `0xF7A0` or `0x8735`), never crashing.
 5. **Regression & Coherence Test Suites**:
-   - `tests/test_port19_witness_address.py`: 19 unit tests asserting tripartite agreement across the candidate build, inspector, and preflight tool on `boot_witness = 0x0035F7A0`, and verifying hard-error rejection if `0x0035F780` is reintroduced. Includes regression tests for `witness_address_int` validation and output collision protection across direct paths, symlinks, and hardlinks.
+   - `tests/test_port19_witness_address.py`: 22 unit tests asserting tripartite agreement across the candidate build, inspector, and preflight tool on `boot_witness = 0x0035F7A0`, and verifying hard-error rejection if `0x0035F780` is reintroduced. Includes regression tests for `witness_address_int` validation, output collision protection across direct paths, symlinks, and hardlinks, validator execution under `python -O` / `PYTHONOPTIMIZE=1` against a self-consistent `0x0035F780` fixture, AST verification of 0 `assert` statements in the validator, and preflight rejection of `0xF7A0` and `0x8735` halfword variants.
    - Fix (a): `tests/test_validate_witness_inspector.py::test_simulated_symbol_address_change_and_linker_output` asserts that the pinned default `EXPECTED_BOOT_WITNESS_ADDR` rejects a simulated ELF with `boot_witness` at `0x00358B10` (`ValueError`), and then verifies dynamic address resolution by passing `expected_witness_addr=sim_witness_addr` explicitly.
    - `tests/test_port18_trial_preflight.py`: 35 unit tests verifying clean FAIL on missing fields, conflicting symbols, or corrupted opcodes.
 
@@ -422,11 +423,14 @@ The inspector validation and build tools, as well as the preflight tool, were up
 ### 4.2 Inspector Validator (`tools/validate_witness_inspector.py`)
 1. **Pinned Constant**: Defined `EXPECTED_BOOT_WITNESS_ADDR = 0x0035F7A0`.
 2. **Candidate Artifact Resolution**: Defined `CANDIDATE_DIR = candidate_port2a`. Defaults to candidate inspector payload, object, and metadata in `candidate_port2a/` when available.
-3. **Hard-Error Address Invariants**: In `validate_payload_binary`:
-   - Rejects binary payload if decoded address does not equal `expected_witness_addr` (`AssertionError`).
-   - Rejects candidate ELF if symbol does not equal `expected_witness_addr` (`AssertionError`).
-   - Rejects address metadata if target does not equal `expected_witness_addr` (`AssertionError`).
+3. **Hard-Error Address Invariants & Python Optimization Resilience**: In `validate_payload_binary`:
+   - Replaced every `assert` statement in the module with explicit `if ...: raise ValueError(...)`.
+   - Guaranteed enforcement under `python -O` and `PYTHONOPTIMIZE=1` (where Python strips `assert` bytecode).
+   - Rejects binary payload if decoded address does not equal `expected_witness_addr` (`ValueError`).
+   - Rejects candidate ELF if symbol does not equal `expected_witness_addr` (`ValueError`).
+   - Rejects address metadata if target does not equal `expected_witness_addr` (`ValueError`).
    - Enforces default `expected_witness_addr = EXPECTED_BOOT_WITNESS_ADDR` (`0x0035F7A0`).
+   - Validates Thumb-2 MOVW/MOVT bit 15 in `extract_witness_addr_from_binary_bytes`: ensures bit 15 of both `hw2` and `hw4` is 0, raising `ValueError` on malformed encodings.
 4. **CLI Option**: Added `--expected-addr` defaulting to `0x0035F7A0`.
 
 ### 4.3 Preflight Verification Tool (`tools/port18_trial_preflight.py`)
@@ -444,6 +448,10 @@ The inspector validation and build tools, as well as the preflight tool, were up
    - Rejects collisions before any file writes or mutations can occur, preserving the exact bytes of the input artifacts.
 5. **Fix (b) - Clean FAIL on Missing Metadata Field**: If `witness_address` is missing in metadata JSON, `meta_addr` is `None` and `meta_err` notes the missing field. The tool reports a clean `FAIL` without evaluating `0x{meta_addr:08X}` on `None`, preventing `TypeError` formatting exceptions.
 6. **Fix (c) - Explicit None-Check on Payload Address**: The payload decoder check uses `elif payload_addr is not None:` rather than truthiness when selecting the diagnostic reason text.
+7. **Thumb-2 MOVW/MOVT Encoding & Bit 15 Validation**:
+   - `decode_inspector_payload_witness_addr_details` validates Thumb-2 T3 MOVW first-halfword opcode bits (`hw1 & 0xFBF0 == 0xF240`) and T1 MOVT first-halfword opcode bits (`hw1 & 0xFBF0 == 0xF2C0`).
+   - Enforces that bit 15 of each instruction's second halfword must be 0 (`(hw2 & 0x8000) == 0`).
+   - Reports clean FAIL verdict on malformed variants (such as `0xF7A0` or `0x8735`), preventing false-positive PASS on corrupted halfwords, never crashing.
 
 ### 4.4 Dynamic Inspector Resolution Test Fix (a)
 In `tests/test_validate_witness_inspector.py::test_simulated_symbol_address_change_and_linker_output`:
@@ -502,9 +510,15 @@ test_refuse_out_equal_to_inspector_metadata (tests.test_port19_witness_address.T
 --out pointing directly to --inspector-metadata file is rejected, leaving file untouched. ... ok
 test_tripartite_witness_address_agreement (tests.test_port19_witness_address.TestPort19WitnessAddress.test_tripartite_witness_address_agreement)
 Inspector, preflight tool, and built candidate strictly agree on 0x0035F7A0. ... ok
+test_validator_contains_no_assert_statements (tests.test_port19_witness_address.TestPort19WitnessAddress.test_validator_contains_no_assert_statements)
+Inspector validator contains zero assert statements (enforces invariants under python -O). ... ok
+test_validator_rejects_self_consistent_0035f780_under_python_optimize (tests.test_port19_witness_address.TestPort19WitnessAddress.test_validator_rejects_self_consistent_0035f780_under_python_optimize)
+Validator rejects a self-consistent 0x0035F780 fixture when run under -O / PYTHONOPTIMIZE=1. ... ok
+test_preflight_movw_movt_thumb2_opcode_and_bit15_validation (tests.test_port19_witness_address.TestPort19WitnessAddress.test_preflight_movw_movt_thumb2_opcode_and_bit15_validation)
+Decoder fully validates Thumb-2 T3 MOVW / T1 MOVT: opcode bits and second halfword bit 15 == 0. ... ok
 
 ----------------------------------------------------------------------
-Ran 19 tests in 0.433s
+Ran 22 tests in 0.965s
 
 OK
 ```

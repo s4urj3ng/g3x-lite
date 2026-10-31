@@ -186,12 +186,12 @@ class TestG3XWitnessInspector(unittest.TestCase):
             self.assertEqual(raw_addr, expected_addr)
 
             # 2. But object .text == raw .bin bit-for-bit check strictly catches corruption
-            with self.assertRaises(AssertionError) as ctx:
+            with self.assertRaises((ValueError, AssertionError)) as ctx:
                 vwi.verify_object_text_matches_binary(vwi.PAYLOAD_ELF, mut_bin)
             self.assertIn("does not match raw binary", str(ctx.exception))
 
             # 3. Overall validation strictly rejects corrupted binary
-            with self.assertRaises(AssertionError):
+            with self.assertRaises((ValueError, AssertionError)):
                 vwi.validate_payload_binary(
                     payload_bin=mut_bin,
                     payload_elf=vwi.PAYLOAD_ELF,
@@ -219,10 +219,10 @@ class TestG3XWitnessInspector(unittest.TestCase):
             self.assertEqual(raw_addr, expected_addr)
 
             # Bit-for-bit text check and string checks reject corruption
-            with self.assertRaises(AssertionError):
+            with self.assertRaises((ValueError, AssertionError)):
                 vwi.verify_object_text_matches_binary(vwi.PAYLOAD_ELF, mut_bin)
 
-            with self.assertRaises(AssertionError):
+            with self.assertRaises((ValueError, AssertionError)):
                 vwi.validate_payload_binary(
                     payload_bin=mut_bin,
                     payload_elf=vwi.PAYLOAD_ELF,
@@ -241,7 +241,7 @@ class TestG3XWitnessInspector(unittest.TestCase):
             with open(trunc_bin, "wb") as f:
                 f.write(data[:-4])
 
-            with self.assertRaises(AssertionError):
+            with self.assertRaises((ValueError, AssertionError)):
                 vwi.validate_payload_binary(
                     payload_bin=trunc_bin,
                     payload_elf=vwi.PAYLOAD_ELF,
@@ -254,7 +254,7 @@ class TestG3XWitnessInspector(unittest.TestCase):
             with open(ext_bin, "wb") as f:
                 f.write(data + b"\x00\x00\x00\x00")
 
-            with self.assertRaises(AssertionError):
+            with self.assertRaises((ValueError, AssertionError)):
                 vwi.validate_payload_binary(
                     payload_bin=ext_bin,
                     payload_elf=vwi.PAYLOAD_ELF,
@@ -279,7 +279,7 @@ class TestG3XWitnessInspector(unittest.TestCase):
             self.assertNotEqual(mock_addr, expected_addr)
 
             # Validating with mismatched ELF must fail assertion
-            with self.assertRaises(AssertionError) as ctx:
+            with self.assertRaises((ValueError, AssertionError)) as ctx:
                 vwi.validate_payload_binary(elf_path=mock_elf)
             self.assertIn("Mismatched ELF symbol", str(ctx.exception))
 
@@ -302,7 +302,7 @@ class TestG3XWitnessInspector(unittest.TestCase):
                     },
                     f,
                 )
-            with self.assertRaises(AssertionError) as ctx:
+            with self.assertRaises((ValueError, AssertionError)) as ctx:
                 vwi.validate_payload_binary(metadata_path=bad_meta)
             self.assertIn("Mismatched address metadata", str(ctx.exception))
 
@@ -326,7 +326,7 @@ class TestG3XWitnessInspector(unittest.TestCase):
             )
             subprocess.run([bwi.OBJCOPY, "-O", "binary", bad_o, bad_bin], check=True)
 
-            with self.assertRaises(AssertionError) as ctx:
+            with self.assertRaises((ValueError, AssertionError)) as ctx:
                 vwi.validate_payload_binary(
                     payload_bin=bad_bin,
                     payload_elf=bad_o,
@@ -443,7 +443,7 @@ class TestG3XWitnessInspector(unittest.TestCase):
 
             # Step 5: Verify cross-mismatch rejection
             # New binary + Old candidate ELF -> REJECT
-            with self.assertRaises(AssertionError) as ctx:
+            with self.assertRaises((ValueError, AssertionError)) as ctx:
                 vwi.validate_payload_binary(
                     payload_bin=sim_bin,
                     payload_elf=sim_o,
@@ -453,7 +453,7 @@ class TestG3XWitnessInspector(unittest.TestCase):
             self.assertIn("Mismatched ELF symbol", str(ctx.exception))
 
             # Old binary + New simulated ELF -> REJECT
-            with self.assertRaises(AssertionError) as ctx:
+            with self.assertRaises((ValueError, AssertionError)) as ctx:
                 vwi.validate_payload_binary(
                     payload_bin=vwi.PAYLOAD_BIN,
                     payload_elf=vwi.PAYLOAD_ELF,

@@ -148,6 +148,8 @@ def extract_witness_addr_from_binary_bytes(bin_path):
     hw2 = data[0x0c] | (data[0x0d] << 8)
     if (hw1 & 0xFBF0) != 0xF240:
         raise ValueError(f"Expected movw instruction at offset 0x0A, got halfword 0x{hw1:04X}")
+    if (hw2 & 0x8000) != 0:
+        raise ValueError(f"Invalid Thumb-2 MOVW encoding at offset 0x0C: bit 15 must be 0, got 0x{hw2:04X}")
     rd_w = (hw2 >> 8) & 0xF
     if rd_w != 7:
         raise ValueError(f"Expected target register r7 for movw at offset 0x0A, got r{rd_w}")
@@ -162,6 +164,8 @@ def extract_witness_addr_from_binary_bytes(bin_path):
     hw4 = data[0x10] | (data[0x11] << 8)
     if (hw3 & 0xFBF0) != 0xF2C0:
         raise ValueError(f"Expected movt instruction at offset 0x0E, got halfword 0x{hw3:04X}")
+    if (hw4 & 0x8000) != 0:
+        raise ValueError(f"Invalid Thumb-2 MOVT encoding at offset 0x10: bit 15 must be 0, got 0x{hw4:04X}")
     rd_t = (hw4 >> 8) & 0xF
     if rd_t != 7:
         raise ValueError(f"Expected target register r7 for movt at offset 0x0E, got r{rd_t}")
@@ -215,7 +219,7 @@ def verify_object_text_matches_binary(payload_elf, payload_bin, objcopy_tool=OBJ
             raw_bin_bytes = f.read()
 
         if o_text_bytes != raw_bin_bytes:
-            raise AssertionError(
+            raise ValueError(
                 f"Object .text ({len(o_text_bytes)} B) does not match raw binary ({len(raw_bin_bytes)} B) bit-for-bit!"
             )
     return True
@@ -281,43 +285,60 @@ def validate_loader_script(loader_script_path, bin_size, fail_closed=True):
 
     # 1. Independent check: Canon Basic allocated/read length & generated metadata match real binary
     m_sz = re.search(r"DIM payload_size\s*=\s*(\d+)", src)
-    assert m_sz, "DIM payload_size constant missing in script"
+    if not m_sz:
+        raise ValueError("DIM payload_size constant missing in script")
     script_payload_size = int(m_sz.group(1))
-    assert script_payload_size == bin_size, (
-        f"Script payload_size ({script_payload_size}) does not match binary size ({bin_size}). "
-        "Rejecting mismatch (regeneration during validation is prohibited)."
-    )
+    if script_payload_size != bin_size:
+        raise ValueError(
+            f"Script payload_size ({script_payload_size}) does not match binary size ({bin_size}). "
+            "Rejecting mismatch (regeneration during validation is prohibited)."
+        )
 
     m_exp = re.search(r"DIM expected_payload_size\s*=\s*(\d+)", src)
-    assert m_exp, "DIM expected_payload_size metadata missing in script"
+    if not m_exp:
+        raise ValueError("DIM expected_payload_size metadata missing in script")
     script_exp_size = int(m_exp.group(1))
-    assert script_exp_size == bin_size, (
-        f"Script expected_payload_size ({script_exp_size}) does not match binary size ({bin_size})."
-    )
+    if script_exp_size != bin_size:
+        raise ValueError(
+            f"Script expected_payload_size ({script_exp_size}) does not match binary size ({bin_size})."
+        )
 
     # Verify allocation size accommodates complete binary
     m_alloc = re.search(r"AllocateMemory\(([^)]+)\)", src)
-    assert m_alloc, "AllocateMemory call missing"
-    assert "payload_size" in m_alloc.group(1), "Allocation buffer must be bound to payload_size"
+    if not m_alloc:
+        raise ValueError("AllocateMemory call missing")
+    if "payload_size" not in m_alloc.group(1):
+        raise ValueError("Allocation buffer must be bound to payload_size")
 
     # 2. Independent check: Short-read & oversized rejection condition
-    assert "read_sz <> payload_size" in src or "read_sz <> expected_payload_size" in src, (
-        "Script must strictly require read_sz == payload_size (rejecting short/zero/oversized reads)"
-    )
-    assert "payload_size + 1" in src, "Script must read payload_size + 1 to detect oversized files"
+    if "read_sz <> payload_size" not in src and "read_sz <> expected_payload_size" not in src:
+        raise ValueError(
+            "Script must strictly require read_sz == payload_size (rejecting short/zero/oversized reads)"
+        )
+    if "payload_size + 1" not in src:
+        raise ValueError("Script must read payload_size + 1 to detect oversized files")
 
     # 3. Prohibitions & Invariants
-    assert "LCDMsg_Delete(100)" not in src, "Global purge LCDMsg_Delete(100) is strictly forbidden"
-    assert "BOOT_SUCCESS" not in src, "Must not report BOOT_SUCCESS"
-    assert "CONTINUATION_CONFIRMED" not in src, "Must not report CONTINUATION_CONFIRMED"
-    assert "0xfc127a85" in src, "Must synchronize D-cache (0xFC127A85)"
-    assert "0xfc127b2b" in src, "Must synchronize I-cache (0xFC127B2B)"
-    assert "FreeMemory(buf)" in src, "Must free payload buffer"
-    assert "gaonisoy" in src and "EC385" in src and "GM1.10C" in src, "Must check compatibility"
+    if "LCDMsg_Delete(100)" in src:
+        raise ValueError("Global purge LCDMsg_Delete(100) is strictly forbidden")
+    if "BOOT_SUCCESS" in src:
+        raise ValueError("Must not report BOOT_SUCCESS")
+    if "CONTINUATION_CONFIRMED" in src:
+        raise ValueError("Must not report CONTINUATION_CONFIRMED")
+    if "0xfc127a85" not in src:
+        raise ValueError("Must synchronize D-cache (0xFC127A85)")
+    if "0xfc127b2b" not in src:
+        raise ValueError("Must synchronize I-cache (0xFC127B2B)")
+    if "FreeMemory(buf)" not in src:
+        raise ValueError("Must free payload buffer")
+    if not ("gaonisoy" in src and "EC385" in src and "GM1.10C" in src):
+        raise ValueError("Must check compatibility")
 
     # 4. Success coloring removal: Color 2 (Green) must not be assigned to title or status
-    assert "LCDMsg_ChangeColor(h_title, 2)" not in src, "Misleading Green (Color 2) title coloring forbidden"
-    assert "LCDMsg_ChangeColor(h_status, 2)" not in src, "Misleading Green (Color 2) status coloring forbidden"
+    if "LCDMsg_ChangeColor(h_title, 2)" in src:
+        raise ValueError("Misleading Green (Color 2) title coloring forbidden")
+    if "LCDMsg_ChangeColor(h_status, 2)" in src:
+        raise ValueError("Misleading Green (Color 2) status coloring forbidden")
 
     print(f"  [OK] Script payload_size bound to {bin_size} B, short-read check, and invariants verified.")
     return True
@@ -349,15 +370,19 @@ def validate_payload_binary(
         raise FileNotFoundError(f"Missing payload ELF/object: {payload_elf}")
 
     bin_size = os.path.getsize(payload_bin)
-    assert bin_size <= 512, f"Payload size {bin_size} exceeds 512 bytes"
-    assert bin_size % 4 == 0, f"Payload size {bin_size} not 4-byte aligned"
+    if bin_size > 512:
+        raise ValueError(f"Payload size {bin_size} exceeds 512 bytes")
+    if bin_size % 4 != 0:
+        raise ValueError(f"Payload size {bin_size} not 4-byte aligned")
 
     with open(payload_bin, "rb") as f:
         payload_bytes = f.read()
 
     # 1. Independent check: Verify absence of premature confirmation claims in string literals
-    assert b"BOOT_SUCCESS" not in payload_bytes, "Must not contain BOOT_SUCCESS"
-    assert b"CONTINUATION_CONFIRMED" not in payload_bytes, "Must not contain CONTINUATION_CONFIRMED"
+    if b"BOOT_SUCCESS" in payload_bytes:
+        raise ValueError("Must not contain BOOT_SUCCESS")
+    if b"CONTINUATION_CONFIRMED" in payload_bytes:
+        raise ValueError("Must not contain CONTINUATION_CONFIRMED")
 
     # 2. Independent check: Verify all binary strings are entirely within the loaded buffer
     required_strings = [
@@ -372,20 +397,25 @@ def validate_payload_binary(
     ]
     for s_bytes in required_strings:
         off = payload_bytes.find(s_bytes)
-        assert off >= 0, f"Missing required string literal {s_bytes.decode()}"
+        if off < 0:
+            raise ValueError(f"Missing required string literal {s_bytes.decode()}")
         end_off = off + len(s_bytes) + 1  # include null terminator
-        assert end_off <= bin_size, (
-            f"String {s_bytes.decode()} (offset {off}..{end_off}) exceeds binary length ({bin_size})"
-        )
+        if end_off > bin_size:
+            raise ValueError(
+                f"String {s_bytes.decode()} (offset {off}..{end_off}) exceeds binary length ({bin_size})"
+            )
 
     # 3. Disassembly invariants via objdump
     res = subprocess.run([OBJDUMP, "-d", payload_elf], stdout=subprocess.PIPE, check=True)
     dump = res.stdout.decode()
 
     # Calling convention: AAPCS 8-byte stack alignment
-    assert "stmdb\tsp!, {r4, r5, r6, r7, r8, lr}" in dump, "Must push 6 registers (24 bytes) for 8-byte alignment"
-    assert "ldmia.w\tsp!, {r4, r5, r6, r7, r8, pc}" in dump, "Must pop 6 registers"
-    assert "push\t{r1, r2}" in dump, "Render must push 2 registers (8 bytes) to maintain 8-byte SP alignment"
+    if "stmdb\tsp!, {r4, r5, r6, r7, r8, lr}" not in dump:
+        raise ValueError("Must push 6 registers (24 bytes) for 8-byte alignment")
+    if "ldmia.w\tsp!, {r4, r5, r6, r7, r8, pc}" not in dump:
+        raise ValueError("Must pop 6 registers")
+    if "push\t{r1, r2}" not in dump:
+        raise ValueError("Render must push 2 registers (8 bytes) to maintain 8-byte SP alignment")
 
     # 4. Prove object .text == raw .bin bit-for-bit
     verify_object_text_matches_binary(payload_elf, payload_bin)
@@ -393,9 +423,10 @@ def validate_payload_binary(
     # 5. Direct opcode decoding of MOVW/MOVT from raw .bin bytes
     raw_bin_addr = extract_witness_addr_from_binary_bytes(payload_bin)
     obj_witness_addr = extract_witness_addr_from_payload(payload_elf)
-    assert raw_bin_addr == obj_witness_addr, (
-        f"Raw .bin decoded address (0x{raw_bin_addr:08X}) does not match object address (0x{obj_witness_addr:08X})!"
-    )
+    if raw_bin_addr != obj_witness_addr:
+        raise ValueError(
+            f"Raw .bin decoded address (0x{raw_bin_addr:08X}) does not match object address (0x{obj_witness_addr:08X})!"
+        )
 
     # 6. Fail-closed candidate ELF and metadata resolution
     if elf_path is None:
@@ -433,26 +464,30 @@ def validate_payload_binary(
     elf_witness_addr = None
     if elf_path is not None:
         elf_witness_addr = extract_witness_addr_from_elf(elf_path)
-        assert elf_witness_addr == raw_bin_addr, (
-            f"Mismatched ELF symbol: candidate ELF symbol has 0x{elf_witness_addr:08X}, "
-            f"but inspector binary loads 0x{raw_bin_addr:08X}!"
-        )
+        if elf_witness_addr != raw_bin_addr:
+            raise ValueError(
+                f"Mismatched ELF symbol: candidate ELF symbol has 0x{elf_witness_addr:08X}, "
+                f"but inspector binary loads 0x{raw_bin_addr:08X}!"
+            )
 
     meta_witness_addr = None
     if metadata_path is not None:
         meta_witness_addr, meta = read_address_metadata(metadata_path)
-        assert meta_witness_addr == raw_bin_addr, (
-            f"Mismatched address metadata: metadata specifies 0x{meta_witness_addr:08X}, "
-            f"but inspector binary loads 0x{raw_bin_addr:08X}!"
-        )
-        assert meta.get("payload_size") == bin_size, (
-            f"Metadata payload size mismatch: {meta.get('payload_size')} vs actual {bin_size}"
-        )
-        if elf_witness_addr is not None:
-            assert elf_witness_addr == meta_witness_addr, (
-                f"Mismatched ELF and metadata: ELF has 0x{elf_witness_addr:08X}, "
-                f"metadata has 0x{meta_witness_addr:08X}!"
+        if meta_witness_addr != raw_bin_addr:
+            raise ValueError(
+                f"Mismatched address metadata: metadata specifies 0x{meta_witness_addr:08X}, "
+                f"but inspector binary loads 0x{raw_bin_addr:08X}!"
             )
+        if meta.get("payload_size") != bin_size:
+            raise ValueError(
+                f"Metadata payload size mismatch: {meta.get('payload_size')} vs actual {bin_size}"
+            )
+        if elf_witness_addr is not None:
+            if elf_witness_addr != meta_witness_addr:
+                raise ValueError(
+                    f"Mismatched ELF and metadata: ELF has 0x{elf_witness_addr:08X}, "
+                    f"metadata has 0x{meta_witness_addr:08X}!"
+                )
 
     if fail_closed:
         if elf_witness_addr is None:
@@ -461,32 +496,38 @@ def validate_payload_binary(
             raise ValueError("Address metadata validation required under fail-closed policy (meta_witness_addr is None)")
 
     if expected_witness_addr is not None:
-        assert raw_bin_addr == expected_witness_addr, (
-            f"Inspector binary address 0x{raw_bin_addr:08X} does not match expected 0x{expected_witness_addr:08X}"
-        )
+        if raw_bin_addr != expected_witness_addr:
+            raise ValueError(
+                f"Inspector binary address 0x{raw_bin_addr:08X} does not match expected 0x{expected_witness_addr:08X}"
+            )
         if elf_witness_addr is not None:
-            assert elf_witness_addr == expected_witness_addr, (
-                f"Candidate ELF symbol address 0x{elf_witness_addr:08X} does not match expected 0x{expected_witness_addr:08X}"
-            )
+            if elf_witness_addr != expected_witness_addr:
+                raise ValueError(
+                    f"Candidate ELF symbol address 0x{elf_witness_addr:08X} does not match expected 0x{expected_witness_addr:08X}"
+                )
         if meta_witness_addr is not None:
-            assert meta_witness_addr == expected_witness_addr, (
-                f"Inspector metadata specifies 0x{meta_witness_addr:08X}, does not match expected 0x{expected_witness_addr:08X}"
-            )
+            if meta_witness_addr != expected_witness_addr:
+                raise ValueError(
+                    f"Inspector metadata specifies 0x{meta_witness_addr:08X}, does not match expected 0x{expected_witness_addr:08X}"
+                )
 
     print(f"  [OK] Witness target address 0x{raw_bin_addr:08X} verified consistent with ELF & metadata.")
     print("  [OK] Raw .bin MOVW/MOVT opcodes verified identical to object .text bit-for-bit.")
 
     # Native call targets
-    assert "0x973d" in dump and "0xfc0c" in dump, "Must call LCDMsg_SetStr_native (0xFC0C973D)"
-    assert "0x99b1" in dump and "0xfc0c" in dump, "Must call LCDMsg_ChangeColor_native (0xFC0C99B1)"
+    if "0x973d" not in dump or "0xfc0c" not in dump:
+        raise ValueError("Must call LCDMsg_SetStr_native (0xFC0C973D)")
+    if "0x99b1" not in dump or "0xfc0c" not in dump:
+        raise ValueError("Must call LCDMsg_ChangeColor_native (0xFC0C99B1)")
 
     # Sentinels
     for s_hex in ["0x5401", "0x5402", "0x5404", "0x54ee", "0x54ff"]:
-        assert s_hex in dump, f"Must construct sentinel {s_hex}"
+        if s_hex not in dump:
+            raise ValueError(f"Must construct sentinel {s_hex}")
 
     # Absence of Color 2 (Green) assignments in disassembly
     for match in re.finditer(r"movs?\s+r([67]),\s*#2", dump):
-        assert False, f"Prohibited Green (Color 2) assignment detected: {match.group(0)}"
+        raise ValueError(f"Prohibited Green (Color 2) assignment detected: {match.group(0)}")
 
     print(f"  [OK] Payload binary ({bin_size} bytes), all string literals within buffer, AAPCS alignment verified.")
     return bin_size
@@ -499,63 +540,82 @@ def run_inspector_parser_tests():
 
     # 1. Uninitialized
     s, t, st, tc, sc = emulate_inspector_parse(bytes(32), valid_nonce)
-    assert s == SENTINEL_INVALID and t == "WITNESS_INVALID" and tc == 3 and sc == 3
+    if not (s == SENTINEL_INVALID and t == "WITNESS_INVALID" and tc == 3 and sc == 3):
+        raise ValueError("Uninitialized memory check failed")
     print("  [OK] Uninitialized (all-zero) memory rejected as INVALID (Red).")
 
     # 2. Invalid magic
     s, t, st, tc, sc = emulate_inspector_parse(pack_witness(0xDEADBEEF, BOOT_WITNESS_VERSION, valid_nonce, 7, 0x7FF8, 0x003489B5, 100), valid_nonce)
-    assert s == SENTINEL_INVALID and t == "WITNESS_INVALID" and tc == 3 and sc == 3
+    if not (s == SENTINEL_INVALID and t == "WITNESS_INVALID" and tc == 3 and sc == 3):
+        raise ValueError("Invalid magic check failed")
     print("  [OK] Invalid magic rejected as INVALID (Red).")
 
     # 3. Checksum corruption (single bit flip)
     corrupted = bytearray(good)
     corrupted[16] ^= 0x01
     s, t, st, tc, sc = emulate_inspector_parse(bytes(corrupted), valid_nonce)
-    assert s == SENTINEL_INVALID and t == "WITNESS_INVALID" and tc == 3 and sc == 3
+    if not (s == SENTINEL_INVALID and t == "WITNESS_INVALID" and tc == 3 and sc == 3):
+        raise ValueError("Corrupted checksum check failed")
     print("  [OK] Corrupted checksum / bit flip rejected as INVALID (Red).")
 
     # 4. Incomplete boot: Stage 1 only
     s, t, st, tc, sc = emulate_inspector_parse(pack_witness(BOOT_WITNESS_MAGIC, BOOT_WITNESS_VERSION, valid_nonce, 1, 0x7FF8, 0, 0), valid_nonce)
-    assert s == SENTINEL_LOADER and t == "LOADER_REACHED" and st == "FRESHNESS_UNVERIFIED" and tc == 1 and sc == 4
+    if not (s == SENTINEL_LOADER and t == "LOADER_REACHED" and st == "FRESHNESS_UNVERIFIED" and tc == 1 and sc == 4):
+        raise ValueError("Stage 1 check failed")
     print("  [OK] Stage 1 classified as LOADER_REACHED / FRESHNESS_UNVERIFIED (White/Yellow).")
 
     # 5. Incomplete boot: Stage 2 only
     s, t, st, tc, sc = emulate_inspector_parse(pack_witness(BOOT_WITNESS_MAGIC, BOOT_WITNESS_VERSION, valid_nonce, 3, 0x7FF8, 0x003489B5, 0), valid_nonce)
-    assert s == SENTINEL_CORE and t == "CORE_REACHED" and st == "FRESHNESS_UNVERIFIED" and tc == 1 and sc == 4
+    if not (s == SENTINEL_CORE and t == "CORE_REACHED" and st == "FRESHNESS_UNVERIFIED" and tc == 1 and sc == 4):
+        raise ValueError("Stage 2 check failed")
     print("  [OK] Stage 2 classified as CORE_REACHED / FRESHNESS_UNVERIFIED (White/Yellow).")
 
     # 6. Illegal transition (Stage 2 skipped: 0x01 -> 0x05)
     s, t, st, tc, sc = emulate_inspector_parse(pack_witness(BOOT_WITNESS_MAGIC, BOOT_WITNESS_VERSION, valid_nonce, 5, 0x7FF8, 0x003489B5, 100), valid_nonce)
-    assert s == SENTINEL_INVALID and t == "WITNESS_INVALID" and tc == 3 and sc == 3
+    if not (s == SENTINEL_INVALID and t == "WITNESS_INVALID" and tc == 3 and sc == 3):
+        raise ValueError("Illegal transition check failed")
     print("  [OK] Illegal transition (core skipped) rejected as INVALID (Red).")
 
     # 7. Dynamic challenge mismatch
     s, t, st, tc, sc = emulate_inspector_parse(good, expected_nonce=0x55555555)
-    assert s == SENTINEL_STALE and t == "STALE / REPLAY" and st == "NONCE_MISMATCH" and tc == 4 and sc == 4
+    if not (s == SENTINEL_STALE and t == "STALE / REPLAY" and st == "NONCE_MISMATCH" and tc == 4 and sc == 4):
+        raise ValueError("Dynamic challenge mismatch check failed")
     print("  [OK] Dynamic challenge mismatch classified as STALE_OR_FRESHNESS_UNKNOWN (Yellow).")
 
     # 8. CRITICAL NEGATIVE TEST: Replayed complete record with MATCHING FIXED NONCE (0x32A80001)
     s, t, st, tc, sc = emulate_inspector_parse(good, expected_nonce=valid_nonce)
-    assert s == SENTINEL_CONTINUATION, "Sentinel must reflect structural continuation"
-    assert t == "CONT_ATTEMPTED", f"Title must be CONT_ATTEMPTED, got {t}"
-    assert st == "FRESHNESS_UNVERIFIED", f"Status must be FRESHNESS_UNVERIFIED, got {st}"
-    assert tc == 4, f"Title color must be 4 (Yellow), got {tc}"
-    assert sc == 4, f"Status color must be 4 (Yellow), got {sc}"
-    assert tc != 2 and sc != 2, "Violation: Color 2 (Green) detected on matching fixed nonce"
-    assert "SUCCESS" not in t and "SUCCESS" not in st, "Violation: SUCCESS detected"
-    assert "CONFIRMED" not in t and "CONFIRMED" not in st, "Violation: CONFIRMED detected"
+    if s != SENTINEL_CONTINUATION:
+        raise ValueError("Sentinel must reflect structural continuation")
+    if t != "CONT_ATTEMPTED":
+        raise ValueError(f"Title must be CONT_ATTEMPTED, got {t}")
+    if st != "FRESHNESS_UNVERIFIED":
+        raise ValueError(f"Status must be FRESHNESS_UNVERIFIED, got {st}")
+    if tc != 4:
+        raise ValueError(f"Title color must be 4 (Yellow), got {tc}")
+    if sc != 4:
+        raise ValueError(f"Status color must be 4 (Yellow), got {sc}")
+    if tc == 2 or sc == 2:
+        raise ValueError("Violation: Color 2 (Green) detected on matching fixed nonce")
+    if "SUCCESS" in t or "SUCCESS" in st:
+        raise ValueError("Violation: SUCCESS detected")
+    if "CONFIRMED" in t or "CONFIRMED" in st:
+        raise ValueError("Violation: CONFIRMED detected")
     print("  [OK] Matching-nonce stale replay strictly produces CONT_ATTEMPTED / FRESHNESS_UNVERIFIED (Yellow, no green).")
 
     # 9. Complete record evaluated with zero expected nonce
     s, t, st, tc, sc = emulate_inspector_parse(good, expected_nonce=0)
-    assert s == SENTINEL_CONTINUATION and t == "CONT_ATTEMPTED" and st == "FRESHNESS_UNVERIFIED"
-    assert tc == 4 and sc == 4
+    if not (s == SENTINEL_CONTINUATION and t == "CONT_ATTEMPTED" and st == "FRESHNESS_UNVERIFIED"):
+        raise ValueError("Complete record check failed")
+    if not (tc == 4 and sc == 4):
+        raise ValueError("Color check failed")
     print("  [OK] Complete record lacking dynamic challenge strictly shows FRESHNESS_UNVERIFIED (Yellow).")
 
     # 10. Semantic invariants across all results
     for label in [t, st]:
-        assert "BOOT_SUCCESS" not in label, "Violation: inspector reported BOOT_SUCCESS"
-        assert "CONTINUATION_CONFIRMED" not in label, "Violation: inspector reported CONTINUATION_CONFIRMED"
+        if "BOOT_SUCCESS" in label:
+            raise ValueError("Violation: inspector reported BOOT_SUCCESS")
+        if "CONTINUATION_CONFIRMED" in label:
+            raise ValueError("Violation: inspector reported CONTINUATION_CONFIRMED")
     print("  [OK] Semantic invariants verified: BOOT_SUCCESS and CONTINUATION_CONFIRMED strictly prohibited.")
 
     return True

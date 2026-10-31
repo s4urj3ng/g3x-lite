@@ -353,18 +353,62 @@ def evaluate_symbol_check(
 # PREFLIGHT VERIFICATION WORKFLOW
 # =============================================================================
 
-def decode_inspector_payload_witness_addr(payload_bytes: bytes) -> Optional[int]:
-    """Decode MOVW/MOVT r7 immediate address from witness inspector payload binary bytes."""
+def decode_inspector_payload_witness_addr_details(
+    payload_bytes: bytes,
+) -> Tuple[Optional[int], Optional[str]]:
+    """Decode MOVW/MOVT r7 immediate address from witness inspector payload binary bytes.
+
+    Validates Thumb-2 T3 MOVW and T1 MOVT instruction encodings:
+    - MOVW (T3):
+        hw1 opcode bits: (hw1 & 0xFBF0) == 0xF240
+        hw2: bit 15 must be 0 ((hw2 & 0x8000) == 0), Rd must be 7 (((hw2 >> 8) & 0xF) == 7)
+    - MOVT (T1):
+        hw1 opcode bits: (hw1 & 0xFBF0) == 0xF2C0
+        hw2: bit 15 must be 0 ((hw2 & 0x8000) == 0), Rd must be 7 (((hw2 >> 8) & 0xF) == 7)
+
+    Returns:
+        (decoded_address, error_reason)
+    """
     if len(payload_bytes) < 18:
-        return None
+        return None, f"Payload binary too short ({len(payload_bytes)} bytes) to contain MOVW/MOVT opcodes"
+
     lo_w1, lo_w2, hi_w1, hi_w2 = struct.unpack("<HHHH", payload_bytes[10:18])
-    if (lo_w1 & 0xFBF0) != 0xF240 or (hi_w1 & 0xFBF0) != 0xF2C0:
-        return None
-    if ((lo_w2 >> 8) & 0xF) != 7 or ((hi_w2 >> 8) & 0xF) != 7:
-        return None
+
+    # MOVW T3 first-halfword opcode check
+    if (lo_w1 & 0xFBF0) != 0xF240:
+        return None, f"Invalid Thumb-2 MOVW T3 opcode in first halfword (0x{lo_w1:04X})"
+
+    # MOVW T3 second-halfword bit 15 check
+    if (lo_w2 & 0x8000) != 0:
+        return None, f"Invalid Thumb-2 MOVW T3 encoding: bit 15 of second halfword must be 0 (got 0x{lo_w2:04X})"
+
+    # MOVW T3 Rd check (expected r7)
+    lo_rd = (lo_w2 >> 8) & 0xF
+    if lo_rd != 7:
+        return None, f"Invalid Thumb-2 MOVW T3 destination register: expected r7, got r{lo_rd}"
+
+    # MOVT T1 first-halfword opcode check
+    if (hi_w1 & 0xFBF0) != 0xF2C0:
+        return None, f"Invalid Thumb-2 MOVT T1 opcode in first halfword (0x{hi_w1:04X})"
+
+    # MOVT T1 second-halfword bit 15 check
+    if (hi_w2 & 0x8000) != 0:
+        return None, f"Invalid Thumb-2 MOVT T1 encoding: bit 15 of second halfword must be 0 (got 0x{hi_w2:04X})"
+
+    # MOVT T1 Rd check (expected r7)
+    hi_rd = (hi_w2 >> 8) & 0xF
+    if hi_rd != 7:
+        return None, f"Invalid Thumb-2 MOVT T1 destination register: expected r7, got r{hi_rd}"
+
     lo = ((lo_w1 & 0x0400) << 1) | ((lo_w1 & 0x000F) << 12) | ((lo_w2 & 0x7000) >> 4) | (lo_w2 & 0x00FF)
     hi = ((hi_w1 & 0x0400) << 1) | ((hi_w1 & 0x000F) << 12) | ((hi_w2 & 0x7000) >> 4) | (hi_w2 & 0x00FF)
-    return (hi << 16) | lo
+    return ((hi << 16) | lo), None
+
+
+def decode_inspector_payload_witness_addr(payload_bytes: bytes) -> Optional[int]:
+    """Decode MOVW/MOVT r7 immediate address from witness inspector payload binary bytes."""
+    addr, _ = decode_inspector_payload_witness_addr_details(payload_bytes)
+    return addr
 
 
 def run_preflight(
@@ -502,10 +546,12 @@ def run_preflight(
             raise FileNotFoundError(f"Inspector payload binary file not found: '{inspector_bin_path}'")
         with open(inspector_bin_path, "rb") as f:
             insp_bytes = f.read()
-        payload_addr = decode_inspector_payload_witness_addr(insp_bytes)
-        bin_pass = (payload_addr == EXPECTED_BOOT_WITNESS_ADDR)
+        payload_addr, decode_err = decode_inspector_payload_witness_addr_details(insp_bytes)
+        bin_pass = (decode_err is None and payload_addr == EXPECTED_BOOT_WITNESS_ADDR)
         if bin_pass:
             bin_reason = None
+        elif decode_err is not None:
+            bin_reason = decode_err
         elif payload_addr is not None:
             bin_reason = f"Inspector payload decoded address 0x{payload_addr:08X} != 0x{EXPECTED_BOOT_WITNESS_ADDR:08X}"
         else:
