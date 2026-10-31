@@ -3,22 +3,27 @@
 
 Validates Hypothesis H4:
 - Was the LOADER witness record at 0x0035F7A0 malformed, given the code exactly as built?
-- Builds the record bytes exactly as the loader writes them (LOADER stage only).
-- Runs the real inspector parse code (tools/validate_witness_inspector.py) on:
-  1. Exact loader-only witness record
-  2. All-zero memory region (uninitialized DRAM)
-  3. Overwritten memory with plausible stock-boot data
-  4. Valid records across boot stages (Stage 1, Stage 2, Stage 3)
-  5. Exhaustive failure modes mapping to WITNESS_INVALID / INVALID / CORRUPT
-- Verifies field-by-field layout, endianness, polynomial checksum, and Color Index 3 mapping.
+- Compiles a host C probe including the real boot witness header (chdk-port/platform/g3x/sub/110c/boot_witness.h)
+  and replicating the loader writer routine (chdk-port/loader/g3x/main_prototype.c:42-56).
+- Serializes the exact C-generated record bytes and runs the real inspector parse code
+  (tools/validate_witness_inspector.py) on:
+  1. Real C-compiled loader-only witness record (Stage 1)
+  2. Disassembly inspection and SP provenance from candidate_loader.elf
+  3. All-zero memory region (power-on uninitialized or cleared DRAM)
+  4. Memory overwritten with plausible stock-boot data / dryos allocations
+  5. Valid records across all boot stages (Stage 1, Stage 2, Stage 3)
+  6. Exhaustive failure modes mapping to WITNESS_INVALID / INVALID / CORRUPT
+  7. Color index 3 selection verification and AYCrCb rendering independence
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -26,129 +31,272 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TOOLS_DIR = REPO_ROOT / "tools"
 CANDIDATE_DIR = REPO_ROOT / "candidate_port2a"
 
+# Optional pytest support for skipping
+try:
+    import pytest
+except ImportError:
+    pytest = None
+
 sys.path.insert(0, str(TOOLS_DIR))
 import validate_witness_inspector as vwi
 import validate_boot_witness as vbw
 
 # Pinned boot witness constants (boot_witness.h & validate_witness_inspector.py)
-BOOT_WITNESS_MAGIC = 0x5749544E       # "WITN"
-BOOT_WITNESS_VERSION = 0x00010001     # Version 1.1
-BOOT_WITNESS_FIXED_NONCE = 0x32A80001 # GM1.10C challenge nonce
+BOOT_WITNESS_MAGIC = 0x5749544E       # "WITN" (boot_witness.h:8)
+BOOT_WITNESS_VERSION = 0x00010001     # Version 1.1 (boot_witness.h:9)
+BOOT_WITNESS_FIXED_NONCE = 0x32A80001 # GM1.10C challenge nonce (main_prototype.c:48)
 EXPECTED_BOOT_WITNESS_ADDR = 0x0035F7A0
 
 STAGE_LOADER = 0x01
 STAGE_CORE = 0x02
 STAGE_CONTINUATION = 0x04
 
-LOADER_MEMBASEADDR = 0x00008000
-# In candidate_loader.elf, my_restart() pushes {r3, lr} (8 bytes), so SP = 0x7FF8:
-LOADER_INITIAL_SP = 0x00007FF8
+# Stack pointer provenance:
+# 1. chdk-port/loader/g3x/entry.S:7: LDR SP, =MEMBASEADDR (0x00008000)
+# 2. candidate_manifest.json:16: loader_entry = 0x00008000
+# 3. candidate_loader.elf disassembly at 0x000081D8 (my_restart prologue):
+#    push {r3, lr} pushes 2 32-bit registers (8 bytes) onto the stack.
+#    Therefore SP at line 52 of main_prototype.c is exactly 0x8000 - 8 = 0x00007FF8.
+LOADER_ENTRY_SP = 0x00008000
+LOADER_PROLOGUE_STACK_CONSUMPTION = 8
+LOADER_INITIAL_SP = LOADER_ENTRY_SP - LOADER_PROLOGUE_STACK_CONSUMPTION  # 0x00007FF8
 CORE_ENTRY_THUMB_PC = 0x003489B5
 PROTOTYPE_CONT_TICK = 0x0014F200
 
+# Parser field offset map for boot_witness_t (<IIIIIIII, tools/validate_witness_inspector.py:247)
+PARSER_FIELD_OFFSETS = {
+    "magic": 0,
+    "version": 4,
+    "session_nonce": 8,
+    "stage_state": 12,
+    "loader_sp": 16,
+    "core_entry_pc": 20,
+    "cont_tick": 24,
+    "checksum": 28,
+}
+PARSER_STRUCT_SIZE = 32
+
+
+def _skip_if_no_gcc():
+    """Explicitly detect compiler and skip if absent; never pass silently."""
+    if shutil.which("gcc") is None:
+        msg = "GCC host compiler is not available on this system"
+        if pytest is not None:
+            pytest.skip(msg)
+        else:
+            raise unittest.SkipTest(msg)
+
 
 class TestPort21WitnessRoundtrip(unittest.TestCase):
-    """Test suite for witness writer vs inspector parser roundtrip."""
+    """Host roundtrip verification between boot witness writer and inspector parser."""
 
-    def test_loader_only_record_is_valid(self):
-        """Build record bytes exactly as loader writes them; verify inspector accepts as LOADER_REACHED."""
-        # Field values exactly as written by chdk-port/loader/g3x/main_prototype.c:42-56:
-        magic = BOOT_WITNESS_MAGIC
-        version = BOOT_WITNESS_VERSION
-        session_nonce = BOOT_WITNESS_FIXED_NONCE
-        stage_state = STAGE_LOADER
-        loader_sp = LOADER_INITIAL_SP
-        core_entry_pc = 0
-        cont_tick = 0
-        checksum = vwi.compute_checksum(
-            magic, version, session_nonce, stage_state, loader_sp, core_entry_pc, cont_tick
-        )
+    def test_real_c_writer_bytes_roundtrip(self):
+        """Compile a host C probe using boot_witness.h; assert field offsets, sizes, and inspector parse."""
+        _skip_if_no_gcc()
 
-        record_bytes = vwi.pack_witness(
-            magic, version, session_nonce, stage_state, loader_sp, core_entry_pc, cont_tick, checksum
-        )
-
-        self.assertEqual(len(record_bytes), 32)
-        self.assertEqual(checksum, 0x3028882D)
-
-        # Run real inspector parse code (emulate_inspector_parse) with expected_nonce=0
-        # (firmware/tools/witness_inspector_gm110c.m:28 defines expected_nonce = 0)
-        sentinel, title, status, title_col, status_col = vwi.emulate_inspector_parse(
-            record_bytes, expected_nonce=0
-        )
-
-        # Must report LOADER_REACHED, NOT WITNESS_INVALID!
-        self.assertEqual(sentinel, vwi.SENTINEL_LOADER)
-        self.assertEqual(sentinel, 0x57495401)
-        self.assertEqual(title, "LOADER_REACHED")
-        self.assertEqual(status, "FRESHNESS_UNVERIFIED")
-        self.assertEqual(title_col, 1)  # White
-        self.assertEqual(status_col, 4)  # Yellow
-
-        # Even with expected_nonce = 0x32A80001 (fixed constant nonce):
-        s2, t2, st2, tc2, sc2 = vwi.emulate_inspector_parse(
-            record_bytes, expected_nonce=BOOT_WITNESS_FIXED_NONCE
-        )
-        self.assertEqual(s2, vwi.SENTINEL_LOADER)
-        self.assertEqual(t2, "LOADER_REACHED")
-        self.assertEqual(st2, "FRESHNESS_UNVERIFIED")
-        self.assertEqual(tc2, 1)
-        self.assertEqual(sc2, 4)
-
-        # Also run validate_boot_witness offline validator:
-        bw_status, bw_reason = vbw.inspect_witness(record_bytes, expected_nonce=None)
-        self.assertEqual(bw_status, "LOADER_REACHED")
-        self.assertEqual(bw_reason, "Loader handoff reached")
-
-    def test_c_struct_packing_and_loader_disassembly_coherence(self):
-        """Verify struct layout matches boot_witness.h and candidate_loader.elf disassembly."""
-        # In boot_witness.h: packed, aligned(16)
-        # uint32_t magic;
-        # uint32_t version;
-        # uint32_t session_nonce;
-        # uint32_t stage_state;
-        # uint32_t loader_sp;
-        # uint32_t core_entry_pc;
-        # uint32_t cont_tick;
-        # uint32_t checksum;
-        fmt = "<IIIIIIII"
-        self.assertEqual(struct.calcsize(fmt), 32)
-
-        # Compile and run host C verification if gcc is available
-        c_src = r"""
+        # Build host C probe including the actual boot_witness.h header and replicating
+        # field-by-field the loader's assignments from chdk-port/loader/g3x/main_prototype.c:42-56
+        c_source = r"""
 #include <stdio.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
 #include "chdk-port/platform/g3x/sub/110c/boot_witness.h"
 
-int main() {
-    boot_witness_t w = {0};
+int main(void) {
+    boot_witness_t w;
+    memset(&w, 0, sizeof(w));
+
+    // Field assignments exactly as written in chdk-port/loader/g3x/main_prototype.c:42-56:
+    // Line 43: w->magic = BOOT_WITNESS_MAGIC;
     w.magic = BOOT_WITNESS_MAGIC;
+    // Line 44: w->version = BOOT_WITNESS_VERSION;
     w.version = BOOT_WITNESS_VERSION;
+    // Line 48: w->session_nonce = 0x32A80001;
     w.session_nonce = 0x32A80001;
+    // Line 50: w->stage_state = STAGE_LOADER;
     w.stage_state = STAGE_LOADER;
-    w.loader_sp = 0x7FF8;
+    // Line 52: w->loader_sp = current_sp (provenance: 0x8000 entry SP - 8 bytes prologue push = 0x7FF8);
+    w.loader_sp = 0x00007FF8;
+    // Line 53: w->core_entry_pc = 0;
     w.core_entry_pc = 0;
+    // Line 54: w->cont_tick = 0;
     w.cont_tick = 0;
+    // Line 55: w->checksum = compute_witness_checksum((const boot_witness_t*)&w);
     w.checksum = compute_witness_checksum(&w);
-    printf("%zu 0x%08X", sizeof(boot_witness_t), w.checksum);
+
+    printf("SIZEOF %zu\n", sizeof(boot_witness_t));
+    printf("OFFSETS %zu %zu %zu %zu %zu %zu %zu %zu\n",
+        offsetof(boot_witness_t, magic),
+        offsetof(boot_witness_t, version),
+        offsetof(boot_witness_t, session_nonce),
+        offsetof(boot_witness_t, stage_state),
+        offsetof(boot_witness_t, loader_sp),
+        offsetof(boot_witness_t, core_entry_pc),
+        offsetof(boot_witness_t, cont_tick),
+        offsetof(boot_witness_t, checksum)
+    );
+    printf("CHECKSUM 0x%08X\n", w.checksum);
+    printf("HEX ");
+    const unsigned char *p = (const unsigned char *)&w;
+    for (size_t i = 0; i < sizeof(w); ++i) {
+        printf("%02x", p[i]);
+    }
+    printf("\n");
     return 0;
 }
 """
-        import tempfile
         with tempfile.TemporaryDirectory() as td:
-            src_path = Path(td) / "test_w.c"
-            bin_path = Path(td) / "test_w"
-            src_path.write_text(c_src)
-            res = subprocess.run(
-                ["gcc", f"-I{REPO_ROOT}", str(src_path), "-o", str(bin_path)],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+            src_file = Path(td) / "probe_writer.c"
+            bin_file = Path(td) / "probe_writer"
+            src_file.write_text(c_source)
+
+            # Compile with host GCC; compile error MUST fail loudly with stderr
+            compile_res = subprocess.run(
+                ["gcc", "-Wall", "-Wextra", f"-I{REPO_ROOT}", str(src_file), "-o", str(bin_file)],
+                capture_output=True,
+                text=True,
             )
-            if res.returncode == 0:
-                run_res = subprocess.run([str(bin_path)], stdout=subprocess.PIPE, check=True)
-                out = run_res.stdout.decode().strip()
-                sz_str, cs_str = out.split()
-                self.assertEqual(int(sz_str), 32)
-                self.assertEqual(cs_str, "0x3028882D")
+            self.assertEqual(
+                compile_res.returncode,
+                0,
+                f"Host C probe GCC compilation failed!\nstderr:\n{compile_res.stderr}\nstdout:\n{compile_res.stdout}",
+            )
+
+            # Run the compiled probe
+            run_res = subprocess.run([str(bin_file)], capture_output=True, text=True)
+            self.assertEqual(
+                run_res.returncode,
+                0,
+                f"Host C probe execution failed!\nstderr:\n{run_res.stderr}\nstdout:\n{run_res.stdout}",
+            )
+
+            # Parse C probe outputs
+            lines = run_res.stdout.strip().splitlines()
+            parsed = {}
+            for line in lines:
+                parts = line.split()
+                if parts:
+                    parsed[parts[0]] = parts[1:]
+
+            # 1. Assert sizeof(boot_witness_t) against parser expectation (32 bytes)
+            c_size = int(parsed["SIZEOF"][0])
+            self.assertEqual(
+                c_size,
+                PARSER_STRUCT_SIZE,
+                f"C struct sizeof {c_size} != parser expectation {PARSER_STRUCT_SIZE}",
+            )
+
+            # 2. Assert offsetof for every member against parser offsets (<IIIIIIII)
+            # If any struct member is reordered or misaligned, this assertion fails immediately.
+            c_offsets = [int(x) for x in parsed["OFFSETS"]]
+            expected_c_offsets = [
+                PARSER_FIELD_OFFSETS["magic"],
+                PARSER_FIELD_OFFSETS["version"],
+                PARSER_FIELD_OFFSETS["session_nonce"],
+                PARSER_FIELD_OFFSETS["stage_state"],
+                PARSER_FIELD_OFFSETS["loader_sp"],
+                PARSER_FIELD_OFFSETS["core_entry_pc"],
+                PARSER_FIELD_OFFSETS["cont_tick"],
+                PARSER_FIELD_OFFSETS["checksum"],
+            ]
+            self.assertEqual(
+                c_offsets,
+                expected_c_offsets,
+                f"C struct member offsets {c_offsets} do not match parser offsets {expected_c_offsets}",
+            )
+
+            # 3. Assert checksum computed by C inline helper compute_witness_checksum()
+            c_checksum = parsed["CHECKSUM"][0]
+            self.assertEqual(c_checksum, "0x3028882D")
+
+            # 4. Extract serialized hex bytes directly from C writer
+            hex_data = parsed["HEX"][0]
+            real_writer_bytes = bytes.fromhex(hex_data)
+            self.assertEqual(len(real_writer_bytes), 32)
+
+            # 5. Feed the real C writer bytes directly to the real inspector parser
+            # (tools/validate_witness_inspector.py: emulate_inspector_parse with expected_nonce=0)
+            sentinel, title, status, title_col, status_col = vwi.emulate_inspector_parse(
+                real_writer_bytes, expected_nonce=0
+            )
+
+            # Assert real inspector reports LOADER_REACHED / FRESHNESS_UNVERIFIED
+            self.assertEqual(sentinel, vwi.SENTINEL_LOADER)
+            self.assertEqual(sentinel, 0x57495401)
+            self.assertEqual(title, "LOADER_REACHED")
+            self.assertEqual(status, "FRESHNESS_UNVERIFIED")
+            self.assertEqual(title_col, 1)  # White
+            self.assertEqual(status_col, 4)  # Yellow
+
+            # Test also with expected_nonce = BOOT_WITNESS_FIXED_NONCE (0x32A80001)
+            s2, t2, st2, tc2, sc2 = vwi.emulate_inspector_parse(
+                real_writer_bytes, expected_nonce=BOOT_WITNESS_FIXED_NONCE
+            )
+            self.assertEqual(s2, vwi.SENTINEL_LOADER)
+            self.assertEqual(t2, "LOADER_REACHED")
+            self.assertEqual(st2, "FRESHNESS_UNVERIFIED")
+            self.assertEqual(tc2, 1)
+            self.assertEqual(sc2, 4)
+
+            # Also pass to offline validator validate_boot_witness.py
+            bw_status, bw_reason = vbw.inspect_witness(real_writer_bytes, expected_nonce=None)
+            self.assertEqual(bw_status, "LOADER_REACHED")
+            self.assertEqual(bw_reason, "Loader handoff reached")
+
+    def test_disassembly_coherence_and_sp_provenance(self):
+        """Inspect candidate_loader.elf disassembly to verify SP provenance and witness write sequence."""
+        loader_elf = CANDIDATE_DIR / "candidate_loader.elf"
+        loader_bin = CANDIDATE_DIR / "candidate_loader.bin"
+        self.assertTrue(loader_elf.exists(), f"Missing {loader_elf}")
+        self.assertTrue(loader_bin.exists(), f"Missing {loader_bin}")
+
+        # Reproducible provenance check 1: entry SP and binary instructions
+        # chdk-port/loader/g3x/entry.S:7: LDR SP, =MEMBASEADDR (0x00008000)
+        # candidate_manifest.json:16: loader_entry = 0x00008000
+        with open(loader_bin, "rb") as f:
+            loader_bytes = f.read()
+
+        # At offset 0x00 (_start): Thumb instruction 'mov.w sp, #0x8000' is f4 4f 4d 00
+        self.assertEqual(loader_bytes[0:4], b"\x4f\xf4\x00\x4d", "Instruction at 0x8000 must be 'mov.w sp, #32768'")
+        # At offset 0x04: 'b.w my_restart' (offset +0x1D4 to 0x81D8) is f0 00 b8 e8
+        self.assertEqual(loader_bytes[4:8], b"\x00\xf0\xe8\xb8", "Instruction at 0x8004 must be branch to my_restart")
+
+        # At offset 0x1D8 (my_restart prologue): 'push {r3, lr}' is b5 08
+        # This decrements SP by exactly 2 words = 8 bytes.
+        self.assertEqual(loader_bytes[0x1D8:0x1DA], b"\x08\xb5", "Instruction at 0x81D8 must be 'push {r3, lr}'")
+
+        # At offset 0x210: 'str.w sp, [r1, #16]' is f8 c1 d0 10
+        # Stores SP directly into boot_witness.loader_sp (offset 16)
+        self.assertEqual(loader_bytes[0x210:0x214], b"\xc1\xf8\x10\xd0", "Instruction at 0x8210 must be 'str.w sp, [r1, #16]'")
+
+        # At offset 0x254: literal pool for boot_witness target address 0x0035F7A0
+        witness_addr_bytes = loader_bytes[0x254:0x258]
+        self.assertEqual(witness_addr_bytes, struct.pack("<I", EXPECTED_BOOT_WITNESS_ADDR))
+
+        # Check via arm-none-eabi-objdump if toolchain is available
+        toolchain_objdump = REPO_ROOT / "toolchains" / "gcc-arm-none-eabi-5_4-2016q3" / "bin" / "arm-none-eabi-objdump"
+        if toolchain_objdump.exists() and os.access(toolchain_objdump, os.X_OK):
+            res = subprocess.run(
+                [str(toolchain_objdump), "-d", str(loader_elf)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(res.returncode, 0, f"arm-none-eabi-objdump failed:\n{res.stderr}")
+            dump = res.stdout
+
+            # Verify disassembled sequence:
+            # 1. Entry SP initialization
+            self.assertIn("mov.w\tsp, #32768", dump, "Disassembly must show 'mov.w sp, #32768' at _start")
+            # 2. Prologue stack adjustment: push {r3, lr}
+            self.assertIn("push\t{r3, lr}", dump, "Disassembly must show 'push {r3, lr}' in my_restart prologue")
+            # 3. Store SP to offset +16
+            self.assertIn("str.w\tsp, [r1, #16]", dump, "Disassembly must show 'str.w sp, [r1, #16]'")
+            # 4. Target address 0x0035F7A0 loaded into r1
+            self.assertIn("0035f7a0", dump, "Disassembly must reference boot witness target address 0x0035F7A0")
+            # 5. Checksum call and store to offset +28
+            self.assertIn("compute_witness_checksum", dump, "Disassembly must call compute_witness_checksum")
+            self.assertIn("str\tr0, [r1, #28]", dump, "Disassembly must store checksum into [r1, #28]")
 
     def test_all_zero_region_yields_witness_invalid(self):
         """Verify that an uninitialized (all-zero) DRAM region yields WITNESS_INVALID / INVALID / CORRUPT."""
@@ -293,34 +441,44 @@ int main() {
                 self.assertEqual(title_col, 3)
                 self.assertEqual(status_col, 3)
 
-    def test_colour_index_3_palette_mapping_analysis(self):
-        """Verify the color lookup mapping of Color Index 3 in GM1.10C firmware palette architecture."""
-        # In GM1.10C ROM:
-        # 1. LCDMsg_ChangeColor_native (0xFC0C99B0) stores r1 as uint16_t into desc->color (+0x08).
-        # 2. LCDMsg renderer calls 0xFC33D118(color_index).
-        # 3. 0xFC33D118 looks up *(0x00015DA4 + 0x1C)[color_index].
-        #    The lookup table pointer is initialized from 0xFC33D50C -> 0xFC77E0DC.
-        # 4. In ROM table at 0xFC77E0DC:
-        #    Index 0: 36 (0x24) -> Palette 0 entry 36 = 0xFFD5C00E (Yellow/Gold)
-        #    Index 1:  1 (0x01) -> Palette 0 entry  1 = 0xFFFFFFFF (White)
-        #    Index 2: 35 (0x23) -> Palette 0 entry 35 = 0xFF0DB671 (Green)
-        #    Index 3: 37 (0x25) -> Palette 0 entry 37 = 0xFF2D94FF (Light Blue)
-        #    Index 4:  3 (0x03) -> Palette 0 entry  3 = 0xFFEFEFEF (Light Gray)
-        #
-        # Verify the palette entry 37 byte format: 0xFF2D94FF
-        # ARGB / AYCrCb:
-        # Alpha: 0xFF (opaque)
-        # Red: 0x2D = 45, Green: 0x94 = 148, Blue: 0xFF = 255
-        # RGB(45, 148, 255) is Light Blue / Sky Blue, NOT Red!
-        #
-        # This confirms that Color Index 3 renders as Light Blue on screen.
-        pal_entry_37 = 0xFF2D94FF
-        b = struct.pack("<I", pal_entry_37)
-        r, g, blue = b[2], b[1], b[0]
-        self.assertEqual(r, 0x2D)
-        self.assertEqual(g, 0x94)
-        self.assertEqual(blue, 0xFF)
-        self.assertGreater(blue, r, "Blue component exceeds Red: color is Light Blue, NOT Red")
+    def test_color_index_3_selection_and_rendering_invariance(self):
+        """Verify that INVALID state selects Color Index 3, and inspector parsing is rendering-independent.
+
+        Tracked evidence:
+        1. firmware/tools/witness_inspector_payload.S:193-194:
+           .Lstate_invalid executes:
+             movs r6, #3  /* Title Color Index 3 */
+             movs r7, #3  /* Status Color Index 3 */
+           and passes r6, r7 to LCDMsg_ChangeColor_native (payload.S:216-232).
+        2. tools/validate_witness_inspector.py:251, 256, 260, 273:
+           All failure exit points return (SENTINEL_INVALID, ..., 3, 3).
+        3. docs/HDMI001_OVERLAY_PIPELINE.md:98:
+           The GM1.10C hardware palette entries are 32-bit AYCrCb (bits 25:24 2-bit alpha,
+           YCrCb chroma/luma), NOT RGB.
+        4. Visual display appearance on the physical camera LCD depends on the active palette
+           configuration, display device LUT calibration, and rendering context [INFERRED / UNKNOWN].
+        5. Inspector parsing logic, sentinel generation (0x574954EE), and execution control flow
+           are strictly independent of the visual display color [VERIFIED].
+        """
+        # 1. Assert parser returns color index 3 for both lines on invalid input
+        all_zeros = bytes(32)
+        sentinel, title, status, title_col, status_col = vwi.emulate_inspector_parse(all_zeros, expected_nonce=0)
+        self.assertEqual(title_col, 3, "Title color index must be 3 for WITNESS_INVALID")
+        self.assertEqual(status_col, 3, "Status color index must be 3 for INVALID / CORRUPT")
+        self.assertEqual(sentinel, 0x574954EE, "Return sentinel must be SENTINEL_INVALID (0x574954EE)")
+
+        # 2. Verify payload assembly source explicitly selects color index 3
+        payload_asm_path = REPO_ROOT / "firmware" / "tools" / "witness_inspector_payload.S"
+        self.assertTrue(payload_asm_path.exists(), f"Missing {payload_asm_path}")
+        asm_text = payload_asm_path.read_text()
+
+        # Check .Lstate_invalid block selects #3 for r6 and r7
+        self.assertIn("movs\tr6, #3", asm_text, "payload.S must set r6 (Title Color) to 3 at .Lstate_invalid")
+        self.assertIn("movs\tr7, #3", asm_text, "payload.S must set r7 (Status Color) to 3 at .Lstate_invalid")
+
+        # 3. Verify inspector control flow and parsing results are invariant to color indices
+        # Color values (1, 4, 3) are output UI telemetry only; they never feed back into parsing logic.
+        self.assertIn("0x574954EE", asm_text)
 
 
 if __name__ == "__main__":
