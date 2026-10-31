@@ -9,19 +9,25 @@ Validates:
 1. One fixture per hypothesis H1, H2, H3, H4.
 2. At least one AMBIGUOUS fixture matches multiple hypotheses with detailed reason.
 3. At least one INCONSISTENT fixture contradicts hypotheses with detailed reason.
-4. Malformed-input cases: bad JSON, missing required fields, wrong types produce
-   clear error messages and non-zero exit codes without tracebacks.
-5. Strict validation of booleans: booleans rejected for ramcmp and startup_timing.
-6. Strict validation of port20_led: closed set, dict handling, precedence handling.
-7. Strict validation of ramcmp & inspector_osd: partial UNREACHABLE rejected,
-   unrecognized strings rejected, reachable ramcmp + UNREACHABLE OSD -> INCONSISTENT.
-8. Safety invariant refusal: paths ending in .bin or starting with PRIMARY.* are refused.
+4. Hand-written expected outcomes tested against CLI --json output for every fixture.
+5. Strict rejection of null values for all fields (ramcmp, port20_led, inspector_osd,
+   card_lock_state, startup_timing).
+6. Closed input schema: removal of undocumented alias keys; passing an alias key on its own
+   gives a missing-field error; unrecognized fields are rejected.
+7. Strict canonical tokens: rejection of 'NONE', 'N/A', 'HANG', 'UNKNOWN', 'MISSING'.
+8. Refusal rules:
+   - Paths ending in .bin (case-insensitive) refused.
+   - Paths starting with PRIMARY.* refused.
+   - Paths not ending in .json refused (e.g. rom.dat).
+   - Files ending in .JSON with binary content (NUL bytes / invalid UTF-8) refused.
 9. Runtime consistency test: parses docs/PORT21_OWNER_SESSION_PLAN.md markdown table
    at run time, normalizes each cell, compares row-by-row and column-by-column across
    all hypotheses and all columns with STRUCTURED_RULE_TABLE, and computes each fixture's
    expected classification dynamically from the parsed table without hardcoding.
 10. All fixtures under tests/fixtures/port22/*.json are synthetic ("synthetic": true).
-11. Deterministic output and --json flag support.
+11. Output reason for AMBIGUOUS [H3, H4] notes that H4 is a strict subset of H3
+    citing docs/PORT21_OWNER_SESSION_PLAN.md:173-174.
+12. Deterministic output and --json flag support.
 """
 
 from __future__ import annotations
@@ -30,6 +36,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -116,6 +123,39 @@ def dynamic_classify_from_parsed_table(
 class TestPort22SessionClassifierFixtures(unittest.TestCase):
     """Verifies that all synthetic fixtures classify correctly according to H1-H4."""
 
+    HANDWRITTEN_EXPECTED: Dict[str, Dict[str, Any]] = {
+        "h1_rejected.json": {
+            "status": "MATCH",
+            "classification": "H1",
+            "hypotheses": ["H1"],
+        },
+        "h2_compat_hang.json": {
+            "status": "MATCH",
+            "classification": "H2",
+            "hypotheses": ["H2"],
+        },
+        "h3_stock_overwrite.json": {
+            "status": "MATCH",
+            "classification": "H3",
+            "hypotheses": ["H3"],
+        },
+        "h4_malformed_witness.json": {
+            "status": "AMBIGUOUS",
+            "classification": "AMBIGUOUS",
+            "hypotheses": ["H3", "H4"],
+        },
+        "ambiguous_unobserved_led.json": {
+            "status": "AMBIGUOUS",
+            "classification": "AMBIGUOUS",
+            "hypotheses": ["H1", "H3"],
+        },
+        "inconsistent_contradictory.json": {
+            "status": "INCONSISTENT",
+            "classification": "INCONSISTENT",
+            "hypotheses": [],
+        },
+    }
+
     def test_all_fixtures_marked_synthetic(self):
         """All fixtures in tests/fixtures/port22/*.json must be marked with synthetic: true."""
         fixture_files = list(FIXTURES_DIR.glob("*.json"))
@@ -124,6 +164,36 @@ class TestPort22SessionClassifierFixtures(unittest.TestCase):
             data = json.loads(f.read_text(encoding="utf-8"))
             self.assertIn("synthetic", data, f"Fixture {f.name} missing 'synthetic' key")
             self.assertTrue(data["synthetic"] is True, f"Fixture {f.name} must have 'synthetic': true")
+
+    def test_handwritten_expected_outcomes_against_cli_json(self):
+        """Asserts each fixture's CLI --json output against hand-written expectations."""
+        for fname, expected in self.HANDWRITTEN_EXPECTED.items():
+            fpath = FIXTURES_DIR / fname
+            self.assertTrue(fpath.is_file(), f"Fixture file not found: {fpath}")
+
+            proc = subprocess.run(
+                [sys.executable, str(TOOL_PATH), "--json", str(fpath)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(proc.returncode, 0, f"CLI exited with error for {fname}: {proc.stderr}")
+            res = json.loads(proc.stdout)
+
+            self.assertEqual(
+                res["status"],
+                expected["status"],
+                f"Status mismatch for {fname}: got {res['status']}, expected {expected['status']}",
+            )
+            self.assertEqual(
+                res["classification"],
+                expected["classification"],
+                f"Classification mismatch for {fname}: got {res['classification']}, expected {expected['classification']}",
+            )
+            self.assertEqual(
+                res["hypotheses"],
+                expected["hypotheses"],
+                f"Hypotheses mismatch for {fname}: got {res['hypotheses']}, expected {expected['hypotheses']}",
+            )
 
     def test_fixture_h1(self):
         """Fixture for H1: StartDiskboot rejected binary, normal boot, no pulse, all RAMCMP differs."""
@@ -165,7 +235,8 @@ class TestPort22SessionClassifierFixtures(unittest.TestCase):
         """Fixture for H4: Shifted heap succeeded (r_c4=1, r_ct=1), witness struct malformed.
         
         Under the table rules alone, H3 specifies WILDCARD for r_c4, r_ct, and r_wm, so
-        both H3 and H4 match, correctly yielding AMBIGUOUS as dictated by the table.
+        both H3 and H4 match, yielding AMBIGUOUS [H3, H4].
+        The reason explicitly notes H4 is a strict subset of H3 citing lines 173-174.
         """
         fpath = FIXTURES_DIR / "h4_malformed_witness.json"
         self.assertTrue(fpath.is_file(), f"Missing fixture {fpath}")
@@ -174,9 +245,9 @@ class TestPort22SessionClassifierFixtures(unittest.TestCase):
         res = json.loads(out)
         self.assertEqual(res["status"], "AMBIGUOUS")
         self.assertEqual(res["classification"], "AMBIGUOUS")
-        self.assertIn("H4", res["hypotheses"])
-        self.assertIn("H3", res["hypotheses"])
         self.assertEqual(res["hypotheses"], ["H3", "H4"])
+        self.assertIn("docs/PORT21_OWNER_SESSION_PLAN.md:173-174", res["reason"])
+        self.assertIn("strict subset", res["reason"].lower())
 
     def test_fixture_ambiguous(self):
         """Fixture for AMBIGUOUS: LED unobserved, so H1 and H3 cannot be distinguished by RAMCMP alone."""
@@ -187,8 +258,7 @@ class TestPort22SessionClassifierFixtures(unittest.TestCase):
         res = json.loads(out)
         self.assertEqual(res["status"], "AMBIGUOUS")
         self.assertEqual(res["classification"], "AMBIGUOUS")
-        self.assertIn("H1", res["hypotheses"])
-        self.assertIn("H3", res["hypotheses"])
+        self.assertEqual(res["hypotheses"], ["H1", "H3"])
 
     def test_fixture_inconsistent(self):
         """Fixture for INCONSISTENT: NO_PULSE reported but r_c4=1 and r_ct=1 contradicts all hypotheses."""
@@ -203,8 +273,19 @@ class TestPort22SessionClassifierFixtures(unittest.TestCase):
         self.assertIn("contradict", res["reason"].lower())
 
 
+def make_valid_base() -> Dict[str, Any]:
+    return {
+        "card_lock_state": "LOCKED",
+        "startup_timing": "normal",
+        "port20_led": "NO_PULSE",
+        "ramcmp": {"r_l8": 0, "r_l4": 0, "r_c4": 0, "r_ct": 0, "r_wm": 0},
+    }
+
+
 class TestPort22SessionClassifierInputValidation(unittest.TestCase):
-    """Verifies refusal rules, malformed JSON handling, missing fields, and strict type validation."""
+    """Verifies refusal rules, malformed JSON handling, missing fields, null rejection,
+    closed schema enforcement, and canonical token validation.
+    """
 
     def test_refuse_bin_path(self):
         """Refuses any path ending in .bin (case-insensitive) with non-zero exit and clear message."""
@@ -221,7 +302,7 @@ class TestPort22SessionClassifierInputValidation(unittest.TestCase):
 
     def test_refuse_primary_path(self):
         """Refuses any path with basename starting with PRIMARY with non-zero exit and clear message."""
-        bad_paths = ["PRIMARY.DAT", "PRIMARY_ROM.dump", "PRIMARY.json", "path/to/PRIMARY.txt"]
+        bad_paths = ["PRIMARY.DAT", "PRIMARY_ROM.dump", "PRIMARY.json", "path/to/PRIMARY.txt", "primary.json"]
         for p in bad_paths:
             proc = subprocess.run(
                 [sys.executable, str(TOOL_PATH), p],
@@ -231,6 +312,48 @@ class TestPort22SessionClassifierInputValidation(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, f"Expected non-zero exit for {p}")
             self.assertIn("Refusing path with basename starting with PRIMARY", proc.stderr)
             self.assertNotIn("Traceback", proc.stderr)
+
+    def test_refuse_non_json_path(self):
+        """Refuses paths not ending in .json (e.g. rom.dat) with clear refusal message."""
+        bad_paths = ["rom.dat", "sample.txt", "data.csv", "report.xml"]
+        for p in bad_paths:
+            proc = subprocess.run(
+                [sys.executable, str(TOOL_PATH), p],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(proc.returncode, 0, f"Expected non-zero exit for {p}")
+            self.assertIn("Refusing non-JSON file path", proc.stderr)
+            self.assertNotIn("Traceback", proc.stderr)
+
+    def test_refuse_binary_content_in_json_path(self):
+        """Refuses files ending in .JSON containing binary bytes (NUL bytes or non-UTF8)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # File with NUL byte
+            nul_file = Path(tmpdir) / "corrupt_null.JSON"
+            nul_file.write_bytes(b'{"card_lock_state": \x00 "LOCKED"}')
+
+            proc1 = subprocess.run(
+                [sys.executable, str(TOOL_PATH), str(nul_file)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(proc1.returncode, 0)
+            self.assertIn("Binary content detected", proc1.stderr)
+            self.assertNotIn("Traceback", proc1.stderr)
+
+            # File with invalid UTF-8 bytes
+            invalid_utf8_file = Path(tmpdir) / "invalid_utf8.json"
+            invalid_utf8_file.write_bytes(b'{"card_lock_state": \xff\xfe "LOCKED"}')
+
+            proc2 = subprocess.run(
+                [sys.executable, str(TOOL_PATH), str(invalid_utf8_file)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(proc2.returncode, 0)
+            self.assertIn("Invalid UTF-8 encoding", proc2.stderr)
+            self.assertNotIn("Traceback", proc2.stderr)
 
     def test_malformed_json_syntax(self):
         """Malformed JSON must exit non-zero with clear error and NO traceback."""
@@ -253,14 +376,8 @@ class TestPort22SessionClassifierInputValidation(unittest.TestCase):
 
     def test_missing_required_top_level_fields(self):
         """Missing top-level required fields produce clear error and non-zero exit without traceback."""
-        valid_base = {
-            "card_lock_state": "LOCKED",
-            "startup_timing": "normal",
-            "port20_led": "NO_PULSE",
-            "ramcmp": {"r_l8": 0, "r_l4": 0, "r_c4": 0, "r_ct": 0, "r_wm": 0},
-        }
         for field in ("card_lock_state", "startup_timing", "port20_led", "ramcmp"):
-            copy_data = dict(valid_base)
+            copy_data = make_valid_base()
             del copy_data[field]
             proc = subprocess.run(
                 [sys.executable, str(TOOL_PATH), "-"],
@@ -272,17 +389,87 @@ class TestPort22SessionClassifierInputValidation(unittest.TestCase):
             self.assertIn(f"Missing required field: '{field}'", proc.stderr)
             self.assertNotIn("Traceback", proc.stderr)
 
+    def test_alias_keys_produce_missing_required_field_error(self):
+        """Alias keys on their own without canonical fields must produce a missing-field error."""
+        alias_tests = [
+            ("led_observation", "port20_led", "NO_PULSE"),
+            ("port20_led_observation", "port20_led", "NO_PULSE"),
+            ("card_locked", "card_lock_state", "LOCKED"),
+            ("start_up_timing", "startup_timing", "normal"),
+        ]
+        for alias_key, missing_canonical, sample_val in alias_tests:
+            bad_data = make_valid_base()
+            del bad_data[missing_canonical]
+            bad_data[alias_key] = sample_val
+
+            proc = subprocess.run(
+                [sys.executable, str(TOOL_PATH), "-"],
+                input=json.dumps(bad_data),
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn(f"Missing required field: '{missing_canonical}'", proc.stderr)
+            self.assertNotIn("Traceback", proc.stderr)
+
+    def test_closed_schema_rejects_unrecognized_fields(self):
+        """Closed schema: unexpected extra fields must be rejected."""
+        bad_data = make_valid_base()
+        bad_data["extra_unrecognized_key"] = "unexpected"
+
+        proc = subprocess.run(
+            [sys.executable, str(TOOL_PATH), "-"],
+            input=json.dumps(bad_data),
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("Unrecognized field in report schema", proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
+
+    def test_reject_null_values_for_all_fields(self):
+        """Null values (null / None) must be rejected for all fields."""
+        fields_to_test = [
+            "ramcmp",
+            "port20_led",
+            "inspector_osd",
+            "card_lock_state",
+            "startup_timing",
+        ]
+        for field in fields_to_test:
+            data = make_valid_base()
+            data[field] = None
+
+            proc = subprocess.run(
+                [sys.executable, str(TOOL_PATH), "-"],
+                input=json.dumps(data),
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(proc.returncode, 0, f"Expected non-zero exit when {field} is null")
+            self.assertIn("null value", proc.stderr.lower())
+            self.assertNotIn("Traceback", proc.stderr)
+
+    def test_reject_null_values_inside_ramcmp_dict(self):
+        """Null values inside ramcmp dict must be rejected."""
+        for ram_field in ("r_l8", "r_l4", "r_c4", "r_ct", "r_wm"):
+            data = make_valid_base()
+            data["ramcmp"][ram_field] = None
+
+            proc = subprocess.run(
+                [sys.executable, str(TOOL_PATH), "-"],
+                input=json.dumps(data),
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("null value", proc.stderr.lower())
+            self.assertNotIn("Traceback", proc.stderr)
+
     def test_missing_required_ramcmp_fields(self):
         """Missing RAMCMP required fields produce clear error and non-zero exit without traceback."""
-        valid_base = {
-            "card_lock_state": "LOCKED",
-            "startup_timing": "normal",
-            "port20_led": "NO_PULSE",
-            "ramcmp": {"r_l8": 0, "r_l4": 0, "r_c4": 0, "r_ct": 0, "r_wm": 0},
-        }
         for ram_field in ("r_l8", "r_l4", "r_c4", "r_ct", "r_wm"):
-            copy_data = dict(valid_base)
-            copy_data["ramcmp"] = dict(valid_base["ramcmp"])
+            copy_data = make_valid_base()
             del copy_data["ramcmp"][ram_field]
             proc = subprocess.run(
                 [sys.executable, str(TOOL_PATH), "-"],
@@ -296,16 +483,9 @@ class TestPort22SessionClassifierInputValidation(unittest.TestCase):
 
     def test_reject_booleans_in_ramcmp_and_timing(self):
         """Booleans must be explicitly rejected for startup_timing and ramcmp fields."""
-        valid_base = {
-            "card_lock_state": "LOCKED",
-            "startup_timing": "normal",
-            "port20_led": "NO_PULSE",
-            "ramcmp": {"r_l8": 0, "r_l4": 0, "r_c4": 0, "r_ct": 0, "r_wm": 0},
-        }
-
         # Boolean in startup_timing
         for bool_val in (True, False):
-            copy_data = dict(valid_base)
+            copy_data = make_valid_base()
             copy_data["startup_timing"] = bool_val
             proc = subprocess.run(
                 [sys.executable, str(TOOL_PATH), "-"],
@@ -320,8 +500,7 @@ class TestPort22SessionClassifierInputValidation(unittest.TestCase):
         # Boolean in ramcmp fields
         for field in ("r_l8", "r_l4", "r_c4", "r_ct", "r_wm"):
             for bool_val in (True, False):
-                copy_data = dict(valid_base)
-                copy_data["ramcmp"] = dict(valid_base["ramcmp"])
+                copy_data = make_valid_base()
                 copy_data["ramcmp"][field] = bool_val
                 proc = subprocess.run(
                     [sys.executable, str(TOOL_PATH), "-"],
@@ -333,17 +512,62 @@ class TestPort22SessionClassifierInputValidation(unittest.TestCase):
                 self.assertIn("booleans not allowed", proc.stderr)
                 self.assertNotIn("Traceback", proc.stderr)
 
+    def test_reject_non_canonical_tokens(self):
+        """Non-canonical tokens ('NONE', 'N/A', 'HANG', 'UNKNOWN', 'MISSING') must be rejected."""
+        # 'NONE' for port20_led rejected
+        copy_data = make_valid_base()
+        copy_data["port20_led"] = "NONE"
+        proc = subprocess.run(
+            [sys.executable, str(TOOL_PATH), "-"],
+            input=json.dumps(copy_data),
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("Unrecognized value for 'port20_led'", proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
+
+        # 'N/A' for port20_led rejected
+        copy_data = make_valid_base()
+        copy_data["port20_led"] = "N/A"
+        proc = subprocess.run(
+            [sys.executable, str(TOOL_PATH), "-"],
+            input=json.dumps(copy_data),
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("Unrecognized value for 'port20_led'", proc.stderr)
+
+        # 'N/A' for inspector_osd rejected
+        copy_data = make_valid_base()
+        copy_data["inspector_osd"] = "N/A"
+        proc = subprocess.run(
+            [sys.executable, str(TOOL_PATH), "-"],
+            input=json.dumps(copy_data),
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("Unrecognized value for 'inspector_osd'", proc.stderr)
+
+        # 'HANG' for ramcmp rejected
+        copy_data = make_valid_base()
+        copy_data["ramcmp"] = "HANG"
+        proc = subprocess.run(
+            [sys.executable, str(TOOL_PATH), "-"],
+            input=json.dumps(copy_data),
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("Unrecognized string value for 'ramcmp'", proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
+
     def test_port20_led_strict_validation(self):
         """Strict validation of port20_led: rejection of garbage, dict handling, anchored matching."""
-        valid_base = {
-            "card_lock_state": "LOCKED",
-            "startup_timing": "normal",
-            "port20_led": "NO_PULSE",
-            "ramcmp": {"r_l8": 0, "r_l4": 0, "r_c4": 0, "r_ct": 0, "r_wm": 0},
-        }
-
         # String 'GARBAGE' rejected
-        copy_data = dict(valid_base)
+        copy_data = make_valid_base()
         copy_data["port20_led"] = "GARBAGE"
         proc = subprocess.run(
             [sys.executable, str(TOOL_PATH), "-"],
@@ -356,7 +580,7 @@ class TestPort22SessionClassifierInputValidation(unittest.TestCase):
         self.assertNotIn("Traceback", proc.stderr)
 
         # Empty dict {} rejected
-        copy_data = dict(valid_base)
+        copy_data = make_valid_base()
         copy_data["port20_led"] = {}
         proc = subprocess.run(
             [sys.executable, str(TOOL_PATH), "-"],
@@ -369,7 +593,7 @@ class TestPort22SessionClassifierInputValidation(unittest.TestCase):
         self.assertNotIn("Traceback", proc.stderr)
 
         # Dict {'pulse': 'NO_PULSE'} handled correctly
-        copy_data = dict(valid_base)
+        copy_data = make_valid_base()
         copy_data["port20_led"] = {"pulse": "NO_PULSE"}
         code, out = classifier.run_classifier("-", use_json_output=True, stdin_content=json.dumps(copy_data))
         self.assertEqual(code, 0)
@@ -377,7 +601,7 @@ class TestPort22SessionClassifierInputValidation(unittest.TestCase):
         self.assertEqual(res["classification"], "H1")
 
         # Dict with garbage value rejected
-        copy_data = dict(valid_base)
+        copy_data = make_valid_base()
         copy_data["port20_led"] = {"pulse": "GARBAGE"}
         proc = subprocess.run(
             [sys.executable, str(TOOL_PATH), "-"],
@@ -388,10 +612,9 @@ class TestPort22SessionClassifierInputValidation(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("Unrecognized value for 'port20_led'", proc.stderr)
 
-        # 'PULSES ~1-2 s then OFF' handled correctly as PULSE
-        copy_data = dict(valid_base)
+        # 'PULSES ~1-2 s then OFF' handled correctly as PULSE (H3)
+        copy_data = make_valid_base()
         copy_data["port20_led"] = "PULSES ~1-2 s then OFF"
-        # Since LED is PULSE and ramcmp is all 0, matches H3
         code, out = classifier.run_classifier("-", use_json_output=True, stdin_content=json.dumps(copy_data))
         self.assertEqual(code, 0)
         res = json.loads(out)
@@ -399,15 +622,8 @@ class TestPort22SessionClassifierInputValidation(unittest.TestCase):
 
     def test_inspector_osd_and_partial_ramcmp_strictly(self):
         """Strict validation of inspector_osd and ramcmp."""
-        valid_base = {
-            "card_lock_state": "LOCKED",
-            "startup_timing": "normal",
-            "port20_led": "NO_PULSE",
-            "ramcmp": {"r_l8": 0, "r_l4": 0, "r_c4": 0, "r_ct": 0, "r_wm": 0},
-        }
-
         # Unknown string in inspector_osd rejected
-        copy_data = dict(valid_base)
+        copy_data = make_valid_base()
         copy_data["inspector_osd"] = "GARBAGE_OSD"
         proc = subprocess.run(
             [sys.executable, str(TOOL_PATH), "-"],
@@ -420,7 +636,7 @@ class TestPort22SessionClassifierInputValidation(unittest.TestCase):
         self.assertNotIn("Traceback", proc.stderr)
 
         # Reachable ramcmp + inspector_osd 'UNREACHABLE' classifies as INCONSISTENT
-        copy_data = dict(valid_base)
+        copy_data = make_valid_base()
         copy_data["inspector_osd"] = "UNREACHABLE"
         code, out = classifier.run_classifier("-", use_json_output=True, stdin_content=json.dumps(copy_data))
         self.assertEqual(code, 0)
@@ -429,7 +645,7 @@ class TestPort22SessionClassifierInputValidation(unittest.TestCase):
         self.assertEqual(res["classification"], "INCONSISTENT")
 
         # Partially UNREACHABLE ramcmp dict rejected as malformed
-        copy_data = dict(valid_base)
+        copy_data = make_valid_base()
         copy_data["ramcmp"] = {"r_l8": 0, "r_l4": "UNREACHABLE", "r_c4": 0, "r_ct": 0, "r_wm": 0}
         proc = subprocess.run(
             [sys.executable, str(TOOL_PATH), "-"],
@@ -442,7 +658,7 @@ class TestPort22SessionClassifierInputValidation(unittest.TestCase):
         self.assertNotIn("Traceback", proc.stderr)
 
         # Invalid RAMCMP integer (e.g. 2) rejected
-        copy_data = dict(valid_base)
+        copy_data = make_valid_base()
         copy_data["ramcmp"]["r_l8"] = 2
         proc = subprocess.run(
             [sys.executable, str(TOOL_PATH), "-"],
@@ -508,13 +724,18 @@ class TestPort22MarkdownConsistency(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.assertTrue(DOC_PATH.is_file(), f"Document missing: {DOC_PATH}")
+        if not DOC_PATH.is_file():
+            raise AssertionError(f"Plan document missing: {DOC_PATH}")
+
         cls.doc_lines = DOC_PATH.read_text(encoding="utf-8").splitlines()
         cls.table_lines = [
             line.strip()
             for line in cls.doc_lines[classifier.TABLE_START_LINE - 1 : classifier.TABLE_END_LINE]
         ]
-        cls.assertTrue(len(cls.table_lines) >= 7, "Table must contain header, separator, and rows")
+        if len(cls.table_lines) < 7:
+            raise AssertionError(
+                f"Table must contain header, separator, and 4+ rows, got {len(cls.table_lines)} lines"
+            )
 
         # Parse header
         cls.parsed_columns = [c.strip() for c in cls.table_lines[0].split("|")[1:-1]]

@@ -23,24 +23,45 @@ Wildcard fields:
 - H4: r_l4 is UNKNOWN in the table at docs/PORT21_OWNER_SESSION_PLAN.md:174 (T1/T2 conflict);
   treated as an explicit WILDCARD citing line 174.
 
-This tool reads a JSON owner session report containing:
-- RAMCMP readings (r_l8, r_l4, r_c4, r_ct, r_wm)
-- PORT-20 LED observations (GPIO 33, 0xD20B0884)
-- SD card lock state (card_lock_state)
-- Start-up timing (startup_timing)
-- Optional Inspector OSD title/status (extend.m)
+Note on H3/H4 Subset Relationship:
+- Under docs/PORT21_OWNER_SESSION_PLAN.md:173-174, H4 is a strict subset of H3 because
+  H3 specifies wildcards for r_c4, r_ct, and r_wm, while H4 specifies r_c4=1, r_ct=1, r_wm=0.
+  Consequently, under the prediction table alone, any observation matching H4 will also match H3,
+  resulting in AMBIGUOUS [H3, H4]. H4 can never be the sole match under table rules alone
+  without subsequent decision-tree evaluation (lines 159, 201-204).
 
-It outputs:
-- A matching hypothesis (H1, H2, H3, or H4) if uniquely matched
-- AMBIGUOUS with matching hypotheses and detailed reason if multiple match
-- INCONSISTENT with detailed reason if readings contradict every hypothesis or each other
+Closed Input Schema:
+  Only the following 7 keys are allowed in the top-level JSON object:
+  - synthetic (boolean, optional)
+  - description (string, optional)
+  - card_lock_state (string or boolean, required)
+  - startup_timing (string or number, required; booleans not allowed)
+  - port20_led (string or dict, required)
+  - ramcmp (dict with 5 fields or 'UNREACHABLE' string, required)
+  - inspector_osd (string, optional)
 
-CLI rules:
-- Pure Python standard library only.
-- Accepts JSON file path or stdin (-).
-- Refuses any path ending in .bin (case-insensitive) or with basename starting with PRIMARY.
-- Exits with non-zero code on malformed JSON, missing fields, wrong types, or refused paths.
-- Deterministic output ordering; provides --json flag for machine-readable JSON.
+Field Canonical Tokens:
+  - port20_led accepts canonical tokens: 'PULSE', 'NO_PULSE', and 'UNOBSERVED'.
+    It also accepts the anchored 'PULSES ...' form (e.g. 'PULSES ~1-2 s') cited directly
+    from docs/PORT21_OWNER_SESSION_PLAN.md:172-175.
+    Non-canonical strings such as 'NONE', 'UNKNOWN', 'N/A', 'MISSING', and 'HANG' are rejected.
+  - ramcmp accepts either an 'UNREACHABLE' string (or 'UNREACHABLE / UNKNOWN' citing line 172)
+    or a dict of 5 integers (r_l8, r_l4, r_c4, r_ct, r_wm) each equal to 0 or 1.
+    Non-canonical strings such as 'HANG' are rejected.
+  - inspector_osd accepts canonical tokens: 'WITNESS_INVALID' (or 'INVALID / CORRUPT'),
+    'UNREACHABLE' (or 'UNREACHABLE / UNKNOWN'), 'LOADER_REACHED', 'CONT_ATTEMPTED', or 'UNOBSERVED'.
+    Non-canonical tokens such as 'N/A', 'UNKNOWN', 'MISSING', and 'HANG' are rejected.
+  - Null values (null / None) are strictly rejected for all fields.
+
+CLI & Refusal Rules:
+  - Pure Python standard library only.
+  - Accepts JSON file path ending in .json (case-insensitive) or '-' for stdin.
+  - Refuses paths ending in .bin (case-insensitive) with a specific refusal message.
+  - Refuses paths whose basename starts with PRIMARY (case-insensitive) with a specific refusal message.
+  - Refuses paths not ending in .json with a specific refusal message.
+  - Inspects raw bytes before decoding: rejects binary content containing NUL bytes or invalid UTF-8.
+  - Exits with non-zero code on malformed JSON, missing fields, wrong types, or refused paths (no traceback).
+  - Deterministic output ordering; provides --json flag for machine-readable JSON.
 """
 
 from __future__ import annotations
@@ -231,7 +252,7 @@ STRUCTURED_RULE_TABLE: Dict[str, Dict[str, Any]] = {
     },
 }
 
-# Alias for backward compatibility if needed
+# Alias for backward compatibility
 ENCODED_TABLE = STRUCTURED_RULE_TABLE
 
 
@@ -250,7 +271,8 @@ def validate_path_safety(path_str: str) -> Path:
     
     Refuses:
     - Paths ending in .bin (case-insensitive)
-    - Paths whose basename starts with PRIMARY (case-sensitive and insensitive)
+    - Paths whose basename starts with PRIMARY (case-insensitive)
+    - Paths not ending in .json (case-insensitive)
     """
     p = Path(path_str)
     name = p.name
@@ -260,9 +282,23 @@ def validate_path_safety(path_str: str) -> Path:
         
     if name.upper().startswith("PRIMARY"):
         raise RefusalError(f"Refusing path with basename starting with PRIMARY: '{path_str}'")
+
+    if not name.lower().endswith(".json"):
+        raise RefusalError(f"Refusing non-JSON file path: '{path_str}' (expected .json extension)")
         
     return p
 
+
+# Closed schema definition
+ALLOWED_TOP_LEVEL_FIELDS: Tuple[str, ...] = (
+    "synthetic",
+    "description",
+    "card_lock_state",
+    "startup_timing",
+    "port20_led",
+    "ramcmp",
+    "inspector_osd",
+)
 
 REQUIRED_TOP_LEVEL_FIELDS: Tuple[str, ...] = (
     "card_lock_state",
@@ -283,14 +319,19 @@ REQUIRED_RAMCMP_FIELDS: Tuple[str, ...] = (
 def normalize_led_observation(val: Any) -> str:
     """Normalizes the PORT-20 LED observation to PULSE, NO_PULSE, or UNOBSERVED.
     
-    Validates strictly against the closed set:
-    - NO_PULSE
-    - PULSE
-    - UNOBSERVED
+    Accepts only canonical tokens:
+    - 'PULSE'
+    - 'NO_PULSE'
+    - 'UNOBSERVED'
+    Plus the anchored 'PULSES ...' form (e.g. 'PULSES ~1-2 s') cited from
+    docs/PORT21_OWNER_SESSION_PLAN.md:172-175.
     
-    Anchored token matching prevents substrings (e.g. 'OFF') from misclassifying
-    strings such as 'PULSES ~1-2 s then OFF' as NO_PULSE.
+    Rejects null values, booleans, empty strings, and non-canonical strings
+    such as 'NONE', 'UNKNOWN', 'N/A', 'MISSING', and 'HANG'.
     """
+    if val is None:
+        raise ValidationError("Invalid 'port20_led': null value is not allowed")
+
     if isinstance(val, bool):
         raise ValidationError(f"Invalid type for 'port20_led': booleans not allowed, got {val}")
 
@@ -308,12 +349,6 @@ def normalize_led_observation(val: Any) -> str:
                 f"Invalid 'port20_led' dict: missing recognized key ({recognized_keys}), got {list(val.keys())}"
             )
         inner = val[found_key]
-        if isinstance(inner, bool):
-            raise ValidationError(f"Invalid type for 'port20_led' dict field '{found_key}': booleans not allowed")
-        if not isinstance(inner, str):
-            raise ValidationError(
-                f"Invalid type for 'port20_led' dict field '{found_key}': expected string, got {type(inner).__name__}"
-            )
         return normalize_led_observation(inner)
 
     if isinstance(val, str):
@@ -321,20 +356,18 @@ def normalize_led_observation(val: Any) -> str:
         if not v:
             raise ValidationError("Invalid 'port20_led': empty string")
 
-        # Anchored NO_PULSE check
+        # Anchored NO_PULSE check (docs/PORT21_OWNER_SESSION_PLAN.md:171: "**NO PULSE**")
         if (
-            v in ("NO_PULSE", "NO PULSE", "NO-PULSE", "NONE", "NO BLINK", "NO_BLINK")
+            v in ("NO_PULSE", "NO PULSE")
             or v.startswith("NO PULSE")
             or v.startswith("NO_PULSE")
-            or v.startswith("0 S DELAY")
             or v.startswith("**NO PULSE")
         ):
             return "NO_PULSE"
 
-        # Anchored PULSE check (takes precedence over secondary 'OFF' in 'PULSES ~1-2 s then OFF')
+        # Anchored PULSE check (docs/PORT21_OWNER_SESSION_PLAN.md:172-175: "**PULSES ~1-2 s**")
         if (
-            v in ("PULSE", "PULSES", "BLINK", "FLASH")
-            or v.startswith("PULSE")
+            v == "PULSE"
             or v.startswith("PULSES")
             or v.startswith("**PULSES")
             or "PULSES ~1-2 S" in v
@@ -342,11 +375,8 @@ def normalize_led_observation(val: Any) -> str:
         ):
             return "PULSE"
 
-        # Anchored UNOBSERVED check
-        if (
-            v in ("UNOBSERVED", "UNKNOWN", "UNRECORDED", "N/A", "MISSING")
-            or v.startswith("UNOBSERVED")
-        ):
+        # Canonical UNOBSERVED check
+        if v == "UNOBSERVED":
             return "UNOBSERVED"
 
         raise ValidationError(f"Unrecognized value for 'port20_led': '{val}'")
@@ -358,20 +388,20 @@ def parse_and_validate_ramcmp(ramcmp_val: Any) -> Tuple[bool, Optional[Dict[str,
     """Validates RAMCMP reading strictly:
     
     Must be either:
-    - String 'UNREACHABLE' (or recognized UNREACHABLE string variant)
+    - String 'UNREACHABLE' (or 'UNREACHABLE / UNKNOWN' citing docs/PORT21_OWNER_SESSION_PLAN.md:172)
     - Dict with ALL 5 required fields ('r_l8', 'r_l4', 'r_c4', 'r_ct', 'r_wm') as integers 0 or 1.
     
     Rejects:
-    - Booleans (True / False) in dict or for ramcmp
-    - Partial UNREACHABLE inside dict
-    - Unknown strings ('GARBAGE')
-    - Missing fields in dict
-    - Values other than 0 or 1
+    - null (None)
+    - booleans (True / False)
+    - partial UNREACHABLE inside dict
+    - non-canonical strings ('HANG', 'GARBAGE')
+    - values other than 0 or 1
     
     Returns (is_ramcmp_unreachable, ramcmp_dict).
     """
     if ramcmp_val is None:
-        return True, None
+        raise ValidationError("Invalid 'ramcmp': null value is not allowed")
 
     if isinstance(ramcmp_val, bool):
         raise ValidationError(f"Invalid type for 'ramcmp': booleans not allowed, got {ramcmp_val}")
@@ -379,7 +409,7 @@ def parse_and_validate_ramcmp(ramcmp_val: Any) -> Tuple[bool, Optional[Dict[str,
     if isinstance(ramcmp_val, str):
         v = ramcmp_val.strip().upper()
         if (
-            v in ("UNREACHABLE", "UNREACHABLE / UNKNOWN", "HANG")
+            v in ("UNREACHABLE", "UNREACHABLE / UNKNOWN")
             or v.startswith("UNREACHABLE")
             or v.startswith("**UNREACHABLE")
         ):
@@ -392,6 +422,8 @@ def parse_and_validate_ramcmp(ramcmp_val: Any) -> Tuple[bool, Optional[Dict[str,
             if field not in ramcmp_val:
                 raise ValidationError(f"Missing required RAMCMP field: '{field}'")
             val = ramcmp_val[field]
+            if val is None:
+                raise ValidationError(f"Invalid value for RAMCMP field '{field}': null value is not allowed")
             if isinstance(val, bool):
                 raise ValidationError(f"Invalid type for RAMCMP field '{field}': booleans not allowed, got {val}")
             if not isinstance(val, int):
@@ -401,24 +433,27 @@ def parse_and_validate_ramcmp(ramcmp_val: Any) -> Tuple[bool, Optional[Dict[str,
             if val not in (0, 1):
                 raise ValidationError(f"Invalid value for RAMCMP field '{field}': expected 0 or 1, got {val}")
             ramcmp_dict[field] = val
+        for k in ramcmp_val:
+            if k not in REQUIRED_RAMCMP_FIELDS:
+                raise ValidationError(f"Unrecognized field in 'ramcmp' dict: '{k}'")
         return False, ramcmp_dict
 
     raise ValidationError(f"Invalid type for 'ramcmp': expected dict or 'UNREACHABLE' string, got {type(ramcmp_val).__name__}")
 
 
 def normalize_inspector_osd(osd_val: Any) -> Optional[str]:
-    """Validates inspector_osd against a closed set of recognized values:
-    - WITNESS_INVALID
-    - UNREACHABLE
+    """Validates inspector_osd against the closed set of recognized values:
+    - WITNESS_INVALID (or 'INVALID / CORRUPT')
+    - UNREACHABLE (or 'UNREACHABLE / UNKNOWN')
     - LOADER_REACHED
     - CONT_ATTEMPTED
     - UNOBSERVED
     
-    Returns normalized string, or None if omitted.
-    Rejects any unrecognized string with ValidationError.
+    Rejects null, booleans, empty strings, and non-canonical tokens such as 'N/A', 'UNKNOWN', 'HANG'.
+    Returns normalized string.
     """
     if osd_val is None:
-        return None
+        raise ValidationError("Invalid 'inspector_osd': null value is not allowed")
     if isinstance(osd_val, bool):
         raise ValidationError(f"Invalid type for 'inspector_osd': booleans not allowed, got {osd_val}")
     if not isinstance(osd_val, str):
@@ -426,10 +461,10 @@ def normalize_inspector_osd(osd_val: Any) -> Optional[str]:
 
     v = osd_val.strip().upper()
     if not v:
-        return None
+        raise ValidationError("Invalid 'inspector_osd': empty string")
 
     if (
-        v in ("WITNESS_INVALID", "INVALID", "CORRUPT", "INVALID / CORRUPT")
+        v in ("WITNESS_INVALID", "INVALID / CORRUPT")
         or v.startswith("WITNESS_INVALID")
         or "WITNESS_INVALID" in v
         or "INVALID / CORRUPT" in v
@@ -457,15 +492,28 @@ def normalize_inspector_osd(osd_val: Any) -> Optional[str]:
     ):
         return "CONT_ATTEMPTED"
 
-    if v in ("UNOBSERVED", "UNKNOWN", "N/A", "MISSING"):
+    if v == "UNOBSERVED":
         return "UNOBSERVED"
 
     raise ValidationError(f"Unrecognized value for 'inspector_osd': '{osd_val}'")
 
 
 def parse_and_validate_report(raw_data: Union[str, bytes, dict]) -> Dict[str, Any]:
-    """Parses JSON data and validates all required fields and strict types."""
-    if isinstance(raw_data, (str, bytes)):
+    """Parses JSON data and validates all required fields, closed schema, and strict types."""
+    if isinstance(raw_data, bytes):
+        if b"\x00" in raw_data:
+            raise ValidationError("Binary content detected: input contains NUL bytes")
+        try:
+            text = raw_data.decode("utf-8")
+        except UnicodeDecodeError as e:
+            raise ValidationError(f"Invalid UTF-8 encoding in input: {e}")
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as e:
+            raise ValidationError(f"Malformed JSON: {e}")
+    elif isinstance(raw_data, str):
+        if "\x00" in raw_data:
+            raise ValidationError("Binary content detected: input contains NUL bytes")
         try:
             data = json.loads(raw_data)
         except json.JSONDecodeError as e:
@@ -478,44 +526,66 @@ def parse_and_validate_report(raw_data: Union[str, bytes, dict]) -> Dict[str, An
     if not isinstance(data, dict):
         raise ValidationError(f"Top-level JSON must be an object/dict, got {type(data).__name__}")
 
-    # Check top-level required fields
+    # Check required fields first (so alias keys on their own fail missing-field check)
     for field in REQUIRED_TOP_LEVEL_FIELDS:
         if field not in data:
-            if field == "card_lock_state" and "card_locked" in data:
-                continue
-            if field == "startup_timing" and "start_up_timing" in data:
-                continue
-            if field == "port20_led" and ("led_observation" in data or "port20_led_observation" in data):
-                continue
             raise ValidationError(f"Missing required field: '{field}'")
 
+    # Enforce closed schema
+    for k in data:
+        if k not in ALLOWED_TOP_LEVEL_FIELDS:
+            raise ValidationError(f"Unrecognized field in report schema: '{k}'")
+
+    # Reject null values for any top-level field present in data
+    for k, v in data.items():
+        if v is None:
+            raise ValidationError(f"Invalid null value for field: '{k}'")
+
     # Validate card_lock_state
-    cls_val = data.get("card_lock_state", data.get("card_locked"))
-    if not isinstance(cls_val, (str, bool)):
+    cls_val = data["card_lock_state"]
+    if isinstance(cls_val, bool):
+        cls_str = "LOCKED" if cls_val else "UNLOCKED"
+    elif isinstance(cls_val, str):
+        cls_str = cls_val
+    else:
         raise ValidationError(f"Invalid type for 'card_lock_state': expected string or bool, got {type(cls_val).__name__}")
 
     # Validate startup_timing (booleans explicitly rejected)
-    timing_val = data.get("startup_timing", data.get("start_up_timing"))
+    timing_val = data["startup_timing"]
     if isinstance(timing_val, bool):
         raise ValidationError(f"Invalid type for 'startup_timing': booleans not allowed, got {timing_val}")
     if not isinstance(timing_val, (str, int, float)):
         raise ValidationError(f"Invalid type for 'startup_timing': expected string or number, got {type(timing_val).__name__}")
 
     # Validate port20_led
-    led_val = data.get("port20_led", data.get("led_observation", data.get("port20_led_observation")))
-    normalized_led = normalize_led_observation(led_val)
+    normalized_led = normalize_led_observation(data["port20_led"])
 
     # Validate ramcmp
-    ramcmp_val = data.get("ramcmp")
-    is_ramcmp_unreachable, ramcmp_dict = parse_and_validate_ramcmp(ramcmp_val)
+    is_ramcmp_unreachable, ramcmp_dict = parse_and_validate_ramcmp(data["ramcmp"])
 
-    # Validate inspector_osd
-    osd_val = data.get("inspector_osd", data.get("inspector_status"))
-    normalized_osd = normalize_inspector_osd(osd_val)
+    # Validate inspector_osd (optional, but validated strictly if present)
+    normalized_osd = None
+    if "inspector_osd" in data:
+        normalized_osd = normalize_inspector_osd(data["inspector_osd"])
+
+    # Validate synthetic (optional)
+    synthetic_val = False
+    if "synthetic" in data:
+        if not isinstance(data["synthetic"], bool):
+            raise ValidationError(f"Invalid type for 'synthetic': expected boolean, got {type(data['synthetic']).__name__}")
+        synthetic_val = data["synthetic"]
+
+    # Validate description (optional)
+    desc_val = ""
+    if "description" in data:
+        if not isinstance(data["description"], str):
+            raise ValidationError(f"Invalid type for 'description': expected string, got {type(data['description']).__name__}")
+        desc_val = data["description"]
 
     return {
-        "synthetic": bool(data.get("synthetic", False)),
-        "card_lock_state": str(cls_val),
+        "synthetic": synthetic_val,
+        "description": desc_val,
+        "card_lock_state": cls_str,
         "startup_timing": timing_val,
         "port20_led": normalized_led,
         "ramcmp": ramcmp_dict,
@@ -639,10 +709,18 @@ def classify_session_report(report_data: Dict[str, Any]) -> Dict[str, Any]:
     elif len(matching_sorted) > 1:
         hyp_str = ", ".join(matching_sorted)
         citations = [STRUCTURED_RULE_TABLE[h]["citation"] for h in matching_sorted]
-        reason = (
-            f"Readings match multiple hypotheses ({hyp_str}). "
-            f"Table rules ({', '.join(citations)}) alone cannot distinguish these hypotheses without further data."
-        )
+        if matching_sorted == ["H3", "H4"]:
+            reason = (
+                f"Readings match multiple hypotheses ({hyp_str}). "
+                f"Under docs/PORT21_OWNER_SESSION_PLAN.md:173-174, H4 is a strict subset of H3 "
+                f"(H3 specifies wildcards for r_c4, r_ct, and r_wm, while H4 specifies r_c4=1, r_ct=1, r_wm=0), "
+                f"so H4 can never be the sole match under table rules ({', '.join(citations)}) alone."
+            )
+        else:
+            reason = (
+                f"Readings match multiple hypotheses ({hyp_str}). "
+                f"Table rules ({', '.join(citations)}) alone cannot distinguish these hypotheses without further data."
+            )
         return {
             "status": "AMBIGUOUS",
             "classification": "AMBIGUOUS",
@@ -682,20 +760,32 @@ def format_text_output(result: Dict[str, Any]) -> str:
 def run_classifier(
     input_source: Union[str, Path, None],
     use_json_output: bool = False,
-    stdin_content: Optional[str] = None,
+    stdin_content: Optional[Union[str, bytes]] = None,
 ) -> Tuple[int, str]:
     """Executes the classifier on a file path or stdin string.
     
     Returns (exit_code, output_text).
     """
     try:
-        if stdin_content is not None or input_source in (None, "-", ""):
-            raw_text = stdin_content if stdin_content is not None else sys.stdin.read()
+        if stdin_content is not None:
+            raw_bytes = stdin_content.encode("utf-8") if isinstance(stdin_content, str) else stdin_content
+        elif input_source in (None, "-", ""):
+            raw_bytes = sys.stdin.buffer.read()
         else:
             p = validate_path_safety(str(input_source))
             if not p.is_file():
                 return 1, f"Error: File not found: '{input_source}'"
-            raw_text = p.read_text(encoding="utf-8")
+            raw_bytes = p.read_bytes()
+
+        # Check for binary content (NUL byte) before decoding
+        if b"\x00" in raw_bytes:
+            src_label = str(input_source) if input_source not in (None, "-", "") else "stdin"
+            raise ValidationError(f"Binary content detected: input contains NUL bytes: '{src_label}'")
+
+        try:
+            raw_text = raw_bytes.decode("utf-8")
+        except UnicodeDecodeError as e:
+            raise ValidationError(f"Invalid UTF-8 encoding in input: {e}")
 
         report = parse_and_validate_report(raw_text)
         result = classify_session_report(report)
