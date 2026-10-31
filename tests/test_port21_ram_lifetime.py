@@ -8,16 +8,21 @@ Validates that:
    - Analysis of RAM lifetime / survival for core region 0x003489B4..0x00366CB0 and loader 0x00008000..0x00024CF0.
    - Separation of Boot Moment 1 (stock cold boot) and Boot Moment 2 (post-loader core boot).
    - Table mapping each finding to H1-H4 with supports / rules out / neutral and confidence labels.
-   - Read provenance table accounting for all manifest reads with Tech Lead ratification.
+   - Read provenance table and the read-start exception approved after the fact.
    - Owner observations labeled OWNER-REPORTED without invented citations.
 2. docs/agentbridge/PORT21_EVIDENCE_MANIFEST.json exists, is validated by port11c_evidence_validator.py,
-   satisfies slice constraints (<= 4 KiB per slice, <= 64 KiB total, non-overlapping),
-   and matches exact SHA-256 hashes against single-pass cached seeks of firmware/dumps/GM1.10C/PRIMARY.BIN.
+   satisfies slice constraints (<= 4 KiB per slice, <= 64 KiB total), and lists exactly the six
+   approved ranges and SHA-256 values.
 3. Every address cited on a line labeled VERIFIED has exact, verifiable provenance:
-   a tracked file:line (from git ls-files alone), a ROM address within a manifest entry, or an explicit derivation.
+   a tracked file:line (from git ls-files alone), a ROM address within a manifest range, an address
+   recorded in a cited manifest entry, or an explicit derivation. This check never reads the ROM.
 4. Derivations are strictly recomputed from cited operands and rejected if self-referential.
 5. Negative tests proving that missing, wrong, uncited table rows, or self-referential derivations fail validation.
-6. No PORT-20-owned files are modified.
+6. ROM-word tests (skipped when PRIMARY.BIN is absent) check the SHA-256 of every slice and every
+   literal-pool value claimed in the doc and the manifest notes.
+7. No PORT-20-owned files are modified.
+
+PORT21_ROM_PATH overrides the ROM location, e.g. PORT21_ROM_PATH=/nonexistent to run without the ROM.
 """
 
 from __future__ import annotations
@@ -29,17 +34,66 @@ from pathlib import Path
 import re
 import struct
 import subprocess
+import sys
 import unittest
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOC_PATH = REPO_ROOT / "docs" / "PORT21_RAM_LIFETIME.md"
 MANIFEST_PATH = REPO_ROOT / "docs" / "agentbridge" / "PORT21_EVIDENCE_MANIFEST.json"
-ROM_PATH = REPO_ROOT / "firmware" / "dumps" / "GM1.10C" / "PRIMARY.BIN"
+ROM_PATH = Path(
+    os.environ.get(
+        "PORT21_ROM_PATH", str(REPO_ROOT / "firmware" / "dumps" / "GM1.10C" / "PRIMARY.BIN")
+    )
+)
 VALIDATOR_TOOL = REPO_ROOT / "tools" / "port11c_evidence_validator.py"
 ROM_BASE = 0xFC000000
 
 HEX_ADDR_RE = re.compile(r"\b0x[0-9a-fA-F]{4,8}\b")
 CITATION_BLOCK_RE = re.compile(r"\[VERIFIED(?::\s*([^\]]+))?\]")
+
+# Ranges and hashes approved after the fact by the Tech Lead decision,
+# AgentBridge task 93 revision 3 (2026-10-31). No other ranges are approved.
+APPROVED_READS = {
+    "PORT21-ROM-BOOT-EARLY": (0xFC020000, 0xFC0201FF, "23082470c3f8d0628c5b6661c2ddb2b2ca010c88e0afc8580754fa887b3a5b2f", None),
+    "PORT21-ROM-HEAP-SETUP": (0xFC05B3C0, 0xFC05B53F, "68e60a1c4ffdf3ce29c97120aac275f1758df3726f8f5829a23e33b73c6908d6", (8, "0xFC05B3C8")),
+    "PORT21-ROM-INIT-TASK": (0xFC05B540, 0xFC05B73F, "15a153beaeabe9770d5016f7240b0b5bbd9ff6ebf56141341cb1e5eebf2a97fe", (24, "0xFC05B558")),
+    "PORT21-ROM-STARTUP-TASKS": (0xFC05B8E0, 0xFC05BBDF, "749dd4f383eec258850e14f1488b853c7902156f106a4924d54788f47fa35e0e", (28, "0xFC05B8FC")),
+    "PORT21-ROM-CONTINUATION": (0xFC0D0120, 0xFC0D01FF, "1d536b259e101bf27771a54cd76a617a23ea2f8ea8759c14b054698084959692", (6, "0xFC0D0126")),
+    "PORT21-ROM-KERNEL-INIT-VENEER": (0xFC31B400, 0xFC31B47F, "be7ee2c5d2b00286374e2ace906811cc775f0ff2d4c7e16d50855df8d0e589c4", (8, "0xFC31B408")),
+}
+APPROVAL_SUFFIX = "approved after the fact by Tech Lead decision, AgentBridge task 93 revision 3 (2026-10-31)"
+
+FORBIDDEN_PREFIXES = ("docs/PORT20_", "tests/test_port20_")
+FORBIDDEN_FILES = ("tools/build_candidate_port2a.py",)
+
+# Set by TestPort21WithoutRom: a nested unittest run records unittest.SkipTest as a skip
+# but would record pytest's Skipped exception as an error.
+_FORCE_UNITTEST_SKIP = False
+
+
+def skip_without_rom() -> None:
+    """Skip the calling test when PRIMARY.BIN is absent (pytest.skip under pytest, else unittest)."""
+    if ROM_PATH.is_file():
+        return
+    reason = (
+        f"ROM dump not present at {ROM_PATH}; this test compares actual ROM words/hashes "
+        "and cannot run without firmware/dumps/GM1.10C/PRIMARY.BIN"
+    )
+    if "pytest" in sys.modules and not _FORCE_UNITTEST_SKIP:
+        import pytest
+
+        pytest.skip(reason)
+    raise unittest.SkipTest(reason)
+
+
+def find_forbidden_paths(changed_paths: list[str]) -> list[str]:
+    """Return the PORT-20-owned paths among changed_paths."""
+    return [
+        p
+        for p in changed_paths
+        if p.startswith(FORBIDDEN_PREFIXES) or p in FORBIDDEN_FILES
+    ]
 
 
 class RomSliceCache:
@@ -185,21 +239,19 @@ def parse_and_validate_citation(
                 derived_citations.append(cit)
                 continue
 
-            # ROM citation (e.g. ROM 0xFC05B450, 0xFC05B474; PORT21-ROM-HEAP-SETUP)
+            # ROM citation (e.g. ROM 0xFC05B450, 0xFC05B474; PORT21-ROM-HEAP-SETUP).
+            # Only the manifest ranges are consulted; ROM words are never read here
+            # (literal values are checked by TestPort21RomWords).
             if cit.startswith("ROM "):
                 rom_part = cit[len("ROM ") :].strip()
                 for addr_str in HEX_ADDR_RE.findall(rom_part):
                     rom_addr = int(addr_str, 16)
                     in_manifest = False
-                    for eid, entry in manifest_entries.items():
+                    for entry in manifest_entries.values():
                         s, e = entry["start"], entry["end"]
                         if s <= rom_addr <= e:
                             in_manifest = True
                             proven_addrs.add(rom_addr)
-                            # Resolve literal word from cached manifest slice
-                            word = RomSliceCache.lookup_word(rom_addr)
-                            if word is not None:
-                                proven_addrs.add(word)
                             break
                     if not in_manifest:
                         raise AssertionError(
@@ -429,10 +481,26 @@ class TestPort21RamLifetimeDoc(unittest.TestCase):
         self.assertIn("INFERRED", self.content)
         self.assertIn("UNKNOWN", self.content)
 
-    def test_tech_lead_ratification_present(self):
-        """Verify Tech Lead ratification is recorded in Section 6.2 (Feedback [P1])."""
-        self.assertIn("Tech Lead Ratification (PORT-21 T1, revision 2)", self.content)
-        self.assertIn("Ratified by Tech Lead: aligned pre-roll of 8 bytes before `0xFC05B3C8`", self.content)
+    def test_read_start_exception_present(self):
+        """Section 6.2 records the read-start exception as an after-the-fact approval, not compliance."""
+        section = self.content.split("### 6.2 Read Provenance & Start Address Justification", 1)[1]
+        self.assertIn("#### Read-start exception", section)
+        exc = section.split("#### Read-start exception", 1)[1]
+        self.assertIn("start exactly at", exc)
+        self.assertIn("5 of the 6 reads broke that rule", exc)
+        self.assertIn("BEFORE any approval", exc)
+        self.assertIn(
+            "AgentBridge milestone PORT-21-OVERNIGHT-DISCRIMINATION, task 93 (T1-ram-lifetime), "
+            "REQUEST_REVISION for revision 3, dated 2026-10-31",
+            exc,
+        )
+        self.assertIn("approved exception, NOT compliance", exc)
+        self.assertNotIn("ratif", self.content.lower())
+        for eid, (_, _, _, exception) in APPROVED_READS.items():
+            if exception is None:
+                continue
+            n, addr = exception
+            self.assertIn(f"starts {n} bytes before `{addr}`", section, eid)
 
 
 class TestPort21EvidenceManifest(unittest.TestCase):
@@ -468,10 +536,82 @@ class TestPort21EvidenceManifest(unittest.TestCase):
             total_bytes += count
         self.assertLessEqual(total_bytes, 65536, f"Total bytes exceed 64 KiB: {total_bytes}")
 
+    def test_manifest_matches_approved_reads(self):
+        """The manifest lists exactly the six approved ranges with their approved SHA-256 values."""
+        entries = {e["evidence_id"]: e for e in self.manifest.get("evidence_entries", [])}
+        self.assertEqual(set(entries), set(APPROVED_READS))
+        for eid, (start, end, sha, _) in APPROVED_READS.items():
+            entry = entries[eid]
+            self.assertEqual(int(entry["start_address"], 16), start, eid)
+            self.assertEqual(int(entry["end_address"], 16), end, eid)
+            self.assertEqual(entry["expected_byte_count"], end - start + 1, eid)
+            self.assertEqual(entry["sha256"], sha, eid)
+
+    def test_manifest_read_start_notes(self):
+        """Each manifest note states its read-start status in the approved wording."""
+        for entry in self.manifest.get("evidence_entries", []):
+            eid = entry["evidence_id"]
+            notes = entry.get("notes", "")
+            self.assertNotIn("ratified", notes, eid)
+            exception = APPROVED_READS[eid][3]
+            if exception is None:
+                self.assertIn("starts at cited address; no exception needed", notes, eid)
+            else:
+                n, addr = exception
+                self.assertIn(
+                    f"read-start exception: starts {n} bytes before {addr}; {APPROVAL_SUFFIX}",
+                    notes,
+                    eid,
+                )
+
+
+class TestPort21RomWords(unittest.TestCase):
+    """Checks that need the actual ROM bytes; each test skips when PRIMARY.BIN is absent."""
+
+    DOC_LITERAL_RES = (
+        re.compile(r"\[(0xFC[0-9A-Fa-f]{6})\]\s*=\s*(0x[0-9A-Fa-f]{1,8})"),
+        re.compile(r"`(0xFC[0-9A-Fa-f]{6})`:\s*`(0x[0-9A-Fa-f]{1,8})`"),
+    )
+    NOTE_LITERAL_RE = re.compile(r"(0x[0-9A-Fa-f]{1,8}) from \[(0xFC[0-9A-Fa-f]{6})\]")
+
+    @classmethod
+    def setUpClass(cls):
+        with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
+            cls.manifest = json.load(f)
+
+    def _check_literals(self, claims: list[tuple[int, int, str]]) -> None:
+        for addr, value, where in claims:
+            word = RomSliceCache.lookup_word(addr)
+            self.assertIsNotNone(word, f"{where}: {hex(addr)} is not inside a manifest slice")
+            self.assertEqual(
+                word, value, f"{where}: ROM [{hex(addr)}] = {hex(word)}, claimed {hex(value)}"
+            )
+
+    def test_doc_literal_values_match_rom(self):
+        """Every '[0xFC......] = value' claim in the doc matches the ROM word."""
+        skip_without_rom()
+        text = DOC_PATH.read_text(encoding="utf-8")
+        claims = []
+        for line_no, line in enumerate(text.splitlines(), start=1):
+            for regex in self.DOC_LITERAL_RES:
+                for m in regex.finditer(line):
+                    claims.append((int(m.group(1), 16), int(m.group(2), 16), f"doc line {line_no}"))
+        self.assertGreaterEqual(len(claims), 10, "too few literal claims found; regex drift?")
+        self._check_literals(claims)
+
+    def test_manifest_note_literal_values_match_rom(self):
+        """Every 'value from [0xFC......]' claim in the manifest notes matches the ROM word."""
+        skip_without_rom()
+        claims = []
+        for entry in self.manifest.get("evidence_entries", []):
+            for m in self.NOTE_LITERAL_RE.finditer(entry.get("notes", "")):
+                claims.append((int(m.group(2), 16), int(m.group(1), 16), entry["evidence_id"]))
+        self.assertGreaterEqual(len(claims), 6, "too few note literal claims found; regex drift?")
+        self._check_literals(claims)
+
     def test_manifest_sha256_against_rom(self):
         """Verify each manifest entry against firmware/dumps/GM1.10C/PRIMARY.BIN via single-pass cached reads."""
-        if not ROM_PATH.is_file():
-            self.skipTest(f"ROM dump not present at {ROM_PATH}")
+        skip_without_rom()
 
         cached_slices, total_bytes_read, rom_present = RomSliceCache.get_slices()
         self.assertTrue(rom_present)
@@ -494,17 +634,6 @@ class TestPort21EvidenceManifest(unittest.TestCase):
         # Assert no extra ROM accesses occurred beyond manifest slices (Feedback [P2-c])
         self.assertLessEqual(RomSliceCache._rom_access_count, 1)
 
-    def test_manifest_ratification_notes(self):
-        """Verify that each manifest entry contains Tech Lead ratification note (Feedback [P1])."""
-        entries = self.manifest.get("evidence_entries", [])
-        for entry in entries:
-            notes = entry.get("notes", "")
-            self.assertIn(
-                "start ratified by Tech Lead: aligned pre-roll of",
-                notes,
-                f"Missing Tech Lead ratification in {entry['evidence_id']} notes",
-            )
-
 
 class TestPort21AddressCitations(unittest.TestCase):
     """Ensures that all addresses cited as VERIFIED in the doc have verifiable provenance."""
@@ -522,17 +651,26 @@ class TestPort21AddressCitations(unittest.TestCase):
             }
             for e in cls.manifest.get("evidence_entries", [])
         }
-        # Pre-cache ROM slices (if PRIMARY.BIN exists)
-        RomSliceCache.get_slices()
 
-    def test_verified_addresses_have_provenance(self):
-        """Validate every line in docs/PORT21_RAM_LIFETIME.md that makes a VERIFIED claim."""
+    def _validate_doc(self):
         doc_text = DOC_PATH.read_text(encoding="utf-8")
         for line_idx, line in enumerate(doc_text.splitlines(), start=1):
             if "VERIFIED" in line:
                 parse_and_validate_citation(
                     line, line_idx, self.manifest_entries, self.tracked_files
                 )
+
+    def test_verified_addresses_have_provenance(self):
+        """Validate every line in docs/PORT21_RAM_LIFETIME.md that makes a VERIFIED claim."""
+        self._validate_doc()
+
+    def test_verified_addresses_have_provenance_without_rom(self):
+        """The provenance check passes with a nonexistent ROM path and never touches the ROM cache."""
+        rom_access = AssertionError("provenance check must not read the ROM")
+        with mock.patch(f"{__name__}.ROM_PATH", REPO_ROOT / "nonexistent" / "PRIMARY.BIN"), \
+                mock.patch.object(RomSliceCache, "get_slices", side_effect=rom_access), \
+                mock.patch.object(RomSliceCache, "lookup_word", side_effect=rom_access):
+            self._validate_doc()
 
     def test_negative_provenance_checker(self):
         """Ensure that wrong, missing, untracked, uncited rows, or self-referential derivations fail (Feedback [P2-a])."""
@@ -602,27 +740,83 @@ class TestPort21AddressCitations(unittest.TestCase):
 class TestPort21ScopeIntegrity(unittest.TestCase):
     """Ensures no PORT-20-owned files are touched."""
 
+    @staticmethod
+    def _changed_paths() -> list[str]:
+        """Paths changed in the working tree and on this branch since its merge-base with origin/main.
+
+        origin/main is preferred because a local main may lag behind merged PRs this branch is based on.
+        """
+        status = subprocess.check_output(
+            ["git", "status", "--porcelain"], cwd=REPO_ROOT, text=True
+        )
+        paths = []
+        for line in status.splitlines():
+            entry = line[3:].strip()
+            paths.extend(p.strip() for p in entry.split(" -> "))
+        base_ref = "origin/main"
+        if subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", base_ref],
+            cwd=REPO_ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        ).returncode != 0:
+            base_ref = "main"
+        base = subprocess.check_output(
+            ["git", "merge-base", "HEAD", base_ref], cwd=REPO_ROOT, text=True
+        ).strip()
+        diff = subprocess.check_output(
+            ["git", "diff", "--name-only", base, "HEAD"], cwd=REPO_ROOT, text=True
+        )
+        paths.extend(diff.splitlines())
+        return paths
+
     def test_no_port20_files_changed(self):
         try:
-            status = subprocess.check_output(
-                ["git", "status", "--porcelain"], cwd=REPO_ROOT, text=True
-            )
-            for line in status.splitlines():
-                filepath = line[3:].strip()
-                self.assertFalse(
-                    filepath.startswith("docs/PORT20_"),
-                    f"Forbidden change to PORT-20 doc: {filepath}",
-                )
-                self.assertFalse(
-                    filepath.startswith("tests/test_port20_"),
-                    f"Forbidden change to PORT-20 test: {filepath}",
-                )
-                self.assertFalse(
-                    filepath == "tools/build_candidate_port2a.py",
-                    f"Forbidden change to tools/build_candidate_port2a.py: {filepath}",
-                )
-        except Exception:
-            pass
+            changed = self._changed_paths()
+        except (subprocess.CalledProcessError, FileNotFoundError, OSError) as exc:
+            self.skipTest(f"git changed-path listing unavailable: {exc}")
+        forbidden = find_forbidden_paths(changed)
+        self.assertEqual(forbidden, [], f"Forbidden changes to PORT-20-owned files: {forbidden}")
+
+    def test_forbidden_path_helper_rejects_port20_paths(self):
+        """Negative test: each PORT-20-owned path is rejected; T1 paths are allowed."""
+        for bad in (
+            "docs/PORT20_FORBIDDEN.md",
+            "tests/test_port20_x.py",
+            "tools/build_candidate_port2a.py",
+        ):
+            self.assertEqual(find_forbidden_paths([bad]), [bad], bad)
+        allowed = [
+            "docs/PORT21_RAM_LIFETIME.md",
+            "docs/agentbridge/PORT21_EVIDENCE_MANIFEST.json",
+            "tests/test_port21_ram_lifetime.py",
+        ]
+        self.assertEqual(find_forbidden_paths(allowed), [])
+
+
+class TestPort21WithoutRom(unittest.TestCase):
+    """Re-runs the other test classes with ROM_PATH pointing at a missing file."""
+
+    def test_suite_passes_without_rom(self):
+        loader = unittest.TestLoader()
+        suite = unittest.TestSuite()
+        for cls in (
+            TestPort21RamLifetimeDoc,
+            TestPort21EvidenceManifest,
+            TestPort21RomWords,
+            TestPort21AddressCitations,
+            TestPort21ScopeIntegrity,
+        ):
+            suite.addTests(loader.loadTestsFromTestCase(cls))
+        result = unittest.TestResult()
+        with mock.patch(f"{__name__}.ROM_PATH", REPO_ROOT / "nonexistent" / "PRIMARY.BIN"), \
+                mock.patch(f"{__name__}._FORCE_UNITTEST_SKIP", True):
+            suite.run(result)
+        problems = [f"{t.id()}: {tb}" for t, tb in result.failures + result.errors]
+        self.assertEqual(problems, [], "failures without ROM")
+        skipped = sorted(t.id().rsplit(".", 1)[1] for t, _ in result.skipped)
+        rom_word_tests = sorted(loader.getTestCaseNames(TestPort21RomWords))
+        self.assertEqual(skipped, rom_word_tests, "only the ROM-word tests may skip without ROM")
+        for _, reason in result.skipped:
+            self.assertIn("ROM dump not present", reason)
 
 
 if __name__ == "__main__":
