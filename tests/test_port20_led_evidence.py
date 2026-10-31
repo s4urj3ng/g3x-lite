@@ -71,8 +71,16 @@ GO_CHAIN_RANGES = (
     "PORT20-ROM-LEDDRV-DISPATCH",
 )
 
-# Tech Lead exceptions for unanchored reads (task 90 revision-5 feedback), keyed on the exception
+# Tech Lead exceptions for unanchored reads (AUTHORITY_CITATION below), keyed on the exception
 # ID and the exact range bounds. No other unanchored range is covered.
+AUTHORITY_CITATION = (
+    "AgentBridge decision log, milestone PORT-20-BOOT-SIGNAL, task 90, Tech Lead REQUEST_REVISION "
+    "for revision 6 (after codex-reviewer review of revision 5)"
+)
+TRUTHFUL_RECORD = "The read happened without an anchor and is recorded truthfully rather than hidden."
+# The CPU core model is UNKNOWN (tracked annotations conflict); no line naming a core may be VERIFIED.
+CPU_MODEL_SOURCE = "docs/PORT16_FIRSTBOOT_U_TRIAGE.md:6"
+CORE_NAME_PATTERN = re.compile(r"\bCortex-?[ARM]\d+\b|\bARM(?:7|9|11)\w*\b", re.IGNORECASE)
 ACKNOWLEDGED_DEVIATIONS = {
     "TL-EXC-P20-T1-01": {
         "evidence_id": "PORT20-ROM-LEDDRIVE",
@@ -83,7 +91,7 @@ ACKNOWLEDGED_DEVIATIONS = {
 DEVIATION_MARKERS = ("ANCHOR: NONE", "SCOPE DEVIATION", "quarantined")
 WAIVER_TEXT = (
     "SCOPE DEVIATION: unanchored read, waived retroactively by Tech Lead exception TL-EXC-P20-T1-01 "
-    "(task 90 revision-5 feedback) for accounting only; quarantined: no claim in this document relies on it."
+    f"({AUTHORITY_CITATION}) for accounting only; quarantined: no claim in this document relies on it."
 )
 SCOPE_ACCOUNTING_LINE = (
     "T1 ROM-read scope: 7 ranges anchored, 1 range covered by exception TL-EXC-P20-T1-01 (PORT20-ROM-LEDDRIVE)"
@@ -552,6 +560,20 @@ def validate_governing_exceptions(manifest: Dict[str, Any], doc_text: str) -> No
             raise ValueError(f"Governing exceptions entry {exc_id} scope is not limited to this range")
         if "Tech Lead decides" not in row["authority"] or "harter" not in row["authority"]:
             raise ValueError(f"Governing exceptions entry {exc_id} lacks the charter authority")
+        if AUTHORITY_CITATION not in row["authority"]:
+            raise ValueError(f"Governing exceptions entry {exc_id} lacks the decision-log authority citation")
+        if TRUTHFUL_RECORD not in row["authority"]:
+            raise ValueError(f"Governing exceptions entry {exc_id} lacks the truthful-record sentence")
+
+
+def validate_cpu_model_not_verified(doc_text: str) -> None:
+    """The CPU core model is UNKNOWN (docs/PORT16_FIRSTBOOT_U_TRIAGE.md:6). No line that names a
+    specific core may carry a VERIFIED label, and the doc must state the core model as UNKNOWN."""
+    for line in doc_text.splitlines():
+        if CORE_NAME_PATTERN.search(line) and "VERIFIED" in line:
+            raise ValueError(f"Line names a specific CPU core and carries VERIFIED: {line.strip()[:120]}")
+    if f"CPU core model: `[UNKNOWN: {CPU_MODEL_SOURCE}]`" not in doc_text:
+        raise ValueError(f"Doc does not label the CPU core model UNKNOWN citing {CPU_MODEL_SOURCE}")
 
 
 def validate_scope_deviations_disclosed(manifest: Dict[str, Any], doc_text: str) -> None:
@@ -742,6 +764,9 @@ class TestPort20ManifestLimits(unittest.TestCase):
         self.assertEqual(int(entry["end_address"], 16), exc["end"])
         self.assertIn("TL-EXC-P20-T1-01", entry["notes"])
         self.assertIn(WAIVER_TEXT, entry["notes"])
+        self.assertIn(AUTHORITY_CITATION, entry["notes"])
+        self.assertIn(TRUTHFUL_RECORD, entry["notes"])
+        self.assertNotIn("revision-5 feedback", entry["notes"])
         self.assertIn(SCOPE_ACCOUNTING_LINE, entry["notes"])
         self.assertNotIn("compliant", entry["notes"].lower())
         self.assertNotIn("revision-4", entry["notes"])
@@ -883,6 +908,27 @@ class TestPort20DocEvidenceConsistency(unittest.TestCase):
         self.assertIn("store buffer", self.doc_text)
         self.assertIn("dsb sy", self.doc_text)
         self.assertIn("### 4.3 Cache Maintenance and Write Completion `[INFERRED]`", self.doc_text)
+        self.assertIn("Regardless of core, a `DSB` after the store", self.doc_text)
+
+    def test_cpu_model_not_verified(self):
+        validate_cpu_model_not_verified(self.doc_text)
+        # Store-buffer statements tied to a specific core must be conditional.
+        for line in self.doc_text.splitlines():
+            if "store buffer" in line and CORE_NAME_PATTERN.search(line):
+                self.assertIn("if the core is", line.lower(), f"Core-specific store-buffer claim not conditional: {line[:120]}")
+
+    def test_mpu_region2_facts_verified_from_rom_range(self):
+        line = next(l for l in self.doc_text.splitlines() if l.startswith("- ROM routine `0xFC0045BE..0xFC0045D6`"))
+        self.assertIn("[VERIFIED: PRIMARY.BIN 0xFC0045BE..0xFC0045D6, range PORT20-ROM-MPU-REGION2-SETUP]", line)
+        for s in ("`DRBAR`: `0x80000000`", "`DRSR`: `0x3D` (2 GiB", "`DRACR`: `0x1105`", "execute never"):
+            self.assertIn(s, self.doc_text)
+
+    def test_exception_authority_and_truthful_record(self):
+        section = parse_scope_deviations_section(self.doc_text)
+        self.assertIsNotNone(section)
+        self.assertIn(TRUTHFUL_RECORD, section)
+        self.assertIn(AUTHORITY_CITATION, self.doc_text)
+        self.assertNotIn("revision-5 feedback", self.doc_text)
 
 
 class TestNegativeMutations(unittest.TestCase):
@@ -1207,6 +1253,34 @@ class TestNegativeMutations(unittest.TestCase):
         self.assertNotEqual(mutated, self.doc_text)
         with self.assertRaises(ValueError):
             validate_firmware_identity(mutated)
+
+    def test_mutation_cpu_core_verified_fails(self):
+        for claim in (
+            "- DIGIC 6 uses an ARM Cortex-R4 with a PMSAv7 MPU `[VERIFIED: docs/PROJECT_STATE.md:254]`.",
+            "- The CPU is a Cortex-A9 **VERIFIED**.",
+            "- Core: ARM946E-S `[VERIFIED]`.",
+        ):
+            with self.assertRaises(ValueError):
+                validate_cpu_model_not_verified(self.doc_text + "\n" + claim + "\n")
+
+    def test_mutation_cpu_model_unknown_label_removed_fails(self):
+        mutated = self.doc_text.replace(f"CPU core model: `[UNKNOWN: {CPU_MODEL_SOURCE}]`", "CPU core model: Cortex-R4")
+        self.assertNotEqual(mutated, self.doc_text)
+        with self.assertRaises(ValueError):
+            validate_cpu_model_not_verified(mutated)
+
+    def test_mutation_governing_exception_old_authority_fails(self):
+        mutated = self.doc_text.replace(f"Record: {AUTHORITY_CITATION}.", "Record: task 90 revision-5 feedback.")
+        self.assertNotEqual(mutated, self.doc_text)
+        with self.assertRaises(ValueError):
+            validate_governing_exceptions(self.manifest, mutated)
+
+    def test_mutation_governing_exception_without_truthful_record_fails(self):
+        row = next(l for l in self.doc_text.splitlines() if l.startswith("| `TL-EXC-P20-T1-01` |"))
+        mutated = self.doc_text.replace(row, row.replace(TRUTHFUL_RECORD, ""))
+        self.assertNotEqual(mutated, self.doc_text)
+        with self.assertRaises(ValueError):
+            validate_governing_exceptions(self.manifest, mutated)
 
 
 if __name__ == "__main__":

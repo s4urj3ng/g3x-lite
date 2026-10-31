@@ -32,7 +32,8 @@ The GM1.10C firmware was examined offline with bounded static disassembly. Eight
 4. **Loader context** (details in §4):
    - MPU Region 2 (`0x80000000..0xFFFFFFFF`) is programmed with `DRACR = 0x1105` (privileged RW only, Shareable Device, non-cacheable, XN) `[VERIFIED: PRIMARY.BIN 0xFC0045BE..0xFC0045D6]`. That no higher-numbered region overrides it at `0xD20B0884` is `[INFERRED: docs/PROJECT_STATE.md:254]`.
    - Privileged (PL1) execution at loader entry: `[INFERRED]`. The exact CPU mode at entry: `[UNKNOWN]`. FIQ state at entry: `[UNKNOWN]`.
-   - No cache maintenance is needed for the LED store, but a `DSB` is needed after it before any busy-wait, because Device writes can sit in the Cortex-R4 store buffer `[INFERRED: ARM DDI 0406C; ARM DDI 0363]`.
+   - CPU core model: `[UNKNOWN: docs/PORT16_FIRSTBOOT_U_TRIAGE.md:6]` (tracked annotations conflict; see §4.2). No loader-context claim rests on it.
+   - No cache maintenance is needed for the LED store, because Region 2 is non-cacheable `[INFERRED: Region 2 DRACR (§4.2) + ARM DDI 0406C]`. Regardless of core, a `DSB` after the store and before any busy-wait is a safe superset `[INFERRED: ARM DDI 0406C, A3.8.3]`; if the core is a Cortex-R4 (`[UNKNOWN]`), its store buffer is the concrete reason `[INFERRED: ARM DDI 0363]`.
 
 ---
 
@@ -199,8 +200,9 @@ Where in the loader `cpsid if` runs, and what runs before it, is UNKNOWN in trac
 - The sequence should alternate `0x004d0002` and `0x004c0003` (a blink), because polarity is UNKNOWN (§3.5); the exact T2 prologue sequence is in §8.
 
 ### 4.2 MPU Memory Region Protection: Privileged Read/Write `[VERIFIED attributes]`
-- DIGIC 6 uses an ARM Cortex-R4 with a PMSAv7 MPU, not an MMU `[VERIFIED: docs/PROJECT_STATE.md:254; docs/HANDOFF.md:628]`.
-- ROM routine `0xFC0045BE..0xFC0045D6` (range `PORT20-ROM-MPU-REGION2-SETUP`) programs MPU Region 2:
+- CPU core model: `[UNKNOWN: docs/PORT16_FIRSTBOOT_U_TRIAGE.md:6]`. The tracked annotations conflict `[INFERRED note]`: `chdk-port/platform/g3x/sub/110c/boot_prototype.c:6` says Cortex-A9, while `firmware/tools/witness_inspector_payload.S:4` and `docs/PORT11A_GM110C_ROM_EVIDENCE.md:20` say Cortex-R4; `docs/CODEX_INDEPENDENT_RESTART_REVIEW.md:82` records the contradiction. This document does not choose between them, and no claim in §4 rests on the core model.
+- Memory protection: the GM1.10C ROM programs CP15 c6 MPU regions (DRBAR / DRSR / DRACR) `[VERIFIED tracked statement: docs/PROJECT_STATE.md:254; docs/HANDOFF.md:628]`. That this MPU, and not an MMU, governs the LED address is `[INFERRED]` from those writes.
+- ROM routine `0xFC0045BE..0xFC0045D6` (range `PORT20-ROM-MPU-REGION2-SETUP`) programs MPU Region 2 `[VERIFIED: PRIMARY.BIN 0xFC0045BE..0xFC0045D6, range PORT20-ROM-MPU-REGION2-SETUP]`:
   - `DRBAR`: `0x80000000`
   - `DRSR`: `0x3D` (2 GiB: `0x80000000..0xFFFFFFFF`)
   - `DRACR`: `0x1105`
@@ -211,7 +213,7 @@ Where in the loader `cpsid if` runs, and what runs before it, is UNKNOWN in trac
 
 ### 4.3 Cache Maintenance and Write Completion `[INFERRED]`
 - **Cache maintenance is not needed.** Region 2 is Device memory (`TEX=000, C=0, B=1`), Non-cacheable and XN, so the LED store does not allocate in the D-cache. No `DCCMVAC` / `DCCISW` is needed for it `[INFERRED: VERIFIED DRACR + ARM DDI 0406C, memory types and attributes]`.
-- **Non-cacheable does not mean unbuffered or complete.** Device writes can be held in the Cortex-R4 store buffer `[INFERRED: ARM DDI 0363, Cortex-R4 TRM, Level One Memory System / store buffer]`. ARMv7 Device memory only guarantees ordering against other Device accesses, not that the write has reached the peripheral before later non-memory instructions run. Completion is guaranteed only by `DSB` `[INFERRED: ARM DDI 0406C, A3.8.3 Memory barriers]`.
+- **Non-cacheable does not mean unbuffered or complete.** If the core is a Cortex-R4 (`[UNKNOWN]`, §4.2), Device writes can be held in its store buffer `[INFERRED: ARM DDI 0363, Cortex-R4 TRM, Level One Memory System / store buffer]`. If the core is another ARMv7 implementation (`[UNKNOWN]`), the architecture allows the same: Device memory only guarantees ordering against other Device accesses, not that the write has reached the peripheral before later non-memory instructions run `[INFERRED: ARM DDI 0406C, A3.8.3]`. Regardless of core, a `DSB` after the store is a safe superset that ensures completion before the busy-wait `[INFERRED: ARM DDI 0406C, A3.8.3 Memory barriers]`.
 - **Recommendation for T2**: `str` the value to `0xD20B0884`, then `dsb sy`, then optionally read back `0xD20B0884` with `ldr`, and only then start the busy-wait. Without the `DSB`, the LED change could be delayed by an unknown amount behind the delay loop. What the read-back returns (latch value or something else) is `[UNKNOWN]`, so T2 must not use it as proof of success.
 - **ROM comparison**: the stock primitive does not show this pattern. It returns straight after the store (`str.w` then `bx lr`) `[VERIFIED: PRIMARY.BIN 0xFC0D73CA..0xFC0D73CE]`. The DSB recommendation therefore stays `[INFERRED]`.
 
@@ -245,7 +247,7 @@ Where in the loader `cpsid if` runs, and what runs before it, is UNKNOWN in trac
 
 T1 ROM-read scope: 7 ranges anchored, 1 range covered by exception TL-EXC-P20-T1-01 (PORT20-ROM-LEDDRIVE).
 
-Eight ranges were read. Seven are anchored. Each is either the root of a chain (a tracked file:line whose content contains an address inside the range, or an address span that covers its start) or is reached by a `bl`/branch/literal inside another anchored range that points into it. One range, `PORT20-ROM-LEDDRIVE`, has no anchor. SCOPE DEVIATION: unanchored read, waived retroactively by Tech Lead exception TL-EXC-P20-T1-01 (task 90 revision-5 feedback) for accounting only; quarantined: no claim in this document relies on it. The original read did not meet the anchoring rule (§7, §7.1). Each manifest entry carries its anchors as `ANCHOR:` clauses in `notes`, which `tests/test_port20_led_evidence.py` checks against the actual line content and the recorded ranges.
+Eight ranges were read. Seven are anchored. Each is either the root of a chain (a tracked file:line whose content contains an address inside the range, or an address span that covers its start) or is reached by a `bl`/branch/literal inside another anchored range that points into it. One range, `PORT20-ROM-LEDDRIVE`, has no anchor. SCOPE DEVIATION: unanchored read, waived retroactively by Tech Lead exception TL-EXC-P20-T1-01 (AgentBridge decision log, milestone PORT-20-BOOT-SIGNAL, task 90, Tech Lead REQUEST_REVISION for revision 6 (after codex-reviewer review of revision 5)) for accounting only; quarantined: no claim in this document relies on it. The original read did not meet the anchoring rule (§7, §7.1). Each manifest entry carries its anchors as `ANCHOR:` clauses in `notes`, which `tests/test_port20_led_evidence.py` checks against the actual line content and the recorded ranges.
 
 | Range ID | Start Address | End Address | Length (Bytes) | SHA-256 Digest | Anchor Citation / Parent Range | Anchor Type | Claims Supported & Classification |
 |---|:---:|:---:|:---:|---|---|---|---|
@@ -261,14 +263,15 @@ Eight ranges were read. Seven are anchored. Each is either the root of a chain (
 - Total ranges read: **8** (limit: at most 8)
 - Largest range: **512 bytes** (limit: at most 4096 bytes)
 - Total bytes read: **2,336 bytes** (limit: at most 32,768 bytes); bytes behind claims: **2,080** (the seven anchored ranges)
-- No new ROM ranges were read in revisions 3, 4 and 5. Only the manifest `notes` fields changed. Addresses, lengths and SHA-256 digests are unchanged.
+- No new ROM ranges were read in revisions 3, 4, 5 and 6. Only the manifest `notes` fields changed. Addresses, lengths and SHA-256 digests are unchanged.
 - Validator: `python3 tools/port11c_evidence_validator.py --manifest docs/agentbridge/PORT20_EVIDENCE_MANIFEST.json` must report `Result: VALID` with 0 errors. The expected single WARNING is the self-declared-scope trust notice (`tools/port11c_evidence_validator.py:606`). `tests/test_port20_led_evidence.py` enforces this.
 
 ---
 
 ## 7. Scope Deviations
 
-- `PORT20-ROM-LEDDRIVE` (`0xFC5572B8..0xFC5573B7`, 256 bytes, SHA-256 `9a23088b4d321bd65e1728451354023c7814d0915c3ad9e4d6ce74af56208399`): SCOPE DEVIATION: unanchored read, waived retroactively by Tech Lead exception TL-EXC-P20-T1-01 (task 90 revision-5 feedback) for accounting only; quarantined: no claim in this document relies on it.
+- `PORT20-ROM-LEDDRIVE` (`0xFC5572B8..0xFC5573B7`, 256 bytes, SHA-256 `9a23088b4d321bd65e1728451354023c7814d0915c3ad9e4d6ce74af56208399`): SCOPE DEVIATION: unanchored read, waived retroactively by Tech Lead exception TL-EXC-P20-T1-01 (AgentBridge decision log, milestone PORT-20-BOOT-SIGNAL, task 90, Tech Lead REQUEST_REVISION for revision 6 (after codex-reviewer review of revision 5)) for accounting only; quarantined: no claim in this document relies on it.
+  - The read happened without an anchor and is recorded truthfully rather than hidden.
   - The read had no tracked anchor: no tracked file:line contains an address inside it, and no instruction or literal inside the other seven recorded ranges points into it.
   - It stays in the manifest only so that the read accounting (start, length, SHA-256) is complete.
   - Nothing read from it is used anywhere in this document: no candidate, no polarity argument and no loader-context claim cites it.
@@ -278,12 +281,12 @@ Eight ranges were read. Seven are anchored. Each is either the root of a chain (
 
 | Exception ID | Range | Reason | Scope | Authority |
 |---|---|---|---|---|
-| `TL-EXC-P20-T1-01` | `PORT20-ROM-LEDDRIVE` `0xFC5572B8..0xFC5573B7` (256 bytes, SHA-256 `9a23088b4d321bd65e1728451354023c7814d0915c3ad9e4d6ce74af56208399`) | The read had already happened; it is within the T1 limits (8 ranges, at most 4096 bytes each, at most 32 KiB total); it is quarantined. Waived retroactively for read accounting only. | This range only. No other unanchored range is covered. | Charter: the Tech Lead decides which ROM ranges a task reads (task 90 revision-5 feedback). |
+| `TL-EXC-P20-T1-01` | `PORT20-ROM-LEDDRIVE` `0xFC5572B8..0xFC5573B7` (256 bytes, SHA-256 `9a23088b4d321bd65e1728451354023c7814d0915c3ad9e4d6ce74af56208399`) | The read had already happened; it is within the T1 limits (8 ranges, at most 4096 bytes each, at most 32 KiB total); it is quarantined. Waived retroactively for read accounting only. | This range only. No other unanchored range is covered. | Charter: the Tech Lead decides which ROM ranges a task reads. Record: AgentBridge decision log, milestone PORT-20-BOOT-SIGNAL, task 90, Tech Lead REQUEST_REVISION for revision 6 (after codex-reviewer review of revision 5). The read happened without an anchor and is recorded truthfully rather than hidden. |
 
 ---
 
 ## 8. Conclusion
 
-Anchored GM1.10C ROM code shows the stock `LEDDrv` storing `0x004d0002` (action 0) and `0x004c0003` (action 1) to MMIO address `0xD20B0884` for LED descriptor 0 (GPIO pin 33) `[VERIFIED]`. That this is the rear green status LED is `[INFERRED]`. Which of the two values lights it is `[UNKNOWN]`, so T2 must alternate both values (a blink) rather than rely on a single store. For T2, the prologue must alternate the two values (write action0, wait about 1 s, write action1, wait about 1 s, then write action0 and action1 once more); this gives a visible transition whichever value lights the LED, and the owner reports which phase was lit. The loader can write the register only at PL1 (`[INFERRED]`; entry mode `[UNKNOWN]`), so T2 must check `CPSR.M` before the store rather than assume a mode, and must not depend on the stack. No cache maintenance is needed, but T2 must issue a `DSB` after each store before any busy-wait. Even then the visible effect is not guaranteed while the physical LED is only INFERRED.
+Anchored GM1.10C ROM code shows the stock `LEDDrv` storing `0x004d0002` (action 0) and `0x004c0003` (action 1) to MMIO address `0xD20B0884` for LED descriptor 0 (GPIO pin 33) `[VERIFIED]`. That this is the rear green status LED is `[INFERRED]`. Which of the two values lights it is `[UNKNOWN]`, so T2 must alternate both values (a blink) rather than rely on a single store. For T2, the prologue must alternate the two values (write action0, wait about 1 s, write action1, wait about 1 s, then write action0 and action1 once more); this gives a visible transition whichever value lights the LED, and the owner reports which phase was lit. The loader can write the register only at PL1 (`[INFERRED]`; entry mode `[UNKNOWN]`), so T2 must check `CPSR.M` before the store rather than assume a mode, and must not depend on the stack. No cache maintenance is needed, but T2 must issue a `DSB` after each store before any busy-wait (a safe superset regardless of the CPU core model, which is UNKNOWN). Even then the visible effect is not guaranteed while the physical LED is only INFERRED.
 
 T2 GO: 0xD20B0884 action0=0x004d0002 action1=0x004c0003 (address/values VERIFIED, ON/OFF polarity UNKNOWN)
