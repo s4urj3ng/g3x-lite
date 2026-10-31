@@ -8,7 +8,7 @@ Asserts that:
 agree on boot_witness = 0x0035F7A0 (.data section, 16-byte aligned, 32 bytes).
 
 Verifies fail-closed behavior:
-- If 0x0035F780 is reintroduced in symbols, maps, metadata, or inspector payload,
+- If FORBIDDEN_WITNESS_ADDR is reintroduced in symbols, maps, metadata, or inspector payload,
   the inspector, preflight tool, and candidate validator fail with hard errors.
 """
 
@@ -41,7 +41,9 @@ import validate_witness_inspector as vwi
 import port18_trial_preflight as ptp
 
 PINNED_BOOT_WITNESS_ADDR = 0x0035F7A0
-STALE_PRECORRECTION_ADDR = 0x0035F780
+FORBIDDEN_WITNESS_ADDR = 0x0035F780  # sole literal: stale pre-correction address
+FORBIDDEN_WITNESS_HEX = f"0x{FORBIDDEN_WITNESS_ADDR:08X}"
+FORBIDDEN_WITNESS_NM = f"{FORBIDDEN_WITNESS_ADDR:08x}"
 
 
 def create_mock_payload_bytes(target_addr: int) -> bytes:
@@ -107,7 +109,7 @@ class TestPort19WitnessAddress(unittest.TestCase):
             )
 
     def test_pinned_constants_coherence(self):
-        """All tools define EXPECTED_BOOT_WITNESS_ADDR as 0x0035F7A0, never 0x0035F780."""
+        """All tools define EXPECTED_BOOT_WITNESS_ADDR as 0x0035F7A0, never FORBIDDEN_WITNESS_ADDR."""
         self.assertEqual(bcp.EXPECTED_BOOT_WITNESS_ADDR, PINNED_BOOT_WITNESS_ADDR)
         self.assertEqual(vcp.EXPECTED_BOOT_WITNESS_ADDR, PINNED_BOOT_WITNESS_ADDR)
         self.assertEqual(ptp.EXPECTED_BOOT_WITNESS_ADDR, PINNED_BOOT_WITNESS_ADDR)
@@ -122,7 +124,7 @@ class TestPort19WitnessAddress(unittest.TestCase):
             bwi.EXPECTED_BOOT_WITNESS_ADDR,
             vwi.EXPECTED_BOOT_WITNESS_ADDR,
         ]:
-            self.assertNotEqual(tool_const, STALE_PRECORRECTION_ADDR)
+            self.assertNotEqual(tool_const, FORBIDDEN_WITNESS_ADDR)
 
     def test_built_candidate_symbol_table(self):
         """Built candidate ELF symbol table defines boot_witness = 0x0035F7A0."""
@@ -148,7 +150,7 @@ class TestPort19WitnessAddress(unittest.TestCase):
 
         self.assertIsNotNone(witness_addr, "boot_witness symbol missing from candidate_main.elf")
         self.assertEqual(witness_addr, PINNED_BOOT_WITNESS_ADDR)
-        self.assertNotEqual(witness_addr, STALE_PRECORRECTION_ADDR)
+        self.assertNotEqual(witness_addr, FORBIDDEN_WITNESS_ADDR)
         self.assertIn(witness_type, ("D", "d"), "boot_witness must reside in .data")
         self.assertEqual(witness_addr % 16, 0, "boot_witness must be 16-byte aligned")
 
@@ -178,7 +180,7 @@ class TestPort19WitnessAddress(unittest.TestCase):
 
         arch = manifest.get("architectural_invariants", {})
         self.assertEqual(arch.get("boot_witness_addr"), "0x0035F7A0")
-        self.assertNotEqual(arch.get("boot_witness_addr"), "0x0035F780")
+        self.assertNotEqual(arch.get("boot_witness_addr"), FORBIDDEN_WITNESS_HEX)
 
     def test_candidate_inspector_artifacts(self):
         """candidate_port2a inspector metadata and binary target 0x0035F7A0."""
@@ -192,12 +194,12 @@ class TestPort19WitnessAddress(unittest.TestCase):
             meta = json.load(f)
         self.assertEqual(meta["witness_address"], "0x0035F7A0")
         self.assertEqual(meta["witness_address_int"], PINNED_BOOT_WITNESS_ADDR)
-        self.assertNotEqual(meta["witness_address"], "0x0035F780")
+        self.assertNotEqual(meta["witness_address"], FORBIDDEN_WITNESS_HEX)
 
         # Payload binary MOVW/MOVT opcode decode
         decoded_addr = vwi.extract_witness_addr_from_binary_bytes(str(bin_path))
         self.assertEqual(decoded_addr, PINNED_BOOT_WITNESS_ADDR)
-        self.assertNotEqual(decoded_addr, STALE_PRECORRECTION_ADDR)
+        self.assertNotEqual(decoded_addr, FORBIDDEN_WITNESS_ADDR)
 
     def test_tripartite_witness_address_agreement(self):
         """Inspector, preflight tool, and built candidate strictly agree on 0x0035F7A0."""
@@ -229,12 +231,12 @@ class TestPort19WitnessAddress(unittest.TestCase):
         self.assertEqual(candidate_addr, meta_addr)
         self.assertEqual(candidate_addr, payload_addr)
 
-        # Absence of 0x0035F780
+        # Absence of FORBIDDEN_WITNESS_ADDR
         for addr in [candidate_addr, preflight_expected, inspector_val_expected, meta_addr, payload_addr]:
-            self.assertNotEqual(addr, STALE_PRECORRECTION_ADDR)
+            self.assertNotEqual(addr, FORBIDDEN_WITNESS_ADDR)
 
     def test_preflight_tool_passes_candidate_and_rejects_0035f780(self):
-        """Preflight tool accepts 0x0035F7A0 candidate symbols and rejects 0x0035F780 with exit 1."""
+        """Preflight tool accepts 0x0035F7A0 candidate symbols and rejects FORBIDDEN_WITNESS_ADDR with exit 1."""
         diskboot = CANDIDATE_DIR / "DISKBOOT.BIN"
         meta_path = CANDIDATE_DIR / "witness_inspector_metadata.json"
         bin_path = CANDIDATE_DIR / "witness_inspector_payload.bin"
@@ -263,55 +265,55 @@ class TestPort19WitnessAddress(unittest.TestCase):
             self.assertTrue(report["checks_by_name"]["inspector_metadata_witness"]["pass"])
             self.assertTrue(report["checks_by_name"]["inspector_payload_witness"]["pass"])
 
-            # Stale 0x0035F780 in symbol table fails closed with exit code 1
+            # Stale FORBIDDEN_WITNESS_ADDR in symbol table fails closed with exit code 1
             bad_symbols = Path(td) / "bad_symbols.nm"
             bad_symbols.write_text(
                 "003489b4 T _start\n"
-                "0035f780 D boot_witness\n"
+                f"{FORBIDDEN_WITNESS_NM} D boot_witness\n"
                 "00366cb0 B _end\n"
             )
             bad_exit, bad_report = ptp.run_preflight(
                 binary_path=str(diskboot),
                 symbols_path=str(bad_symbols),
             )
-            self.assertEqual(bad_exit, 1, "Preflight must fail on stale 0x0035F780 symbols")
+            self.assertEqual(bad_exit, 1, f"Preflight must fail on stale {FORBIDDEN_WITNESS_HEX} symbols")
             self.assertEqual(bad_report["verdict"], "FAIL")
             self.assertFalse(bad_report["checks_by_name"]["boot_witness"]["pass"])
-            self.assertEqual(bad_report["checks_by_name"]["boot_witness"]["actual"], "0x0035F780")
+            self.assertEqual(bad_report["checks_by_name"]["boot_witness"]["actual"], FORBIDDEN_WITNESS_HEX)
 
-            # Stale 0x0035F780 in metadata fails closed with exit code 1
+            # Stale FORBIDDEN_WITNESS_ADDR in metadata fails closed with exit code 1
             bad_meta = Path(td) / "bad_meta.json"
-            bad_meta.write_text(json.dumps({"witness_address": "0x0035F780"}))
+            bad_meta.write_text(json.dumps({"witness_address": FORBIDDEN_WITNESS_HEX}))
             meta_exit, meta_report = ptp.run_preflight(
                 binary_path=str(diskboot),
                 symbols_path=str(symbols_txt),
                 inspector_metadata_path=str(bad_meta),
             )
-            self.assertEqual(meta_exit, 1, "Preflight must fail on stale 0x0035F780 inspector metadata")
+            self.assertEqual(meta_exit, 1, f"Preflight must fail on stale {FORBIDDEN_WITNESS_HEX} inspector metadata")
             self.assertEqual(meta_report["verdict"], "FAIL")
             self.assertFalse(meta_report["checks_by_name"]["inspector_metadata_witness"]["pass"])
-            self.assertEqual(meta_report["checks_by_name"]["inspector_metadata_witness"]["actual"], "0x0035F780")
+            self.assertEqual(meta_report["checks_by_name"]["inspector_metadata_witness"]["actual"], FORBIDDEN_WITNESS_HEX)
 
-            # Stale 0x0035F780 in inspector payload binary fails closed with exit code 1
+            # Stale FORBIDDEN_WITNESS_ADDR in inspector payload binary fails closed with exit code 1
             bad_bin = Path(td) / "bad_inspector.bin"
-            bad_bin.write_bytes(create_mock_payload_bytes(STALE_PRECORRECTION_ADDR))
+            bad_bin.write_bytes(create_mock_payload_bytes(FORBIDDEN_WITNESS_ADDR))
             bin_exit, bin_report = ptp.run_preflight(
                 binary_path=str(diskboot),
                 symbols_path=str(symbols_txt),
                 inspector_bin_path=str(bad_bin),
             )
-            self.assertEqual(bin_exit, 1, "Preflight must fail on stale 0x0035F780 inspector payload binary")
+            self.assertEqual(bin_exit, 1, f"Preflight must fail on stale {FORBIDDEN_WITNESS_HEX} inspector payload binary")
             self.assertEqual(bin_report["verdict"], "FAIL")
             self.assertFalse(bin_report["checks_by_name"]["inspector_payload_witness"]["pass"])
-            self.assertEqual(bin_report["checks_by_name"]["inspector_payload_witness"]["actual"], "0x0035F780")
+            self.assertEqual(bin_report["checks_by_name"]["inspector_payload_witness"]["actual"], FORBIDDEN_WITNESS_HEX)
 
     def test_inspector_validator_rejects_0035f780(self):
-        """Inspector validator fails closed when encountering 0x0035F780 in metadata or payload."""
+        """Inspector validator fails closed when encountering FORBIDDEN_WITNESS_ADDR in metadata or payload."""
         payload_bin = CANDIDATE_DIR / "witness_inspector_payload.bin"
         payload_o = CANDIDATE_DIR / "witness_inspector_payload.o"
         core_elf = CANDIDATE_DIR / "candidate_main.elf"
 
-        # Stale metadata targeting 0x0035F780 raises AssertionError
+        # Stale metadata targeting FORBIDDEN_WITNESS_ADDR raises AssertionError
         with tempfile.TemporaryDirectory() as td:
             stale_meta = Path(td) / "stale_meta.json"
             stale_meta.write_text(
@@ -319,8 +321,8 @@ class TestPort19WitnessAddress(unittest.TestCase):
                     {
                         "target": "Canon PowerShot G3 X (GM1.10C)",
                         "symbol": "boot_witness",
-                        "witness_address": "0x0035F780",
-                        "witness_address_int": 3536768,
+                        "witness_address": FORBIDDEN_WITNESS_HEX,
+                        "witness_address_int": FORBIDDEN_WITNESS_ADDR,
                         "payload_size": 444,
                     }
                 )
@@ -333,12 +335,12 @@ class TestPort19WitnessAddress(unittest.TestCase):
                     metadata_path=str(stale_meta),
                     expected_witness_addr=PINNED_BOOT_WITNESS_ADDR,
                 )
-            self.assertIn("0x0035F780", str(ctx.exception))
+            self.assertIn(FORBIDDEN_WITNESS_HEX, str(ctx.exception))
 
-        # Stale payload binary targeting 0x0035F780 raises ValueError
+        # Stale payload binary targeting FORBIDDEN_WITNESS_ADDR raises ValueError
         with tempfile.TemporaryDirectory() as td:
             stale_payload = Path(td) / "stale_payload.bin"
-            stale_payload.write_bytes(create_mock_payload_bytes(STALE_PRECORRECTION_ADDR))
+            stale_payload.write_bytes(create_mock_payload_bytes(FORBIDDEN_WITNESS_ADDR))
             with self.assertRaises((ValueError, AssertionError)) as ctx:
                 vwi.validate_payload_binary(
                     payload_bin=str(stale_payload),
@@ -348,19 +350,19 @@ class TestPort19WitnessAddress(unittest.TestCase):
                 )
             err_msg = str(ctx.exception)
             self.assertTrue(
-                "0x0035F780" in err_msg or "does not match" in err_msg,
+                FORBIDDEN_WITNESS_HEX in err_msg or "does not match" in err_msg,
                 f"Expected mismatch error, got: {err_msg}",
             )
 
     def test_inspector_builder_rejects_0035f780_symbol_table(self):
-        """Inspector builder extract_witness_addr_from_elf rejects 0x0035F780 with ValueError."""
+        """Inspector builder extract_witness_addr_from_elf rejects FORBIDDEN_WITNESS_ADDR with ValueError."""
         with tempfile.TemporaryDirectory() as td:
             dummy_elf = Path(td) / "dummy.elf"
             dummy_elf.touch()
 
             def mock_run(*args, **kwargs):
                 class MockRes:
-                    stdout = b"0035f780 D boot_witness\n"
+                    stdout = f"{FORBIDDEN_WITNESS_NM} D boot_witness\n".encode()
                     stderr = b""
                     returncode = 0
                 return MockRes()
@@ -373,7 +375,7 @@ class TestPort19WitnessAddress(unittest.TestCase):
                         nm_tool=str(NM),
                         expected_addr=PINNED_BOOT_WITNESS_ADDR,
                     )
-                self.assertIn("0x0035F780", str(ctx.exception))
+                self.assertIn(FORBIDDEN_WITNESS_HEX, str(ctx.exception))
                 self.assertIn("0x0035F7A0", str(ctx.exception))
 
     def test_inspector_metadata_missing_field_reports_clean_fail(self):
@@ -434,7 +436,7 @@ class TestPort19WitnessAddress(unittest.TestCase):
     # =========================================================================
 
     def test_inspector_metadata_witness_address_int_disagreement_fails(self):
-        """Metadata with witness_address string OK but witness_address_int = 0x0035F780 fails (non-zero exit)."""
+        """Metadata with witness_address string OK but witness_address_int = FORBIDDEN_WITNESS_ADDR fails (non-zero exit)."""
         diskboot = CANDIDATE_DIR / "DISKBOOT.BIN"
         core_elf = CANDIDATE_DIR / "candidate_main.elf"
         with tempfile.TemporaryDirectory() as td:
@@ -447,7 +449,7 @@ class TestPort19WitnessAddress(unittest.TestCase):
                 "target": "Canon PowerShot G3 X (GM1.10C)",
                 "symbol": "boot_witness",
                 "witness_address": "0x0035F7A0",
-                "witness_address_int": STALE_PRECORRECTION_ADDR,
+                "witness_address_int": FORBIDDEN_WITNESS_ADDR,
             }))
 
             exit_code, report = ptp.run_preflight(
@@ -461,7 +463,7 @@ class TestPort19WitnessAddress(unittest.TestCase):
             self.assertFalse(check["pass"])
             self.assertEqual(check["status"], "FAIL")
             self.assertIn("disagrees", check["reason"])
-            self.assertIn("0x0035F780", check["reason"])
+            self.assertIn(FORBIDDEN_WITNESS_HEX, check["reason"])
 
     def test_inspector_metadata_witness_address_int_non_integer_fails(self):
         """Metadata with witness_address_int not an integer fails with clean FAIL reason."""
@@ -718,7 +720,7 @@ class TestPort19WitnessAddress(unittest.TestCase):
         )
 
     def test_validator_rejects_self_consistent_0035f780_under_python_optimize(self):
-        """Validator rejects a self-consistent 0x0035F780 fixture when run under -O / PYTHONOPTIMIZE=1."""
+        """Validator rejects a self-consistent FORBIDDEN_WITNESS_ADDR fixture when run under -O / PYTHONOPTIMIZE=1."""
         with tempfile.TemporaryDirectory() as td:
             td_path = Path(td)
             mock_c = td_path / "mock.c"
@@ -728,12 +730,12 @@ class TestPort19WitnessAddress(unittest.TestCase):
             )
             mock_elf = td_path / "mock_780.elf"
             subprocess.run(
-                [str(CC), "-nostdlib", "-Wl,-Ttext,0x350000,-Tdata,0x0035f780", str(mock_c), "-o", str(mock_elf)],
+                [str(CC), "-nostdlib", f"-Wl,-Ttext,0x350000,-Tdata,0x{FORBIDDEN_WITNESS_ADDR:08x}", str(mock_c), "-o", str(mock_elf)],
                 check=True,
             )
 
             mock_addr = bwi.extract_witness_addr_from_elf(str(mock_elf))
-            self.assertEqual(mock_addr, STALE_PRECORRECTION_ADDR)
+            self.assertEqual(mock_addr, FORBIDDEN_WITNESS_ADDR)
 
             fixture_o = td_path / "payload.o"
             fixture_bin = td_path / "payload.bin"
@@ -751,15 +753,15 @@ class TestPort19WitnessAddress(unittest.TestCase):
                 payload_bin=str(fixture_bin),
                 loader_script=str(fixture_script),
                 metadata_json=str(fixture_meta),
-                expected_witness_addr=STALE_PRECORRECTION_ADDR,
+                expected_witness_addr=FORBIDDEN_WITNESS_ADDR,
             )
 
-            # Confirm fixture is internally self-consistent on 0x0035F780
+            # Confirm fixture is internally self-consistent on FORBIDDEN_WITNESS_ADDR
             bin_addr = vwi.extract_witness_addr_from_binary_bytes(str(fixture_bin))
-            self.assertEqual(bin_addr, STALE_PRECORRECTION_ADDR)
+            self.assertEqual(bin_addr, FORBIDDEN_WITNESS_ADDR)
             with open(fixture_meta, "r", encoding="utf-8") as f:
                 meta = json.load(f)
-            self.assertEqual(meta["witness_address_int"], STALE_PRECORRECTION_ADDR)
+            self.assertEqual(meta["witness_address_int"], FORBIDDEN_WITNESS_ADDR)
 
             # Test 1: Subprocess invocation with python3 -O
             cmd_opt = [
@@ -776,9 +778,9 @@ class TestPort19WitnessAddress(unittest.TestCase):
             self.assertNotEqual(
                 res_opt.returncode,
                 0,
-                f"Validator unexpectedly passed on 0x0035F780 under -O:\nSTDOUT: {res_opt.stdout}\nSTDERR: {res_opt.stderr}",
+                f"Validator unexpectedly passed on {FORBIDDEN_WITNESS_HEX} under -O:\nSTDOUT: {res_opt.stdout}\nSTDERR: {res_opt.stderr}",
             )
-            self.assertIn("0x0035F780", res_opt.stderr)
+            self.assertIn(FORBIDDEN_WITNESS_HEX, res_opt.stderr)
 
             # Test 2: Subprocess invocation with PYTHONOPTIMIZE=1
             env_opt = os.environ.copy()
@@ -796,9 +798,9 @@ class TestPort19WitnessAddress(unittest.TestCase):
             self.assertNotEqual(
                 res_env.returncode,
                 0,
-                f"Validator unexpectedly passed on 0x0035F780 under PYTHONOPTIMIZE=1:\nSTDOUT: {res_env.stdout}\nSTDERR: {res_env.stderr}",
+                f"Validator unexpectedly passed on {FORBIDDEN_WITNESS_HEX} under PYTHONOPTIMIZE=1:\nSTDOUT: {res_env.stdout}\nSTDERR: {res_env.stderr}",
             )
-            self.assertIn("0x0035F780", res_env.stderr)
+            self.assertIn(FORBIDDEN_WITNESS_HEX, res_env.stderr)
 
     def test_preflight_movw_movt_thumb2_opcode_and_bit15_validation(self):
         """Decoder fully validates Thumb-2 T3 MOVW / T1 MOVT: opcode bits and second halfword bit 15 == 0.
