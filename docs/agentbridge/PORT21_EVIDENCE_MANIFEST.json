@@ -74,7 +74,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT21-RAM-LIFETIME",
       "classification": "STATIC_VERIFIED",
-      "notes": "Stock DryOS heap configuration 0xFC05B3C0..0xFC05B53F: sub_fc05b3c8 loading stock heap base r4=0x003489B4 from [0xFC05B450], headroom check >=0x000B1FEC, populating sp[8]=r4=0x003489B4, sp[0xC]=size 0x002B7660, sp[0x10]=0x00600014, and calling DryOS init sub_fc31b408"
+      "notes": "Stock DryOS heap configuration 0xFC05B3C0..0xFC05B53F: sub_fc05b3c8 loading stock heap base r4=0x003489B4 from [0xFC05B450], upper limit 0x006CE000 from [0xFC05B454], headroom check >=0x000B1FEC from [0xFC05B458], pool 0 limit 0x0060E000 from [0xFC05B470], populating sp[8]=r4=0x003489B4, sp[0xC]=size 0x002B7660, sp[0x10]=0x00600014 from [0xFC05B474], continuation 0xFC05B559 from [0xFC05B478], and calling DryOS init sub_fc31b408"
     },
     {
       "evidence_id": "PORT21-ROM-INIT-TASK",
