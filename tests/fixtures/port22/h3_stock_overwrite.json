@@ -1,0 +1,15 @@
+{
+  "synthetic": true,
+  "description": "Synthetic fixture for hypothesis H3: Loader ran and pulsed LED, but rebooted into stock boot without candidate heap shift, overwriting core region and witness.",
+  "card_lock_state": "LOCKED",
+  "startup_timing": "slow (~2.5-3.5s to stock Playback UI)",
+  "port20_led": "PULSES ~1-2 s",
+  "ramcmp": {
+    "r_l8": 0,
+    "r_l4": 0,
+    "r_c4": 0,
+    "r_ct": 0,
+    "r_wm": 0
+  },
+  "inspector_osd": "WITNESS_INVALID"
+}

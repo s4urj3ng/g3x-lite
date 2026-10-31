@@ -1,0 +1,15 @@
+{
+  "synthetic": true,
+  "description": "Synthetic fixture for hypothesis H1: ROM rejected candidate binary before copy, normal start-up, no LED pulse, stock RAM data (differs).",
+  "card_lock_state": "LOCKED",
+  "startup_timing": "normal (~1.0s to stock Playback UI)",
+  "port20_led": "NO_PULSE",
+  "ramcmp": {
+    "r_l8": 0,
+    "r_l4": 0,
+    "r_c4": 0,
+    "r_ct": 0,
+    "r_wm": 0
+  },
+  "inspector_osd": "WITNESS_INVALID"
+}

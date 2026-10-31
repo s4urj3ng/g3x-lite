@@ -1,0 +1,15 @@
+{
+  "synthetic": true,
+  "description": "Synthetic fixture for hypothesis H4: Candidate heap shift succeeded (r_c4=1, r_ct=1), but witness struct at 0x0035F7A0 has malformed checksum or field. Under docs/PORT21_OWNER_SESSION_PLAN.md:169-175, H3 specifies wildcards for r_c4/r_ct/r_wm, so these readings match both H3 and H4 (AMBIGUOUS).",
+  "card_lock_state": "LOCKED",
+  "startup_timing": "slow (~2.5-3.5s to stock Playback UI)",
+  "port20_led": "PULSES ~1-2 s",
+  "ramcmp": {
+    "r_l8": 0,
+    "r_l4": 1,
+    "r_c4": 1,
+    "r_ct": 1,
+    "r_wm": 0
+  },
+  "inspector_osd": "WITNESS_INVALID"
+}
