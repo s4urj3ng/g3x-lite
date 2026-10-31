@@ -44,6 +44,11 @@
           "start_address": "0xFC000580",
           "end_address": "0xFC00067F",
           "label": "PORT19-ROM-ROMSTARTER"
+        },
+        {
+          "start_address": "0xFC37A400",
+          "end_address": "0xFC37B3FF",
+          "label": "PORT19-ROM-MOUNTER-VBR"
         }
       ],
       "max_bytes_total": 65536,
@@ -52,7 +57,7 @@
         "INFERRED",
         "UNKNOWN"
       ],
-      "description": "PORT-19 GM1.10C StartDiskboot / DISKBOOT.BIN encoding resolution scope (budget: at most 4 KiB per read, 64 KiB total)"
+      "description": "PORT-19 GM1.10C StartDiskboot / DISKBOOT.BIN encoding & VBR marker resolution scope (budget: at most 4 KiB per read, 64 KiB total)"
     }
   ],
   "evidence_entries": [
@@ -175,6 +180,21 @@
       "authorization_scope_id": "SCOPE-PORT19-DISKBOOT",
       "classification": "STATIC_VERIFIED",
       "notes": "RomStarter UART/rescue loader at 0xFC0005A0 that loads raw bytes without dancingbits"
+    },
+    {
+      "evidence_id": "PORT19-ROM-MOUNTER-VBR",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC37A400",
+      "end_address": "0xFC37B3FF",
+      "expected_byte_count": 4096,
+      "sha256": "7706e4438a36a0c42aa584c994571382870d427c945240c66eec86dc02a1f65b",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT19-DISKBOOT",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Mounter.c VBR marker check routines (0xFC37A4B6 to 0xFC37B3A8): checking BOOTDISK at 0x40 (FAT12/FAT16) and 0x1E0 (FAT32), SCRIPT at 0x1F0, and bypass for exFAT (type 4)"
     }
   ]
 }
