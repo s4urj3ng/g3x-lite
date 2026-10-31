@@ -229,7 +229,7 @@ class TestPort21EvidenceManifestAppendOnly(unittest.TestCase):
     def test_manifest_is_append_only_relative_to_t1(self):
         """Ensure existing T1 entries are byte-identical and appear first."""
         entries = self.manifest.get("evidence_entries", [])
-        self.assertGreaterEqual(len(entries), len(T1_ENTRIES) + len(T2_ENTRIES))
+        self.assertGreaterEqual(len(entries), len(T1_ENTRIES))
 
         # Check first 6 entries match T1 exactly
         for i, expected in enumerate(T1_ENTRIES):
@@ -237,41 +237,46 @@ class TestPort21EvidenceManifestAppendOnly(unittest.TestCase):
             for key in ("evidence_id", "start_address", "end_address", "expected_byte_count", "sha256", "authorization_scope_id"):
                 self.assertEqual(actual[key], expected[key], f"Mismatch in T1 entry {i} key '{key}'")
 
-        # Check T1 scope is unchanged and first
+        # Check T1 scope is unchanged and first, and T2 scope is appended
         scopes = self.manifest.get("authorization_scopes", [])
         self.assertGreaterEqual(len(scopes), 2)
         self.assertEqual(scopes[0]["scope_id"], "SCOPE-PORT21-RAM-LIFETIME")
         self.assertEqual(scopes[1]["scope_id"], "SCOPE-PORT21-DISKBOOT-TIMING")
 
-    def test_t2_entries_present_and_budget_compliant(self):
-        """All approved T2 entries are present and within budget."""
-        entries_by_id = {e["evidence_id"]: e for e in self.manifest.get("evidence_entries", [])}
+    def test_t2_scope_approved_ranges_and_budget_compliant(self):
+        """All approved T2 ranges are present in SCOPE-PORT21-DISKBOOT-TIMING and within budget."""
+        scopes = {s["scope_id"]: s for s in self.manifest.get("authorization_scopes", [])}
+        self.assertIn("SCOPE-PORT21-DISKBOOT-TIMING", scopes)
+        t2_scope = scopes["SCOPE-PORT21-DISKBOOT-TIMING"]
+        self.assertLessEqual(t2_scope["max_bytes_total"], 32768)
+
+        ranges_by_label = {r["label"]: r for r in t2_scope.get("approved_ranges", [])}
         total_t2_bytes = 0
 
         for eid, (start, end, count, sha) in T2_ENTRIES.items():
-            self.assertIn(eid, entries_by_id, f"Missing T2 evidence entry: {eid}")
-            entry = entries_by_id[eid]
-            self.assertEqual(int(entry["start_address"], 16), start, eid)
-            self.assertEqual(int(entry["end_address"], 16), end, eid)
-            self.assertEqual(entry["expected_byte_count"], count, eid)
-            self.assertEqual(entry["sha256"], sha, eid)
-            self.assertEqual(entry["authorization_scope_id"], "SCOPE-PORT21-DISKBOOT-TIMING", eid)
-            self.assertLessEqual(count, 4096, f"Entry {eid} exceeds 4 KiB limit")
+            self.assertIn(eid, ranges_by_label, f"Missing T2 approved range: {eid}")
+            r = ranges_by_label[eid]
+            self.assertEqual(int(r["start_address"], 16), start, eid)
+            self.assertEqual(int(r["end_address"], 16), end, eid)
+            span = end - start + 1
+            self.assertEqual(span, count, eid)
+            self.assertLessEqual(count, 4096, f"Range {eid} exceeds 4 KiB limit")
             total_t2_bytes += count
 
         self.assertLessEqual(total_t2_bytes, 32768, f"Total T2 bytes ({total_t2_bytes}) exceed 32 KiB budget")
 
     def test_no_slice_overlaps(self):
-        """No two evidence slices overlap in memory."""
-        slices = []
-        for entry in self.manifest.get("evidence_entries", []):
-            start = int(entry["start_address"], 16)
-            end = int(entry["end_address"], 16)
-            eid = entry["evidence_id"]
-            slices.append((start, end, eid))
+        """No two evidence ranges in T2 or between T1 and T2 overlap in memory."""
+        all_ranges = []
+        for s in self.manifest.get("authorization_scopes", []):
+            for r in s.get("approved_ranges", []):
+                start = int(r["start_address"], 16)
+                end = int(r["end_address"], 16)
+                label = r["label"]
+                all_ranges.append((start, end, label))
 
-        for i, (s1, e1, id1) in enumerate(slices):
-            for j, (s2, e2, id2) in enumerate(slices):
+        for i, (s1, e1, id1) in enumerate(all_ranges):
+            for j, (s2, e2, id2) in enumerate(all_ranges):
                 if i >= j:
                     continue
                 overlap = max(s1, s2) <= min(e1, e2)

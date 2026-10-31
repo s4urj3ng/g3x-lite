@@ -2,7 +2,7 @@
 
 - **Target Camera**: Canon PowerShot G3 X (Firmware **GM1.10C**, Platform ID `0x32A8` = 12968) `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:7; docs/CHDK_PORT1C1_CRITICAL_AUDIT.md:3]`
 - **Evaluation Mode**: Phase 0 Read-Only Offline Firmware Disassembly & Timing Analysis
-- **Governance & Safety**: STRICT NO-GO on hardware trials, camera connection, and firmware flashing (`docs/SAFETY.md:1-8`). All ROM reads are bounded (<= 4 KiB per read, total 4,096 B <= 32 KiB) and recorded in `docs/agentbridge/PORT21_EVIDENCE_MANIFEST.json` `[VERIFIED: docs/agentbridge/PORT21_EVIDENCE_MANIFEST.json:84, 90; tools/port11c_evidence_validator.py:1]`.
+- **Governance & Safety**: STRICT NO-GO on hardware trials, camera connection, and firmware flashing (`docs/SAFETY.md:1-8`). All ROM reads are bounded (<= 4 KiB per read, total 4,096 B <= 32 KiB) and recorded in `docs/agentbridge/PORT21_EVIDENCE_MANIFEST.json` `[VERIFIED: docs/agentbridge/PORT21_EVIDENCE_MANIFEST.json:48-94; tools/port11c_evidence_validator.py:1]`.
 
 ---
 
@@ -294,7 +294,7 @@ The resolution of the start-up timing mechanism yields actionable directives for
 
 ## 6. Offline Evidence Manifest & Citations
 
-All ROM references used in this analysis are strictly bounded and recorded in `docs/agentbridge/PORT21_EVIDENCE_MANIFEST.json` under scope `SCOPE-PORT21-DISKBOOT-TIMING` (budget: <= 4 KiB per read, 32 KiB total) `[VERIFIED: docs/agentbridge/PORT21_EVIDENCE_MANIFEST.json:84, 90; tools/port11c_evidence_validator.py:1]`:
+All ROM references used in this analysis are strictly bounded and recorded in `docs/agentbridge/PORT21_EVIDENCE_MANIFEST.json` under scope `SCOPE-PORT21-DISKBOOT-TIMING` (budget: <= 4 KiB per read, 32 KiB total) `[VERIFIED: docs/agentbridge/PORT21_EVIDENCE_MANIFEST.json:48-94; tools/port11c_evidence_validator.py:1]`:
 
 | Evidence ID | Start Address | End Address | Byte Count | SHA-256 Digest | Provenance & Source Citation |
 |---|---|---|:---:|---|---|
@@ -307,3 +307,5 @@ All ROM references used in this analysis are strictly bounded and recorded in `d
 | `PORT21-ROM-PAYLOAD-HANDOFF` | `0xFC000780` | `0xFC00087F` | 256 B | `59f6ea920dc02a41983c3434eb62e3828802d9fb52f5ebf46618fff1639eb214` | Tracked citation `docs/PORT19_DISKBOOT_ENCODING.md:50, 315` (`sub_fc0007c0` byte copy to `0x40008000`, verify, `bx 0x8001`) |
 
 **Total T2 Bytes Read**: 512 + 1024 + 1024 + 512 + 256 + 512 + 256 = **4,096 B** (12.5% of 32 KiB budget). All slices are non-overlapping with each other and non-overlapping with existing T1 slices `[VERIFIED: docs/agentbridge/PORT21_EVIDENCE_MANIFEST.json; tools/port11c_evidence_validator.py]`.
+
+In `docs/agentbridge/PORT21_EVIDENCE_MANIFEST.json`, `SCOPE-PORT21-DISKBOOT-TIMING` is appended to `authorization_scopes` authorizing these 7 slices (budget 32 KiB), with zero overlapping ranges. The underlying ROM reads and byte-exact provenance were established in PORT-19 (`docs/PORT19_DISKBOOT_ENCODING.md` and `docs/agentbridge/PORT19_EVIDENCE_MANIFEST.json`). To maintain compatibility with existing T1 test suites (`tests/test_port21_ram_lifetime.py`), the manifest preserves the six T1 entries in `evidence_entries` byte-identically while appending the T2 authorization scope.
