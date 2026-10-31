@@ -14,6 +14,11 @@ Validates Hypothesis H4:
   5. Valid records across all boot stages (Stage 1, Stage 2, Stage 3)
   6. Exhaustive failure modes mapping to WITNESS_INVALID / INVALID / CORRUPT
   7. Color index 3 selection verification and AYCrCb rendering independence
+  8. Inspector provenance: tracked firmware/tools payload (reads 0x0035F780) vs
+     regenerated candidate_port2a payload (reads 0x0035F7A0), and a valid LOADER record
+     at 0x0035F7A0 parsed at 0x0035F780
+  9. Aborted loader writes over different prior memory contents (incl. a prior valid
+     record plus a partial rewrite, which stays LOADER_REACHED)
 """
 
 from __future__ import annotations
@@ -491,6 +496,206 @@ int main(void) {
         # 3. Verify inspector control flow and parsing results are invariant to color indices
         # Color values (1, 4, 3) are output UI telemetry only; they never feed back into parsing logic.
         self.assertIn("0x574954EE", asm_text)
+
+
+FIRMWARE_TOOLS_DIR = REPO_ROOT / "firmware" / "tools"
+HISTORICAL_PAYLOAD_BIN = FIRMWARE_TOOLS_DIR / "witness_inspector_payload.bin"
+HISTORICAL_METADATA_JSON = FIRMWARE_TOOLS_DIR / "witness_inspector_metadata.json"
+HISTORICAL_LOADER_SCRIPT = FIRMWARE_TOOLS_DIR / "witness_inspector_gm110c.m"
+CANDIDATE_PAYLOAD_BIN = CANDIDATE_DIR / "witness_inspector_payload.bin"
+CANDIDATE_METADATA_JSON = CANDIDATE_DIR / "witness_inspector_metadata.json"
+CANDIDATE_LOADER_SCRIPT = CANDIDATE_DIR / "witness_inspector_gm110c.m"
+
+# Tracked hashes (docs/REPRODUCIBILITY_MANIFEST.md:83; docs/PORT16_CANDIDATE_BUILD.md:364, 389)
+HISTORICAL_PAYLOAD_SHA256 = "f1cd6438b8c54a233b28360705c02f869da2149c6499e9b2d8c340746a3c7f00"
+CANDIDATE_PAYLOAD_SHA256 = "241420a6eea2d7cbedd14046ec4f5988ed0404c5a82bb5d2ed6693fd74e612e2"
+HISTORICAL_INSPECTOR_ADDR = 0x0035F780
+
+# Core image placement (candidate_manifest.json: core_destination; main_prototype.c:32-38)
+CORE_DESTINATION = 0x003489B4
+
+# Loader stores in source order (main_prototype.c:43-55). Volatile stores, so the
+# compiler keeps this order; whether DRAM sees them in this order is not claimed.
+LOADER_STORE_ORDER = [
+    "magic", "version", "session_nonce", "stage_state",
+    "loader_sp", "core_entry_pc", "cont_tick", "checksum",
+]
+
+
+def _loader_store_values(loader_sp=LOADER_INITIAL_SP):
+    """Values the loader stores at each offset (main_prototype.c:43-55)."""
+    fields = {
+        "magic": BOOT_WITNESS_MAGIC,
+        "version": BOOT_WITNESS_VERSION,
+        "session_nonce": BOOT_WITNESS_FIXED_NONCE,
+        "stage_state": STAGE_LOADER,
+        "loader_sp": loader_sp,
+        "core_entry_pc": 0,
+        "cont_tick": 0,
+    }
+    fields["checksum"] = vwi.compute_checksum(
+        fields["magic"], fields["version"], fields["session_nonce"], fields["stage_state"],
+        fields["loader_sp"], fields["core_entry_pc"], fields["cont_tick"],
+    )
+    return fields
+
+
+def _apply_first_n_loader_stores(prior: bytes, n: int, loader_sp=LOADER_INITIAL_SP) -> bytes:
+    """Model an aborted loader write: only the first n of the 8 stores reach memory."""
+    assert len(prior) == 32 and 0 <= n <= len(LOADER_STORE_ORDER)
+    mem = bytearray(prior)
+    values = _loader_store_values(loader_sp)
+    for name in LOADER_STORE_ORDER[:n]:
+        off = PARSER_FIELD_OFFSETS[name]
+        mem[off:off + 4] = struct.pack("<I", values[name])
+    return bytes(mem)
+
+
+def _title(buf: bytes) -> str:
+    return vwi.emulate_inspector_parse(buf, expected_nonce=0)[1]
+
+
+class TestPort21InspectorProvenance(unittest.TestCase):
+    """Which inspector payload reads which address (review finding 1)."""
+
+    def test_historical_vs_regenerated_payload_target_addresses(self):
+        """Tracked firmware/tools payload reads 0x0035F780; regenerated candidate payload reads 0x0035F7A0."""
+        import hashlib
+
+        hist = HISTORICAL_PAYLOAD_BIN.read_bytes()
+        self.assertEqual(hashlib.sha256(hist).hexdigest(), HISTORICAL_PAYLOAD_SHA256)
+        self.assertEqual(len(hist), 444)
+        # Real decoder from the validator (tools/validate_witness_inspector.py:131-178)
+        self.assertEqual(vwi.extract_witness_addr_from_binary_bytes(str(HISTORICAL_PAYLOAD_BIN)), HISTORICAL_INSPECTOR_ADDR)
+        self.assertEqual(hist[0x0A:0x12].hex(), "4ff28077c0f23507")  # movw r7,#0xf780; movt r7,#0x0035
+        meta_addr, meta = vwi.read_address_metadata(str(HISTORICAL_METADATA_JSON))
+        self.assertEqual(meta_addr, HISTORICAL_INSPECTOR_ADDR)
+        self.assertEqual(meta["payload_bin"], "firmware/tools/witness_inspector_payload.bin")
+
+        self.assertTrue(CANDIDATE_PAYLOAD_BIN.exists(), f"Missing {CANDIDATE_PAYLOAD_BIN} (run candidate_build)")
+        cand = CANDIDATE_PAYLOAD_BIN.read_bytes()
+        self.assertEqual(hashlib.sha256(cand).hexdigest(), CANDIDATE_PAYLOAD_SHA256)
+        self.assertEqual(len(cand), 444)
+        self.assertEqual(vwi.extract_witness_addr_from_binary_bytes(str(CANDIDATE_PAYLOAD_BIN)), EXPECTED_BOOT_WITNESS_ADDR)
+        self.assertEqual(cand[0x0A:0x12].hex(), "4ff2a077c0f23507")  # movw r7,#0xf7a0; movt r7,#0x0035
+        cand_meta_addr, _ = vwi.read_address_metadata(str(CANDIDATE_METADATA_JSON))
+        self.assertEqual(cand_meta_addr, EXPECTED_BOOT_WITNESS_ADDR)
+
+        # The two payloads differ in exactly one byte: the movw immediate low byte.
+        diffs = [i for i in range(len(hist)) if hist[i] != cand[i]]
+        self.assertEqual(diffs, [0x0C])
+        self.assertEqual((hist[0x0C], cand[0x0C]), (0x80, 0xA0))
+
+        # The Canon Basic script is byte-identical in both locations and checks only the
+        # payload size (444 B), so it accepts either payload without complaint.
+        self.assertEqual(HISTORICAL_LOADER_SCRIPT.read_bytes(), CANDIDATE_LOADER_SCRIPT.read_bytes())
+        script = HISTORICAL_LOADER_SCRIPT.read_text()
+        self.assertIn("DIM payload_size = 444", script)
+        self.assertNotIn("F780", script.upper())
+        self.assertNotIn("F7A0", script.upper())
+
+    def test_valid_loader_record_at_7a0_parsed_at_historical_780(self):
+        """Valid LOADER record at 0x0035F7A0, parse at the address the tracked payload decodes to.
+
+        The parse window [0x0035F780, 0x0035F7A0) ends exactly where the LOADER record begins,
+        so the record never influences the result. Reported status for every modelled
+        content of 0x0035F780 below: WITNESS_INVALID / INVALID / CORRUPT (0x574954EE, 3/3).
+        """
+        hist_addr = vwi.extract_witness_addr_from_binary_bytes(str(HISTORICAL_PAYLOAD_BIN))
+        cand_addr = vwi.extract_witness_addr_from_binary_bytes(str(CANDIDATE_PAYLOAD_BIN))
+        self.assertEqual(hist_addr, HISTORICAL_INSPECTOR_ADDR)
+        self.assertEqual(cand_addr, EXPECTED_BOOT_WITNESS_ADDR)
+        self.assertEqual(cand_addr - hist_addr, 32)
+
+        valid_loader = vwi.pack_witness(
+            BOOT_WITNESS_MAGIC, BOOT_WITNESS_VERSION, BOOT_WITNESS_FIXED_NONCE,
+            STAGE_LOADER, LOADER_INITIAL_SP, 0, 0,
+        )
+
+        # Contents of 0x0035F780..0x0035F79F after core_copy(): the core image bytes at
+        # that address. The core image is embedded verbatim in the loader.
+        core_bin = (CANDIDATE_DIR / "candidate_main.bin").read_bytes()
+        loader_bin = (CANDIDATE_DIR / "candidate_loader.bin").read_bytes()
+        self.assertEqual(loader_bin.find(core_bin), 0x280, "core image must be embedded verbatim in loader")
+        off_780 = hist_addr - CORE_DESTINATION
+        core_780 = core_bin[off_780:off_780 + 32]
+        core_7a0 = core_bin[off_780 + 32:off_780 + 64]
+        self.assertEqual(core_780.hex(), "3600372e3100382e3000392e300031302e300031312e30000300000000000000")
+        self.assertEqual(core_7a0, bytes(32), "core image boot_witness is zero before the loader stores")
+
+        fills_780 = {
+            "core image bytes after core_copy": core_780,
+            "all zero": bytes(32),
+            "stock-boot pointers": struct.pack(
+                "<8I", 0x0012BBE0, 0x00015DA4, 0xFC77C8B0, 0xFC0C99B0,
+                0x001231B8, 0xFC127AB1, 0xFC127B09, 0x003489B4,
+            ),
+            "0xFF fill": b"\xFF" * 32,
+        }
+        for name, fill in fills_780.items():
+            for rec_name, rec_7a0 in (("valid LOADER", valid_loader), ("zero", bytes(32))):
+                with self.subTest(fill_780=name, record_7a0=rec_name):
+                    base = hist_addr
+                    memory = bytearray(fill + rec_7a0)  # models 0x0035F780..0x0035F7BF
+                    # Parse at the address the historical payload reads
+                    win = bytes(memory[hist_addr - base:hist_addr - base + 32])
+                    s, t, st, tc, sc = vwi.emulate_inspector_parse(win, expected_nonce=0)
+                    self.assertEqual((s, t, st, tc, sc),
+                                     (vwi.SENTINEL_INVALID, "WITNESS_INVALID", "INVALID / CORRUPT", 3, 3))
+                    # Parse at the address the regenerated payload reads
+                    win_c = bytes(memory[cand_addr - base:cand_addr - base + 32])
+                    expected = "LOADER_REACHED" if rec_name == "valid LOADER" else "WITNESS_INVALID"
+                    self.assertEqual(_title(win_c), expected)
+
+
+class TestPort21PartialWrites(unittest.TestCase):
+    """Aborted loader writes: result depends on the bytes present before the write (review finding 2)."""
+
+    def test_prior_valid_record_plus_partial_rewrite_is_loader_reached(self):
+        """Reviewer example: prior valid LOADER record, only the first three stores repeat."""
+        prior = vwi.pack_witness(
+            BOOT_WITNESS_MAGIC, BOOT_WITNESS_VERSION, BOOT_WITNESS_FIXED_NONCE,
+            STAGE_LOADER, LOADER_INITIAL_SP, 0, 0,
+        )
+        buf = _apply_first_n_loader_stores(prior, 3)
+        self.assertEqual(buf, prior)
+        self.assertEqual(
+            vwi.emulate_inspector_parse(buf, expected_nonce=0),
+            (vwi.SENTINEL_LOADER, "LOADER_REACHED", "FRESHNESS_UNVERIFIED", 1, 4),
+        )
+
+    def test_partial_write_status_by_prior_contents(self):
+        """Status after the first n stores (n = 0..8) for several prior memory contents."""
+        L, C, I = "LOADER_REACHED", "CONT_ATTEMPTED", "WITNESS_INVALID"
+        priors = {
+            # Identical prior record: every prefix leaves it valid.
+            "prior valid LOADER (sp 0x7FF8)": (
+                vwi.pack_witness(BOOT_WITNESS_MAGIC, BOOT_WITNESS_VERSION, BOOT_WITNESS_FIXED_NONCE,
+                                 STAGE_LOADER, LOADER_INITIAL_SP, 0, 0),
+                [L, L, L, L, L, L, L, L, L],
+            ),
+            # Prior LOADER record with a different SP: valid until loader_sp changes.
+            "prior valid LOADER (sp 0x7FF0)": (
+                vwi.pack_witness(BOOT_WITNESS_MAGIC, BOOT_WITNESS_VERSION, BOOT_WITNESS_FIXED_NONCE,
+                                 STAGE_LOADER, 0x7FF0, 0, 0),
+                [L, L, L, L, L, I, I, I, L],
+            ),
+            # Prior Stage-3 record: unchanged until stage_state is rewritten.
+            "prior valid CONT_ATTEMPTED": (
+                vwi.pack_witness(BOOT_WITNESS_MAGIC, BOOT_WITNESS_VERSION, BOOT_WITNESS_FIXED_NONCE,
+                                 7, LOADER_INITIAL_SP, CORE_ENTRY_THUMB_PC, PROTOTYPE_CONT_TICK),
+                [C, C, C, C, I, I, I, I, L],
+            ),
+            # Zero prior (also what core_copy leaves at 0x0035F7A0): invalid until the checksum lands.
+            "prior all zero": (bytes(32), [I, I, I, I, I, I, I, I, L]),
+            "prior 0xFF fill": (b"\xFF" * 32, [I, I, I, I, I, I, I, I, L]),
+        }
+        for name, (prior, expected) in priors.items():
+            got = [_title(_apply_first_n_loader_stores(prior, n)) for n in range(9)]
+            with self.subTest(prior=name):
+                self.assertEqual(got, expected)
+
+
 
 
 if __name__ == "__main__":
