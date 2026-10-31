@@ -1,0 +1,180 @@
+{
+  "manifest_version": "1.0.0",
+  "authorization_scopes": [
+    {
+      "scope_id": "SCOPE-PORT19-DISKBOOT",
+      "firmware_revision": "GM1.10C",
+      "approved_ranges": [
+        {
+          "start_address": "0xFC05BB80",
+          "end_address": "0xFC05BF7F",
+          "label": "PORT19-ROM-STARTDISKBOOT"
+        },
+        {
+          "start_address": "0xFC54DE00",
+          "end_address": "0xFC54E1FF",
+          "label": "PORT19-ROM-EXEC-VALIDATE"
+        },
+        {
+          "start_address": "0xFC421800",
+          "end_address": "0xFC421BFF",
+          "label": "PORT19-ROM-DANCINGBITS-MAIN"
+        },
+        {
+          "start_address": "0xFC469100",
+          "end_address": "0xFC4692FF",
+          "label": "PORT19-ROM-DANCINGBITS-DANCE"
+        },
+        {
+          "start_address": "0xFC7C0F80",
+          "end_address": "0xFC7C107F",
+          "label": "PORT19-ROM-ROW13-TABLE"
+        },
+        {
+          "start_address": "0xFC0D9C00",
+          "end_address": "0xFC0D9DFF",
+          "label": "PORT19-ROM-PREPARE-EXEC"
+        },
+        {
+          "start_address": "0xFC000780",
+          "end_address": "0xFC00087F",
+          "label": "PORT19-ROM-PAYLOAD-HANDOFF"
+        },
+        {
+          "start_address": "0xFC000580",
+          "end_address": "0xFC00067F",
+          "label": "PORT19-ROM-ROMSTARTER"
+        }
+      ],
+      "max_bytes_total": 65536,
+      "allowed_classifications": [
+        "STATIC_VERIFIED",
+        "INFERRED",
+        "UNKNOWN"
+      ],
+      "description": "PORT-19 GM1.10C StartDiskboot / DISKBOOT.BIN encoding resolution scope (budget: at most 4 KiB per read, 64 KiB total)"
+    }
+  ],
+  "evidence_entries": [
+    {
+      "evidence_id": "PORT19-ROM-STARTDISKBOOT",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC05BB80",
+      "end_address": "0xFC05BF7F",
+      "expected_byte_count": 1024,
+      "sha256": "308fcecfc9a05a0ce29eafbac5d54c1f293ee4e543bde0e98ff890aee777bc11",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT19-DISKBOOT",
+      "classification": "STATIC_VERIFIED",
+      "notes": "StartDiskboot (0xFC05BBEA) and sub_fc05bc3c (0xFC05BC3C) reading A/DISKBOOT.BIN and calling sub_fc54de38 and sub_fc0d9c9c"
+    },
+    {
+      "evidence_id": "PORT19-ROM-EXEC-VALIDATE",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC54DE00",
+      "end_address": "0xFC54E1FF",
+      "expected_byte_count": 1024,
+      "sha256": "570ac7e7702b065b4c27a62590cbcdea9db7ca09670b22b96a08ce8315d3ca6b",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT19-DISKBOOT",
+      "classification": "STATIC_VERIFIED",
+      "notes": "sub_fc54de38 checking byte 0 == 0x00, stripping byte 0 via left shift, and invoking dancingbits decoder sub_fc42189c"
+    },
+    {
+      "evidence_id": "PORT19-ROM-DANCINGBITS-MAIN",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC421800",
+      "end_address": "0xFC421BFF",
+      "expected_byte_count": 1024,
+      "sha256": "845863414ef9691aa46e096d8ae12fe7339f532ad10121dedf907a653e9b627d",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT19-DISKBOOT",
+      "classification": "STATIC_VERIFIED",
+      "notes": "sub_fc42189c dancingbits 8-byte block decode loop calling permutation and descrambler routines. Function entry 0xFC42189C is a direct bl target from 0xFC54DE60; the window also holds the literal-pool loads (0xFC4218A6, 0xFC4218B4) and register-indirect blx sites (0xFC4218C4, 0xFC4218EE) and was grouped with the indirect-reach windows in review. Read before authorization; ratified post hoc by Tech Lead REQUEST_REVISION decision on task 81 (handling TASK_BLOCKED, revision 4, 2026-10-31)."
+    },
+    {
+      "evidence_id": "PORT19-ROM-DANCINGBITS-DANCE",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC469100",
+      "end_address": "0xFC4692FF",
+      "expected_byte_count": 512,
+      "sha256": "00b960cbbdb3d0c077b36209a020a450ce04e5beb84da59df94d169f8ede102c",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT19-DISKBOOT",
+      "classification": "STATIC_VERIFIED",
+      "notes": "sub_fc469180 (table lookup from 0xFC7C0F8C) and sub_fc469188 (_dance byte descrambler: mod 3, XOR 0xFF, XOR 0xA0, nibble swap). Reached via register-indirect call (blx r1 at 0xFC4218C4, blx r2 at 0xFC4218EE; targets 0xFC469181 / 0xFC469189 loaded by ldr at 0xFC4218A6 / 0xFC4218B4 from literals 0xFC421928 / 0xFC421930), not a direct branch target. Read before authorization; ratified post hoc by Tech Lead REQUEST_REVISION decision on task 81 (handling TASK_BLOCKED, revision 4, 2026-10-31)."
+    },
+    {
+      "evidence_id": "PORT19-ROM-ROW13-TABLE",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC7C0F80",
+      "end_address": "0xFC7C107F",
+      "expected_byte_count": 256,
+      "sha256": "dbcbc94e7228055ac95454c92be4b9bef56c2b6a5afa3f1ef76c167f76bd50ca",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT19-DISKBOOT",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Dancingbits row 13 8-dword permutation table [6, 5, 3, 7, 0, 2, 4, 1] at 0xFC7C0F8C. Reached via data pointer (ldr r1, [pc, #44] at 0xFC469180 loads 0xFC7C0F8C from literal 0xFC4691B0), not a direct branch target. Read before authorization; ratified post hoc by Tech Lead REQUEST_REVISION decision on task 81 (handling TASK_BLOCKED, revision 4, 2026-10-31)."
+    },
+    {
+      "evidence_id": "PORT19-ROM-PREPARE-EXEC",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC0D9C00",
+      "end_address": "0xFC0D9DFF",
+      "expected_byte_count": 512,
+      "sha256": "8c891f7dc8fc758510f36a69d95ff323cee00a7ac0e853128d1be27d8598d644",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT19-DISKBOOT",
+      "classification": "STATIC_VERIFIED",
+      "notes": "sub_fc0d9c9c interrupt disabling, cache flush at 0x8000, MPU Region 7 setup, and branch to *(0x4000) preserving LR = 0xFC05BC7F (Thumb), and 0xFC05BC7E is the address of the return instruction"
+    },
+    {
+      "evidence_id": "PORT19-ROM-PAYLOAD-HANDOFF",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC000780",
+      "end_address": "0xFC00087F",
+      "expected_byte_count": 256,
+      "sha256": "59f6ea920dc02a41983c3434eb62e3828802d9fb52f5ebf46618fff1639eb214",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT19-DISKBOOT",
+      "classification": "STATIC_VERIFIED",
+      "notes": "sub_fc0007c0 copying decoded payload to 0x40008000, verifying, and executing bx ip (0x8001)"
+    },
+    {
+      "evidence_id": "PORT19-ROM-ROMSTARTER",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC000580",
+      "end_address": "0xFC00067F",
+      "expected_byte_count": 256,
+      "sha256": "21a1af67b0801c03e2dc5cccf40bd6a1e21071444c8c0d5883a3cca1abde8d91",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT19-DISKBOOT",
+      "classification": "STATIC_VERIFIED",
+      "notes": "RomStarter UART/rescue loader at 0xFC0005A0 that loads raw bytes without dancingbits"
+    }
+  ]
+}
