@@ -9,12 +9,13 @@ Validates that:
    - Summary table of hypothesis, change, evidence, and confirming reading.
    - List of open UNKNOWNs.
 2. Every claim bullet or row carries a VERIFIED, INFERRED, or UNKNOWN label.
-3. Every path:line (or path:start-end, comma-separated) citation resolves to an existing file
-   in the repository with valid line bounds.
+3. Every path:line (or path:start-end, comma-separated) citation resolves to a file tracked
+   in git (``git ls-files``) with at least that many lines. Untracked local files never count.
 4. No hex address appears without an epistemic label and citation, unless it is labelled UNKNOWN.
 5. Evidence citations adhere strictly to the allowed source boundary (PORT16-PORT21 docs and manifests),
-   and every hex literal not labelled UNKNOWN appears verbatim in allowed sources.
-6. Scope integrity: only approved files are modified, and no ROM files are accessed.
+   and every hex literal (UNKNOWN lines included) is cited from an allowed source on the same line,
+   so no guessed value can appear.
+6. Proposed changes are never labelled VERIFIED.
 """
 
 from __future__ import annotations
@@ -265,7 +266,11 @@ class TestPort22RemediationPlan(unittest.TestCase):
         )
 
     def test_every_path_line_citation_resolves_and_is_tracked(self):
-        """Verifies every citation resolves to an existing file in the repo with valid line bounds."""
+        """Verifies every citation resolves to a git-tracked file with valid line bounds.
+
+        Tracked status comes from ``git ls-files``, so a citation cannot pass just because a
+        gitignored or untracked file happens to exist in the local worktree.
+        """
         citations = parse_citations(self.content)
         self.assertGreaterEqual(len(citations), 20, "Doc must contain substantive citations")
 
@@ -273,15 +278,13 @@ class TestPort22RemediationPlan(unittest.TestCase):
         citation_errors = []
 
         for fpath, ranges in citations:
+            if fpath not in self.tracked_files:
+                citation_errors.append(f"Cited file is not tracked in git: {fpath}")
+                continue
             p = REPO_ROOT / fpath
             if not p.is_file():
-                citation_errors.append(f"Cited file does not exist in repo: {fpath}")
+                citation_errors.append(f"Tracked cited file missing from worktree: {fpath}")
                 continue
-
-            if fpath not in self.tracked_files:
-                if not (fpath.startswith("chdk-port/") and fpath.lower() in self.allowed_corpus):
-                    citation_errors.append(f"Cited file is not tracked in git and not an allowed untracked source: {fpath}")
-                    continue
 
             if fpath not in file_cache:
                 file_cache[fpath] = len(p.read_text(encoding="utf-8").splitlines())
@@ -306,6 +309,47 @@ class TestPort22RemediationPlan(unittest.TestCase):
             [],
             f"Citation errors in docs/PORT22_REMEDIATION_PLAN.md:\n" + "\n".join(citation_errors),
         )
+
+    def test_untracked_loader_sources_are_never_cited_with_lines(self):
+        """Verifies untracked loader sources are named only, never cited as path:line."""
+        for fpath, _ in parse_citations(self.content):
+            self.assertFalse(
+                fpath.startswith("chdk-port/loader/"),
+                f"Untracked loader source must not carry a line citation: {fpath}",
+            )
+
+    def test_every_claim_bullet_and_row_has_citation(self):
+        """Verifies every labelled bullet and table row also carries a path:line citation."""
+        missing = []
+        for i, line in enumerate(self.lines, start=1):
+            stripped = line.strip()
+            is_bullet = stripped.startswith(("- ", "* ")) or re.match(r"^\d+\.\s", stripped)
+            is_row = (
+                stripped.startswith("|")
+                and stripped.endswith("|")
+                and not re.match(r"^\|[\s\-:|]+\|$", stripped)
+                and "Hypothesis ID" not in stripped
+            )
+            if (is_bullet or is_row) and not CITATION_PATTERN.search(stripped):
+                missing.append(f"Line {i}: {stripped}")
+        self.assertEqual(missing, [], "Claims without path:line citation:\n" + "\n".join(missing))
+
+    def test_proposals_are_never_labelled_verified(self):
+        """Verifies every proposed change leads with an INFERRED (or UNKNOWN) label, never VERIFIED."""
+        proposals = [
+            (i, line.strip())
+            for i, line in enumerate(self.lines, start=1)
+            if line.strip().startswith("- **Proposal")
+        ]
+        self.assertGreaterEqual(len(proposals), 4, "Each hypothesis must have at least one proposal")
+        for i, text in proposals:
+            first = LABEL_PATTERN.search(text)
+            self.assertIsNotNone(first, f"Line {i}: proposal without label")
+            self.assertIn(
+                first.group(1),
+                ("INFERRED", "UNKNOWN"),
+                f"Line {i}: proposal must not lead with VERIFIED: {text[:80]}",
+            )
 
     def test_evidence_citations_source_boundary(self):
         """Verifies every evidence citation points to PORT16-PORT21 docs or manifests."""
@@ -354,28 +398,42 @@ class TestPort22RemediationPlan(unittest.TestCase):
             f"Hex addresses without label and citation (not labeled UNKNOWN):\n" + "\n".join(hex_violations),
         )
 
-    def test_every_hex_literal_not_unknown_appears_in_allowed_sources(self):
-        """Verifies every hex literal not labelled UNKNOWN appears verbatim in allowed sources."""
-        unverified_hex = []
+    def test_every_hex_literal_is_cited_from_allowed_source_on_same_line(self):
+        """Verifies every hex literal appears in an allowed PORT16-PORT21 source cited on its line.
 
+        This applies to UNKNOWN lines too: an UNKNOWN item names no value, so any hex value in the
+        document must come from a cited PORT16-PORT21 doc or evidence manifest. Values are compared
+        numerically so that case and leading zeros do not matter.
+        """
+        hex_cache: dict[str, set[int]] = {}
+
+        def hex_values(rel_path: str) -> set[int]:
+            if rel_path not in hex_cache:
+                text = (REPO_ROOT / rel_path).read_text(encoding="utf-8")
+                hex_cache[rel_path] = {int(h, 16) for h in HEX_PATTERN.findall(text)}
+            return hex_cache[rel_path]
+
+        violations = []
         for i, line in enumerate(self.lines, start=1):
-            stripped = line.strip()
-            hex_matches = HEX_PATTERN.findall(stripped)
-            if not hex_matches:
+            literals = HEX_PATTERN.findall(line)
+            if not literals:
                 continue
-
-            # If line is explicitly marked UNKNOWN or in Open UNKNOWNs section, skip
-            if "UNKNOWN" in stripped:
+            sources = [
+                fpath
+                for fpath, _ in parse_citations(line)
+                if ALLOWED_SOURCE_PATTERN.match(fpath) and fpath in self.tracked_files
+            ]
+            if not sources:
+                violations.append(f"Line {i}: hex {literals} without an allowed-source citation")
                 continue
-
-            for h in hex_matches:
-                if h.lower() not in self.allowed_corpus:
-                    unverified_hex.append(f"Line {i}: Hex literal {h} not in allowed sources corpus")
+            for h in literals:
+                if not any(int(h, 16) in hex_values(src) for src in sources):
+                    violations.append(f"Line {i}: hex {h} not found in cited sources {sources}")
 
         self.assertEqual(
-            unverified_hex,
+            violations,
             [],
-            f"Hex literals not in allowed sources corpus:\n" + "\n".join(unverified_hex),
+            "Hex literals not backed by a cited PORT16-PORT21 source:\n" + "\n".join(violations),
         )
 
 
