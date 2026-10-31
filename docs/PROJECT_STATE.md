@@ -686,3 +686,92 @@ python3 -B tools/port18_trial_report.py private/port18/trial_report.md --out pri
   - `docs/PORT19_WITNESS_ADDRESS.md`, `tools/build_witness_inspector.py`, `tools/validate_witness_inspector.py`, `tools/port18_trial_preflight.py`, and `tests/test_port19_witness_address.py` (22 static `def test_` definitions) `[VERIFIED: docs/PORT19_WITNESS_ADDRESS.md:15-36; count of lines matching ^\s*def test_ in the file; recomputed by tests/test_port18_docs_consistency.py]`: resolves P6 (`VERIFIED`). Confirms `boot_witness = 0x0035F7A0` and `_end = 0x00366CB0` in `candidate_port2a/candidate_main.elf`, defaults inspector tooling to `candidate_port2a/`, and verifies inspector metadata/binary alignment (`0x0035F7A0`) in preflight `[VERIFIED: docs/PORT19_WITNESS_ADDRESS.md:17-31, 317-419]`.
   - `docs/PORT19_GO_NOGO.md`, updated `docs/PORT18_OWNER_TRIAL_PLAN.md`, `tests/test_port18_docs_consistency.py` (16 static `def test_` definitions), and `tests/test_port19_go_nogo.py` (13 static `def test_` definitions) `[VERIFIED: docs/PORT19_GO_NOGO.md:3-22; count of lines matching ^\s*def test_ in each file; recomputed by tests/test_port18_docs_consistency.py]`: records rebuilt candidate measurements (`DISKBOOT.BIN` SHA-256 `9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136`, size `118001` B, `boot_witness` `0x0035F7A0`, `_end` `0x00366CB0`), updates the trial plan so P3/P4/P6 are no longer open conflicts, and issues verdict **`GO`** for the owner-executed first-boot trial (with P1 and P2 remaining human owner preconditions) `[VERIFIED: docs/PORT19_GO_NOGO.md:7-55; docs/PORT18_OWNER_TRIAL_PLAN.md:11, 17-26, 177-218]`.
 - **Hardware Status**: **STRICT NO-GO** for autonomous agents (`AGENTS.md:18-22`; `docs/SAFETY.md:3-8`); technical verdict **`GO`** in `docs/PORT19_GO_NOGO.md:7` applies solely to the human owner's manual trial execution after P1 and P2 are satisfied `[VERIFIED: docs/PORT19_GO_NOGO.md:7-22]`.
+
+
+## Milestones PORT-16 to PORT-21 Summary & Current Next Step (2026-10-31)
+
+### PORT-16 — First-Boot Candidate Pipeline Rebuild & Triage
+- **Status**: `MERGED` on `origin/main` `[VERIFIED: git merge-base --is-ancestor 1031ace origin/main]`.
+- **PR Number**: PR #49 `[VERIFIED: git log -1 --format='%H %s' 1031ace1343a7c869365c475dd5a368282771ae0]`.
+- **Merge State**: `MERGED` into `main` at commit `1031ace1343a7c869365c475dd5a368282771ae0` ("Merge pull request #49 ..."), committed 2026-10-30 23:37:43 +0900 `[VERIFIED: git log --first-parent --format='%H %ci %s' origin/main]`. The ledger records that PORT-17 was stacked on the unmerged PORT-16 integration branch. Git history on `main` shows the #49 merge `1031ace` on the first-parent chain of `main`, and `1031ace` is the first parent of the #54 merge `7e6da69` `[VERIFIED: git log -1 --format='%H %P %s' 7e6da69; existing PORT-16 and PORT-17 Status sections at docs/PROJECT_STATE.md:599, 621 and docs/HANDOFF.md:2067, 2089]`.
+- **Main Deliverables**:
+  - `tools/build_candidate_port2a.py`: candidate builder pinning `EXPECTED_BOOT_WITNESS_ADDR = 0x0035F7A0` `[VERIFIED: tools/build_candidate_port2a.py:54]`.
+  - `tools/validate_candidate_port2a.py`: candidate validator pinning `EXPECTED_CORE_END_ADDR = 0x00366CB0` `[VERIFIED: tools/validate_candidate_port2a.py:48-52]`.
+  - `docs/PORT16_WITNESS_ADDRESS.md`: derivation of corrected `boot_witness` address `0x0035F7A0` and `_end` `0x00366CB0` `[VERIFIED: docs/PORT16_WITNESS_ADDRESS.md:15-16, 218]`.
+  - `docs/PORT16_CANDIDATE_BUILD.md`: host rebuild and offline validation report `[VERIFIED: docs/PORT16_CANDIDATE_BUILD.md:21-24]`.
+  - `docs/PORT16_FIRSTBOOT_U_TRIAGE.md`, `docs/PORT16_FIRSTBOOT_U_EVIDENCE.md`, `docs/agentbridge/PORT16_U_CLOSE_RANGES.md`, `docs/agentbridge/PORT16_TRUSTED_SCOPES.json`, `docs/agentbridge/PORT16_U_EVIDENCE_MANIFEST.json`: runtime unknowns U1–U4 triage `[VERIFIED: docs/PORT16_FIRSTBOOT_U_TRIAGE.md:17-27]`.
+  - `docs/PORT16_OWNER_TRIAL_PLAN.md`: initial owner trial and recovery plan `[VERIFIED: docs/PORT16_OWNER_TRIAL_PLAN.md:82-97]`.
+  - `tests/test_port16_pipeline_witness.py` (25 static tests), `tests/test_port16_validator_witness.py` (31 static tests) `[VERIFIED: count of lines matching ^\s*def test_ in each file; recomputed by tests/test_port18_docs_consistency.py]`.
+- **Outstanding Owner Actions**: None outstanding for PORT-16 itself; trial execution procedures were refined and superseded by PORT-18, PORT-19, and PORT-21 `[VERIFIED: docs/PORT18_OWNER_TRIAL_PLAN.md:17-26; docs/PORT21_OWNER_SESSION_PLAN.md:4]`.
+
+### PORT-17 — Runtime Trace Buffer & Offline Trace Parser
+- **Status**: `MERGED` on `origin/main` `[VERIFIED: git merge-base --is-ancestor 7e6da69 origin/main]`.
+- **PR Number**: PR #54 `[VERIFIED: git log -1 --format='%H %s' 7e6da6913e2ac8331849ce3200260c7563498b5d]`.
+- **Merge State**: `MERGED` into `main` at commit `7e6da6913e2ac8331849ce3200260c7563498b5d` ("Merge pull request #54 ..."), committed 2026-10-31 06:53:38 +0900 `[VERIFIED: git log --first-parent --format='%H %ci %s' origin/main]`. Its parents are `1031ace1343a7c869365c475dd5a368282771ae0` (the #49 merge) and the PR head `682adb7472147838b5966b886758c853b1a8253f` `[VERIFIED: git log -1 --format='%H %P %s' 7e6da69]`.
+- **Main Deliverables**:
+  - `chdk-port/platform/g3x/sub/110c/g3x_trace.h`: trace buffer header with compile-time opt-in (`G3X_TRACE=0` default) and 64-record ring definition `[VERIFIED: chdk-port/platform/g3x/sub/110c/g3x_trace.h:66, 110-112]`.
+  - `chdk-port/platform/g3x/sub/110c/g3x_trace.c`: 2080-byte trace ring core and guarded stage recorders `[VERIFIED: chdk-port/platform/g3x/sub/110c/g3x_trace.h:197-199; chdk-port/platform/g3x/sub/110c/g3x_trace.c:11]`.
+  - `chdk-port/platform/g3x/sub/110c/boot_prototype.c`: trace hook `g3x_trace_boot_post_bss` in boot trampoline `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:156-160, 441]`.
+  - `tools/port17_trace_parser.py`: offline standard-library parser for `TRACE.LOG` files and raw ring dumps `[VERIFIED: tools/port17_trace_parser.py:2, 22-25]`.
+  - `docs/PORT17_TRACE_EVIDENCE.md`: evidence for stream `Fut` wrapper entry addresses `[VERIFIED: docs/PORT17_TRACE_EVIDENCE.md:320-323]`.
+  - `tests/test_port17_trace_core.py` (24 static tests), `tests/test_port17_trace_integration.py` (12 static tests), `tests/test_port17_trace_parser.py` (33 static tests) `[VERIFIED: count of lines matching ^\s*def test_ in each file; recomputed by tests/test_port18_docs_consistency.py]`.
+- **Outstanding Owner Actions**: None for standard trials; tracing remains opt-in and non-trial-ready; owner action required only if trace logging is requested for post-crash diagnosis `[VERIFIED: tools/build_candidate_port2a.py:944-948, 1068]`.
+
+### PORT-18 — Owner Trial Packet & Verification Tools
+- **Status**: `MERGED` on `origin/main` `[VERIFIED: git merge-base --is-ancestor f9c1bdc origin/main]`.
+- **PR Number**: PR #59 `[VERIFIED: git log --first-parent --format='%H %ci %s' origin/main]`.
+- **Merge State**: `MERGED` into `main` at commit `f9c1bdcd4ffd07165d4badafae3b93ae9b08d694` ("Merge pull request #59 ..."), committed 2026-10-31 12:05:03 +0900 `[VERIFIED: git rev-parse f9c1bdc; git log --first-parent --format='%H %ci %s' origin/main]`. This matches the ledger.
+- **Main Deliverables**:
+  - `tools/port18_trial_preflight.py`: candidate preflight verification tool checking symbol alignments and rejecting unsafe configurations `[VERIFIED: tools/port18_trial_preflight.py:50, 469-471]`.
+  - `tools/port18_trial_report.py`: owner trial report ingest and O1–O16 classification tool `[VERIFIED: tools/port18_trial_report.py:8-19]`.
+  - `docs/PORT18_OWNER_TRIAL_PLAN.md`: first-boot trial and recovery plan `[VERIFIED: docs/PORT18_OWNER_TRIAL_PLAN.md:17-406]`.
+  - `tests/fixtures/port18/preflight/`: 8 preflight fixtures `[VERIFIED: git ls-files tests/fixtures/port18/preflight]`.
+  - `tests/test_port18_trial_preflight.py` (35 static tests), `tests/test_port18_trial_report.py` (110 static tests), `tests/test_port18_docs_consistency.py` (16 static tests) `[VERIFIED: count of lines matching ^\s*def test_ in each file; recomputed by tests/test_port18_docs_consistency.py]`.
+- **Outstanding Owner Actions**: Satisfy preconditions P1 (external power assurance) and P2 (SD card inspection / FAT formatting), execute candidate build and preflight, and report results with `tools/port18_trial_report.py` `[VERIFIED: docs/PORT18_OWNER_TRIAL_PLAN.md:17-26, 357-406]`. (Technical blockers P3, P4, P6 resolved in PORT-19).
+
+### PORT-19 — First-Boot Trial Blockers Resolution & Owner Verdict
+- **Status**: `MERGED` on `origin/main` `[VERIFIED: git merge-base --is-ancestor bbae06f origin/main]`.
+- **PR Number**: PR #64 `[VERIFIED: git log --first-parent --format='%H %ci %s' origin/main]`.
+- **Merge State**: `MERGED` into `main` at commit `bbae06f2beb3b628d7914a4ccc622e0bb5849637` ("Merge pull request #64 ..."), committed 2026-10-31 19:44:24 +0900 `[VERIFIED: git log --first-parent --format='%H %ci %s' origin/main]`. This matches the ledger.
+- **Main Deliverables**:
+  - `docs/PORT19_DISKBOOT_ENCODING.md`: proves `StartDiskboot` requires encoded `A/DISKBOOT.BIN` (`dancingbits` row 13, byte 0 = 0x00) `[VERIFIED: docs/PORT19_DISKBOOT_ENCODING.md:14-31]`.
+  - `docs/PORT19_BOOTDISK_VBR.md`: proves `"BOOTDISK"` offset 0x1E0 on FAT32 and 0x40 on FAT12/FAT16, `"SCRIPT"` offset 0x1F0, and `exFAT` unsupported `[VERIFIED: docs/PORT19_BOOTDISK_VBR.md:18-34]`.
+  - `docs/PORT19_WITNESS_ADDRESS.md`: pins `boot_witness = 0x0035F7A0` and `_end = 0x00366CB0` `[VERIFIED: docs/PORT19_WITNESS_ADDRESS.md:15-36]`.
+  - `docs/PORT19_GO_NOGO.md`: technical readiness verdict `GO` for owner-executed first-boot trial `[VERIFIED: docs/PORT19_GO_NOGO.md:7]`.
+  - `docs/PORT18_OWNER_TRIAL_PLAN.md`: updated card-preparation specifications and preconditions `[VERIFIED: docs/PORT18_OWNER_TRIAL_PLAN.md:25]`.
+  - `tools/build_witness_inspector.py`, `tools/validate_witness_inspector.py`, `tools/port18_trial_preflight.py`: alignment updates for 0x0035F7A0 `[VERIFIED: tools/port18_trial_preflight.py:488-567]`.
+  - `tests/test_port19_diskboot_encoding.py` (9 static tests), `tests/test_port19_bootdisk_vbr.py` (22 static tests), `tests/test_port19_witness_address.py` (22 static tests), `tests/test_port19_go_nogo.py` (13 static tests) `[VERIFIED: count of lines matching ^\s*def test_ in each file; recomputed by tests/test_port18_docs_consistency.py]`.
+  - `docs/agentbridge/PORT19_EVIDENCE_MANIFEST.json` `[VERIFIED: docs/agentbridge/PORT19_EVIDENCE_MANIFEST.json:2]`.
+- **Outstanding Owner Actions**: Satisfy owner items P1 (battery/power) and P2 (card prep) and perform manual first-boot trial per `docs/PORT18_OWNER_TRIAL_PLAN.md` and `docs/PORT19_GO_NOGO.md` `[VERIFIED: docs/PORT19_GO_NOGO.md:7-22]`. Observation O6 was recorded during the physical camera trial for CHDK-PORT-2A: the inspector showed `WITNESS_INVALID` on Line 1 and `INVALID / CORRUPT` on Line 2, with sentinel `0x574954EE` `[VERIFIED: docs/PORT21_WITNESS_AUDIT.md:8]`. Whether that trial ran the PORT-19 candidate, and which inspector payload the owner ran, is `UNKNOWN` `[UNKNOWN: docs/PORT21_WITNESS_AUDIT.md:13, 27]`. That O6 prompted PORT-20 and PORT-21 is `INFERRED` `[INFERRED: docs/PORT21_WITNESS_AUDIT.md:8-13]`.
+
+### PORT-20 — Loader-Entry LED Boot Signal Candidate
+- **Status**: `MERGED` on `origin/main` `[VERIFIED: git merge-base --is-ancestor e2aea4d origin/main]`.
+- **PR Number**: PR #70 `[VERIFIED: git log --first-parent --format='%H %ci %s' origin/main]`.
+- **Merge State**: `MERGED` into `main` at commit `e2aea4dd186a16efcad1fee8529758bc766be9e1` ("Merge pull request #70 ..."), committed 2026-11-01 03:58:05 +0900 `[VERIFIED: git log --first-parent --format='%H %ci %s' origin/main]`. This matches the ledger.
+- **Main Deliverables**:
+  - `chdk-port/platform/g3x/sub/110c/loader_entry_led.S`: standalone ARM assembly sequence driving rear green status LED via MMIO `0xD20B0884` (GPIO pin 33) before core relocation `[VERIFIED: chdk-port/platform/g3x/sub/110c/loader_entry_led.S:5, 30-31, 42; docs/PORT20_LED_CANDIDATE.md:14-16, 158]`.
+  - `tools/build_candidate_port2a.py`: opt-in `--led` flag assembling `loader_entry_led.S` and emitting `candidate_led/DISKBOOT.BIN` (118,041 bytes, SHA-256 `757dfb...`) `[VERIFIED: tools/build_candidate_port2a.py:63, 1024; docs/PORT20_LED_CANDIDATE.md:71]`.
+  - `docs/PORT20_LED_EVIDENCE.md`: offline evidence for LED GPIO register `0xD20B0884` (GPIO pin 33) and MPU Region 2 writeability `[VERIFIED: docs/PORT20_LED_EVIDENCE.md:23-28, 32-34; docs/PORT20_LED_CANDIDATE.md:14-16, 158]`.
+  - `docs/PORT20_LED_CANDIDATE.md`: candidate implementation design and safety qualification `[VERIFIED: docs/PORT20_LED_CANDIDATE.md:22-30, 122-151, 156-170]`.
+  - `docs/PORT20_OWNER_SESSION.md`: one-page owner session sheet for manual execution of the LED candidate `[VERIFIED: docs/PORT20_OWNER_SESSION.md:12-43, 49-59]`.
+  - `docs/PORT18_OWNER_TRIAL_PLAN.md`: updated referencing LED candidate session sheet `[VERIFIED: docs/PORT18_OWNER_TRIAL_PLAN.md:267]`.
+  - `docs/agentbridge/PORT20_EVIDENCE_MANIFEST.json` `[VERIFIED: docs/agentbridge/PORT20_EVIDENCE_MANIFEST.json:2]`.
+  - `tests/test_port20_led_candidate.py` (8 static tests), `tests/test_port20_led_evidence.py` (74 static tests) `[VERIFIED: count of lines matching ^\s*def test_ in each file; recomputed by tests/test_port18_docs_consistency.py]`.
+- **Outstanding Owner Actions**: Perform manual LED boot-signal trial by generating `candidate_led/DISKBOOT.BIN` (`--led`), preparing SD card, and recording whether the rear green status LED changes state upon power-on `[VERIFIED: docs/PORT20_OWNER_SESSION.md:12-43, 49-59; docs/PORT20_LED_CANDIDATE.md:14-16, 158]`. (Integrated into the morning discrimination session in PORT-21).
+
+### PORT-21 — Overnight Discrimination & Owner Session Plan
+- **Status**: `MERGED` on `origin/main` `[VERIFIED: git merge-base --is-ancestor 760f0f7 origin/main]`.
+- **PR Number**: PR #73 `[VERIFIED: git log --first-parent --format='%H %ci %s' origin/main]`.
+- **Merge State**: `MERGED` into `main` at commit `760f0f7c471522e08d006d32d96628163f5c4116` ("Merge pull request #73 ..."), committed 2026-11-01 03:58:23 +0900 `[VERIFIED: git log --first-parent --format='%H %ci %s' origin/main]`. This matches the ledger.
+- **Main Deliverables**:
+  - `docs/PORT21_RAM_LIFETIME.md` (T1): stock-boot lifetime analysis of core region `0x003489B4..0x00366CB0` and uncached DRAM `0x40008000` `[VERIFIED: docs/PORT21_RAM_LIFETIME.md:5-7, 26-28, 36-47, 221]`.
+  - `docs/PORT21_DISKBOOT_TIMING.md` (T2): analysis of locked vs unlocked SD card start-up timing delay and `StartDiskboot` gate execution `[VERIFIED: docs/PORT21_DISKBOOT_TIMING.md:17-44]`.
+  - `docs/PORT21_WITNESS_AUDIT.md` (T3): boot witness roundtrip audit: no writer/parser mismatch was found in the record format `[VERIFIED: docs/PORT21_WITNESS_AUDIT.md:24-25]`; which payload the owner ran is UNKNOWN `[UNKNOWN: docs/PORT21_WITNESS_AUDIT.md:13, 27]`, and O6 alone cannot tell H1–H4 apart `[INFERRED: docs/PORT21_WITNESS_AUDIT.md:32]`; distinguishing H4 is left to the owner session `[INFERRED: docs/PORT21_OWNER_SESSION_PLAN.md:204, 235]`.
+  - `docs/PORT21_OWNER_SESSION_PLAN.md` (T4): discrimination plan for morning session (2026-11-01) separating hypotheses H1–H4 with manual readings `[VERIFIED: docs/PORT21_OWNER_SESSION_PLAN.md:4, 150-160, 169-175]`.
+  - `docs/agentbridge/PORT21_EVIDENCE_MANIFEST.json` `[VERIFIED: docs/agentbridge/PORT21_EVIDENCE_MANIFEST.json:2]`.
+  - `tests/test_port21_diskboot_timing.py` (15 static tests), `tests/test_port21_owner_session_plan.py` (14 static tests), `tests/test_port21_ram_lifetime.py` (28 static tests), `tests/test_port21_witness_roundtrip.py` (11 static tests) `[VERIFIED: count of lines matching ^\s*def test_ in each file; recomputed by tests/test_port18_docs_consistency.py]`.
+- **Outstanding Owner Actions**: The owner executes the PORT-21 morning session (2026-11-01) by hand per `docs/PORT21_OWNER_SESSION_PLAN.md`, recording the physical LED behaviour (GPIO 33, `0xD20B0884`), the inspector OSD readout (`extend.m`), and the five RAMCMP observation readings (`r_l8`, `r_l4`, `r_c4`, `r_ct`, `r_wm`) `[VERIFIED: docs/PORT21_OWNER_SESSION_PLAN.md:4, 169-175]`.
+
+### Current Next Step
+- **Current next step**: The owner runs the PORT-21 morning session (2026-11-01) by hand and reports the readings `[VERIFIED: docs/PORT21_OWNER_SESSION_PLAN.md:4]`, then the readings are classified with tools\/port22_session_classify.py (planned PORT-22 T1 output), and then the next candidate is chosen using docs\/PORT22_REMEDIATION_PLAN.md (planned PORT-22 T2 output). Both are planned PORT-22 outputs and are not yet on main `[UNKNOWN until PORT-22 merge]`. This workflow supersedes earlier per-milestone next steps, such as the PORT-18 'Exact owner next step' `[INFERRED: docs/PORT21_OWNER_SESSION_PLAN.md:4; docs/PORT18_OWNER_TRIAL_PLAN.md:17-26]`.
+
