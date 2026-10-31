@@ -14,8 +14,14 @@ Hypothesis rules & line citations:
 - H2: docs/PORT21_OWNER_SESSION_PLAN.md:172
 - H3: docs/PORT21_OWNER_SESSION_PLAN.md:173
 - H4: docs/PORT21_OWNER_SESSION_PLAN.md:174
-Wildcard fields (card_lock_state, startup_timing) not specified in table:
-  Treated as wildcards per docs/PORT21_OWNER_SESSION_PLAN.md:169-175.
+
+Wildcard fields:
+- card_lock_state and startup_timing: Not specified as columns in the prediction
+  table at docs/PORT21_OWNER_SESSION_PLAN.md:169-175; treated as wildcards per the table.
+- H3: r_l4, r_c4, r_ct, r_wm are UNKNOWN in the table at docs/PORT21_OWNER_SESSION_PLAN.md:173;
+  treated as explicit WILDCARDs citing line 173.
+- H4: r_l4 is UNKNOWN in the table at docs/PORT21_OWNER_SESSION_PLAN.md:174 (T1/T2 conflict);
+  treated as an explicit WILDCARD citing line 174.
 
 This tool reads a JSON owner session report containing:
 - RAMCMP readings (r_l8, r_l4, r_c4, r_ct, r_wm)
@@ -56,125 +62,177 @@ TABLE_SOURCE_PATH: str = "docs/PORT21_OWNER_SESSION_PLAN.md"
 TABLE_START_LINE: int = 169
 TABLE_END_LINE: int = 175
 
-# Encoded table from docs/PORT21_OWNER_SESSION_PLAN.md:169-175
-# Exact text row by row and column by column:
-ENCODED_TABLE: Dict[str, Any] = {
-    "path": TABLE_SOURCE_PATH,
-    "line_range": (TABLE_START_LINE, TABLE_END_LINE),
-    "columns": [
-        "Hypothesis ID & Summary",
-        "`r_l8` (RAMCMP at `0x00008000`)",
-        "`r_l4` (RAMCMP at `0x40008000`)",
-        "`r_c4` (RAMCMP at `0x003489B4`)",
-        "`r_ct` (RAMCMP Core Continuation)",
-        "`r_wm` (RAMCMP Witness at `0x0035F7A0`)",
-        "PORT-20 LED Behaviour (GPIO 33, `0xD20B0884`)",
-        "Inspector OSD Title & Status (`extend.m`)",
-    ],
-    "rows": {
-        "H1": {
-            "Hypothesis ID & Summary": "**H1**: `StartDiskboot` never reached loader (ROM rejected binary or skipped)",
-            "`r_l8` (RAMCMP at `0x00008000`)": "`0` (differs / stock Low RAM initialized data) `[INFERRED: docs/PORT21_RAM_LIFETIME.md:221, 282]`",
-            "`r_l4` (RAMCMP at `0x40008000`)": "`0` (differs / unwritten DRAM: ROM rejected before copy) `[INFERRED: docs/PORT21_RAM_LIFETIME.md:221, 282; docs/PORT21_DISKBOOT_TIMING.md:298-302]`",
-            "`r_c4` (RAMCMP at `0x003489B4`)": "`0` (differs / unwritten core) `[INFERRED: docs/PORT21_RAM_LIFETIME.md:282]`",
-            "`r_ct` (RAMCMP Core Continuation)": "`0` (differs / continuation code absent) `[INFERRED: docs/PORT21_RAM_LIFETIME.md:282]`",
-            "`r_wm` (RAMCMP Witness at `0x0035F7A0`)": "`0` (differs / unwritten witness) `[INFERRED: docs/PORT21_RAM_LIFETIME.md:282]`",
-            "PORT-20 LED Behaviour (GPIO 33, `0xD20B0884`)": "**NO PULSE** (0 s delay, normal stock LED sequence; rejected before loader prologue) `[INFERRED: origin/agentbridge/g3x-lite/port-20-boot-signal/integration docs/PORT20_LED_CANDIDATE.md:31-37; docs/PORT21_DISKBOOT_TIMING.md:20-22]`",
-            "Inspector OSD Title & Status (`extend.m`)": "`WITNESS_INVALID` / `INVALID / CORRUPT` (Color 3, Light Blue) `[INFERRED: docs/PORT21_WITNESS_AUDIT.md:220-222; tools/validate_witness_inspector.py:273]`",
+WILDCARD: str = "WILDCARD"
+
+TABLE_COLUMNS: List[str] = [
+    "Hypothesis ID & Summary",
+    "`r_l8` (RAMCMP at `0x00008000`)",
+    "`r_l4` (RAMCMP at `0x40008000`)",
+    "`r_c4` (RAMCMP at `0x003489B4`)",
+    "`r_ct` (RAMCMP Core Continuation)",
+    "`r_wm` (RAMCMP Witness at `0x0035F7A0`)",
+    "PORT-20 LED Behaviour (GPIO 33, `0xD20B0884`)",
+    "Inspector OSD Title & Status (`extend.m`)",
+]
+
+COLUMN_TO_FIELD: Dict[str, str] = {
+    "`r_l8` (RAMCMP at `0x00008000`)": "r_l8",
+    "`r_l4` (RAMCMP at `0x40008000`)": "r_l4",
+    "`r_c4` (RAMCMP at `0x003489B4`)": "r_c4",
+    "`r_ct` (RAMCMP Core Continuation)": "r_ct",
+    "`r_wm` (RAMCMP Witness at `0x0035F7A0`)": "r_wm",
+    "PORT-20 LED Behaviour (GPIO 33, `0xD20B0884`)": "port20_led",
+    "Inspector OSD Title & Status (`extend.m`)": "inspector_osd",
+}
+
+# Structured rule table mapping every hypothesis H1-H4 across all table columns
+# from docs/PORT21_OWNER_SESSION_PLAN.md:169-175 to explicit expected values or WILDCARDs.
+# Each cell explicitly cites its source line in the document.
+STRUCTURED_RULE_TABLE: Dict[str, Dict[str, Any]] = {
+    "H1": {
+        "line": 171,
+        "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:171",
+        "summary": "StartDiskboot never reached loader (ROM rejected binary or skipped)",
+        "columns": {
+            "`r_l8` (RAMCMP at `0x00008000`)": {
+                "expected": 0,
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:171",
+            },
+            "`r_l4` (RAMCMP at `0x40008000`)": {
+                "expected": 0,
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:171",
+            },
+            "`r_c4` (RAMCMP at `0x003489B4`)": {
+                "expected": 0,
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:171",
+            },
+            "`r_ct` (RAMCMP Core Continuation)": {
+                "expected": 0,
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:171",
+            },
+            "`r_wm` (RAMCMP Witness at `0x0035F7A0`)": {
+                "expected": 0,
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:171",
+            },
+            "PORT-20 LED Behaviour (GPIO 33, `0xD20B0884`)": {
+                "expected": "NO_PULSE",
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:171",
+            },
+            "Inspector OSD Title & Status (`extend.m`)": {
+                "expected": "WITNESS_INVALID",
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:171",
+            },
         },
-        "H2": {
-            "Hypothesis ID & Summary": "**H2**: Loader reached, but hung in `check_compat()`",
-            "`r_l8` (RAMCMP at `0x00008000`)": "`UNREACHABLE / UNKNOWN` (camera hangs in `check_compat()`; watchdog reset is UNKNOWN) `[UNKNOWN: docs/PORT21_RAM_LIFETIME.md:286; docs/PORT21_DISKBOOT_TIMING.md:251, 282]`",
-            "`r_l4` (RAMCMP at `0x40008000`)": "`UNREACHABLE / UNKNOWN` (camera hangs in `check_compat()`; watchdog reset is UNKNOWN) `[UNKNOWN: docs/PORT21_RAM_LIFETIME.md:286; docs/PORT21_DISKBOOT_TIMING.md:251, 282]`",
-            "`r_c4` (RAMCMP at `0x003489B4`)": "`UNREACHABLE / UNKNOWN` (camera hangs in `check_compat()`; core copy never ran) `[UNKNOWN: docs/PORT21_RAM_LIFETIME.md:286; docs/PORT21_DISKBOOT_TIMING.md:251, 282]`",
-            "`r_ct` (RAMCMP Core Continuation)": "`UNREACHABLE / UNKNOWN` (camera hangs in `check_compat()`; continuation absent) `[UNKNOWN: docs/PORT21_RAM_LIFETIME.md:286; docs/PORT21_DISKBOOT_TIMING.md:251, 282]`",
-            "`r_wm` (RAMCMP Witness at `0x0035F7A0`)": "`UNREACHABLE / UNKNOWN` (camera hangs in `check_compat()`; witness write never ran) `[UNKNOWN: docs/PORT21_RAM_LIFETIME.md:286; docs/PORT21_DISKBOOT_TIMING.md:251, 282]`",
-            "PORT-20 LED Behaviour (GPIO 33, `0xD20B0884`)": "**PULSES ~1-2 s** in loader entry prologue, then hangs in `check_compat()`; subsequent blink activity on PORT-20 LED is UNKNOWN `[INFERRED / UNKNOWN: origin/agentbridge/g3x-lite/port-20-boot-signal/integration docs/PORT20_LED_CANDIDATE.md:31-37; docs/PORT21_RAM_LIFETIME.md:283-286; docs/PORT21_DISKBOOT_TIMING.md:280-282]`",
-            "Inspector OSD Title & Status (`extend.m`)": "**UNREACHABLE / UNKNOWN** (camera hangs before stock UI; Canon Basic cannot run without watchdog reset) `[UNKNOWN: docs/PORT21_RAM_LIFETIME.md:286; docs/PORT21_DISKBOOT_TIMING.md:251, 282]`",
+    },
+    "H2": {
+        "line": 172,
+        "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:172",
+        "summary": "Loader reached, but hung in check_compat()",
+        "columns": {
+            "`r_l8` (RAMCMP at `0x00008000`)": {
+                "expected": "UNREACHABLE",
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:172",
+            },
+            "`r_l4` (RAMCMP at `0x40008000`)": {
+                "expected": "UNREACHABLE",
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:172",
+            },
+            "`r_c4` (RAMCMP at `0x003489B4`)": {
+                "expected": "UNREACHABLE",
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:172",
+            },
+            "`r_ct` (RAMCMP Core Continuation)": {
+                "expected": "UNREACHABLE",
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:172",
+            },
+            "`r_wm` (RAMCMP Witness at `0x0035F7A0`)": {
+                "expected": "UNREACHABLE",
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:172",
+            },
+            "PORT-20 LED Behaviour (GPIO 33, `0xD20B0884`)": {
+                "expected": "PULSE",
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:172",
+            },
+            "Inspector OSD Title & Status (`extend.m`)": {
+                "expected": "UNREACHABLE",
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:172",
+            },
         },
-        "H3": {
-            "Hypothesis ID & Summary": "**H3**: Loader wrote witness, but stock boot later overwrote `0x0035F7A0`",
-            "`r_l8` (RAMCMP at `0x00008000`)": "`0` (differs / overwritten by Boot Moment 2 copy loop) `[INFERRED: docs/PORT21_RAM_LIFETIME.md:215-221, 267]`",
-            "`r_l4` (RAMCMP at `0x40008000`)": "`UNKNOWN` (T1/T2 conflict: T1:221,293 predicts `0` via post-reboot overwrite; T2:298-302 predicts `1` in uncached DRAM alias) `[UNKNOWN: docs/PORT21_RAM_LIFETIME.md:221, 293; docs/PORT21_DISKBOOT_TIMING.md:298-302]`",
-            "`r_c4` (RAMCMP at `0x003489B4`)": "`UNKNOWN` (`0` if overwritten by stock heap, but whether stock boot overwrites `0x003489B4` before Canon Basic runs is UNKNOWN) `[UNKNOWN: docs/PORT21_RAM_LIFETIME.md:247-249, 269, 290]`",
-            "`r_ct` (RAMCMP Core Continuation)": "`UNKNOWN` (`0` if overwritten by stock heap, but overwrite timing before Canon Basic is UNKNOWN) `[UNKNOWN: docs/PORT21_RAM_LIFETIME.md:247-249, 269, 290]`",
-            "`r_wm` (RAMCMP Witness at `0x0035F7A0`)": "`UNKNOWN` (`0` if destroyed by stock heap allocations, but actual overwrite before Canon Basic is UNKNOWN) `[UNKNOWN: docs/PORT21_RAM_LIFETIME.md:47, 247-249, 269, 290]`",
-            "PORT-20 LED Behaviour (GPIO 33, `0xD20B0884`)": "**PULSES ~1-2 s** (loader entry executed prologue) `[INFERRED: origin/agentbridge/g3x-lite/port-20-boot-signal/integration docs/PORT20_LED_CANDIDATE.md:31-37, 189; origin/agentbridge/g3x-lite/port-20-boot-signal/integration docs/PORT20_OWNER_SESSION.md:38-44]`",
-            "Inspector OSD Title & Status (`extend.m`)": "`WITNESS_INVALID` / `INVALID / CORRUPT` (Color 3, Light Blue) `[INFERRED: docs/PORT21_WITNESS_AUDIT.md:225-226; tools/validate_witness_inspector.py:273]`",
+    },
+    "H3": {
+        "line": 173,
+        "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:173",
+        "summary": "Loader wrote witness, but stock boot later overwrote 0x0035F7A0",
+        "columns": {
+            "`r_l8` (RAMCMP at `0x00008000`)": {
+                "expected": 0,
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:173",
+            },
+            "`r_l4` (RAMCMP at `0x40008000`)": {
+                "expected": WILDCARD,
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:173",
+            },
+            "`r_c4` (RAMCMP at `0x003489B4`)": {
+                "expected": WILDCARD,
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:173",
+            },
+            "`r_ct` (RAMCMP Core Continuation)": {
+                "expected": WILDCARD,
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:173",
+            },
+            "`r_wm` (RAMCMP Witness at `0x0035F7A0`)": {
+                "expected": WILDCARD,
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:173",
+            },
+            "PORT-20 LED Behaviour (GPIO 33, `0xD20B0884`)": {
+                "expected": "PULSE",
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:173",
+            },
+            "Inspector OSD Title & Status (`extend.m`)": {
+                "expected": "WITNESS_INVALID",
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:173",
+            },
         },
-        "H4": {
-            "Hypothesis ID & Summary": "**H4**: Witness record at `0x0035F7A0` was malformed as built",
-            "`r_l8` (RAMCMP at `0x00008000`)": "`0` (differs / overwritten by Boot Moment 2 copy loop) `[INFERRED: docs/PORT21_RAM_LIFETIME.md:215-221, 267]`",
-            "`r_l4` (RAMCMP at `0x40008000`)": "`UNKNOWN` (T1/T2 conflict: T1:221,293 predicts `0`; T2:298-302 predicts `1` in uncached DRAM alias) `[UNKNOWN: docs/PORT21_RAM_LIFETIME.md:221, 293; docs/PORT21_DISKBOOT_TIMING.md:298-302]`",
-            "`r_c4` (RAMCMP at `0x003489B4`)": "`1` (matches `REF_C.BIN` protected by shifted heap `new_sa = 0x00366CB0`) `[INFERRED: docs/PORT21_RAM_LIFETIME.md:238, 295]`",
-            "`r_ct` (RAMCMP Core Continuation)": "`1` (matches core continuation intact) `[INFERRED: docs/PORT21_RAM_LIFETIME.md:238, 295]`",
-            "`r_wm` (RAMCMP Witness at `0x0035F7A0`)": "`0` (differs / checksum or field malformed while magic intact) `[INFERRED: docs/PORT21_RAM_LIFETIME.md:295; docs/PORT21_WITNESS_AUDIT.md:162-176]`",
-            "PORT-20 LED Behaviour (GPIO 33, `0xD20B0884`)": "**PULSES ~1-2 s** (loader entry executed prologue) `[INFERRED: origin/agentbridge/g3x-lite/port-20-boot-signal/integration docs/PORT20_LED_CANDIDATE.md:31-37, 189; origin/agentbridge/g3x-lite/port-20-boot-signal/integration docs/PORT20_OWNER_SESSION.md:38-44]`",
-            "Inspector OSD Title & Status (`extend.m`)": "`WITNESS_INVALID` / `INVALID / CORRUPT` (Color 3, Light Blue) `[INFERRED: docs/PORT21_WITNESS_AUDIT.md:162-176; tools/validate_witness_inspector.py:273]`",
-        },
-        "Alternative / Baseline": {
-            "Hypothesis ID & Summary": "**Alternative / Baseline**: Candidate Succeeded (O6 was tracked `0x780` payload error)",
-            "`r_l8` (RAMCMP at `0x00008000`)": "`0` (differs / overwritten by Boot Moment 2 copy loop) `[INFERRED: docs/PORT21_RAM_LIFETIME.md:215-221, 267]`",
-            "`r_l4` (RAMCMP at `0x40008000`)": "`UNKNOWN` (T1/T2 conflict: T1:221 predicts `0`; T2:298-302 predicts `1` in uncached DRAM alias) `[UNKNOWN: docs/PORT21_RAM_LIFETIME.md:221; docs/PORT21_DISKBOOT_TIMING.md:298-302]`",
-            "`r_c4` (RAMCMP at `0x003489B4`)": "`1` (matches `REF_C.BIN` protected by shifted heap) `[INFERRED: docs/PORT21_RAM_LIFETIME.md:238]`",
-            "`r_ct` (RAMCMP Core Continuation)": "`1` (matches core continuation intact) `[INFERRED: docs/PORT21_RAM_LIFETIME.md:238]`",
-            "`r_wm` (RAMCMP Witness at `0x0035F7A0`)": "`1` (matches valid witness struct at `0x0035F7A0`) `[INFERRED: docs/PORT21_RAM_LIFETIME.md:238; docs/PORT21_WITNESS_AUDIT.md:27-38]`",
-            "PORT-20 LED Behaviour (GPIO 33, `0xD20B0884`)": "**PULSES ~1-2 s** (loader entry executed prologue) `[INFERRED: origin/agentbridge/g3x-lite/port-20-boot-signal/integration docs/PORT20_LED_CANDIDATE.md:31-37, 189; origin/agentbridge/g3x-lite/port-20-boot-signal/integration docs/PORT20_OWNER_SESSION.md:38-44]`",
-            "Inspector OSD Title & Status (`extend.m`)": "**`LOADER_REACHED`** (Color 1,4 White/Yellow) or **`CONT_ATTEMPTED`** (Color 4,4 Yellow/Yellow) `[VERIFIED: docs/PORT21_WITNESS_AUDIT.md:33-38; tools/validate_witness_inspector.py:266, 271]`",
+    },
+    "H4": {
+        "line": 174,
+        "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:174",
+        "summary": "Witness record at 0x0035F7A0 was malformed as built",
+        "columns": {
+            "`r_l8` (RAMCMP at `0x00008000`)": {
+                "expected": 0,
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:174",
+            },
+            "`r_l4` (RAMCMP at `0x40008000`)": {
+                "expected": WILDCARD,
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:174",
+            },
+            "`r_c4` (RAMCMP at `0x003489B4`)": {
+                "expected": 1,
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:174",
+            },
+            "`r_ct` (RAMCMP Core Continuation)": {
+                "expected": 1,
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:174",
+            },
+            "`r_wm` (RAMCMP Witness at `0x0035F7A0`)": {
+                "expected": 0,
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:174",
+            },
+            "PORT-20 LED Behaviour (GPIO 33, `0xD20B0884`)": {
+                "expected": "PULSE",
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:174",
+            },
+            "Inspector OSD Title & Status (`extend.m`)": {
+                "expected": "WITNESS_INVALID",
+                "citation": "docs/PORT21_OWNER_SESSION_PLAN.md:174",
+            },
         },
     },
 }
 
-# =============================================================================
-# EXPLICIT HYPOTHESIS RULES & CITATIONS
-# =============================================================================
-#
-# RULE H1 (docs/PORT21_OWNER_SESSION_PLAN.md:171):
-#   - r_l8 == 0
-#   - r_l4 == 0 (unwritten DRAM: ROM rejected before copy)
-#   - r_c4 == 0 (unwritten core)
-#   - r_ct == 0 (continuation absent)
-#   - r_wm == 0 (unwritten witness)
-#   - LED: NO PULSE (0 s delay, normal stock LED sequence; rejected before loader)
-#   - OSD: WITNESS_INVALID / INVALID / CORRUPT (Light Blue)
-#   - Wildcard fields: card_lock_state, startup_timing are not specified as table
-#     columns in docs/PORT21_OWNER_SESSION_PLAN.md:169-175 and are treated as wildcards
-#     per line 171.
-#
-# RULE H2 (docs/PORT21_OWNER_SESSION_PLAN.md:172):
-#   - r_l8, r_l4, r_c4, r_ct, r_wm: UNREACHABLE / UNKNOWN (camera hangs in
-#     check_compat(); Canon Basic cannot run without watchdog reset)
-#   - LED: PULSES ~1-2 s in loader entry prologue, then hangs in check_compat()
-#   - OSD: UNREACHABLE / UNKNOWN (camera hangs before stock UI)
-#   - Wildcard fields: card_lock_state, startup_timing are not specified as table
-#     columns in docs/PORT21_OWNER_SESSION_PLAN.md:169-175 and are treated as wildcards
-#     per line 172.
-#
-# RULE H3 (docs/PORT21_OWNER_SESSION_PLAN.md:173):
-#   - r_l8 == 0 (overwritten by Boot Moment 2 copy loop)
-#   - r_l4: UNKNOWN (T1/T2 conflict: T1 predicts 0 via overwrite, T2 predicts 1
-#     in uncached DRAM alias) -> treated as wildcard per line 173.
-#   - r_c4: 0 (predicted 0 if overwritten by stock heap; docs/PORT21_OWNER_SESSION_PLAN.md:159, 203, 225)
-#   - r_ct: 0 (predicted 0 if overwritten by stock heap; docs/PORT21_OWNER_SESSION_PLAN.md:159, 203, 225)
-#   - r_wm: 0 (predicted 0 if destroyed by stock heap; docs/PORT21_OWNER_SESSION_PLAN.md:159, 203, 225)
-#   - LED: PULSES ~1-2 s (loader entry executed prologue)
-#   - OSD: WITNESS_INVALID / INVALID / CORRUPT (Light Blue)
-#   - Wildcard fields: card_lock_state, startup_timing are not specified as table
-#     columns in docs/PORT21_OWNER_SESSION_PLAN.md:169-175 and are treated as wildcards
-#     per line 173.
-#
-# RULE H4 (docs/PORT21_OWNER_SESSION_PLAN.md:174):
-#   - r_l8 == 0 (overwritten by Boot Moment 2 copy loop)
-#   - r_l4: UNKNOWN (T1/T2 conflict: T1 predicts 0, T2 predicts 1) -> treated
-#     as wildcard per line 174.
-#   - r_c4 == 1 (matches REF_C.BIN protected by shifted heap new_sa = 0x00366CB0)
-#   - r_ct == 1 (matches core continuation intact)
-#   - r_wm == 0 (differs / checksum or field malformed while magic intact)
-#   - LED: PULSES ~1-2 s (loader entry executed prologue)
-#   - OSD: WITNESS_INVALID / INVALID / CORRUPT (Light Blue)
-#   - Wildcard fields: card_lock_state, startup_timing are not specified as table
-#     columns in docs/PORT21_OWNER_SESSION_PLAN.md:169-175 and are treated as wildcards
-#     per line 174.
+# Alias for backward compatibility if needed
+ENCODED_TABLE = STRUCTURED_RULE_TABLE
 
 
 class RefusalError(Exception):
@@ -223,49 +281,190 @@ REQUIRED_RAMCMP_FIELDS: Tuple[str, ...] = (
 
 
 def normalize_led_observation(val: Any) -> str:
-    """Normalizes the PORT-20 LED observation to PULSE, NO_PULSE, or UNOBSERVED."""
+    """Normalizes the PORT-20 LED observation to PULSE, NO_PULSE, or UNOBSERVED.
+    
+    Validates strictly against the closed set:
+    - NO_PULSE
+    - PULSE
+    - UNOBSERVED
+    
+    Anchored token matching prevents substrings (e.g. 'OFF') from misclassifying
+    strings such as 'PULSES ~1-2 s then OFF' as NO_PULSE.
+    """
     if isinstance(val, bool):
-        return "PULSE" if val else "NO_PULSE"
+        raise ValidationError(f"Invalid type for 'port20_led': booleans not allowed, got {val}")
+
     if isinstance(val, dict):
-        pulse = val.get("pulse", val.get("pulse_observed", val.get("led_pulse")))
-        if pulse is None:
-            return "UNOBSERVED"
-        return "PULSE" if bool(pulse) else "NO_PULSE"
+        if not val:
+            raise ValidationError("Invalid 'port20_led': empty dict is not allowed")
+        recognized_keys = ("pulse", "observation", "value", "state", "port20_led", "led_pulse")
+        found_key = None
+        for k in recognized_keys:
+            if k in val:
+                found_key = k
+                break
+        if found_key is None:
+            raise ValidationError(
+                f"Invalid 'port20_led' dict: missing recognized key ({recognized_keys}), got {list(val.keys())}"
+            )
+        inner = val[found_key]
+        if isinstance(inner, bool):
+            raise ValidationError(f"Invalid type for 'port20_led' dict field '{found_key}': booleans not allowed")
+        if not isinstance(inner, str):
+            raise ValidationError(
+                f"Invalid type for 'port20_led' dict field '{found_key}': expected string, got {type(inner).__name__}"
+            )
+        return normalize_led_observation(inner)
+
     if isinstance(val, str):
         v = val.strip().upper()
-        if any(term in v for term in ("NO PULSE", "NO_PULSE", "0 S DELAY", "NONE", "NO_BLINK", "OFF")):
+        if not v:
+            raise ValidationError("Invalid 'port20_led': empty string")
+
+        # Anchored NO_PULSE check
+        if (
+            v in ("NO_PULSE", "NO PULSE", "NO-PULSE", "NONE", "NO BLINK", "NO_BLINK")
+            or v.startswith("NO PULSE")
+            or v.startswith("NO_PULSE")
+            or v.startswith("0 S DELAY")
+            or v.startswith("**NO PULSE")
+        ):
             return "NO_PULSE"
-        if any(term in v for term in ("PULSE", "PULSES", "BLINK", "YES", "1-2 S", "FLASH")):
+
+        # Anchored PULSE check (takes precedence over secondary 'OFF' in 'PULSES ~1-2 s then OFF')
+        if (
+            v in ("PULSE", "PULSES", "BLINK", "FLASH")
+            or v.startswith("PULSE")
+            or v.startswith("PULSES")
+            or v.startswith("**PULSES")
+            or "PULSES ~1-2 S" in v
+            or "PULSE ~1-2 S" in v
+        ):
             return "PULSE"
-        if any(term in v for term in ("UNOBSERVED", "UNKNOWN", "UNRECORDED", "N/A", "MISSING")):
+
+        # Anchored UNOBSERVED check
+        if (
+            v in ("UNOBSERVED", "UNKNOWN", "UNRECORDED", "N/A", "MISSING")
+            or v.startswith("UNOBSERVED")
+        ):
             return "UNOBSERVED"
-        # If string doesn't match known patterns:
-        return v
-    raise ValidationError(f"Invalid type for 'port20_led': expected str, bool, or dict, got {type(val).__name__}")
+
+        raise ValidationError(f"Unrecognized value for 'port20_led': '{val}'")
+
+    raise ValidationError(f"Invalid type for 'port20_led': expected string or dict, got {type(val).__name__}")
 
 
-def normalize_ramcmp_value(val: Any) -> Optional[int]:
-    """Normalizes a single RAMCMP comparison value (0, 1, or None for UNKNOWN/UNREACHABLE)."""
-    if val is None:
+def parse_and_validate_ramcmp(ramcmp_val: Any) -> Tuple[bool, Optional[Dict[str, int]]]:
+    """Validates RAMCMP reading strictly:
+    
+    Must be either:
+    - String 'UNREACHABLE' (or recognized UNREACHABLE string variant)
+    - Dict with ALL 5 required fields ('r_l8', 'r_l4', 'r_c4', 'r_ct', 'r_wm') as integers 0 or 1.
+    
+    Rejects:
+    - Booleans (True / False) in dict or for ramcmp
+    - Partial UNREACHABLE inside dict
+    - Unknown strings ('GARBAGE')
+    - Missing fields in dict
+    - Values other than 0 or 1
+    
+    Returns (is_ramcmp_unreachable, ramcmp_dict).
+    """
+    if ramcmp_val is None:
+        return True, None
+
+    if isinstance(ramcmp_val, bool):
+        raise ValidationError(f"Invalid type for 'ramcmp': booleans not allowed, got {ramcmp_val}")
+
+    if isinstance(ramcmp_val, str):
+        v = ramcmp_val.strip().upper()
+        if (
+            v in ("UNREACHABLE", "UNREACHABLE / UNKNOWN", "HANG")
+            or v.startswith("UNREACHABLE")
+            or v.startswith("**UNREACHABLE")
+        ):
+            return True, None
+        raise ValidationError(f"Unrecognized string value for 'ramcmp': '{ramcmp_val}'")
+
+    if isinstance(ramcmp_val, dict):
+        ramcmp_dict: Dict[str, int] = {}
+        for field in REQUIRED_RAMCMP_FIELDS:
+            if field not in ramcmp_val:
+                raise ValidationError(f"Missing required RAMCMP field: '{field}'")
+            val = ramcmp_val[field]
+            if isinstance(val, bool):
+                raise ValidationError(f"Invalid type for RAMCMP field '{field}': booleans not allowed, got {val}")
+            if not isinstance(val, int):
+                raise ValidationError(
+                    f"Invalid type for RAMCMP field '{field}': expected integer 0 or 1 (partial UNREACHABLE not allowed), got {type(val).__name__}"
+                )
+            if val not in (0, 1):
+                raise ValidationError(f"Invalid value for RAMCMP field '{field}': expected 0 or 1, got {val}")
+            ramcmp_dict[field] = val
+        return False, ramcmp_dict
+
+    raise ValidationError(f"Invalid type for 'ramcmp': expected dict or 'UNREACHABLE' string, got {type(ramcmp_val).__name__}")
+
+
+def normalize_inspector_osd(osd_val: Any) -> Optional[str]:
+    """Validates inspector_osd against a closed set of recognized values:
+    - WITNESS_INVALID
+    - UNREACHABLE
+    - LOADER_REACHED
+    - CONT_ATTEMPTED
+    - UNOBSERVED
+    
+    Returns normalized string, or None if omitted.
+    Rejects any unrecognized string with ValidationError.
+    """
+    if osd_val is None:
         return None
-    if isinstance(val, int):
-        if val in (0, 1):
-            return val
-        raise ValidationError(f"Invalid RAMCMP integer value: {val} (expected 0 or 1)")
-    if isinstance(val, str):
-        v = val.strip().upper()
-        if v in ("0", "ZERO", "DIFFERS"):
-            return 0
-        if v in ("1", "ONE", "MATCHES"):
-            return 1
-        if any(term in v for term in ("UNKNOWN", "UNREACHABLE", "N/A", "WILDCARD", "*")):
-            return None
-        raise ValidationError(f"Unrecognized RAMCMP string value: '{val}'")
-    raise ValidationError(f"Invalid type for RAMCMP value: expected int, str, or null, got {type(val).__name__}")
+    if isinstance(osd_val, bool):
+        raise ValidationError(f"Invalid type for 'inspector_osd': booleans not allowed, got {osd_val}")
+    if not isinstance(osd_val, str):
+        raise ValidationError(f"Invalid type for 'inspector_osd': expected string, got {type(osd_val).__name__}")
+
+    v = osd_val.strip().upper()
+    if not v:
+        return None
+
+    if (
+        v in ("WITNESS_INVALID", "INVALID", "CORRUPT", "INVALID / CORRUPT")
+        or v.startswith("WITNESS_INVALID")
+        or "WITNESS_INVALID" in v
+        or "INVALID / CORRUPT" in v
+    ):
+        return "WITNESS_INVALID"
+
+    if (
+        v in ("UNREACHABLE", "UNREACHABLE / UNKNOWN")
+        or v.startswith("UNREACHABLE")
+        or v.startswith("**UNREACHABLE")
+    ):
+        return "UNREACHABLE"
+
+    if (
+        v in ("LOADER_REACHED",)
+        or v.startswith("LOADER_REACHED")
+        or "LOADER_REACHED" in v
+    ):
+        return "LOADER_REACHED"
+
+    if (
+        v in ("CONT_ATTEMPTED",)
+        or v.startswith("CONT_ATTEMPTED")
+        or "CONT_ATTEMPTED" in v
+    ):
+        return "CONT_ATTEMPTED"
+
+    if v in ("UNOBSERVED", "UNKNOWN", "N/A", "MISSING"):
+        return "UNOBSERVED"
+
+    raise ValidationError(f"Unrecognized value for 'inspector_osd': '{osd_val}'")
 
 
 def parse_and_validate_report(raw_data: Union[str, bytes, dict]) -> Dict[str, Any]:
-    """Parses JSON data and validates all required fields and types."""
+    """Parses JSON data and validates all required fields and strict types."""
     if isinstance(raw_data, (str, bytes)):
         try:
             data = json.loads(raw_data)
@@ -282,7 +481,6 @@ def parse_and_validate_report(raw_data: Union[str, bytes, dict]) -> Dict[str, An
     # Check top-level required fields
     for field in REQUIRED_TOP_LEVEL_FIELDS:
         if field not in data:
-            # Check common aliases
             if field == "card_lock_state" and "card_locked" in data:
                 continue
             if field == "startup_timing" and "start_up_timing" in data:
@@ -296,274 +494,131 @@ def parse_and_validate_report(raw_data: Union[str, bytes, dict]) -> Dict[str, An
     if not isinstance(cls_val, (str, bool)):
         raise ValidationError(f"Invalid type for 'card_lock_state': expected string or bool, got {type(cls_val).__name__}")
 
-    # Validate startup_timing
+    # Validate startup_timing (booleans explicitly rejected)
     timing_val = data.get("startup_timing", data.get("start_up_timing"))
+    if isinstance(timing_val, bool):
+        raise ValidationError(f"Invalid type for 'startup_timing': booleans not allowed, got {timing_val}")
     if not isinstance(timing_val, (str, int, float)):
         raise ValidationError(f"Invalid type for 'startup_timing': expected string or number, got {type(timing_val).__name__}")
 
     # Validate port20_led
     led_val = data.get("port20_led", data.get("led_observation", data.get("port20_led_observation")))
-    if not isinstance(led_val, (str, bool, dict)):
-        raise ValidationError(f"Invalid type for 'port20_led': expected string, bool, or dict, got {type(led_val).__name__}")
     normalized_led = normalize_led_observation(led_val)
 
     # Validate ramcmp
     ramcmp_val = data.get("ramcmp")
-    ramcmp_normalized: Optional[Dict[str, Optional[int]]] = None
-    is_ramcmp_unreachable = False
+    is_ramcmp_unreachable, ramcmp_dict = parse_and_validate_ramcmp(ramcmp_val)
 
-    if ramcmp_val is None:
-        is_ramcmp_unreachable = True
-    elif isinstance(ramcmp_val, str):
-        if any(term in ramcmp_val.upper() for term in ("UNREACHABLE", "HANG", "NONE", "N/A", "UNKNOWN")):
-            is_ramcmp_unreachable = True
-        else:
-            raise ValidationError(f"Invalid string value for 'ramcmp': '{ramcmp_val}'")
-    elif isinstance(ramcmp_val, dict):
-        for field in REQUIRED_RAMCMP_FIELDS:
-            if field not in ramcmp_val:
-                raise ValidationError(f"Missing required RAMCMP field: '{field}'")
-        ramcmp_normalized = {
-            field: normalize_ramcmp_value(ramcmp_val[field])
-            for field in REQUIRED_RAMCMP_FIELDS
-        }
-        # Check if all values are unreachable/unknown
-        if all(v is None for v in ramcmp_normalized.values()):
-            is_ramcmp_unreachable = True
-    else:
-        raise ValidationError(f"Invalid type for 'ramcmp': expected dict, null, or string, got {type(ramcmp_val).__name__}")
-
-    # Validate inspector_osd if present
+    # Validate inspector_osd
     osd_val = data.get("inspector_osd", data.get("inspector_status"))
-    if osd_val is not None and not isinstance(osd_val, str):
-        raise ValidationError(f"Invalid type for 'inspector_osd': expected string or null, got {type(osd_val).__name__}")
+    normalized_osd = normalize_inspector_osd(osd_val)
 
     return {
         "synthetic": bool(data.get("synthetic", False)),
         "card_lock_state": str(cls_val),
         "startup_timing": timing_val,
         "port20_led": normalized_led,
-        "ramcmp": ramcmp_normalized,
+        "ramcmp": ramcmp_dict,
         "is_ramcmp_unreachable": is_ramcmp_unreachable,
-        "inspector_osd": osd_val,
+        "inspector_osd": normalized_osd,
     }
 
 
-def evaluate_hypothesis_h1(report: Dict[str, Any]) -> Tuple[bool, List[str]]:
-    """Checks whether the report matches Hypothesis H1 (StartDiskboot rejected binary).
+def evaluate_hypothesis_against_rules(
+    h_id: str,
+    rule: Dict[str, Any],
+    report: Dict[str, Any],
+) -> Tuple[bool, List[str]]:
+    """Evaluates an owner report generically against the structured rule for hypothesis h_id.
     
-    Source citation: docs/PORT21_OWNER_SESSION_PLAN.md:171.
+    Checks every column from docs/PORT21_OWNER_SESSION_PLAN.md:169-175 without hardcoded
+    assumptions or out-of-table logic.
+    
+    Returns (matched, messages).
     """
-    reasons = []
-    # LED rule: NO PULSE (0 s delay)
-    led = report["port20_led"]
-    if led == "PULSE":
-        return False, ["LED pulse observed (H1 predicts NO PULSE)"]
-    if led == "NO_PULSE":
-        reasons.append("LED shows NO PULSE (fits H1)")
-    elif led == "UNOBSERVED":
-        reasons.append("LED unobserved (plausible for H1)")
+    reasons: List[str] = []
+    contradictions: List[str] = []
 
-    # RAMCMP rule: RAM was not unreachable, all 5 fields == 0
-    if report["is_ramcmp_unreachable"]:
-        return False, ["RAMCMP is UNREACHABLE (H1 reaches stock UI and Canon Basic runs)"]
+    columns = rule["columns"]
+    for col_name, col_rule in columns.items():
+        field_name = COLUMN_TO_FIELD[col_name]
+        expected = col_rule["expected"]
+        citation = col_rule["citation"]
 
-    ram = report["ramcmp"]
-    if ram is None:
-        return False, ["Missing RAMCMP readings for H1"]
+        if field_name in ("r_l8", "r_l4", "r_c4", "r_ct", "r_wm"):
+            if expected == "UNREACHABLE":
+                if not report["is_ramcmp_unreachable"]:
+                    actual_v = report["ramcmp"][field_name] if report["ramcmp"] else "reachable"
+                    contradictions.append(
+                        f"RAMCMP was reachable ({field_name}={actual_v}), but {h_id} predicts UNREACHABLE [{citation}]"
+                    )
+                else:
+                    reasons.append(f"RAMCMP UNREACHABLE matches {h_id} [{citation}]")
+            elif expected == WILDCARD:
+                reasons.append(f"{field_name} is WILDCARD for {h_id} [{citation}]")
+            elif expected in (0, 1):
+                if report["is_ramcmp_unreachable"]:
+                    contradictions.append(
+                        f"RAMCMP was UNREACHABLE, but {h_id} predicts {field_name}={expected} [{citation}]"
+                    )
+                else:
+                    actual = report["ramcmp"][field_name]
+                    if actual != expected:
+                        contradictions.append(
+                            f"{field_name}={actual}, but {h_id} predicts {field_name}={expected} [{citation}]"
+                        )
+                    else:
+                        reasons.append(f"{field_name}={actual} matches {h_id} [{citation}]")
 
-    for k in ("r_l8", "r_l4", "r_c4", "r_ct", "r_wm"):
-        v = ram.get(k)
-        if v is not None and v != 0:
-            return False, [f"{k} == {v} (H1 predicts {k} == 0)"]
-    reasons.append("RAMCMP shows r_l8=0, r_l4=0, r_c4=0, r_ct=0, r_wm=0 (fits H1)")
+        elif field_name == "port20_led":
+            actual_led = report["port20_led"]
+            if actual_led == "UNOBSERVED":
+                reasons.append(f"LED is UNOBSERVED; compatible with {h_id} ({expected}) [{citation}]")
+            elif actual_led == expected:
+                reasons.append(f"LED observation '{actual_led}' matches {h_id} [{citation}]")
+            else:
+                contradictions.append(
+                    f"LED observation '{actual_led}' contradicts {h_id} (expected {expected}) [{citation}]"
+                )
 
-    # OSD rule: WITNESS_INVALID / INVALID / CORRUPT (or unobserved/null)
-    osd = report.get("inspector_osd")
-    if osd is not None:
-        osd_u = osd.upper()
-        if "INVALID" in osd_u or "CORRUPT" in osd_u:
-            reasons.append("Inspector OSD shows WITNESS_INVALID (fits H1)")
-        elif "LOADER_REACHED" in osd_u or "CONT_ATTEMPTED" in osd_u:
-            return False, [f"Inspector OSD shows {osd} (H1 predicts WITNESS_INVALID)"]
+        elif field_name == "inspector_osd":
+            actual_osd = report.get("inspector_osd")
+            if actual_osd is None or actual_osd == "UNOBSERVED":
+                reasons.append(f"Inspector OSD unobserved; compatible with {h_id} [{citation}]")
+            elif actual_osd == expected:
+                reasons.append(f"Inspector OSD '{actual_osd}' matches {h_id} [{citation}]")
+            else:
+                contradictions.append(
+                    f"Inspector OSD '{actual_osd}' contradicts {h_id} (expected {expected}) [{citation}]"
+                )
 
-    # Wildcard fields: card_lock_state and startup_timing not specified in table
-    # per docs/PORT21_OWNER_SESSION_PLAN.md:171, treated as wildcards.
-    return True, reasons
-
-
-def evaluate_hypothesis_h2(report: Dict[str, Any]) -> Tuple[bool, List[str]]:
-    """Checks whether the report matches Hypothesis H2 (Loader hung in check_compat).
-    
-    Source citation: docs/PORT21_OWNER_SESSION_PLAN.md:172.
-    """
-    reasons = []
-    # LED rule: PULSES ~1-2 s in loader entry prologue, then hangs in check_compat()
-    led = report["port20_led"]
-    if led == "NO_PULSE":
-        return False, ["NO PULSE observed (H2 executed loader prologue and pulsed ~1-2 s)"]
-    if led == "PULSE":
-        reasons.append("LED pulses ~1-2 s (fits H2)")
-    elif led == "UNOBSERVED":
-        reasons.append("LED unobserved (plausible for H2)")
-
-    # RAMCMP rule: camera hangs before stock UI, so Canon Basic cannot run; RAMCMP is UNREACHABLE
-    if not report["is_ramcmp_unreachable"]:
-        return False, ["RAMCMP was reachable (H2 hangs before stock UI; Canon Basic cannot run)"]
-    reasons.append("Camera hung before stock UI / RAMCMP UNREACHABLE (fits H2)")
-
-    # OSD rule: UNREACHABLE / UNKNOWN
-    osd = report.get("inspector_osd")
-    if osd is not None and "UNREACHABLE" not in osd.upper() and "UNKNOWN" not in osd.upper():
-        return False, [f"Inspector OSD was reachable with {osd} (H2 hangs before stock UI)"]
-
-    # Wildcard fields: card_lock_state and startup_timing not specified in table
-    # per docs/PORT21_OWNER_SESSION_PLAN.md:172, treated as wildcards.
-    return True, reasons
-
-
-def evaluate_hypothesis_h3(report: Dict[str, Any]) -> Tuple[bool, List[str]]:
-    """Checks whether the report matches Hypothesis H3 (Stock boot later overwrote witness).
-    
-    Source citation: docs/PORT21_OWNER_SESSION_PLAN.md:173.
-    """
-    reasons = []
-    # LED rule: PULSES ~1-2 s
-    led = report["port20_led"]
-    if led == "NO_PULSE":
-        return False, ["NO PULSE observed (H3 executed loader prologue and pulsed ~1-2 s)"]
-    if led == "PULSE":
-        reasons.append("LED pulses ~1-2 s (fits H3)")
-    elif led == "UNOBSERVED":
-        reasons.append("LED unobserved (plausible for H3)")
-
-    # RAMCMP rule: camera reaches stock UI, RAMCMP runs
-    if report["is_ramcmp_unreachable"]:
-        return False, ["RAMCMP is UNREACHABLE (H3 reaches stock UI and Canon Basic runs)"]
-
-    ram = report["ramcmp"]
-    if ram is None:
-        return False, ["Missing RAMCMP readings for H3"]
-
-    # r_l8 must be 0
-    if ram.get("r_l8") is not None and ram["r_l8"] != 0:
-        return False, [f"r_l8 == {ram['r_l8']} (H3 predicts r_l8 == 0)"]
-
-    # r_l4 is UNKNOWN (wildcard due to T1/T2 conflict per line 173) -> any value fits
-    reasons.append("r_l4 is treated as wildcard due to T1/T2 conflict (line 173)")
-
-    # r_c4: under H3, stock boot ran without heap shift, yielding r_c4 == 0 (lines 159, 203, 225)
-    # If r_c4 == 1, that indicates shifted heap succeeded (H4), refuting H3.
-    if ram.get("r_c4") is not None and ram["r_c4"] == 1:
-        return False, ["r_c4 == 1 (H3 predicts r_c4 == 0 if overwritten; r_c4 == 1 indicates heap shift succeeded)"]
-    
-    # r_ct: predicted 0 if overwritten
-    if ram.get("r_ct") is not None and ram["r_ct"] == 1:
-        return False, ["r_ct == 1 (H3 predicts r_ct == 0 if overwritten; r_ct == 1 indicates core continuation intact)"]
-
-    # r_wm: predicted 0 if overwritten
-    if ram.get("r_wm") is not None and ram["r_wm"] == 1:
-        return False, ["r_wm == 1 (H3 predicts witness destroyed / r_wm == 0)"]
-
-    reasons.append("RAMCMP shows r_l8=0, r_c4=0, r_ct=0, r_wm=0 (fits H3)")
-
-    # OSD rule: WITNESS_INVALID
-    osd = report.get("inspector_osd")
-    if osd is not None:
-        osd_u = osd.upper()
-        if "INVALID" in osd_u or "CORRUPT" in osd_u:
-            reasons.append("Inspector OSD shows WITNESS_INVALID (fits H3)")
-        elif "LOADER_REACHED" in osd_u or "CONT_ATTEMPTED" in osd_u:
-            return False, [f"Inspector OSD shows {osd} (H3 predicts WITNESS_INVALID)"]
-
-    # Wildcard fields: card_lock_state and startup_timing not specified in table
-    # per docs/PORT21_OWNER_SESSION_PLAN.md:173, treated as wildcards.
-    return True, reasons
-
-
-def evaluate_hypothesis_h4(report: Dict[str, Any]) -> Tuple[bool, List[str]]:
-    """Checks whether the report matches Hypothesis H4 (Witness malformed as built).
-    
-    Source citation: docs/PORT21_OWNER_SESSION_PLAN.md:174.
-    """
-    reasons = []
-    # LED rule: PULSES ~1-2 s
-    led = report["port20_led"]
-    if led == "NO_PULSE":
-        return False, ["NO PULSE observed (H4 executed loader prologue and pulsed ~1-2 s)"]
-    if led == "PULSE":
-        reasons.append("LED pulses ~1-2 s (fits H4)")
-    elif led == "UNOBSERVED":
-        reasons.append("LED unobserved (plausible for H4)")
-
-    # RAMCMP rule: camera reaches stock UI, RAMCMP runs
-    if report["is_ramcmp_unreachable"]:
-        return False, ["RAMCMP is UNREACHABLE (H4 reaches stock UI and Canon Basic runs)"]
-
-    ram = report["ramcmp"]
-    if ram is None:
-        return False, ["Missing RAMCMP readings for H4"]
-
-    # r_l8 must be 0
-    if ram.get("r_l8") is not None and ram["r_l8"] != 0:
-        return False, [f"r_l8 == {ram['r_l8']} (H4 predicts r_l8 == 0)"]
-
-    # r_l4 is UNKNOWN (wildcard due to T1/T2 conflict per line 174) -> any value fits
-    reasons.append("r_l4 is treated as wildcard due to T1/T2 conflict (line 174)")
-
-    # r_c4 must be 1 (protected by shifted heap new_sa = 0x00366CB0)
-    if ram.get("r_c4") is not None and ram["r_c4"] != 1:
-        return False, [f"r_c4 == {ram['r_c4']} (H4 predicts r_c4 == 1 via shifted heap)"]
-
-    # r_ct must be 1 (core continuation intact)
-    if ram.get("r_ct") is not None and ram["r_ct"] != 1:
-        return False, [f"r_ct == {ram['r_ct']} (H4 predicts r_ct == 1 via core continuation intact)"]
-
-    # r_wm must be 0 (checksum or field malformed while magic intact)
-    if ram.get("r_wm") is not None and ram["r_wm"] != 0:
-        return False, [f"r_wm == {ram['r_wm']} (H4 predicts r_wm == 0 due to witness malformation)"]
-
-    reasons.append("RAMCMP shows r_l8=0, r_c4=1, r_ct=1, r_wm=0 (fits H4)")
-
-    # OSD rule: WITNESS_INVALID
-    osd = report.get("inspector_osd")
-    if osd is not None:
-        osd_u = osd.upper()
-        if "INVALID" in osd_u or "CORRUPT" in osd_u:
-            reasons.append("Inspector OSD shows WITNESS_INVALID (fits H4)")
-        elif "LOADER_REACHED" in osd_u or "CONT_ATTEMPTED" in osd_u:
-            return False, [f"Inspector OSD shows {osd} (H4 predicts WITNESS_INVALID)"]
-
-    # Wildcard fields: card_lock_state and startup_timing not specified in table
-    # per docs/PORT21_OWNER_SESSION_PLAN.md:174, treated as wildcards.
+    if contradictions:
+        return False, contradictions
     return True, reasons
 
 
 def classify_session_report(report_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Classifies an owner session report against hypotheses H1-H4.
+    """Classifies an owner session report generically against hypotheses H1-H4.
+    
+    Evaluates report against STRUCTURED_RULE_TABLE driven entirely by
+    docs/PORT21_OWNER_SESSION_PLAN.md:169-175.
     
     Returns a deterministic dictionary:
     {
       "status": "MATCH" | "AMBIGUOUS" | "INCONSISTENT",
       "classification": "H1" | "H2" | "H3" | "H4" | "AMBIGUOUS" | "INCONSISTENT",
-      "hypotheses": List of matching hypothesis strings (e.g. ["H1"], ["H1", "H3"], or []),
+      "hypotheses": List of matching hypothesis strings (e.g. ["H1"], ["H3", "H4"], or []),
       "reason": Human-readable explanation with citations,
-      "details": Dict of per-hypothesis evaluation reasons
+      "details": Dict of per-hypothesis evaluation reasons/contradictions
     }
     """
-    evaluators = {
-        "H1": evaluate_hypothesis_h1,
-        "H2": evaluate_hypothesis_h2,
-        "H3": evaluate_hypothesis_h3,
-        "H4": evaluate_hypothesis_h4,
-    }
-
     matching: List[str] = []
     details: Dict[str, List[str]] = {}
 
-    for h_id in sorted(evaluators.keys()):
-        matched, reasons = evaluators[h_id](report_data)
-        details[h_id] = reasons
+    for h_id in sorted(STRUCTURED_RULE_TABLE.keys()):
+        rule = STRUCTURED_RULE_TABLE[h_id]
+        matched, msgs = evaluate_hypothesis_against_rules(h_id, rule, report_data)
+        details[h_id] = msgs
         if matched:
             matching.append(h_id)
 
@@ -571,8 +626,9 @@ def classify_session_report(report_data: Dict[str, Any]) -> Dict[str, Any]:
 
     if len(matching_sorted) == 1:
         matched_h = matching_sorted[0]
-        summary_text = ENCODED_TABLE["rows"][matched_h]["Hypothesis ID & Summary"]
-        reason = f"Readings uniquely match hypothesis {matched_h}: {summary_text}."
+        summary = STRUCTURED_RULE_TABLE[matched_h]["summary"]
+        citation = STRUCTURED_RULE_TABLE[matched_h]["citation"]
+        reason = f"Readings uniquely match hypothesis {matched_h}: {summary} [{citation}]."
         return {
             "status": "MATCH",
             "classification": matched_h,
@@ -582,19 +638,11 @@ def classify_session_report(report_data: Dict[str, Any]) -> Dict[str, Any]:
         }
     elif len(matching_sorted) > 1:
         hyp_str = ", ".join(matching_sorted)
-        reason = f"Readings match multiple hypotheses ({hyp_str}). "
-        if matching_sorted == ["H1", "H3"]:
-            reason += (
-                "LED observation is unobserved or ambiguous, so H1 (no pulse) and "
-                "H3 (pulse) cannot be distinguished by RAMCMP alone (cite docs/PORT21_OWNER_SESSION_PLAN.md:147)."
-            )
-        elif matching_sorted == ["H3", "H4"]:
-            reason += (
-                "RAMCMP r_c4 / r_ct readings are indeterminate, so H3 (overwritten) "
-                "and H4 (protected by shifted heap) cannot be separated."
-            )
-        else:
-            reason += "Further discrimination trial is required to resolve ambiguity."
+        citations = [STRUCTURED_RULE_TABLE[h]["citation"] for h in matching_sorted]
+        reason = (
+            f"Readings match multiple hypotheses ({hyp_str}). "
+            f"Table rules ({', '.join(citations)}) alone cannot distinguish these hypotheses without further data."
+        )
         return {
             "status": "AMBIGUOUS",
             "classification": "AMBIGUOUS",
@@ -605,10 +653,10 @@ def classify_session_report(report_data: Dict[str, Any]) -> Dict[str, Any]:
     else:
         # 0 hypotheses matched
         inconsistencies = []
-        for h_id, r_list in sorted(details.items()):
-            inconsistencies.append(f"{h_id} contradicted: {'; '.join(r_list)}")
+        for h_id in sorted(details.keys()):
+            inconsistencies.append(f"{h_id} contradicted: {'; '.join(details[h_id])}")
         reason = (
-            "Readings contradict every hypothesis in docs/PORT21_OWNER_SESSION_PLAN.md:169-175: "
+            f"Readings contradict every hypothesis in docs/PORT21_OWNER_SESSION_PLAN.md:169-175: "
             + "; ".join(inconsistencies)
         )
         return {
@@ -653,7 +701,6 @@ def run_classifier(
         result = classify_session_report(report)
 
         if use_json_output:
-            # Deterministic sorted json
             out = json.dumps(result, indent=2, sort_keys=True)
         else:
             out = format_text_output(result)
