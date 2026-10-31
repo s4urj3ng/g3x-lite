@@ -80,6 +80,62 @@ def parse_markdown_table(table_text: str) -> list[dict[str, str]]:
     return rows
 
 
+def parse_and_validate_offset_cell(
+    cell: str,
+    expected_offset: int | None,
+    fs: str,
+    marker_name: str,
+) -> tuple[str, int | None]:
+    """Parse, validate, and pin the offset cell of a table row.
+
+    Rules:
+    - Strips parenthetical descriptions (e.g. "(64 dec)", "(No offset / not checked)").
+    - Strips whitespace, backticks, and asterisks.
+    - Requires exactly one hex token matching ^0x[0-9A-Fa-f]+$ (or UNSUPPORTED / UNKNOWN).
+    - If hex, verifies int(tok, 16) < 0x200 (within 512-byte VBR).
+    - Numerically compares parsed value against expected pinned value (or None if unsupported).
+    - Removes all substring checks.
+
+    Returns (raw_token, parsed_int_or_None).
+    Raises ValueError on any violation.
+    """
+    cleaned = re.sub(r"\s*\([^)]*\)", "", cell).strip()
+    tok = cleaned.replace("*", "").replace("`", "").strip()
+
+    if not tok:
+        raise ValueError(f"{fs} {marker_name} offset cell is empty after removing notes: {cell!r}")
+
+    if tok.upper() in ("UNSUPPORTED", "UNKNOWN"):
+        if expected_offset is not None:
+            raise ValueError(
+                f"{fs} {marker_name} is marked {tok}, but expected pinned offset 0x{expected_offset:X}"
+            )
+        return tok.upper(), None
+
+    if not re.fullmatch(r"^0x[0-9A-Fa-f]+$", tok):
+        raise ValueError(
+            f"{fs} {marker_name} offset token {tok!r} is not a valid hex token (^0x[0-9A-Fa-f]+$)"
+        )
+
+    val = int(tok, 16)
+    if val >= 0x200:
+        raise ValueError(
+            f"{fs} {marker_name} parsed offset 0x{val:X} ({val} dec) is >= 0x200 (outside 512-byte VBR)"
+        )
+
+    if expected_offset is None:
+        raise ValueError(
+            f"{fs} {marker_name} must be UNSUPPORTED, got offset 0x{val:X}"
+        )
+
+    if val != expected_offset:
+        raise ValueError(
+            f"{fs} {marker_name} offset must be 0x{expected_offset:X}, got: 0x{val:X}"
+        )
+
+    return tok, val
+
+
 def validate_bootdisk_vbr_doc(doc_text: str) -> dict[str, Any]:
     """Validate and pin the VBR marker tables and statements in docs/PORT19_BOOTDISK_VBR.md.
 
@@ -112,44 +168,24 @@ def validate_bootdisk_vbr_doc(doc_text: str) -> dict[str, Any]:
 
     bootdisk_by_fs = {r["Filesystem Type"].replace("*", "").strip(): r for r in bootdisk_rows}
 
-    # Pin BOOTDISK values:
-    # FAT16: 0x40
-    fat16_bd = bootdisk_by_fs["FAT16"]
-    if "0x40" not in fat16_bd["BOOTDISK Marker Offset"] or "0x1E0" in fat16_bd["BOOTDISK Marker Offset"] or "UNSUPPORTED" in fat16_bd["BOOTDISK Marker Offset"]:
-        raise ValueError(f"FAT16 BOOTDISK offset must be 0x40, got: {fat16_bd['BOOTDISK Marker Offset']}")
-    if "VERIFIED" not in fat16_bd["Status & Classification"]:
-        raise ValueError(f"FAT16 BOOTDISK status must be VERIFIED, got: {fat16_bd['Status & Classification']}")
-    if "0xFC37A63A" not in fat16_bd["ROM Address Citations"] and "0xFC37A650" not in fat16_bd["ROM Address Citations"]:
-        raise ValueError(f"FAT16 BOOTDISK citations missing required address: {fat16_bd['ROM Address Citations']}")
-
-    # FAT32: 0x1E0
-    fat32_bd = bootdisk_by_fs["FAT32"]
-    if "0x1E0" not in fat32_bd["BOOTDISK Marker Offset"] or "0x40" in fat32_bd["BOOTDISK Marker Offset"] or "UNSUPPORTED" in fat32_bd["BOOTDISK Marker Offset"]:
-        raise ValueError(f"FAT32 BOOTDISK offset must be 0x1E0, got: {fat32_bd['BOOTDISK Marker Offset']}")
-    if "VERIFIED" not in fat32_bd["Status & Classification"]:
-        raise ValueError(f"FAT32 BOOTDISK status must be VERIFIED, got: {fat32_bd['Status & Classification']}")
-    if "0xFC37A606" not in fat32_bd["ROM Address Citations"] and "0xFC37A5FA" not in fat32_bd["ROM Address Citations"]:
-        raise ValueError(f"FAT32 BOOTDISK citations missing required address: {fat32_bd['ROM Address Citations']}")
-
-    # exFAT: UNSUPPORTED / not checked (no offset)
-    exfat_bd = bootdisk_by_fs["exFAT"]
-    if "UNSUPPORTED" not in exfat_bd["BOOTDISK Marker Offset"] and "not checked" not in exfat_bd["BOOTDISK Marker Offset"].lower():
-        raise ValueError(f"exFAT BOOTDISK must be UNSUPPORTED / not checked, got: {exfat_bd['BOOTDISK Marker Offset']}")
-    if any(valid_off in exfat_bd["BOOTDISK Marker Offset"] for valid_off in ["0x40", "0x1E0", "0x1F0"]):
-        raise ValueError(f"exFAT BOOTDISK must not contain a supported offset: {exfat_bd['BOOTDISK Marker Offset']}")
-    if "VERIFIED" not in exfat_bd["Status & Classification"]:
-        raise ValueError(f"exFAT BOOTDISK status must be VERIFIED, got: {exfat_bd['Status & Classification']}")
-    if "0xFC37A4CE" not in exfat_bd["ROM Address Citations"] and "0xFC37A55C" not in exfat_bd["ROM Address Citations"]:
-        raise ValueError(f"exFAT BOOTDISK citations missing required address: {exfat_bd['ROM Address Citations']}")
-
-    # FAT12: 0x40
-    fat12_bd = bootdisk_by_fs["FAT12"]
-    if "0x40" not in fat12_bd["BOOTDISK Marker Offset"] or "0x1E0" in fat12_bd["BOOTDISK Marker Offset"] or "UNSUPPORTED" in fat12_bd["BOOTDISK Marker Offset"]:
-        raise ValueError(f"FAT12 BOOTDISK offset must be 0x40, got: {fat12_bd['BOOTDISK Marker Offset']}")
-    if "VERIFIED" not in fat12_bd["Status & Classification"]:
-        raise ValueError(f"FAT12 BOOTDISK status must be VERIFIED, got: {fat12_bd['Status & Classification']}")
-    if "0xFC37A63E" not in fat12_bd["ROM Address Citations"] and "0xFC37A650" not in fat12_bd["ROM Address Citations"]:
-        raise ValueError(f"FAT12 BOOTDISK citations missing required address: {fat12_bd['ROM Address Citations']}")
+    # Pin BOOTDISK values with exact numeric comparisons and < 0x200 boundary checks:
+    expected_bootdisk: dict[str, tuple[int | None, list[str]]] = {
+        "FAT16": (PINNED_BOOTDISK_OFFSET_FAT16, ["0xFC37A63A", "0xFC37A650"]),
+        "FAT32": (PINNED_BOOTDISK_OFFSET_FAT32, ["0xFC37A606", "0xFC37A5FA"]),
+        "exFAT": (None, ["0xFC37A4CE", "0xFC37A55C"]),
+        "FAT12": (PINNED_BOOTDISK_OFFSET_FAT12, ["0xFC37A63E", "0xFC37A650"]),
+    }
+    for fs, (expected_off, citations) in expected_bootdisk.items():
+        row = bootdisk_by_fs[fs]
+        raw_tok, val = parse_and_validate_offset_cell(
+            row["BOOTDISK Marker Offset"], expected_off, fs, "BOOTDISK"
+        )
+        row["offset_token"] = raw_tok
+        row["parsed_offset"] = val
+        if "VERIFIED" not in row["Status & Classification"]:
+            raise ValueError(f"{fs} BOOTDISK status must be VERIFIED, got: {row['Status & Classification']}")
+        if not any(c in row["ROM Address Citations"] for c in citations):
+            raise ValueError(f"{fs} BOOTDISK citations missing required address: {row['ROM Address Citations']}")
 
     # 2. Bounded extraction of Section 1.3 (SCRIPT marker table)
     script_match = re.search(
@@ -172,26 +208,24 @@ def validate_bootdisk_vbr_doc(doc_text: str) -> dict[str, Any]:
 
     script_by_fs = {r["Filesystem Type"].replace("*", "").strip(): r for r in script_rows}
 
-    # Pin SCRIPT values:
-    for fs in ["FAT16", "FAT32", "FAT12"]:
-        sc = script_by_fs[fs]
-        if "0x1F0" not in sc["SCRIPT Marker Offset"] or "0x1E0" in sc["SCRIPT Marker Offset"] or "0x40" in sc["SCRIPT Marker Offset"] or "UNSUPPORTED" in sc["SCRIPT Marker Offset"]:
-            raise ValueError(f"{fs} SCRIPT offset must be 0x1F0, got: {sc['SCRIPT Marker Offset']}")
-        if "VERIFIED" not in sc["Status & Classification"]:
-            raise ValueError(f"{fs} SCRIPT status must be VERIFIED, got: {sc['Status & Classification']}")
-        if "0xFC37A668" not in sc["ROM Address Citations"] and "0xFC37A66C" not in sc["ROM Address Citations"]:
-            raise ValueError(f"{fs} SCRIPT citations missing required address: {sc['ROM Address Citations']}")
-
-    # exFAT: UNSUPPORTED / not checked (no offset)
-    exfat_sc = script_by_fs["exFAT"]
-    if "UNSUPPORTED" not in exfat_sc["SCRIPT Marker Offset"] and "not checked" not in exfat_sc["SCRIPT Marker Offset"].lower():
-        raise ValueError(f"exFAT SCRIPT must be UNSUPPORTED / not checked, got: {exfat_sc['SCRIPT Marker Offset']}")
-    if any(valid_off in exfat_sc["SCRIPT Marker Offset"] for valid_off in ["0x40", "0x1E0", "0x1F0"]):
-        raise ValueError(f"exFAT SCRIPT must not contain a supported offset: {exfat_sc['SCRIPT Marker Offset']}")
-    if "VERIFIED" not in exfat_sc["Status & Classification"]:
-        raise ValueError(f"exFAT SCRIPT status must be VERIFIED, got: {exfat_sc['Status & Classification']}")
-    if "0xFC37A4D0" not in exfat_sc["ROM Address Citations"] and "0xFC37A55C" not in exfat_sc["ROM Address Citations"]:
-        raise ValueError(f"exFAT SCRIPT citations missing required address: {exfat_sc['ROM Address Citations']}")
+    # Pin SCRIPT values with exact numeric comparisons and < 0x200 boundary checks:
+    expected_script: dict[str, tuple[int | None, list[str]]] = {
+        "FAT16": (PINNED_SCRIPT_OFFSET_FAT16, ["0xFC37A668", "0xFC37A66C"]),
+        "FAT32": (PINNED_SCRIPT_OFFSET_FAT32, ["0xFC37A668", "0xFC37A66C"]),
+        "exFAT": (None, ["0xFC37A4D0", "0xFC37A55C"]),
+        "FAT12": (PINNED_SCRIPT_OFFSET_FAT12, ["0xFC37A668", "0xFC37A66C"]),
+    }
+    for fs, (expected_off, citations) in expected_script.items():
+        row = script_by_fs[fs]
+        raw_tok, val = parse_and_validate_offset_cell(
+            row["SCRIPT Marker Offset"], expected_off, fs, "SCRIPT"
+        )
+        row["offset_token"] = raw_tok
+        row["parsed_offset"] = val
+        if "VERIFIED" not in row["Status & Classification"]:
+            raise ValueError(f"{fs} SCRIPT status must be VERIFIED, got: {row['Status & Classification']}")
+        if not any(c in row["ROM Address Citations"] for c in citations):
+            raise ValueError(f"{fs} SCRIPT citations missing required address: {row['ROM Address Citations']}")
 
     # 3. Bounded extraction of Section 1.4 (EOS_DEVELOP statement / table)
     eos_match = re.search(
@@ -274,24 +308,23 @@ class TestPort19BootdiskVbr(unittest.TestCase):
         self.assertEqual(set(bootdisk.keys()), {"FAT12", "FAT16", "FAT32", "exFAT"})
 
         # FAT16: 0x40, VERIFIED
-        self.assertIn("0x40", bootdisk["FAT16"]["BOOTDISK Marker Offset"])
-        self.assertNotIn("0x1E0", bootdisk["FAT16"]["BOOTDISK Marker Offset"])
+        self.assertEqual(bootdisk["FAT16"]["parsed_offset"], PINNED_BOOTDISK_OFFSET_FAT16)
+        self.assertEqual(bootdisk["FAT16"]["offset_token"], "0x40")
         self.assertIn("VERIFIED", bootdisk["FAT16"]["Status & Classification"])
 
         # FAT32: 0x1E0, VERIFIED
-        self.assertIn("0x1E0", bootdisk["FAT32"]["BOOTDISK Marker Offset"])
-        self.assertNotIn("0x40", bootdisk["FAT32"]["BOOTDISK Marker Offset"])
+        self.assertEqual(bootdisk["FAT32"]["parsed_offset"], PINNED_BOOTDISK_OFFSET_FAT32)
+        self.assertEqual(bootdisk["FAT32"]["offset_token"], "0x1E0")
         self.assertIn("VERIFIED", bootdisk["FAT32"]["Status & Classification"])
 
         # exFAT: UNSUPPORTED / not checked, VERIFIED
-        self.assertIn("UNSUPPORTED", bootdisk["exFAT"]["BOOTDISK Marker Offset"])
-        self.assertNotIn("0x40", bootdisk["exFAT"]["BOOTDISK Marker Offset"])
-        self.assertNotIn("0x1E0", bootdisk["exFAT"]["BOOTDISK Marker Offset"])
+        self.assertIsNone(bootdisk["exFAT"]["parsed_offset"])
+        self.assertEqual(bootdisk["exFAT"]["offset_token"], "UNSUPPORTED")
         self.assertIn("VERIFIED", bootdisk["exFAT"]["Status & Classification"])
 
         # FAT12: 0x40, VERIFIED
-        self.assertIn("0x40", bootdisk["FAT12"]["BOOTDISK Marker Offset"])
-        self.assertNotIn("0x1E0", bootdisk["FAT12"]["BOOTDISK Marker Offset"])
+        self.assertEqual(bootdisk["FAT12"]["parsed_offset"], PINNED_BOOTDISK_OFFSET_FAT12)
+        self.assertEqual(bootdisk["FAT12"]["offset_token"], "0x40")
         self.assertIn("VERIFIED", bootdisk["FAT12"]["Status & Classification"])
 
     def test_stated_script_table_pinned(self):
@@ -303,23 +336,23 @@ class TestPort19BootdiskVbr(unittest.TestCase):
         self.assertEqual(set(script.keys()), {"FAT12", "FAT16", "FAT32", "exFAT"})
 
         # FAT16: 0x1F0, VERIFIED
-        self.assertIn("0x1F0", script["FAT16"]["SCRIPT Marker Offset"])
-        self.assertNotIn("0x1E0", script["FAT16"]["SCRIPT Marker Offset"])
+        self.assertEqual(script["FAT16"]["parsed_offset"], PINNED_SCRIPT_OFFSET_FAT16)
+        self.assertEqual(script["FAT16"]["offset_token"], "0x1F0")
         self.assertIn("VERIFIED", script["FAT16"]["Status & Classification"])
 
         # FAT32: 0x1F0, VERIFIED
-        self.assertIn("0x1F0", script["FAT32"]["SCRIPT Marker Offset"])
-        self.assertNotIn("0x1E0", script["FAT32"]["SCRIPT Marker Offset"])
+        self.assertEqual(script["FAT32"]["parsed_offset"], PINNED_SCRIPT_OFFSET_FAT32)
+        self.assertEqual(script["FAT32"]["offset_token"], "0x1F0")
         self.assertIn("VERIFIED", script["FAT32"]["Status & Classification"])
 
         # exFAT: UNSUPPORTED / not checked, VERIFIED
-        self.assertIn("UNSUPPORTED", script["exFAT"]["SCRIPT Marker Offset"])
-        self.assertNotIn("0x1F0", script["exFAT"]["SCRIPT Marker Offset"])
+        self.assertIsNone(script["exFAT"]["parsed_offset"])
+        self.assertEqual(script["exFAT"]["offset_token"], "UNSUPPORTED")
         self.assertIn("VERIFIED", script["exFAT"]["Status & Classification"])
 
         # FAT12: 0x1F0, VERIFIED
-        self.assertIn("0x1F0", script["FAT12"]["SCRIPT Marker Offset"])
-        self.assertNotIn("0x1E0", script["FAT12"]["SCRIPT Marker Offset"])
+        self.assertEqual(script["FAT12"]["parsed_offset"], PINNED_SCRIPT_OFFSET_FAT12)
+        self.assertEqual(script["FAT12"]["offset_token"], "0x1F0")
         self.assertIn("VERIFIED", script["FAT12"]["Status & Classification"])
 
     def test_eos_develop_scoped_status_pinned(self):
@@ -430,6 +463,74 @@ class TestPort19BootdiskVbr(unittest.TestCase):
         self.assertTrue(
             "BOOTDISK table filesystems" in str(ctx.exception)
             or "BOOTDISK table must have exactly 4 rows" in str(ctx.exception)
+        )
+
+    def test_negative_mutation_fat32_script_out_of_range(self):
+        """Negative test (mutation a): FAT32 SCRIPT 0x1F0 -> 0x1F00 must be rejected."""
+        target = '| **FAT32** | **`0x1F0`** (496 dec) |'
+        self.assertIn(target, self.doc_text, "Anchor line for FAT32 SCRIPT mutation not found")
+        mutated_text = self.doc_text.replace(
+            target,
+            '| **FAT32** | **`0x1F00`** (496 dec) |',
+            1,
+        )
+        self.assertNotEqual(mutated_text, self.doc_text)
+        with self.assertRaises(ValueError) as ctx:
+            validate_bootdisk_vbr_doc(mutated_text)
+        self.assertTrue(
+            "0x1F00" in str(ctx.exception) or ">= 0x200" in str(ctx.exception) or "FAT32 SCRIPT" in str(ctx.exception),
+            f"Unexpected exception message: {ctx.exception}",
+        )
+
+    def test_negative_mutation_bootdisk_fat16_out_of_range(self):
+        """Negative test (mutation b): BOOTDISK FAT16 0x40 -> 0x400 must be rejected."""
+        target = '| **FAT16** | **`0x40`** (64 dec) |'
+        self.assertIn(target, self.doc_text, "Anchor line for FAT16 BOOTDISK mutation not found")
+        mutated_text = self.doc_text.replace(
+            target,
+            '| **FAT16** | **`0x400`** (64 dec) |',
+            1,
+        )
+        self.assertNotEqual(mutated_text, self.doc_text)
+        with self.assertRaises(ValueError) as ctx:
+            validate_bootdisk_vbr_doc(mutated_text)
+        self.assertTrue(
+            "0x400" in str(ctx.exception) or ">= 0x200" in str(ctx.exception) or "FAT16 BOOTDISK" in str(ctx.exception),
+            f"Unexpected exception message: {ctx.exception}",
+        )
+
+    def test_negative_mutation_bootdisk_fat32_out_of_range(self):
+        """Negative test (mutation c1): BOOTDISK FAT32 0x1E0 -> 0x1E00 must be rejected."""
+        target = '| **FAT32** | **`0x1E0`** (480 dec) |'
+        self.assertIn(target, self.doc_text, "Anchor line for FAT32 BOOTDISK mutation not found")
+        mutated_text = self.doc_text.replace(
+            target,
+            '| **FAT32** | **`0x1E00`** (480 dec) |',
+            1,
+        )
+        self.assertNotEqual(mutated_text, self.doc_text)
+        with self.assertRaises(ValueError) as ctx:
+            validate_bootdisk_vbr_doc(mutated_text)
+        self.assertTrue(
+            "0x1E00" in str(ctx.exception) or ">= 0x200" in str(ctx.exception) or "FAT32 BOOTDISK" in str(ctx.exception),
+            f"Unexpected exception message: {ctx.exception}",
+        )
+
+    def test_negative_mutation_bootdisk_fat32_invalid_hex(self):
+        """Negative test (mutation c2): BOOTDISK FAT32 0x1E0 -> 0x01E0X must be rejected."""
+        target = '| **FAT32** | **`0x1E0`** (480 dec) |'
+        self.assertIn(target, self.doc_text, "Anchor line for FAT32 BOOTDISK invalid hex mutation not found")
+        mutated_text = self.doc_text.replace(
+            target,
+            '| **FAT32** | **`0x01E0X`** (480 dec) |',
+            1,
+        )
+        self.assertNotEqual(mutated_text, self.doc_text)
+        with self.assertRaises(ValueError) as ctx:
+            validate_bootdisk_vbr_doc(mutated_text)
+        self.assertTrue(
+            "0x01E0X" in str(ctx.exception) or "not a valid hex token" in str(ctx.exception) or "FAT32 BOOTDISK" in str(ctx.exception),
+            f"Unexpected exception message: {ctx.exception}",
         )
 
     def test_p3_conflict_reconciliation(self):
