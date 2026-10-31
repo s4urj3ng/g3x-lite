@@ -32,6 +32,27 @@ CANDIDATE_MAIN_ELF = os.path.join(REPO_ROOT, "candidate_port2a", "candidate_main
 class TestG3XWitnessInspector(unittest.TestCase):
     """PORT-1G.1: Offline Validation of Canon Basic Witness Inspector Prototype."""
 
+    @classmethod
+    def setUpClass(cls):
+        """Ensure candidate is built before inspecting artifacts."""
+        core_elf = CANDIDATE_MAIN_ELF
+        if not os.path.exists(core_elf):
+            subprocess.run(
+                [sys.executable, "-B", os.path.join(REPO_ROOT, "tools", "bootstrap_chdk_platform.py")],
+                cwd=REPO_ROOT,
+                check=True,
+            )
+            subprocess.run(
+                [sys.executable, "-B", os.path.join(REPO_ROOT, "tools", "build_candidate_port2a.py")],
+                cwd=REPO_ROOT,
+                check=True,
+            )
+        if os.path.exists(vwi.CANDIDATE_PAYLOAD_BIN):
+            vwi.PAYLOAD_BIN = vwi.CANDIDATE_PAYLOAD_BIN
+            vwi.PAYLOAD_ELF = vwi.CANDIDATE_PAYLOAD_ELF
+            vwi.LOADER_SCRIPT = vwi.CANDIDATE_LOADER_SCRIPT
+            vwi.METADATA_JSON = vwi.CANDIDATE_METADATA_JSON
+
     def test_build_witness_inspector_payload(self):
         """Build witness inspector payload and verify assembly succeeds."""
         build_script = os.path.join(REPO_ROOT, "tools", "build_witness_inspector.py")
@@ -291,7 +312,7 @@ class TestG3XWitnessInspector(unittest.TestCase):
         wrong_addr = (expected_addr + 0x1000) & 0xFFFFFFFF
         with tempfile.TemporaryDirectory() as td:
             bad_s = os.path.join(td, "bad.S")
-            with open(vwi.PAYLOAD_ELF.replace(".o", ".S")) as f:
+            with open(bwi.PAYLOAD_S) as f:
                 content = f.read()
             with open(bad_s, "w") as f:
                 f.write(content)
@@ -385,12 +406,24 @@ class TestG3XWitnessInspector(unittest.TestCase):
                 with open(sim_script, "w", encoding="utf-8") as f_out:
                     f_out.write(f.read())
 
+            # Pinned default check: calling with default expectation (0x0035F7A0) must reject simulated ELF
+            with self.assertRaises(ValueError) as ctx:
+                bwi.build_witness_inspector(
+                    elf_path=elf_sim,
+                    payload_o=sim_o,
+                    payload_bin=sim_bin,
+                    loader_script=sim_script,
+                    metadata_json=sim_meta,
+                )
+            self.assertIn("address mismatch", str(ctx.exception))
+
             built_addr, bin_sz, meta = bwi.build_witness_inspector(
                 elf_path=elf_sim,
                 payload_o=sim_o,
                 payload_bin=sim_bin,
                 loader_script=sim_script,
                 metadata_json=sim_meta,
+                expected_witness_addr=sim_witness_addr,
             )
 
             self.assertEqual(built_addr, sim_witness_addr)

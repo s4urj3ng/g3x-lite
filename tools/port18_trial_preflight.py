@@ -29,6 +29,7 @@ import hashlib
 import json
 import os
 import re
+import struct
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -339,10 +340,26 @@ def evaluate_symbol_check(
 # PREFLIGHT VERIFICATION WORKFLOW
 # =============================================================================
 
+def decode_inspector_payload_witness_addr(payload_bytes: bytes) -> Optional[int]:
+    """Decode MOVW/MOVT r7 immediate address from witness inspector payload binary bytes."""
+    if len(payload_bytes) < 18:
+        return None
+    lo_w1, lo_w2, hi_w1, hi_w2 = struct.unpack("<HHHH", payload_bytes[10:18])
+    if (lo_w1 & 0xFBF0) != 0xF240 or (hi_w1 & 0xFBF0) != 0xF2C0:
+        return None
+    if ((lo_w2 >> 8) & 0xF) != 7 or ((hi_w2 >> 8) & 0xF) != 7:
+        return None
+    lo = ((lo_w1 & 0x0400) << 1) | ((lo_w1 & 0x000F) << 12) | ((lo_w2 & 0x7000) >> 4) | (lo_w2 & 0x00FF)
+    hi = ((hi_w1 & 0x0400) << 1) | ((hi_w1 & 0x000F) << 12) | ((hi_w2 & 0x7000) >> 4) | (hi_w2 & 0x00FF)
+    return (hi << 16) | lo
+
+
 def run_preflight(
     binary_path: str,
     symbols_path: str,
     out_path: Optional[str] = None,
+    inspector_metadata_path: Optional[str] = None,
+    inspector_bin_path: Optional[str] = None,
 ) -> Tuple[int, Dict[str, Any]]:
     """Execute preflight checks on candidate binary and symbols file.
 
@@ -355,6 +372,10 @@ def run_preflight(
     if out_path:
         validate_path_safety(out_path)
         validate_output_target(out_path, binary_path, symbols_path)
+    if inspector_metadata_path:
+        validate_path_safety(inspector_metadata_path)
+    if inspector_bin_path:
+        validate_path_safety(inspector_bin_path)
 
     # 2. Inspect candidate binary file
     if not os.path.isfile(binary_path):
@@ -399,6 +420,67 @@ def run_preflight(
         end_check,
         trace_check,
     ]
+
+    # Optional Inspector Metadata Witness Alignment Check
+    if inspector_metadata_path:
+        if not os.path.isfile(inspector_metadata_path):
+            raise FileNotFoundError(f"Inspector metadata file not found: '{inspector_metadata_path}'")
+        try:
+            with open(inspector_metadata_path, "r", encoding="utf-8") as f:
+                meta_data = json.load(f)
+            meta_raw = meta_data.get("witness_address")
+            if meta_raw is None:
+                meta_addr = None
+                meta_err = "Inspector metadata missing 'witness_address' field"
+            else:
+                meta_addr = int(meta_raw, 16)
+                meta_err = None
+        except Exception as exc:
+            meta_addr = None
+            meta_err = f"Malformed inspector metadata: {exc}"
+
+        meta_pass = (meta_addr == EXPECTED_BOOT_WITNESS_ADDR)
+        if meta_pass:
+            meta_reason = None
+        elif meta_err:
+            meta_reason = meta_err
+        elif meta_addr is not None:
+            meta_reason = f"Inspector metadata target 0x{meta_addr:08X} != 0x{EXPECTED_BOOT_WITNESS_ADDR:08X}"
+        else:
+            meta_reason = "Inspector metadata missing witness address"
+
+        checks.append({
+            "name": "inspector_metadata_witness",
+            "expected": f"0x{EXPECTED_BOOT_WITNESS_ADDR:08X}",
+            "actual": f"0x{meta_addr:08X}" if meta_addr is not None else "None",
+            "pass": meta_pass,
+            "status": "PASS" if meta_pass else "FAIL",
+            "reason": meta_reason,
+        })
+
+    # Optional Inspector Payload Binary Witness Alignment Check
+    if inspector_bin_path:
+        if not os.path.isfile(inspector_bin_path):
+            raise FileNotFoundError(f"Inspector payload binary file not found: '{inspector_bin_path}'")
+        with open(inspector_bin_path, "rb") as f:
+            insp_bytes = f.read()
+        payload_addr = decode_inspector_payload_witness_addr(insp_bytes)
+        bin_pass = (payload_addr == EXPECTED_BOOT_WITNESS_ADDR)
+        if bin_pass:
+            bin_reason = None
+        elif payload_addr is not None:
+            bin_reason = f"Inspector payload decoded address 0x{payload_addr:08X} != 0x{EXPECTED_BOOT_WITNESS_ADDR:08X}"
+        else:
+            bin_reason = "Failed to decode MOVW/MOVT opcodes"
+
+        checks.append({
+            "name": "inspector_payload_witness",
+            "expected": f"0x{EXPECTED_BOOT_WITNESS_ADDR:08X}",
+            "actual": f"0x{payload_addr:08X}" if payload_addr is not None else "None",
+            "pass": bin_pass,
+            "status": "PASS" if bin_pass else "FAIL",
+            "reason": bin_reason,
+        })
 
     all_passed = all(c["pass"] for c in checks)
     verdict = "PASS" if all_passed else "FAIL"
@@ -491,6 +573,19 @@ def build_cli_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional path to write JSON preflight report (default: write to stdout)",
     )
+    parser.add_argument(
+        "--inspector-metadata",
+        "--metadata",
+        dest="inspector_metadata",
+        default=None,
+        help="Optional path to witness_inspector_metadata.json to verify witness address alignment",
+    )
+    parser.add_argument(
+        "--inspector-bin",
+        dest="inspector_bin",
+        default=None,
+        help="Optional path to witness_inspector_payload.bin to verify witness address alignment",
+    )
     return parser
 
 
@@ -515,6 +610,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             binary_path=binary_path,
             symbols_path=symbols_path,
             out_path=args.out,
+            inspector_metadata_path=args.inspector_metadata,
+            inspector_bin_path=args.inspector_bin,
         )
         return exit_code
     except ValueError as exc:
