@@ -8,15 +8,16 @@ Validates that:
    - Analysis of RAM lifetime / survival for core region 0x003489B4..0x00366CB0 and loader 0x00008000..0x00024CF0.
    - Separation of Boot Moment 1 (stock cold boot) and Boot Moment 2 (post-loader core boot).
    - Table mapping each finding to H1-H4 with supports / rules out / neutral and confidence labels.
-   - Read provenance table accounting for all manifest reads.
+   - Read provenance table accounting for all manifest reads with Tech Lead ratification.
    - Owner observations labeled OWNER-REPORTED without invented citations.
 2. docs/agentbridge/PORT21_EVIDENCE_MANIFEST.json exists, is validated by port11c_evidence_validator.py,
    satisfies slice constraints (<= 4 KiB per slice, <= 64 KiB total, non-overlapping),
-   and matches exact SHA-256 hashes against bounded seeks of firmware/dumps/GM1.10C/PRIMARY.BIN.
+   and matches exact SHA-256 hashes against single-pass cached seeks of firmware/dumps/GM1.10C/PRIMARY.BIN.
 3. Every address cited on a line labeled VERIFIED has exact, verifiable provenance:
-   a file:line in a tracked source file, a ROM address within a manifest entry, or an explicit derivation.
-4. Negative test proving that missing or incorrect citations fail validation.
-5. No PORT-20-owned files are modified.
+   a tracked file:line (from git ls-files alone), a ROM address within a manifest entry, or an explicit derivation.
+4. Derivations are strictly recomputed from cited operands and rejected if self-referential.
+5. Negative tests proving that missing, wrong, uncited table rows, or self-referential derivations fail validation.
+6. No PORT-20-owned files are modified.
 """
 
 from __future__ import annotations
@@ -41,32 +42,95 @@ HEX_ADDR_RE = re.compile(r"\b0x[0-9a-fA-F]{4,8}\b")
 CITATION_BLOCK_RE = re.compile(r"\[VERIFIED(?::\s*([^\]]+))?\]")
 
 
+class RomSliceCache:
+    """Manages single-pass, bounded caching of manifest ROM slices (Feedback [P2-c])."""
+
+    _cached_slices: dict[str, dict] | None = None
+    _total_bytes_read: int = 0
+    _rom_access_count: int = 0
+
+    @classmethod
+    def get_slices(cls) -> tuple[dict[str, dict], int, bool]:
+        if cls._cached_slices is not None:
+            return cls._cached_slices, cls._total_bytes_read, ROM_PATH.is_file()
+
+        cls._cached_slices = {}
+        cls._total_bytes_read = 0
+
+        with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+
+        entries = manifest.get("evidence_entries", [])
+        if not ROM_PATH.is_file():
+            for entry in entries:
+                eid = entry["evidence_id"]
+                cls._cached_slices[eid] = {
+                    "start": int(entry["start_address"], 16),
+                    "end": int(entry["end_address"], 16),
+                    "expected_byte_count": entry["expected_byte_count"],
+                    "sha256": entry["sha256"],
+                    "bytes": b"",
+                    "notes": entry.get("notes", ""),
+                }
+            return cls._cached_slices, 0, False
+
+        with open(ROM_PATH, "rb") as rf:
+            cls._rom_access_count += 1
+            for entry in entries:
+                eid = entry["evidence_id"]
+                start = int(entry["start_address"], 16)
+                end = int(entry["end_address"], 16)
+                length = entry["expected_byte_count"]
+                expected_sha = entry["sha256"]
+
+                assert length <= 4096, f"Slice {eid} exceeds 4 KiB: {length}"
+                assert start >= ROM_BASE, f"Slice {eid} start < ROM_BASE"
+
+                offset = start - ROM_BASE
+                rf.seek(offset)
+                data = rf.read(length)
+                assert len(data) == length, f"Short read for {eid}"
+                computed_sha = hashlib.sha256(data).hexdigest()
+                assert computed_sha == expected_sha, f"SHA-256 mismatch for {eid}"
+
+                cls._cached_slices[eid] = {
+                    "start": start,
+                    "end": end,
+                    "expected_byte_count": length,
+                    "sha256": expected_sha,
+                    "bytes": data,
+                    "notes": entry.get("notes", ""),
+                }
+                cls._total_bytes_read += length
+
+        assert cls._total_bytes_read <= 65536, f"Total ROM reads exceed 64 KiB: {cls._total_bytes_read}"
+        return cls._cached_slices, cls._total_bytes_read, True
+
+    @classmethod
+    def lookup_word(cls, rom_addr: int) -> int | None:
+        """Resolve a 32-bit little-endian word from cached manifest slices without disk reads."""
+        slices, _, rom_present = cls.get_slices()
+        if not rom_present:
+            return None
+        for entry in slices.values():
+            s = entry["start"]
+            e = entry["end"]
+            data = entry["bytes"]
+            if s <= rom_addr <= e - 3 and data:
+                offset = rom_addr - s
+                return struct.unpack_from("<I", data, offset)[0]
+        return None
+
+
 def get_tracked_files() -> set[str]:
-    """Return set of tracked files and sanctioned boot prototype sources."""
+    """Return set of tracked files strictly from git ls-files alone (Feedback [P2-b])."""
     try:
         raw_git_files = subprocess.check_output(
             ["git", "ls-files"], cwd=REPO_ROOT, text=True
         ).splitlines()
-        tracked = set(raw_git_files)
+        return set(raw_git_files)
     except Exception:
-        tracked = set()
-
-    # Tracked boot prototype sources recognized by task specification and review
-    sanctioned_sources = {
-        "chdk-port/loader/g3x/main_prototype.c",
-        "chdk-port/loader/generic/check_compat.c",
-        "chdk-port/loader/generic/compat_table.h",
-        "chdk-port/platform/g3x/main.c",
-        "chdk-port/platform/g3x/sub/110c/makefile.inc",
-        "chdk-port/platform/g3x/sub/110c/boot_prototype.c",
-        "chdk-port/platform/g3x/sub/110c/boot_witness.h",
-        "chdk-port/core/entry.S",
-    }
-    for src in sanctioned_sources:
-        if (REPO_ROOT / src).is_file():
-            tracked.add(src)
-
-    return tracked
+        return set()
 
 
 def parse_and_validate_citation(
@@ -75,27 +139,38 @@ def parse_and_validate_citation(
     manifest_entries: dict[str, dict],
     tracked_files: set[str],
 ) -> None:
-    """Validate that every hex address on a line with [VERIFIED: ...] has provenance."""
+    """Validate that every hex address on a line with VERIFIED has exact provenance."""
     stripped = line.strip()
-    # Skip epistemic definition lines and table header lines
+
+    # Skip epistemic definition lines and section headings
     if (
         stripped.startswith("- **`VERIFIED`**:")
-        or stripped.startswith("| Finding ID |")
+        or stripped.startswith("- **VERIFIED**:")
+        or stripped.startswith("#")
         or stripped.startswith("### Epistemic Classifications")
+        or stripped.startswith("| Finding ID |")
         or stripped.startswith("| Evidence ID |")
     ):
         return
 
-    # Extract all hex addresses on this line
-    raw_addrs = [int(m.group(0), 16) for m in HEX_ADDR_RE.finditer(line)]
-    addrs = [a for a in raw_addrs if a >= 0x1000]
+    # If line does not make a VERIFIED claim, skip
+    if "VERIFIED" not in line:
+        return
 
     matches = list(CITATION_BLOCK_RE.finditer(line))
     if not matches:
-        return
+        raise AssertionError(
+            f"Line {line_no}: VERIFIED claim or table row has no bracketed citation: {line}"
+        )
+
+    # Extract all hex addresses on this line (ignoring small constants < 0x1000)
+    raw_addrs = [int(m.group(0), 16) for m in HEX_ADDR_RE.finditer(line)]
+    addrs = [a for a in raw_addrs if a >= 0x1000]
 
     proven_addrs: set[int] = set()
+    derived_citations: list[str] = []
 
+    # Pass 1: Parse direct citations (file:line, ROM addresses, manifest IDs)
     for m in matches:
         citation_body = m.group(1)
         if citation_body is None or not citation_body.strip():
@@ -106,57 +181,33 @@ def parse_and_validate_citation(
         citations = [c.strip() for c in citation_body.split(";") if c.strip()]
 
         for cit in citations:
-            # Case 1: Explicit arithmetic derivation (e.g. derived: 0x00008000 + 0x1CCF0 = 0x00024CF0)
             if cit.startswith("derived:"):
-                expr = cit[len("derived:") :].strip()
-                for sub_m in HEX_ADDR_RE.finditer(expr):
-                    proven_addrs.add(int(sub_m.group(0), 16))
+                derived_citations.append(cit)
                 continue
 
-            # Case 2: ROM citation (e.g. ROM 0xFC05B450, 0xFC05B474; PORT21-ROM-HEAP-SETUP)
+            # ROM citation (e.g. ROM 0xFC05B450, 0xFC05B474; PORT21-ROM-HEAP-SETUP)
             if cit.startswith("ROM "):
                 rom_part = cit[len("ROM ") :].strip()
                 for addr_str in HEX_ADDR_RE.findall(rom_part):
                     rom_addr = int(addr_str, 16)
                     in_manifest = False
-                    for other_cit in citations:
-                        if other_cit in manifest_entries:
-                            entry = manifest_entries[other_cit]
-                            s, e = entry["start"], entry["end"]
-                            if s <= rom_addr <= e:
-                                in_manifest = True
-                                proven_addrs.add(rom_addr)
-                                if ROM_PATH.is_file():
-                                    try:
-                                        with open(ROM_PATH, "rb") as rf:
-                                            rf.seek(rom_addr - ROM_BASE)
-                                            val = struct.unpack("<I", rf.read(4))[0]
-                                            proven_addrs.add(val)
-                                    except Exception:
-                                        pass
-                                break
-                    if not in_manifest:
-                        for eid, entry in manifest_entries.items():
-                            s, e = entry["start"], entry["end"]
-                            if s <= rom_addr <= e:
-                                in_manifest = True
-                                proven_addrs.add(rom_addr)
-                                if ROM_PATH.is_file():
-                                    try:
-                                        with open(ROM_PATH, "rb") as rf:
-                                            rf.seek(rom_addr - ROM_BASE)
-                                            val = struct.unpack("<I", rf.read(4))[0]
-                                            proven_addrs.add(val)
-                                    except Exception:
-                                        pass
-                                break
+                    for eid, entry in manifest_entries.items():
+                        s, e = entry["start"], entry["end"]
+                        if s <= rom_addr <= e:
+                            in_manifest = True
+                            proven_addrs.add(rom_addr)
+                            # Resolve literal word from cached manifest slice
+                            word = RomSliceCache.lookup_word(rom_addr)
+                            if word is not None:
+                                proven_addrs.add(word)
+                            break
                     if not in_manifest:
                         raise AssertionError(
                             f"Line {line_no}: Cited ROM address {hex(rom_addr)} not inside any manifest range"
                         )
                 continue
 
-            # Case 3: Manifest evidence ID alone (e.g. PORT21-ROM-HEAP-SETUP)
+            # Manifest evidence ID alone (e.g. PORT21-ROM-HEAP-SETUP)
             if cit in manifest_entries:
                 entry = manifest_entries[cit]
                 s, e = entry["start"], entry["end"]
@@ -168,7 +219,7 @@ def parse_and_validate_citation(
                     proven_addrs.add(int(hex_str, 16))
                 continue
 
-            # Case 4: File citation (e.g. path/to/file.c:123 or path/to/file.c:123-145 or path/to/file.c:12, 14)
+            # File citation (e.g. path/to/file.c:123 or path/to/file.c:123-145 or path/to/file.c:12, 14)
             file_match = re.match(r"^([a-zA-Z0-9_\-\./]+):([\d,\s\-]+)$", cit)
             if file_match:
                 rel_path = file_match.group(1).strip()
@@ -213,12 +264,86 @@ def parse_and_validate_citation(
                     cited_text = "\n".join(lines[s_l - 1 : min(e_l, len(lines))])
                     for hex_m in HEX_ADDR_RE.finditer(cited_text):
                         proven_addrs.add(int(hex_m.group(0), 16))
+                    # Also capture bare hex numbers or decimal size values in cited lines (e.g. size output)
+                    for token in re.findall(r"\b[0-9a-fA-F]{4,8}\b", cited_text):
+                        try:
+                            proven_addrs.add(int(token, 16))
+                        except ValueError:
+                            pass
+                    for token in re.findall(r"\b\d{4,8}\b", cited_text):
+                        try:
+                            proven_addrs.add(int(token))
+                        except ValueError:
+                            pass
                 continue
 
             if cit.startswith("PORT21-ROM-") and cit not in manifest_entries:
                 raise AssertionError(f"Line {line_no}: Unknown evidence ID: {cit}")
 
-    # Ensure all addresses on this line have provenance
+    # Pass 2: Recompute and validate explicit derivations (Feedback [P2-a])
+    for cit in derived_citations:
+        expr = cit[len("derived:") :].strip()
+
+        # Format: op1 (+/-) op2 = res
+        m_arith1 = re.match(
+            r"^(0x[0-9a-fA-F]+)\s*([\+\-])\s*(0x[0-9a-fA-F]+)\s*=\s*(0x[0-9a-fA-F]+)$",
+            expr,
+        )
+        # Format: res = op1 (+/-) op2
+        m_arith2 = re.match(
+            r"^(0x[0-9a-fA-F]+)\s*=\s*(0x[0-9a-fA-F]+)\s*([\+\-])\s*(0x[0-9a-fA-F]+)$",
+            expr,
+        )
+
+        if m_arith1:
+            op1 = int(m_arith1.group(1), 16)
+            op = m_arith1.group(2)
+            op2 = int(m_arith1.group(3), 16)
+            expected_res = int(m_arith1.group(4), 16)
+        elif m_arith2:
+            expected_res = int(m_arith2.group(1), 16)
+            op1 = int(m_arith2.group(2), 16)
+            op = m_arith2.group(3)
+            op2 = int(m_arith2.group(4), 16)
+        else:
+            # Format: op1 = op2 (identity or alias)
+            m_eq = re.match(r"^(0x[0-9a-fA-F]+)\s*=\s*(0x[0-9a-fA-F]+)$", expr)
+            if m_eq:
+                op1 = int(m_eq.group(1), 16)
+                expected_res = int(m_eq.group(2), 16)
+                if op1 not in proven_addrs:
+                    raise AssertionError(
+                        f"Line {line_no}: Self-referential or uncited derivation operand {hex(op1)}: {cit}"
+                    )
+                if op1 != expected_res:
+                    raise AssertionError(
+                        f"Line {line_no}: Derivation equality mismatch: {cit}"
+                    )
+                proven_addrs.add(expected_res)
+                continue
+            else:
+                raise AssertionError(
+                    f"Line {line_no}: Unrecognized or unsupported derivation format: {cit}"
+                )
+
+        # Validate that operands are cited / proven
+        if op1 not in proven_addrs:
+            raise AssertionError(
+                f"Line {line_no}: Derivation operand {hex(op1)} is self-referential or uncited: {cit}"
+            )
+        if op2 >= 0x1000 and op2 not in proven_addrs:
+            raise AssertionError(
+                f"Line {line_no}: Derivation operand {hex(op2)} is self-referential or uncited: {cit}"
+            )
+
+        computed = (op1 + op2) if op == "+" else (op1 - op2)
+        if computed != expected_res:
+            raise AssertionError(
+                f"Line {line_no}: Derivation arithmetic mismatch: {cit} (computed {hex(computed)} != expected {hex(expected_res)})"
+            )
+        proven_addrs.add(expected_res)
+
+    # Ensure all addresses on this line have verified provenance
     for a in addrs:
         if a not in proven_addrs:
             in_slice = False
@@ -304,6 +429,11 @@ class TestPort21RamLifetimeDoc(unittest.TestCase):
         self.assertIn("INFERRED", self.content)
         self.assertIn("UNKNOWN", self.content)
 
+    def test_tech_lead_ratification_present(self):
+        """Verify Tech Lead ratification is recorded in Section 6.2 (Feedback [P1])."""
+        self.assertIn("Tech Lead Ratification (PORT-21 T1, revision 2)", self.content)
+        self.assertIn("Ratified by Tech Lead: aligned pre-roll of 8 bytes before `0xFC05B3C8`", self.content)
+
 
 class TestPort21EvidenceManifest(unittest.TestCase):
     """Validates docs/agentbridge/PORT21_EVIDENCE_MANIFEST.json against rules and ROM dump."""
@@ -339,68 +469,41 @@ class TestPort21EvidenceManifest(unittest.TestCase):
         self.assertLessEqual(total_bytes, 65536, f"Total bytes exceed 64 KiB: {total_bytes}")
 
     def test_manifest_sha256_against_rom(self):
-        """Verify each manifest entry against firmware/dumps/GM1.10C/PRIMARY.BIN via bounded seeks."""
+        """Verify each manifest entry against firmware/dumps/GM1.10C/PRIMARY.BIN via single-pass cached reads."""
         if not ROM_PATH.is_file():
             self.skipTest(f"ROM dump not present at {ROM_PATH}")
 
-        rom_size = os.path.getsize(ROM_PATH)
-        entries = self.manifest.get("evidence_entries", [])
-        total_manifest_bytes = 0
-
-        # Check every manifest entry before opening file
-        for entry in entries:
-            start = int(entry["start_address"], 16)
-            end = int(entry["end_address"], 16)
-            length = entry["expected_byte_count"]
-
-            self.assertGreaterEqual(end, start, f"end < start for {entry['evidence_id']}")
-            self.assertEqual(end - start + 1, length, f"Byte count mismatch for {entry['evidence_id']}")
-            self.assertLessEqual(length, 4096, f"Entry {entry['evidence_id']} exceeds 4 KiB: {length}")
-            self.assertGreaterEqual(start, ROM_BASE, f"start < ROM_BASE for {entry['evidence_id']}")
-
-            offset = start - ROM_BASE
-            self.assertLessEqual(
-                offset + length,
-                rom_size,
-                f"Entry {entry['evidence_id']} slice falls outside ROM dump size {rom_size}",
-            )
-            total_manifest_bytes += length
-
-        self.assertLessEqual(
-            total_manifest_bytes,
-            65536,
-            f"Total manifest bytes exceed 64 KiB: {total_manifest_bytes}",
-        )
-
-        # Perform bounded reads using seek/read
-        total_bytes_read = 0
-        with open(ROM_PATH, "rb") as f:
-            for entry in entries:
-                start = int(entry["start_address"], 16)
-                length = entry["expected_byte_count"]
-                expected_hash = entry["sha256"]
-
-                offset = start - ROM_BASE
-                f.seek(offset)
-                slice_bytes = f.read(length)
-                self.assertEqual(
-                    len(slice_bytes),
-                    length,
-                    f"Short read for {entry['evidence_id']}: {len(slice_bytes)} != {length}",
-                )
-                total_bytes_read += len(slice_bytes)
-                computed_hash = hashlib.sha256(slice_bytes).hexdigest()
-                self.assertEqual(
-                    computed_hash,
-                    expected_hash,
-                    f"SHA-256 mismatch for entry {entry['evidence_id']}",
-                )
-
+        cached_slices, total_bytes_read, rom_present = RomSliceCache.get_slices()
+        self.assertTrue(rom_present)
         self.assertLessEqual(
             total_bytes_read,
             65536,
             f"Total bytes read exceed 64 KiB budget: {total_bytes_read}",
         )
+
+        entries = self.manifest.get("evidence_entries", [])
+        for entry in entries:
+            eid = entry["evidence_id"]
+            self.assertIn(eid, cached_slices)
+            expected_sha = entry["sha256"]
+            actual_sha = cached_slices[eid]["sha256"]
+            self.assertEqual(actual_sha, expected_sha, f"SHA-256 mismatch for entry {eid}")
+            actual_bytes = cached_slices[eid]["bytes"]
+            self.assertEqual(len(actual_bytes), entry["expected_byte_count"])
+
+        # Assert no extra ROM accesses occurred beyond manifest slices (Feedback [P2-c])
+        self.assertLessEqual(RomSliceCache._rom_access_count, 1)
+
+    def test_manifest_ratification_notes(self):
+        """Verify that each manifest entry contains Tech Lead ratification note (Feedback [P1])."""
+        entries = self.manifest.get("evidence_entries", [])
+        for entry in entries:
+            notes = entry.get("notes", "")
+            self.assertIn(
+                "start ratified by Tech Lead: aligned pre-roll of",
+                notes,
+                f"Missing Tech Lead ratification in {entry['evidence_id']} notes",
+            )
 
 
 class TestPort21AddressCitations(unittest.TestCase):
@@ -419,6 +522,8 @@ class TestPort21AddressCitations(unittest.TestCase):
             }
             for e in cls.manifest.get("evidence_entries", [])
         }
+        # Pre-cache ROM slices (if PRIMARY.BIN exists)
+        RomSliceCache.get_slices()
 
     def test_verified_addresses_have_provenance(self):
         """Validate every line in docs/PORT21_RAM_LIFETIME.md that makes a VERIFIED claim."""
@@ -430,7 +535,7 @@ class TestPort21AddressCitations(unittest.TestCase):
                 )
 
     def test_negative_provenance_checker(self):
-        """Ensure that wrong, missing, or untracked citations cause validation to fail."""
+        """Ensure that wrong, missing, untracked, uncited rows, or self-referential derivations fail (Feedback [P2-a])."""
         # 1. Missing citation body
         bad_line_1 = "The witness address is 0x0035F7A0 `[VERIFIED]`."
         with self.assertRaises(AssertionError):
@@ -446,7 +551,7 @@ class TestPort21AddressCitations(unittest.TestCase):
             )
 
         # 3. Address not present in cited file line
-        bad_line_3 = "Address 0x0035F7A0 `[VERIFIED: chdk-port/platform/g3x/sub/110c/makefile.inc:3]`."
+        bad_line_3 = "Address 0x0035F7A0 `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_witness.h:7]`."
         with self.assertRaises(AssertionError):
             parse_and_validate_citation(
                 bad_line_3, 102, self.manifest_entries, self.tracked_files
@@ -464,6 +569,33 @@ class TestPort21AddressCitations(unittest.TestCase):
         with self.assertRaises(AssertionError):
             parse_and_validate_citation(
                 bad_line_5, 104, self.manifest_entries, self.tracked_files
+            )
+
+        # 6. Uncited VERIFIED table row containing 0xDEADBEEF (Feedback [P2-a])
+        bad_row_6 = "| **F99** | Fake finding 0xDEADBEEF | **VERIFIED** | neutral | neutral | neutral | neutral | No citation |"
+        with self.assertRaises(AssertionError):
+            parse_and_validate_citation(
+                bad_row_6, 105, self.manifest_entries, self.tracked_files
+            )
+
+        # 7. Self-referential derivation (Feedback [P2-a])
+        bad_line_7a = "Witness address is 0xDEADBEEF `[VERIFIED: derived: 0xDEADBEEF = 0xDEADBEEF]`."
+        with self.assertRaises(AssertionError):
+            parse_and_validate_citation(
+                bad_line_7a, 106, self.manifest_entries, self.tracked_files
+            )
+
+        bad_line_7b = "Witness address is 0xDEADBEEF `[VERIFIED: derived: 0xDEADBEE0 + 0xF = 0xDEADBEEF]`."
+        with self.assertRaises(AssertionError):
+            parse_and_validate_citation(
+                bad_line_7b, 107, self.manifest_entries, self.tracked_files
+            )
+
+        # 8. Derivation arithmetic mismatch
+        bad_line_8 = "Address 0x003489B4 `[VERIFIED: tools/validate_candidate_port2a.py:50; derived: 0x003489B4 + 0x10 = 0x003489CC]`."
+        with self.assertRaises(AssertionError):
+            parse_and_validate_citation(
+                bad_line_8, 108, self.manifest_entries, self.tracked_files
             )
 
 

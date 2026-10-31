@@ -59,7 +59,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT21-RAM-LIFETIME",
       "classification": "STATIC_VERIFIED",
-      "notes": "Stock early boot 0xFC020000..0xFC0201FF: reset entry 0xFC02000C, vector copy 0xFC020016, High RAM copy 0xFC020024..36, ATCM copy 0xFC020040..52, Low RAM copy 0xFC020054..66 (overwriting 0x8000..0x3F4F4), Canon BSS zero loop 0xFC020068..78 (zeroing 0x3F4F4..0x3489B4), branch to DryOS init 0xFC02007A, and literal pool 0xFC0200B0..DF"
+      "notes": "Stock early boot 0xFC020000..0xFC0201FF: reset entry 0xFC02000C, vector copy 0xFC020016, High RAM copy 0xFC020024..36, ATCM copy 0xFC020040..52, Low RAM copy 0xFC020054..66 (overwriting 0x8000..0x3F4F4), Canon BSS zero loop 0xFC020068..78 (zeroing 0x3F4F4..0x3489B4), branch to DryOS init 0xFC02007A, and literal pool 0xFC0200B0..DF; start ratified by Tech Lead: aligned pre-roll of 0 bytes before 0xFC020000"
     },
     {
       "evidence_id": "PORT21-ROM-HEAP-SETUP",
@@ -74,7 +74,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT21-RAM-LIFETIME",
       "classification": "STATIC_VERIFIED",
-      "notes": "Stock DryOS heap configuration 0xFC05B3C0..0xFC05B53F: sub_fc05b3c8 loading stock heap base r4=0x003489B4 from [0xFC05B450], upper limit 0x006CE000 from [0xFC05B454], headroom check >=0x000B1FEC from [0xFC05B458], pool 0 limit 0x0060E000 from [0xFC05B470], populating sp[8]=r4=0x003489B4, sp[0xC]=size 0x002B7660, sp[0x10]=0x00600014 from [0xFC05B474], continuation 0xFC05B559 from [0xFC05B478], and calling DryOS init sub_fc31b408"
+      "notes": "Stock DryOS heap configuration 0xFC05B3C0..0xFC05B53F: sub_fc05b3c8 loading stock heap base r4=0x003489B4 from [0xFC05B450], upper limit 0x006CE000 from [0xFC05B454], headroom check >=0x000B1FEC from [0xFC05B458], pool 0 limit 0x0060E000 from [0xFC05B470], populating sp[8]=r4=0x003489B4, sp[0xC]=size 0x002B7660, sp[0x10]=0x00600014 from [0xFC05B474], continuation 0xFC05B559 from [0xFC05B478], and calling DryOS init sub_fc31b408; start ratified by Tech Lead: aligned pre-roll of 8 bytes before 0xFC05B3C8"
     },
     {
       "evidence_id": "PORT21-ROM-INIT-TASK",
@@ -89,7 +89,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT21-RAM-LIFETIME",
       "classification": "STATIC_VERIFIED",
-      "notes": "Stock initial task initialization 0xFC05B540..0xFC05B73F: sub_fc05b558 verifying USER_MEM bounds, initializing termDriver, termDevice, stdio, stdlib, extlib, and branching b.w 0xFC05B962 to startup task creator"
+      "notes": "Stock initial task initialization 0xFC05B540..0xFC05B73F: sub_fc05b558 verifying USER_MEM bounds, initializing termDriver, termDevice, stdio, stdlib, extlib, and branching b.w 0xFC05B962 to startup task creator; start ratified by Tech Lead: aligned pre-roll of 24 bytes before 0xFC05B558"
     },
     {
       "evidence_id": "PORT21-ROM-STARTUP-TASKS",
@@ -104,7 +104,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT21-RAM-LIFETIME",
       "classification": "STATIC_VERIFIED",
-      "notes": "Stock task_Startup (0xFC05B8FC) and creator sub_fc05b962 (0xFC05B962) 0xFC05B8E0..0xFC05BBDF: sub_fc05b962 spawning task_Startup; task_Startup calling StartDiskboot at 0xFC05B90E (bl 0xFC05BBEA), then continuing via sub_fc1283d2 (task_PhySw) to terminal branch 0xFC05B95E (b.w 0xFC0D0126)"
+      "notes": "Stock task_Startup (0xFC05B8FC) and creator sub_fc05b962 (0xFC05B962) 0xFC05B8E0..0xFC05BBDF: sub_fc05b962 spawning task_Startup; task_Startup calling StartDiskboot at 0xFC05B90E (bl 0xFC05BBEA), then continuing via sub_fc1283d2 (task_PhySw) to terminal branch 0xFC05B95E (b.w 0xFC0D0126); start ratified by Tech Lead: aligned pre-roll of 28 bytes before 0xFC05B8FC"
     },
     {
       "evidence_id": "PORT21-ROM-CONTINUATION",
@@ -119,7 +119,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT21-RAM-LIFETIME",
       "classification": "STATIC_VERIFIED",
-      "notes": "Stock firmware continuation 0xFC0D0120..0xFC0D01FF: sub_fc0d0126 continuation target where task_Startup and task_Startup_my transfer control into main Canon application tasks"
+      "notes": "Stock firmware continuation 0xFC0D0120..0xFC0D01FF: sub_fc0d0126 continuation target where task_Startup and task_Startup_my transfer control into main Canon application tasks; start ratified by Tech Lead: aligned pre-roll of 6 bytes before 0xFC0D0126"
     },
     {
       "evidence_id": "PORT21-ROM-KERNEL-INIT-VENEER",
@@ -134,7 +134,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT21-RAM-LIFETIME",
       "classification": "STATIC_VERIFIED",
-      "notes": "DryOS kernel initialization veneer 0xFC31B400..0xFC31B47F: sub_fc31b408 ARM veneer jumping to ATCM entry point 0xBFE10F79"
+      "notes": "DryOS kernel initialization veneer 0xFC31B400..0xFC31B47F: sub_fc31b408 ARM veneer jumping to ATCM entry point 0xBFE10F79; start ratified by Tech Lead: aligned pre-roll of 8 bytes before 0xFC31B408"
     }
   ]
 }

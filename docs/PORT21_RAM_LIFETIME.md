@@ -1,10 +1,10 @@
 # PORT-21 T1: Stock-Boot Lifetime of Core Region (0x003489B4..0x00366CB0) and Loader Region (0x00008000..0x00024CF0)
 
-- **Target Camera**: Canon PowerShot G3 X (Firmware **GM1.10C**, Platform ID `0x32A8` = 12968) `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:7; chdk-port/platform/g3x/sub/110c/makefile.inc:3]`
+- **Target Camera**: Canon PowerShot G3 X (Firmware **GM1.10C**, Platform ID `0x32A8` = 12968) `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:7; docs/CHDK_PORT1C1_CRITICAL_AUDIT.md:3]`
 - **Target Memory Ranges**:
   - Loader image in DRAM: `0x00008000..0x00024CF0` (118,000 bytes = `0x1CCF0`, derived: `0x00008000 + 0x1CCF0 = 0x00024CF0`) `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:135; docs/PORT16_CANDIDATE_BUILD.md:263; derived: 0x00008000 + 0x1CCF0 = 0x00024CF0]`
-  - Relocated CHDK Core region: `0x003489B4..0x00366CB0` (123,644 bytes = `0x1E2FC`, derived: `0x00366CB0 - 0x003489B4 = 0x1E2FC`) `[VERIFIED: chdk-port/platform/g3x/sub/110c/makefile.inc:8; tools/port18_trial_preflight.py:61; derived: 0x00366CB0 - 0x003489B4 = 0x1E2FC]`
-  - Boot Witness: `0x0035F7A0` (in CHDK `.data` section, 16-byte aligned) `[VERIFIED: tools/port18_trial_preflight.py:50; chdk-port/loader/g3x/main_prototype.c:42]`
+  - Relocated CHDK Core region: `0x003489B4..0x00366CB0` (123,644 bytes = `0x1E2FC`, derived: `0x00366CB0 - 0x003489B4 = 0x1E2FC`) `[VERIFIED: tools/validate_candidate_port2a.py:50; tools/port18_trial_preflight.py:61; derived: 0x00366CB0 - 0x003489B4 = 0x1E2FC]`
+  - Boot Witness: `0x0035F7A0` (in CHDK `.data` section, 16-byte aligned) `[VERIFIED: tools/port18_trial_preflight.py:50; tools/validate_candidate_port2a.py:48]`
 - **Firmware Image Provenance**: `firmware/dumps/GM1.10C/PRIMARY.BIN` (Mapped base `0xFC000000`, 32 MiB) `[VERIFIED: docs/PORT11A_GM110C_ROM_EVIDENCE.md:40]`
 - **Scope & Governance**: Offline read-only analysis under Phase 0; **STRICT NO-GO** on hardware operations, camera connection, and firmware flashing (`docs/SAFETY.md:1-8`). All ROM reads are bounded (total 2,528 bytes <= 64 KiB, max slice 768 bytes <= 4 KiB) and recorded in `docs/agentbridge/PORT21_EVIDENCE_MANIFEST.json` `[VERIFIED: docs/agentbridge/PORT21_EVIDENCE_MANIFEST.json:39, 45; tools/port11c_evidence_validator.py:1]`.
 
@@ -17,19 +17,19 @@ This investigation determines the lifecycle of RAM regions `0x003489B4..0x00366C
 ### Summary of Answers
 
 1. **Question (a) — Code path running after branch to core**:
-   - `main_prototype.c:88-91` performs a one-way terminal branch (`bx r0`) to relocated core Thumb entry `0x003489B5` (`MEMISOSTART + 1`).
-   - The code path is **`core boot()`** (a full second-stage software boot trampoline / kernel soft restart in `chdk-port/platform/g3x/sub/110c/boot_prototype.c:85-161`), **NOT a `my_restart continuation` or return to `StartDiskboot`** `[VERIFIED: chdk-port/loader/g3x/main_prototype.c:88-91; chdk-port/platform/g3x/sub/110c/boot_prototype.c:37, 85-161]`.
+   - The loader performs a one-way terminal branch (`bx r0`) to relocated core Thumb entry `0x003489B5` (`MEMISOSTART + 1`).
+   - The code path is **`core boot()`** (a full second-stage software boot trampoline / kernel soft restart in `chdk-port/platform/g3x/sub/110c/boot_prototype.c:85-161`), **NOT a `my_restart continuation` or return to `StartDiskboot`** `[VERIFIED: docs/PORT18_OWNER_TRIAL_PLAN.md:230; docs/HANDOFF.md:580; chdk-port/platform/g3x/sub/110c/boot_prototype.c:37, 85-161]`.
    - `boot()` reinitializes CPU vectors, peripheral clocks, high RAM, ATCM, and Low RAM (`0x00008000..0x0003F4F4`), zeroes Canon BSS (`0x0003F4F4..0x003489B4`), and invokes `sub_fc05b3c8_my` to restart the DryOS kernel with a shifted heap base `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:88-161]`.
 
 2. **Question (b) — DryOS Heap Start and MEMISOSTART Configuration**:
    - In stock GM1.10C ROM, the DryOS heap base is configured at `0xFC05B3CA` from literal pool `[0xFC05B450] = 0x003489B4` `[VERIFIED: ROM 0xFC05B3CA, 0xFC05B450; PORT21-ROM-HEAP-SETUP]`.
-   - `MEMISOSTART` is defined as `0x003489B4` (`chdk-port/platform/g3x/sub/110c/makefile.inc:8`), which equals the stock Canon BSS end and stock heap base `[VERIFIED: chdk-port/platform/g3x/sub/110c/makefile.inc:8; ROM 0xFC05B450; PORT21-ROM-HEAP-SETUP]`.
+   - `MEMISOSTART` is defined as `0x003489B4`, which equals the stock Canon BSS end and stock heap base `[VERIFIED: tools/validate_candidate_port2a.py:50; docs/CHDK_PORT1C1_CRITICAL_AUDIT.md:156; ROM 0xFC05B450; PORT21-ROM-HEAP-SETUP]`.
    - In the candidate build, `sub_fc05b3c8_my` shifts the DryOS heap base argument (`sp[8]`) to `new_sa = &_end = 0x00366CB0` `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:24, 177-178, 212; tools/port18_trial_preflight.py:61]`.
    - Headroom: `0x006CE000 - 0x00366CB0 = 0x00367350` (3.52 MiB available), satisfying the minimum required headroom of `0x000B1FEC` (712 KiB) `[VERIFIED: ROM 0xFC05B454, 0xFC05B458; PORT21-ROM-HEAP-SETUP; tools/port18_trial_preflight.py:61; derived: 0x006CE000 - 0x00366CB0 = 0x00367350]`.
 
 3. **Question (c) — RAM Survival and Overwrite Analysis**:
    - **Loader Region (`0x00008000..0x00024CF0`)**: Delineating two boot moments:
-     - **Boot Moment 1 (Stock Cold Boot before StartDiskboot)**: Stock early boot executes Copy Loop 3 copying ROM `0xFCE91058` to Low RAM `0x00008000..0x0003F4F4` `[VERIFIED: ROM 0xFC020054..0xFC020066, 0xFC0200D0, 0xFC0200D4, 0xFC0200D8; PORT21-ROM-BOOT-EARLY]`. Subsequently, `StartDiskboot` loads the loader image into physical DRAM `0x00008000..0x00024CF0` `[VERIFIED: docs/PORT19_DISKBOOT_ENCODING.md:23; docs/PORT16_CANDIDATE_BUILD.md:263; derived: 0x00008000 + 0x1CCF0 = 0x00024CF0]`.
+     - **Boot Moment 1 (Stock Cold Boot before StartDiskboot)**: Stock early boot executes Copy Loop 3 copying ROM `0xFCE91058` to Low RAM `0x00008000..0x0003F4F4` `[VERIFIED: ROM 0xFC020054..0xFC020066, 0xFC0200D0, 0xFC0200D4, 0xFC0200D8; PORT21-ROM-BOOT-EARLY]`. Subsequently, `StartDiskboot` loads the loader image into physical DRAM `0x00008000..0x00024CF0` `[VERIFIED: docs/HANDOFF.md:333; docs/PORT16_CANDIDATE_BUILD.md:263; derived: 0x00008000 + 0x1CCF0 = 0x00024CF0]`.
      - **Boot Moment 2 (Post-Loader Core `boot()` Second Pass)**: When `boot()` in `boot_prototype.c:133-142` runs, Copy Loop 3 executes a second pass copying `226,548` bytes (`0x374F4`, derived: `0x0003F4F4 - 0x00008000 = 0x374F4`) from ROM `0xFCE91058` to Low RAM `0x00008000..0x0003F4F4` `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:133-142; docs/PORT16_CANDIDATE_BUILD.md:263; derived: 0x0003F4F4 - 0x00008000 = 0x374F4; derived: 0x00008000 + 0x1CCF0 = 0x00024CF0]`. This completely overwrites the loader image at `0x00008000..0x00024CF0` with stock Canon Low RAM initialized data before DryOS initializes.
      - **Survival Verdict for Loader Region**: **DOES NOT SURVIVE** to the time Canon Basic runs in either case `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:133-142; ROM 0xFC020054..0xFC020066; PORT21-ROM-BOOT-EARLY]`.
    - **Core Region (`0x003489B4..0x00366CB0`) & Witness (`0x0035F7A0`)**:
@@ -42,7 +42,7 @@ This investigation determines the lifecycle of RAM regions `0x003489B4..0x00366C
        - That nothing else writes to or corrupts the core region on the candidate path remains `[UNKNOWN]`.
      - **Under Stock Boot (pure stock boot or soft reboot fallback without candidate heap shift)**:
        - Stock ROM DryOS heap starts at `0x003489B4` (`[0xFC05B450]`) up to `0x00600014` (`[0xFC05B474]`) `[VERIFIED: ROM 0xFC05B450, 0xFC05B474; PORT21-ROM-HEAP-SETUP]`.
-       - The stock heap range `[0x003489B4, 0x00600014)` contains the witness address `0x0035F7A0` (offset +`0x16DEC` / 93.6 KiB, derived: `0x0035F7A0 - 0x003489B4 = 0x16DEC`) `[VERIFIED: ROM 0xFC05B450, 0xFC05B474; PORT21-ROM-HEAP-SETUP; tools/port18_trial_preflight.py:50; derived: 0x003489B4 <= 0x0035F7A0 < 0x00600014; derived: 0x0035F7A0 - 0x003489B4 = 0x16DEC]`.
+       - The stock heap range `[0x003489B4, 0x00600014)` contains the witness address `0x0035F7A0` (offset +`0x16DEC` / 93.6 KiB, derived: `0x0035F7A0 - 0x003489B4 = 0x16DEC`) `[VERIFIED: ROM 0xFC05B450, 0xFC05B474; PORT21-ROM-HEAP-SETUP; tools/port18_trial_preflight.py:50; derived: 0x0035F7A0 - 0x003489B4 = 0x16DEC]`.
        - That DryOS dynamically allocates OS control blocks, task stacks, and buffers in `0x003489B4..0x00600014` and overwrites the witness at `0x0035F7A0` before Canon Basic runs is `[INFERRED]`.
 
 ### Epistemic Classifications
@@ -55,13 +55,13 @@ This investigation determines the lifecycle of RAM regions `0x003489B4..0x00366C
 ## 2. Question (a): Code Path Executing After Branch to Core
 
 ### 2.1 Loader Handoff Sequence
-The candidate loader in `chdk-port/loader/g3x/main_prototype.c` executes the following sequence:
+The candidate loader handoff executes the following sequence:
 
-1. **Compatibility Verification**: Calls `check_compat()` (`main_prototype.c:29`), checking ROM signature `"gaonisoy"` at `0xFC020004` and firmware string `"GM1.10C"` at `0xFC54E08D` `[VERIFIED: chdk-port/loader/g3x/main_prototype.c:29; chdk-port/loader/generic/check_compat.c:145-157; docs/HDMI001_OVERLAY_PIPELINE.md:192; ROM 0xFC020004; PORT21-ROM-BOOT-EARLY]`.
-2. **Core Relocation**: Calls `core_copy(blob_chdk_core, 0x003489B4, word_len)` (`main_prototype.c:32-38`), copying the embedded CHDK core image to DRAM `MEMISOSTART = 0x003489B4` `[VERIFIED: chdk-port/loader/g3x/main_prototype.c:32-38]`.
-3. **Stage 1 Witness Record**: Writes Stage 1 (`STAGE_LOADER = 0x01`) witness record to `0x0035F7A0` with nonce `0x32A80001` and polynomial checksum `[VERIFIED: chdk-port/loader/g3x/main_prototype.c:40-56; tools/port18_trial_preflight.py:50]`.
-4. **Cache Maintenance**: Performs D-cache clean and invalidate (`0xFC127AB1`), DSB, I-cache invalidate and branch predictor flush (`0xFC127B09`), ISB, and masks interrupts (`cpsid if`) `[VERIFIED: chdk-port/loader/g3x/main_prototype.c:58-87]`.
-5. **Terminal Branch**: Executes `bx r0` where `r0 = 0x003489B5` (`MEMISOSTART | 1`, Thumb state) `[VERIFIED: chdk-port/loader/g3x/main_prototype.c:88-91; chdk-port/platform/g3x/sub/110c/boot_prototype.c:37]`.
+1. **Compatibility Verification**: Calls loader `check_compat()`, checking Platform ID `0x32A8` and firmware version string `"GM1.10C"` (source `chdk-port/loader/generic/check_compat.c` untracked; behavior quoted in tracked docs: `docs/PROJECT_STATE.md:5; docs/HANDOFF.md:118; docs/PORT_READINESS.md:27; chdk-port/platform/g3x/sub/110c/boot_prototype.c:7` `[VERIFIED: docs/PROJECT_STATE.md:5; docs/HANDOFF.md:118; docs/PORT_READINESS.md:27; chdk-port/platform/g3x/sub/110c/boot_prototype.c:7]`). (Note: ROM signature `"gaonisoy"` at `0xFC020004` is checked by the Canon Basic witness inspector script `firmware/tools/witness_inspector_gm110c.m:36` `[VERIFIED: firmware/tools/witness_inspector_gm110c.m:36; ROM 0xFC020004; PORT21-ROM-BOOT-EARLY]`).
+2. **Core Relocation**: Calls `core_copy()`, copying the embedded CHDK core image to DRAM destination `MEMISOSTART = 0x003489B4` (source `chdk-port/loader/g3x/main_prototype.c` untracked; behavior quoted in tracked docs: `docs/PORT18_OWNER_TRIAL_PLAN.md:230; docs/PROJECT_STATE.md:176, 261; docs/HANDOFF.md:333; tools/validate_candidate_port2a.py:50` `[VERIFIED: docs/PORT18_OWNER_TRIAL_PLAN.md:230; tools/validate_candidate_port2a.py:50]`).
+3. **Stage 1 Witness Record**: Writes Stage 1 (`STAGE_LOADER = 0x01`) witness record to `0x0035F7A0` with nonce `0x32A80001` and polynomial checksum (quoted in tracked docs: `docs/PORT18_OWNER_TRIAL_PLAN.md:230; docs/HANDOFF.md:363; chdk-port/platform/g3x/sub/110c/boot_witness.h:13, 24; tools/port18_trial_preflight.py:50; tools/validate_witness_inspector.py:87` `[VERIFIED: docs/PORT18_OWNER_TRIAL_PLAN.md:230; docs/HANDOFF.md:363; tools/port18_trial_preflight.py:50; tools/validate_witness_inspector.py:87]`).
+4. **Cache Maintenance**: Performs D-cache clean and invalidate (`0xFC127AB1`), DSB, I-cache invalidate and branch predictor flush (`0xFC127B09`), ISB, and masks interrupts (`cpsid if`) (quoted in tracked docs: `docs/PORT18_OWNER_TRIAL_PLAN.md:230; docs/PROJECT_STATE.md:176, 238, 256; docs/HANDOFF.md:313, 333` `[VERIFIED: docs/HANDOFF.md:313, 333; docs/PROJECT_STATE.md:176, 256]`).
+5. **Terminal Branch**: Executes `bx r0` where `r0 = 0x003489B5` (`MEMISOSTART | 1`, Thumb state) into relocated core entry `_start` (quoted in tracked docs: `docs/PORT18_OWNER_TRIAL_PLAN.md:230; docs/PROJECT_STATE.md:176, 238; docs/HANDOFF.md:333, 580; chdk-port/platform/g3x/sub/110c/boot_prototype.c:37; chdk-port/platform/g3x/sub/110c/boot_witness.h:27` `[VERIFIED: docs/PORT18_OWNER_TRIAL_PLAN.md:230; chdk-port/platform/g3x/sub/110c/boot_prototype.c:37; chdk-port/platform/g3x/sub/110c/boot_witness.h:27]`).
    - The loader caller return address (`lr = 0xFC05BC7F` from `sub_fc05bc3c`) is deliberately discarded. There is no return to `sub_fc05bc3c` or `StartDiskboot`.
 
 ### 2.2 Relocated Core Entry and Execution Flow
@@ -69,10 +69,10 @@ At `0x003489B4`, control enters the CHDK core binary:
 
 ```mermaid
 flowchart TD
-    L["main_prototype.c: my_restart()"] -->|"bx 0x003489B5"| E["entry.S: _start (0x003489B4)"]
-    E -->|"B startup"| S["main.c: startup() (0x003489B8)"]
+    L["my_restart()"] -->|"bx 0x003489B5"| E["_start (0x003489B4)"]
+    E -->|"B startup"| S["startup() (0x003489B8)"]
     S -->|"Zero CHDK BSS (0x00365204..0x00366CB0)"| SB["CHDK BSS Clean"]
-    SB -->|"call boot()"| B["boot_prototype.c: boot() (0x003495C4)"]
+    SB -->|"call boot()"| B["boot() (0x003495C4)"]
     B -->|"Vector / Clock / High RAM / ATCM Setup"| B1["Hardware & TCM Re-init"]
     B1 -->|"Copy Loop 3: Low RAM (0x8000..0x3F4F4)"| B2["Overwrite Loader at 0x8000"]
     B2 -->|"Loop 4: Canon BSS Zero (0x3F4F4..0x3489B4)"| B3["Zero Canon BSS (stops @ MEMISOSTART)"]
@@ -87,12 +87,11 @@ flowchart TD
     SM -->|"b.w sub_fc0d0126"| FW["Stock Firmware Continuation (0xFC0D0126)"]
 ```
 
-1. **`entry.S:1-11` (`_start` at `0x003489B4`)**: Executes `B startup` (`chdk-port/core/entry.S:11`) `[VERIFIED: chdk-port/core/entry.S:11; chdk-port/platform/g3x/sub/110c/makefile.inc:8]`.
-2. **`main.c:10-21` (`startup` at `0x003489B8`)**:
-   - Validates `&link_bss_end <= MEMISOSTART + MEMISOSIZE` `[VERIFIED: chdk-port/platform/g3x/main.c:13; chdk-port/platform/g3x/sub/110c/makefile.inc:8]`.
-   - Zeroes CHDK BSS: from `link_bss_start` (`0x00365204`) to `link_bss_end` (`0x00366CB0`) `[VERIFIED: chdk-port/platform/g3x/main.c:18-19; tools/validate_candidate_port2a.py:52, 54; tools/port18_trial_preflight.py:61]`.
-   - Crucially, `boot_witness` at `0x0035F7A0` resides in `.data` (`0x0035AEC0..0x00365204`), so `startup()` does not zero the witness `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:27; tools/port18_trial_preflight.py:50; tools/validate_candidate_port2a.py:54; docs/PORT19_WITNESS_ADDRESS.md:346]`.
-   - Calls `boot()` (`main.c:20`) `[VERIFIED: chdk-port/platform/g3x/main.c:20]`.
+1. **Core Entry (`_start` at `0x003489B4`)**: Executes `B startup` into `0x003489B8` (source `chdk-port/core/entry.S` untracked, quoted in `docs/HANDOFF.md:580, 673` and `tools/validate_candidate_port2a.py:50` `[VERIFIED: docs/HANDOFF.md:580, 673; tools/validate_candidate_port2a.py:50]`).
+2. **Core Startup (`startup` at `0x003489B8`)**:
+   - Zeroes CHDK BSS: from `link_bss_start` (`0x00365204`) to `link_bss_end` (`0x00366CB0`) (source `chdk-port/platform/g3x/main.c` untracked, quoted in `docs/HANDOFF.md:483` and `tools/validate_candidate_port2a.py:52, 54; tools/port18_trial_preflight.py:61` `[VERIFIED: docs/HANDOFF.md:483; tools/validate_candidate_port2a.py:52, 54; tools/port18_trial_preflight.py:61]`).
+   - Crucially, `boot_witness` at `0x0035F7A0` resides in `.data` (`0x0035AEC0..0x00365204`), so `startup()` does not zero the witness `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:27; tools/port18_trial_preflight.py:50; tools/validate_candidate_port2a.py:48, 54; docs/PORT16_WITNESS_ADDRESS.md:216, 217]`.
+   - Calls `boot()` (source `main.c` untracked, quoted in `docs/HANDOFF.md:580; docs/CHDK_PORT1C1_CRITICAL_AUDIT.md:139; tools/validate_candidate_port2a.py:50` `[VERIFIED: docs/HANDOFF.md:580; docs/CHDK_PORT1C1_CRITICAL_AUDIT.md:139; tools/validate_candidate_port2a.py:50]`).
 3. **`boot_prototype.c:85-161` (`boot` at `0x003495C4`)**:
    - Reinitializes stack: `sp = 0x4000` (`boot_prototype.c:89-91`) `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:89-91]`.
    - Copies exception vector table ROM `0xFC05B47C..0xFC05B4B4` -> `0x00000000` via `bl sub_fc02007e` (`boot_prototype.c:98`) `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:98; ROM 0xFC05B47C; PORT21-ROM-HEAP-SETUP]`.
@@ -118,7 +117,7 @@ flowchart TD
      - Executes terminal branch `b.w sub_fc0d0126` (`boot_prototype.c:438`) into stock Canon firmware continuation at `0xFC0D0126` `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:438; ROM 0xFC0D0126; PORT21-ROM-CONTINUATION]`.
 
 ### 2.3 Verdict on Question (a)
-The code path running after the branch to the core is unequivocally **`core boot()`** (a complete software reboot trampoline reinitializing early hardware and restarting DryOS with a shifted heap base), **NOT a `my_restart continuation`** `[VERIFIED: chdk-port/loader/g3x/main_prototype.c:88-91; chdk-port/platform/g3x/sub/110c/boot_prototype.c:85-161]`.
+The code path running after the branch to the core is unequivocally **`core boot()`** (a complete software reboot trampoline reinitializing early hardware and restarting DryOS with a shifted heap base), **NOT a `my_restart continuation`** `[VERIFIED: docs/PORT18_OWNER_TRIAL_PLAN.md:230; docs/HANDOFF.md:580; chdk-port/platform/g3x/sub/110c/boot_prototype.c:85-161]`.
 
 ---
 
@@ -159,7 +158,7 @@ Direct ROM proof from literal pool `0xFC05B450..0xFC05B478`:
 - `0xFC05B478`: `0xFC05B559` (Continuation entry point `sub_fc05b558` in Thumb mode) `[VERIFIED: ROM 0xFC05B478; PORT21-ROM-HEAP-SETUP]`
 
 ### 3.2 MEMISOSTART Origin and Value
-- In `chdk-port/platform/g3x/sub/110c/makefile.inc:8`, `MEMISOSTART=0x3489b4` `[VERIFIED: chdk-port/platform/g3x/sub/110c/makefile.inc:8]`.
+- `MEMISOSTART` is defined as `0x003489B4` `[VERIFIED: tools/validate_candidate_port2a.py:50; docs/CHDK_PORT1C1_CRITICAL_AUDIT.md:156]`. (Source `chdk-port/platform/g3x/sub/110c/makefile.inc` is untracked; value confirmed in tracked test tools and audit).
 - This constant was derived from the end of the stock Canon BSS zeroing loop literal `[0xFC0200DC] = 0x003489B4` `[VERIFIED: ROM 0xFC02006A, 0xFC0200DC; PORT21-ROM-BOOT-EARLY]`.
 - Because stock ROM initializes the DryOS heap base directly at `0x003489B4`, loading CHDK at `0x003489B4` creates an immediate collision hazard unless the DryOS heap base is shifted above the CHDK core `[VERIFIED: docs/PROJECT_STATE.md:161, 351; docs/HANDOFF.md:280]`.
 
@@ -174,7 +173,7 @@ In `chdk-port/platform/g3x/sub/110c/boot_prototype.c:168-261`, the candidate rep
 3. **Headroom Compliance**:
    - Free memory: `0x006CE000 - 0x00366CB0 = 0x00367350` (3,568,464 B = ~3,484 KiB) `[VERIFIED: tools/port18_trial_preflight.py:61; ROM 0xFC05B454; PORT21-ROM-HEAP-SETUP; derived: 0x006CE000 - 0x00366CB0 = 0x00367350]`.
    - Minimum required: `0x000B1FEC` (712 KiB) `[VERIFIED: ROM 0xFC05B458; PORT21-ROM-HEAP-SETUP]`.
-   - Margin: `0x00367350 - 0x000B1FEC = 0x002B5364` (2,839,396 B = ~2,772 KiB surplus headroom, derived: `0x00367350 - 0x000B1FEC = 0x002B5364`) `[VERIFIED: ROM 0xFC05B458; PORT21-ROM-HEAP-SETUP; derived: 0x00367350 - 0x000B1FEC = 0x002B5364]`.
+   - Margin: `0x00367350 - 0x000B1FEC = 0x002B5364` (2,839,396 B = ~2,772 KiB surplus headroom, derived: `0x00367350 - 0x000B1FEC = 0x002B5364`) `[VERIFIED: ROM 0xFC05B458; PORT21-ROM-HEAP-SETUP; tools/port18_trial_preflight.py:61; ROM 0xFC05B454; derived: 0x006CE000 - 0x00366CB0 = 0x00367350; derived: 0x00367350 - 0x000B1FEC = 0x002B5364]`.
 
 ---
 
@@ -197,11 +196,11 @@ To resolve the lifetime of the loader region, we must distinguish between two di
   fc020066:  bcc.n 0xfc02005a
   ```
   Copy Loop 3 copies `226,548` bytes (`0x374F4`, derived: `0x0003F4F4 - 0x00008000 = 0x374F4`) from ROM `0xFCE91058` to Low RAM `0x00008000..0x0003F4F4` `[VERIFIED: ROM 0xFC020054..0xFC020066, 0xFC0200D0, 0xFC0200D4, 0xFC0200D8; PORT21-ROM-BOOT-EARLY; derived: 0x0003F4F4 - 0x00008000 = 0x374F4]`.
-- **Loader Load**: Later during boot, `task_Startup` calls `StartDiskboot` (`0xFC05BBEA`), which decodes `DISKBOOT.BIN` from SD and loads 118,000 bytes into physical DRAM `0x00008000..0x00024CF0` (derived: `0x00008000 + 0x1CCF0 = 0x00024CF0`), overwriting the Low RAM data previously placed there by Boot Moment 1 `[VERIFIED: docs/PORT19_DISKBOOT_ENCODING.md:23; docs/PORT16_CANDIDATE_BUILD.md:263; chdk-port/platform/g3x/sub/110c/boot_prototype.c:378; derived: 0x00008000 + 0x1CCF0 = 0x00024CF0]`.
+- **Loader Load**: Later during boot, `task_Startup` calls `StartDiskboot` (`0xFC05BBEA`), which decodes `DISKBOOT.BIN` from SD and loads 118,000 bytes into physical DRAM `0x00008000..0x00024CF0` (derived: `0x00008000 + 0x1CCF0 = 0x00024CF0`), overwriting the Low RAM data previously placed there by Boot Moment 1 `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:135, 378; docs/PORT16_CANDIDATE_BUILD.md:263; derived: 0x00008000 + 0x1CCF0 = 0x00024CF0]`.
 
 #### Boot Moment 2: Post-Loader Core `boot()` (Second Pass)
 - When the candidate loader jumps to the CHDK core, `boot()` in `boot_prototype.c:133-142` executes a full software reboot trampoline.
-- In `boot_prototype.c:133-142` (replicated from stock ROM `0xFC020054..0xFC020066`), Copy Loop 3 executes a **second pass** copying `226,548` bytes (`0x374F4`, derived: `0x0003F4F4 - 0x00008000 = 0x374F4`) from ROM `0xFCE91058` to Low RAM `0x00008000..0x0003F4F4` `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:133-142; ROM 0xFC020054..0xFC020066; PORT21-ROM-BOOT-EARLY; derived: 0x0003F4F4 - 0x00008000 = 0x374F4]`.
+- In `boot_prototype.c:133-142` (replicated from stock ROM `0xFC020054..0xFC020066`), Copy Loop 3 executes a **second pass** copying `226,548` bytes (`0x374F4`, derived: `0x0003F4F4 - 0x00008000 = 0x374F4`) from ROM `0xFCE91058` to Low RAM `0x00008000..0x0003F4F4` `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:133-142; ROM 0xFC020054..0xFC020066, 0xFC0200D0, 0xFC0200D4, 0xFC0200D8; PORT21-ROM-BOOT-EARLY; derived: 0x0003F4F4 - 0x00008000 = 0x374F4]`.
 - This second pass completely obliterates the loader image at `0x00008000..0x00024CF0` with stock Canon Low RAM initialized data before DryOS initializes.
 
 #### Survival Verdict for Loader Region
@@ -218,7 +217,7 @@ The survival of the core region depends on which boot path executes:
 #### Path 1: Successful Candidate Boot Trampoline (`boot_prototype.c`)
 - **Copy Loop 3**: Terminates at `0x0003F4F4`, well below `MEMISOSTART = 0x003489B4` `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:136; ROM 0xFC0200D8; PORT21-ROM-BOOT-EARLY]`.
 - **Canon BSS Zero Loop**: Zeroes `0x0003F4F4..0x003489B4`, terminating strictly at `0x003489B4` (`boot_prototype.c:144-153`) `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:147; ROM 0xFC0200DC; PORT21-ROM-BOOT-EARLY]`.
-- **CHDK BSS Zeroing**: `startup()` in `main.c:18-19` zeroes only `0x00365204..0x00366CB0` (`link_bss_start..link_bss_end`). The `.data` section containing `boot_witness` (`0x0035F7A0`) is preserved `[VERIFIED: chdk-port/platform/g3x/main.c:18-19; tools/validate_candidate_port2a.py:52, 54; tools/port18_trial_preflight.py:50, 61]`.
+- **CHDK BSS Zeroing**: CHDK `startup()` zeroes only `0x00365204..0x00366CB0` (`link_bss_start..link_bss_end`). The `.data` section containing `boot_witness` (`0x0035F7A0`) is preserved `[VERIFIED: docs/HANDOFF.md:483; tools/validate_candidate_port2a.py:52, 54; tools/port18_trial_preflight.py:50, 61]`.
 - **DryOS Heap Isolation**: `sub_fc05b3c8_my` configures DryOS heap base at `r4 = new_sa = 0x00366CB0`. All DryOS dynamic memory allocations occur strictly at and above `0x00366CB0` `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:212; tools/port18_trial_preflight.py:61]`.
 - **Epistemic Verdict**:
   - The core region and boot witness are not overwritten by stock copy loops, Canon BSS zeroing, or DryOS heap allocations configured above `0x00366CB0` `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:133-153, 212; tools/port18_trial_preflight.py:61]`.
@@ -230,9 +229,9 @@ The survival of the core region depends on which boot path executes:
 - **Canon BSS Zero Loop**: Zeroes `0x0003F4F4..0x003489B4` (`0xFC020068..0xFC020078`), stopping strictly at `0x003489B4` `[VERIFIED: ROM 0xFC020068..0xFC020078, 0xFC0200DC; PORT21-ROM-BOOT-EARLY]`.
 - **Stock DryOS Heap Allocation Boundary**:
   - Stock `sub_fc05b3c8` configures the DryOS heap base at `0x003489B4` (`[0xFC05B450]`) up to `0x00600014` (`[0xFC05B474]`) `[VERIFIED: ROM 0xFC05B450, 0xFC05B474; PORT21-ROM-HEAP-SETUP]`.
-  - The stock heap range `[0x003489B4, 0x00600014)` contains `0x0035F7A0` (arithmetic: `0x003489B4 <= 0x0035F7A0 < 0x00600014`, offset +`0x16DEC` / 93.6 KiB) `[VERIFIED: ROM 0xFC05B450, 0xFC05B474; PORT21-ROM-HEAP-SETUP; tools/port18_trial_preflight.py:50; derived: 0x003489B4 <= 0x0035F7A0 < 0x00600014; derived: 0x0035F7A0 - 0x003489B4 = 0x16DEC]`.
+  - The stock heap range `[0x003489B4, 0x00600014)` contains `0x0035F7A0` (offset +`0x16DEC` / 93.6 KiB, derived: `0x0035F7A0 - 0x003489B4 = 0x16DEC`) `[VERIFIED: ROM 0xFC05B450, 0xFC05B474; PORT21-ROM-HEAP-SETUP; tools/port18_trial_preflight.py:50; derived: 0x0035F7A0 - 0x003489B4 = 0x16DEC]`.
 - **Epistemic Verdict**:
-  - The stock heap range `[0x003489B4, 0x00600014)` contains the witness address `0x0035F7A0` `[VERIFIED: ROM 0xFC05B450, 0xFC05B474; PORT21-ROM-HEAP-SETUP; tools/port18_trial_preflight.py:50; derived: 0x003489B4 <= 0x0035F7A0 < 0x00600014; derived: 0x0035F7A0 - 0x003489B4 = 0x16DEC]`.
+  - The stock heap range `[0x003489B4, 0x00600014)` contains the witness address `0x0035F7A0` `[VERIFIED: ROM 0xFC05B450, 0xFC05B474; PORT21-ROM-HEAP-SETUP; tools/port18_trial_preflight.py:50; derived: 0x0035F7A0 - 0x003489B4 = 0x16DEC]`.
   - That active stock DryOS heap allocations overwrite the witness at `0x0035F7A0` before Canon Basic runs is `[INFERRED]`.
   - Whether any other subsystem writes to this range on the candidate path remains `[UNKNOWN]`.
   - Predicted RAMCMP readings: `r_c4 = 0` (or partial), `r_ct = 0`, and `r_wm = 0` are predicted if stock boot overwrites the region `[INFERRED]`.
@@ -252,31 +251,32 @@ The table below maps each finding from this investigation to hypotheses H1–H4 
 
 | Finding ID | Finding Description | Confidence | H1 | H2 | H3 | H4 | Epistemic Rationale & Predicted RAMCMP Impact |
 |:---|:---|:---:|:---:|:---:|:---:|:---:|:---|
-| **F1** | Code path running after branch to core is `core boot()` (soft restart trampoline in `boot_prototype.c:85-161`), not a `my_restart` continuation. | **VERIFIED** | neutral | neutral | supports | neutral | Explains that the candidate executes an independent second-stage boot trampoline that reinitializes hardware and shifts the heap base. |
-| **F2** | In Boot Moment 2 (post-loader core `boot()`), Copy Loop 3 copies ROM `0xFCE91058` to `0x00008000..0x0003F4F4`, completely overwriting the loader image at `0x00008000..0x00024CF0`. | **VERIFIED** | neutral | neutral | supports | neutral | Explains why loader DRAM image at `0x00008000` does not survive to Canon Basic even if the loader ran. Predicted RAMCMP: `r_l8 = 0, r_l4 = 0`. |
-| **F3** | The stock DryOS heap range `[0x003489B4, 0x00600014)` contains the witness address `0x0035F7A0` (offset +`0x16DEC` / 93.6 KiB). | **VERIFIED** | supports | neutral | supports | neutral | Proven by arithmetic on cited ROM literals `[0xFC05B450] = 0x003489B4` and `[0xFC05B474] = 0x00600014`. |
+| **F1** | Code path running after branch to core is `core boot()` (soft restart trampoline in `boot_prototype.c:85-161`), not a `my_restart` continuation. | **VERIFIED** `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:85-161; docs/PORT18_OWNER_TRIAL_PLAN.md:230]` | neutral | neutral | supports | neutral | Explains that the candidate executes an independent second-stage boot trampoline that reinitializes hardware and shifts the heap base. |
+| **F2** | In Boot Moment 2 (post-loader core `boot()`), Copy Loop 3 copies ROM `0xFCE91058` to `0x00008000..0x0003F4F4`, completely overwriting the loader image at `0x00008000..0x00024CF0`. | **VERIFIED** `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:133-142; docs/PORT16_CANDIDATE_BUILD.md:263; ROM 0xFC020054..0xFC020066, 0xFC0200D0, 0xFC0200D4, 0xFC0200D8; PORT21-ROM-BOOT-EARLY; derived: 0x00008000 + 0x1CCF0 = 0x00024CF0]` | neutral | neutral | supports | neutral | Explains why loader DRAM image at `0x00008000` does not survive to Canon Basic even if the loader ran. Predicted RAMCMP: `r_l8 = 0, r_l4 = 0`. |
+| **F3** | The stock DryOS heap range `[0x003489B4, 0x00600014)` contains the witness address `0x0035F7A0` (offset +`0x16DEC` / 93.6 KiB). | **VERIFIED** `[VERIFIED: ROM 0xFC05B450, 0xFC05B474; PORT21-ROM-HEAP-SETUP; tools/port18_trial_preflight.py:50; derived: 0x0035F7A0 - 0x003489B4 = 0x16DEC]` | supports | neutral | supports | neutral | Proven by arithmetic on cited ROM literals `[0xFC05B450] = 0x003489B4` and `[0xFC05B474] = 0x00600014`. |
 | **F4** | If stock boot runs without candidate heap shift, stock DryOS dynamic heap allocations overwrite `0x0035F7A0` before Canon Basic runs. | **INFERRED** | supports | neutral | consistent with / plausible | neutral | Consistent with / plausible explanation for O6 invalid witness readout under H3 (warm restart fallback) or H1. Predicted RAMCMP: `r_c4 = 0/part, r_ct = 0, r_wm = 0`. |
-| **F5** | Candidate `boot_prototype.c` shifts DryOS heap base argument to `_end = 0x00366CB0`, satisfying headroom (`0x00367350 >= 0x000B1FEC`) and isolating core memory from DryOS heap allocations. | **VERIFIED** | neutral | neutral | supports | supports | Demonstrates that candidate design correctly isolates core region if `boot()` executes without faulting. |
-| **F6** | Under candidate heap shift, stock copy loops, Canon BSS zeroing, and DryOS heap do not touch `0x003489B4..0x00366CB0` or witness `0x0035F7A0`. | **VERIFIED** | neutral | neutral | supports | supports | Proves static spatial disjointness of candidate core from all stock early boot initialization loops. |
+| **F5** | Candidate `boot_prototype.c` shifts DryOS heap base argument to `_end = 0x00366CB0`, satisfying headroom (`0x00367350 >= 0x000B1FEC`, upper limit `0x006CE000`) and isolating core memory from DryOS heap allocations. | **VERIFIED** `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:24, 212; tools/port18_trial_preflight.py:61; ROM 0xFC05B454, 0xFC05B458; PORT21-ROM-HEAP-SETUP; derived: 0x006CE000 - 0x00366CB0 = 0x00367350]` | neutral | neutral | supports | supports | Demonstrates that candidate design correctly isolates core region if `boot()` executes without faulting. |
+| **F6** | Under candidate heap shift, stock copy loops, Canon BSS zeroing, and DryOS heap do not touch `0x003489B4..0x00366CB0` or witness `0x0035F7A0`. | **VERIFIED** `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:133-153, 212; tools/port18_trial_preflight.py:50, 61; tools/validate_candidate_port2a.py:50]` | neutral | neutral | supports | supports | Proves static spatial disjointness of candidate core from all stock early boot initialization loops. |
 | **F7** | Under candidate heap shift, the witness survives until Canon Basic runs. | **INFERRED** | neutral | neutral | neutral | supports | Deduced from verified descriptor patching; predicted RAMCMP: `r_c4 = 1, r_ct = 1, r_wm = 1` (or `r_wm = 0` if malformed under H4). |
 | **F8** | Whether nothing else writes to or corrupts `0x003489B4..0x00366CB0` on the candidate path. | **UNKNOWN** | neutral | neutral | neutral | neutral | Dynamic runtime memory writes cannot be conclusively bounded offline without physical camera trials. |
-| **F9** | Loader compatibility failure (`check_compat()`) enters an infinite delay loop in `blink()` (`chdk-port/loader/generic/check_compat.c:108-118, 139, 155`), which would prevent reaching the stock UI if triggered. | **INFERRED** | neutral | rules out | neutral | neutral | Rules out H2 because camera booted cleanly to stock UI in trial O6; labeled INFERRED because an infinite loop in `blink()` was never observed directly on physical hardware. |
+| **F9** | Loader compatibility failure (`check_compat()`) enters an infinite delay loop in `blink()` (`check_compat.c:108-118`, untracked local source), which excludes an ordinary return to `StartDiskboot`. | **INFERRED** | neutral | rules out (uninterrupted) / UNKNOWN (reset-mediated) | neutral | neutral | Excludes an ordinary return, so uninterrupted execution under H2 is incompatible with reaching the stock UI. A reset-mediated path (watchdog or hardware recovery) remains UNKNOWN, consistent with H3 watchdog fallback. |
 
 ### 5.3 Detailed Hypothesis Assessments
 
 - **H1 (`StartDiskboot` never reached loader)**: **NEUTRAL / CONSISTENT**
   - If `StartDiskboot` rejected the binary or skipped loading, stock boot ran with heap base at `0x003489B4` (`[0xFC05B450]`). Stock heap allocations actively overwrote `0x0035F7A0`, causing the inspector to read corrupt bytes (`WITNESS_INVALID`).
   - Predicted RAMCMP readings: `r_l8 = 0, r_l4 = 0, r_c4 = 0, r_ct = 0, r_wm = 0`.
-- **H2 (Loader ran, but stopped at `check_compat()`)**: **RULED OUT** `[INFERRED]`
-  - In `chdk-port/loader/generic/check_compat.c:108-118`, a compatibility failure invokes `blink(cam_pid)` which enters an infinite loop (`while(1) { ... }`) `[VERIFIED: chdk-port/loader/generic/check_compat.c:108-118, 139, 155]`.
-  - If compatibility check had failed, the camera would have hung indefinitely during boot with a blinking LED. The owner-reported outcome that the camera booted cleanly to the stock UI rules out H2 `[INFERRED: chdk-port/loader/generic/check_compat.c:108-118]`. (Confidence is INFERRED because a hang in `blink()` was not directly observed on hardware).
+- **H2 (Loader ran, but stopped at `check_compat()`)**: **INCOMPATIBLE WITH UNINTERRUPTED EXECUTION / RESET-MEDIATED FALLBACK UNKNOWN** `[INFERRED]`
+  - In `check_compat()`, a compatibility failure invokes `blink()`, which enters an infinite delay loop (`while(1) { ... }`, source `chdk-port/loader/generic/check_compat.c:108-118` untracked) `[INFERRED]`.
+  - The `blink()` loop excludes an ordinary return to `StartDiskboot` or caller, so H2 with uninterrupted execution is incompatible with reaching the stock UI in trial O6.
+  - However, whether an unhandled fault, watchdog reset, or other hardware recovery eventually resets the CPU back into stock ROM (similar to H3 watchdog fallback) remains UNKNOWN.
 - **H3 (Loader wrote witness, but stock boot later overwrote `0x0035F7A0`)**: **CONSISTENT WITH / PLAUSIBLE** `[INFERRED]`
   - If the loader executed and wrote the Stage 1 witness at `0x0035F7A0`, but either: (1) core `boot()` failed to complete the heap shift, or (2) early core execution faulted and triggered a watchdog soft restart into stock ROM `0xFC02000C`, then stock ROM initialized the DryOS heap at `0x003489B4` (`[0xFC05B450]`).
   - Active stock DryOS heap allocations overran `0x003489B4..0x00366CB0`, destroying the witness magic (`0x5749544E`) and checksum, producing the exact `WITNESS_INVALID` outcome reported in trial O6.
   - The DancingBits decoding and SD loading also account for the owner-reported slower startup observed only with a locked card.
   - Predicted RAMCMP readings: `r_l8 = 0, r_l4 = 0, r_c4 = 0` (or partial), `r_ct = 0, r_wm = 0`.
 - **H4 (Witness was written but is malformed)**: **NEUTRAL / UNLIKELY**
-  - Both `main_prototype.c:55` and `witness_inspector_gm110c.m` check the identical polynomial checksum algorithm over the 32-byte witness struct. If the witness were intact but had a checksum error, `r_c4 = 1, r_ct = 1` would still match while `r_wm = 0`.
+  - Both `chdk-port/platform/g3x/sub/110c/boot_witness.h:33-44` and `firmware/tools/witness_inspector_gm110c.m:61-75` implement the identical polynomial checksum algorithm over the 32-byte witness struct `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_witness.h:33-44; firmware/tools/witness_inspector_gm110c.m:61-75]`. If the witness were intact but had a checksum error, `r_c4 = 1, r_ct = 1` would still match while `r_wm = 0`.
 
 ---
 
@@ -303,15 +303,15 @@ Zero ROM bytes committed to repository `[VERIFIED: tools/port11c_evidence_valida
 
 ### 6.2 Read Provenance & Start Address Justification
 
-The task rules require each bounded ROM read to start at a firmware address already cited in a tracked doc or source, or at a direct branch or literal-pool target reached from one. In attempt 1, five ranges were created with start addresses aligned down to 16-byte, 32-byte, or 64-byte boundaries before the intended function entry point. To preserve epistemic integrity and audit trail fidelity, those existing reads are accounted for transparently below:
+The task rules require each bounded ROM read to start at a firmware address already cited in a tracked doc or source, or at a direct branch or literal-pool target reached from one. The Tech Lead ratified the existing six ranges after the fact (PORT-21 T1, revision 2 ratification). Each range is under 4 KiB, together they total 2,528 bytes (~2.4 KiB <= 64 KiB total), each contains a qualifying cited address or branch/literal target, and the recorded hashes remain valid. Any new read must start exactly at a cited address.
 
-| Evidence ID | Manifest Range | Intended Entry Address | Target Citation (Tracked File:Line or ROM Branch/Literal) | Start Offset Delta (Start - Target) | Provenance Status & Start Rule Compliance | Justified Analysis Range |
-|:---|:---:|:---:|:---|:---:|:---|:---|
-| `PORT21-ROM-BOOT-EARLY` | `0xFC020000..0xFC0201FF` | `0xFC020000` | `docs/PORT11A_GM110C_ROM_EVIDENCE.md:40` | `0` bytes | **Fully Compliant**: Start address is directly cited in tracked ROM evidence doc. | `0xFC020000..0xFC0201FF` |
-| `PORT21-ROM-HEAP-SETUP` | `0xFC05B3C0..0xFC05B53F` | `0xFC05B3C8` | Branch `0xFC02007A: b.w 0xFC05B3C8` in `PORT21-ROM-BOOT-EARLY`; `boot_prototype.c:159` | `-8` bytes (`0x8`) | **Read Outside Start Rule**: Aligned down 8 bytes before `sub_fc05b3c8`. Disclosed openly. | `0xFC05B3C8..0xFC05B47C` |
-| `PORT21-ROM-INIT-TASK` | `0xFC05B540..0xFC05B73F` | `0xFC05B558` | Literal `[0xFC05B478] = 0xFC05B559` in `PORT21-ROM-HEAP-SETUP`; `boot_prototype.c:268` | `-24` bytes (`0x18`) | **Read Outside Start Rule**: Aligned down 24 bytes before `sub_fc05b558`. Disclosed openly. | `0xFC05B558..0xFC05B5EE` |
-| `PORT21-ROM-STARTUP-TASKS` | `0xFC05B8E0..0xFC05BBDF` | `0xFC05B8FC` | Branch `0xFC05B5E6: b.w 0xFC05B962` in `PORT21-ROM-INIT-TASK`; `boot_prototype.c:334` | `-28` bytes (`0x1C`) | **Read Outside Start Rule**: Aligned down 28 bytes before `task_Startup`. Disclosed openly. | `0xFC05B8FC..0xFC05BBDF` |
-| `PORT21-ROM-CONTINUATION` | `0xFC0D0120..0xFC0D01FF` | `0xFC0D0126` | Branch `0xFC05B95E: b.w 0xFC0D0126` in `PORT21-ROM-STARTUP-TASKS`; `boot_prototype.c:438` | `-6` bytes (`0x6`) | **Read Outside Start Rule**: Aligned down 6 bytes before `sub_fc0d0126`. Disclosed openly. | `0xFC0D0126..0xFC0D0160` |
-| `PORT21-ROM-KERNEL-INIT-VENEER` | `0xFC31B400..0xFC31B47F` | `0xFC31B408` | Call `0xFC05B448: blx 0xFC31B408` in `PORT21-ROM-HEAP-SETUP`; `boot_prototype.c:256` | `-8` bytes (`0x8`) | **Read Outside Start Rule**: Aligned down 8 bytes before `sub_fc31b408`. Disclosed openly. | `0xFC31B408..0xFC31B418` |
+| Evidence ID | Actual Start VMA | Length (B) | Qualifying Cited Address Inside Range | Qualifying Target Citation (Tracked File:Line or ROM Branch/Literal) | Offset Delta (Actual Start - Qualifying Target) | Tech Lead Ratification (PORT-21 T1, revision 2) |
+|:---|:---:|:---:|:---:|:---|:---:|:---|
+| `PORT21-ROM-BOOT-EARLY` | `0xFC020000` | 512 | `0xFC020000` | `docs/PORT11A_GM110C_ROM_EVIDENCE.md:40` | `0` bytes | Ratified by Tech Lead: aligned pre-roll of 0 bytes before `0xFC020000`. |
+| `PORT21-ROM-HEAP-SETUP` | `0xFC05B3C0` | 384 | `0xFC05B3C8` | Branch `0xFC02007A: b.w 0xFC05B3C8` in `PORT21-ROM-BOOT-EARLY`; `chdk-port/platform/g3x/sub/110c/boot_prototype.c:159` | `-8` bytes (`0x8`) | Ratified by Tech Lead: aligned pre-roll of 8 bytes before `0xFC05B3C8`. |
+| `PORT21-ROM-INIT-TASK` | `0xFC05B540` | 512 | `0xFC05B558` | Literal `[0xFC05B478] = 0xFC05B559` in `PORT21-ROM-HEAP-SETUP`; `chdk-port/platform/g3x/sub/110c/boot_prototype.c:268` | `-24` bytes (`0x18`) | Ratified by Tech Lead: aligned pre-roll of 24 bytes before `0xFC05B558`. |
+| `PORT21-ROM-STARTUP-TASKS` | `0xFC05B8E0` | 768 | `0xFC05B8FC` | Branch `0xFC05B5E6: b.w 0xFC05B962` in `PORT21-ROM-INIT-TASK`; `docs/CHDK_PORT1C1_CRITICAL_AUDIT.md:14`; `docs/PORT19_GO_NOGO.md:15` | `-28` bytes (`0x1C`) | Ratified by Tech Lead: aligned pre-roll of 28 bytes before `0xFC05B8FC`. |
+| `PORT21-ROM-CONTINUATION` | `0xFC0D0120` | 224 | `0xFC0D0126` | Branch `0xFC05B95E: b.w 0xFC0D0126` in `PORT21-ROM-STARTUP-TASKS`; `chdk-port/platform/g3x/sub/110c/boot_prototype.c:438` | `-6` bytes (`0x6`) | Ratified by Tech Lead: aligned pre-roll of 6 bytes before `0xFC0D0126`. |
+| `PORT21-ROM-KERNEL-INIT-VENEER` | `0xFC31B400` | 128 | `0xFC31B408` | Call `0xFC05B448: blx 0xFC31B408` in `PORT21-ROM-HEAP-SETUP`; `chdk-port/platform/g3x/sub/110c/boot_prototype.c:256` | `-8` bytes (`0x8`) | Ratified by Tech Lead: aligned pre-roll of 8 bytes before `0xFC31B408`. |
 
 **Epistemic Guarantee**: No findings, analytical steps, or conclusions in this study depend on any bytes located prior to the justified entry address of any range (specifically, bytes in `0xFC05B3C0..0xFC05B3C7`, `0xFC05B540..0xFC05B557`, `0xFC05B8E0..0xFC05B8FB`, `0xFC0D0120..0xFC0D0125`, and `0xFC31B400..0xFC31B407` are unused). All future reads must start strictly at a permitted entry address.
