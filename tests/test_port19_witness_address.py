@@ -423,6 +423,278 @@ class TestPort19WitnessAddress(unittest.TestCase):
             self.assertEqual(check["status"], "FAIL")
             self.assertEqual(check["reason"], "Failed to decode MOVW/MOVT opcodes")
 
+    # =========================================================================
+    # Regression Tests: Inspector Metadata witness_address_int Validation
+    # =========================================================================
+
+    def test_inspector_metadata_witness_address_int_disagreement_fails(self):
+        """Metadata with witness_address string OK but witness_address_int = 0x0035F780 fails (non-zero exit)."""
+        diskboot = CANDIDATE_DIR / "DISKBOOT.BIN"
+        core_elf = CANDIDATE_DIR / "candidate_main.elf"
+        with tempfile.TemporaryDirectory() as td:
+            symbols_txt = Path(td) / "symbols.nm"
+            with open(symbols_txt, "w") as f:
+                subprocess.run([str(NM), "-n", str(core_elf)], stdout=f, check=True)
+
+            meta_file = Path(td) / "disagree_meta.json"
+            meta_file.write_text(json.dumps({
+                "target": "Canon PowerShot G3 X (GM1.10C)",
+                "symbol": "boot_witness",
+                "witness_address": "0x0035F7A0",
+                "witness_address_int": STALE_PRECORRECTION_ADDR,
+            }))
+
+            exit_code, report = ptp.run_preflight(
+                binary_path=str(diskboot),
+                symbols_path=str(symbols_txt),
+                inspector_metadata_path=str(meta_file),
+            )
+            self.assertEqual(exit_code, 1)
+            self.assertEqual(report["verdict"], "FAIL")
+            check = report["checks_by_name"]["inspector_metadata_witness"]
+            self.assertFalse(check["pass"])
+            self.assertEqual(check["status"], "FAIL")
+            self.assertIn("disagrees", check["reason"])
+            self.assertIn("0x0035F780", check["reason"])
+
+    def test_inspector_metadata_witness_address_int_non_integer_fails(self):
+        """Metadata with witness_address_int not an integer fails with clean FAIL reason."""
+        diskboot = CANDIDATE_DIR / "DISKBOOT.BIN"
+        core_elf = CANDIDATE_DIR / "candidate_main.elf"
+        with tempfile.TemporaryDirectory() as td:
+            symbols_txt = Path(td) / "symbols.nm"
+            with open(symbols_txt, "w") as f:
+                subprocess.run([str(NM), "-n", str(core_elf)], stdout=f, check=True)
+
+            for non_int in ["0x0035F7A0", True, 3.14]:
+                meta_file = Path(td) / f"non_int_{type(non_int).__name__}.json"
+                meta_file.write_text(json.dumps({
+                    "target": "Canon PowerShot G3 X (GM1.10C)",
+                    "symbol": "boot_witness",
+                    "witness_address": "0x0035F7A0",
+                    "witness_address_int": non_int,
+                }))
+
+                exit_code, report = ptp.run_preflight(
+                    binary_path=str(diskboot),
+                    symbols_path=str(symbols_txt),
+                    inspector_metadata_path=str(meta_file),
+                )
+                self.assertEqual(exit_code, 1)
+                self.assertEqual(report["verdict"], "FAIL")
+                check = report["checks_by_name"]["inspector_metadata_witness"]
+                self.assertFalse(check["pass"])
+                self.assertEqual(check["status"], "FAIL")
+                self.assertIn("not an integer", check["reason"])
+
+    def test_inspector_metadata_both_fields_pinned_passes(self):
+        """Metadata with both witness_address and witness_address_int pinned to 0x0035F7A0 passes."""
+        diskboot = CANDIDATE_DIR / "DISKBOOT.BIN"
+        core_elf = CANDIDATE_DIR / "candidate_main.elf"
+        with tempfile.TemporaryDirectory() as td:
+            symbols_txt = Path(td) / "symbols.nm"
+            with open(symbols_txt, "w") as f:
+                subprocess.run([str(NM), "-n", str(core_elf)], stdout=f, check=True)
+
+            meta_file = Path(td) / "pinned_meta.json"
+            meta_file.write_text(json.dumps({
+                "target": "Canon PowerShot G3 X (GM1.10C)",
+                "symbol": "boot_witness",
+                "witness_address": "0x0035F7A0",
+                "witness_address_int": PINNED_BOOT_WITNESS_ADDR,
+            }))
+
+            exit_code, report = ptp.run_preflight(
+                binary_path=str(diskboot),
+                symbols_path=str(symbols_txt),
+                inspector_metadata_path=str(meta_file),
+            )
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(report["verdict"], "PASS")
+            check = report["checks_by_name"]["inspector_metadata_witness"]
+            self.assertTrue(check["pass"])
+            self.assertEqual(check["status"], "PASS")
+            self.assertEqual(check["actual"], "0x0035F7A0")
+            self.assertIsNone(check["reason"])
+
+    # =========================================================================
+    # Regression Tests: Output Collision Protection for Inspector Inputs
+    # =========================================================================
+
+    def _run_preflight_cli(self, *args):
+        cmd = [sys.executable, str(TOOLS_DIR / "port18_trial_preflight.py")] + list(args)
+        return subprocess.run(cmd, capture_output=True, text=True)
+
+    def test_refuse_out_equal_to_inspector_metadata(self):
+        """--out pointing directly to --inspector-metadata file is rejected, leaving file untouched."""
+        with tempfile.TemporaryDirectory() as td:
+            meta_bytes = b'{"target": "Canon PowerShot G3 X", "witness_address": "0x0035F7A0", "witness_address_int": 3536800}\n'
+            meta_path = Path(td) / "inspector_meta.json"
+            meta_path.write_bytes(meta_bytes)
+
+            bin_path = Path(td) / "candidate.bin"
+            bin_path.write_bytes(b"CANDIDATE_DATA")
+            sym_path = Path(td) / "symbols.nm"
+            sym_path.write_text("0035f7a0 D boot_witness\n00366cb0 B _end\n")
+
+            # Direct CLI check
+            res = self._run_preflight_cli(
+                str(bin_path), str(sym_path),
+                "--inspector-metadata", str(meta_path),
+                "--out", str(meta_path),
+            )
+            self.assertNotEqual(res.returncode, 0)
+            self.assertIn("Output collision error", res.stderr)
+            self.assertEqual(meta_path.read_bytes(), meta_bytes, "Inspector metadata bytes must be unchanged")
+
+            # Direct Python API check
+            with self.assertRaises(ValueError) as ctx:
+                ptp.run_preflight(
+                    binary_path=str(bin_path),
+                    symbols_path=str(sym_path),
+                    inspector_metadata_path=str(meta_path),
+                    out_path=str(meta_path),
+                )
+            self.assertIn("Output collision error", str(ctx.exception))
+            self.assertEqual(meta_path.read_bytes(), meta_bytes, "Inspector metadata bytes must be unchanged")
+
+    def test_refuse_out_as_symlink_to_inspector_metadata(self):
+        """--out given as symlink alias to --inspector-metadata is rejected, leaving file untouched."""
+        with tempfile.TemporaryDirectory() as td:
+            meta_bytes = b'{"target": "Canon PowerShot G3 X", "witness_address": "0x0035F7A0", "witness_address_int": 3536800}\n'
+            meta_path = Path(td) / "inspector_meta.json"
+            meta_path.write_bytes(meta_bytes)
+            out_link = Path(td) / "meta_symlink.json"
+            try:
+                os.symlink(meta_path, out_link)
+            except (OSError, NotImplementedError, AttributeError):
+                self.skipTest("symlinks not supported")
+
+            bin_path = Path(td) / "candidate.bin"
+            bin_path.write_bytes(b"CANDIDATE_DATA")
+            sym_path = Path(td) / "symbols.nm"
+            sym_path.write_text("0035f7a0 D boot_witness\n00366cb0 B _end\n")
+
+            res = self._run_preflight_cli(
+                str(bin_path), str(sym_path),
+                "--inspector-metadata", str(meta_path),
+                "--out", str(out_link),
+            )
+            self.assertNotEqual(res.returncode, 0)
+            self.assertIn("Output collision error", res.stderr)
+            self.assertEqual(meta_path.read_bytes(), meta_bytes, "Inspector metadata bytes must be unchanged")
+
+    def test_refuse_out_as_hardlink_to_inspector_metadata(self):
+        """--out given as hardlink alias to --inspector-metadata is rejected, leaving file untouched."""
+        with tempfile.TemporaryDirectory() as td:
+            meta_bytes = b'{"target": "Canon PowerShot G3 X", "witness_address": "0x0035F7A0", "witness_address_int": 3536800}\n'
+            meta_path = Path(td) / "inspector_meta.json"
+            meta_path.write_bytes(meta_bytes)
+            out_hardlink = Path(td) / "meta_hardlink.json"
+            try:
+                os.link(meta_path, out_hardlink)
+            except (OSError, NotImplementedError, AttributeError):
+                self.skipTest("hard links not supported")
+
+            bin_path = Path(td) / "candidate.bin"
+            bin_path.write_bytes(b"CANDIDATE_DATA")
+            sym_path = Path(td) / "symbols.nm"
+            sym_path.write_text("0035f7a0 D boot_witness\n00366cb0 B _end\n")
+
+            res = self._run_preflight_cli(
+                str(bin_path), str(sym_path),
+                "--inspector-metadata", str(meta_path),
+                "--out", str(out_hardlink),
+            )
+            self.assertNotEqual(res.returncode, 0)
+            self.assertIn("Output collision error", res.stderr)
+            self.assertEqual(meta_path.read_bytes(), meta_bytes, "Inspector metadata bytes must be unchanged")
+
+    def test_refuse_out_equal_to_inspector_bin(self):
+        """--out pointing directly to --inspector-bin file is rejected, leaving file untouched."""
+        with tempfile.TemporaryDirectory() as td:
+            payload_bytes = create_mock_payload_bytes(PINNED_BOOT_WITNESS_ADDR)
+            bin_target = Path(td) / "witness_inspector_payload.bin"
+            bin_target.write_bytes(payload_bytes)
+
+            bin_path = Path(td) / "candidate.bin"
+            bin_path.write_bytes(b"CANDIDATE_DATA")
+            sym_path = Path(td) / "symbols.nm"
+            sym_path.write_text("0035f7a0 D boot_witness\n00366cb0 B _end\n")
+
+            # Direct CLI check
+            res = self._run_preflight_cli(
+                str(bin_path), str(sym_path),
+                "--inspector-bin", str(bin_target),
+                "--out", str(bin_target),
+            )
+            self.assertNotEqual(res.returncode, 0)
+            self.assertIn("Output collision error", res.stderr)
+            self.assertEqual(bin_target.read_bytes(), payload_bytes, "Inspector binary bytes must be unchanged")
+
+            # Direct Python API check
+            with self.assertRaises(ValueError) as ctx:
+                ptp.run_preflight(
+                    binary_path=str(bin_path),
+                    symbols_path=str(sym_path),
+                    inspector_bin_path=str(bin_target),
+                    out_path=str(bin_target),
+                )
+            self.assertIn("Output collision error", str(ctx.exception))
+            self.assertEqual(bin_target.read_bytes(), payload_bytes, "Inspector binary bytes must be unchanged")
+
+    def test_refuse_out_as_symlink_to_inspector_bin(self):
+        """--out given as symlink alias to --inspector-bin is rejected, leaving file untouched."""
+        with tempfile.TemporaryDirectory() as td:
+            payload_bytes = create_mock_payload_bytes(PINNED_BOOT_WITNESS_ADDR)
+            bin_target = Path(td) / "witness_inspector_payload.bin"
+            bin_target.write_bytes(payload_bytes)
+            out_link = Path(td) / "payload_symlink.json"
+            try:
+                os.symlink(bin_target, out_link)
+            except (OSError, NotImplementedError, AttributeError):
+                self.skipTest("symlinks not supported")
+
+            bin_path = Path(td) / "candidate.bin"
+            bin_path.write_bytes(b"CANDIDATE_DATA")
+            sym_path = Path(td) / "symbols.nm"
+            sym_path.write_text("0035f7a0 D boot_witness\n00366cb0 B _end\n")
+
+            res = self._run_preflight_cli(
+                str(bin_path), str(sym_path),
+                "--inspector-bin", str(bin_target),
+                "--out", str(out_link),
+            )
+            self.assertNotEqual(res.returncode, 0)
+            self.assertIn("Output collision error", res.stderr)
+            self.assertEqual(bin_target.read_bytes(), payload_bytes, "Inspector binary bytes must be unchanged")
+
+    def test_refuse_out_as_hardlink_to_inspector_bin(self):
+        """--out given as hardlink alias to --inspector-bin is rejected, leaving file untouched."""
+        with tempfile.TemporaryDirectory() as td:
+            payload_bytes = create_mock_payload_bytes(PINNED_BOOT_WITNESS_ADDR)
+            bin_target = Path(td) / "witness_inspector_payload.bin"
+            bin_target.write_bytes(payload_bytes)
+            out_hardlink = Path(td) / "payload_hardlink.json"
+            try:
+                os.link(bin_target, out_hardlink)
+            except (OSError, NotImplementedError, AttributeError):
+                self.skipTest("hard links not supported")
+
+            bin_path = Path(td) / "candidate.bin"
+            bin_path.write_bytes(b"CANDIDATE_DATA")
+            sym_path = Path(td) / "symbols.nm"
+            sym_path.write_text("0035f7a0 D boot_witness\n00366cb0 B _end\n")
+
+            res = self._run_preflight_cli(
+                str(bin_path), str(sym_path),
+                "--inspector-bin", str(bin_target),
+                "--out", str(out_hardlink),
+            )
+            self.assertNotEqual(res.returncode, 0)
+            self.assertIn("Output collision error", res.stderr)
+            self.assertEqual(bin_target.read_bytes(), payload_bytes, "Inspector binary bytes must be unchanged")
+
 
 if __name__ == "__main__":
     unittest.main()

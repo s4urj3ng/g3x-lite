@@ -151,52 +151,65 @@ def validate_path_safety(path: str) -> None:
     _check_policy(resolved, "resolved path")
 
 
-def validate_output_target(out_path: str, binary_path: str, symbols_path: str) -> None:
-    """Reject --out path if it refers to either the candidate binary or symbol/map file.
+def validate_output_target(
+    out_path: str,
+    binary_path: str,
+    symbols_path: str,
+    inspector_metadata_path: Optional[str] = None,
+    inspector_bin_path: Optional[str] = None,
+) -> None:
+    """Reject --out path if it refers to candidate binary, symbol/map file, or inspector inputs.
 
     Guards against clobbering input files through direct path equality, symlinks,
     hardlinks, or relative traversal aliases.
     """
+    inputs: List[Tuple[str, str]] = [
+        ("candidate binary", binary_path),
+        ("symbols/map file", symbols_path),
+    ]
+    if inspector_metadata_path:
+        inputs.append(("inspector metadata file", inspector_metadata_path))
+    if inspector_bin_path:
+        inputs.append(("inspector binary file", inspector_bin_path))
+
     try:
         real_out = os.path.realpath(out_path)
-        real_bin = os.path.realpath(binary_path)
-        real_sym = os.path.realpath(symbols_path)
     except OSError as exc:
         raise ValueError(f"Path resolution error during output collision check: {exc}") from exc
 
-    if real_out == real_bin:
-        raise ValueError(
-            f"Output collision error: --out path '{out_path}' resolves to candidate binary '{binary_path}' "
-            "(refusing to clobber input file)."
-        )
+    for input_name, in_path in inputs:
+        if not in_path:
+            continue
+        try:
+            real_in = os.path.realpath(in_path)
+        except OSError as exc:
+            raise ValueError(f"Path resolution error during output collision check: {exc}") from exc
 
-    if real_out == real_sym:
-        raise ValueError(
-            f"Output collision error: --out path '{out_path}' resolves to symbols/map file '{symbols_path}' "
-            "(refusing to clobber input file)."
-        )
+        if real_out == real_in:
+            raise ValueError(
+                f"Output collision error: --out path '{out_path}' resolves to {input_name} '{in_path}' "
+                "(refusing to clobber input file)."
+            )
 
-    # If the target exists on disk, check samefile and st_dev/st_ino for hardlinks or alias handles
-    if os.path.exists(out_path):
-        for input_name, in_path in (("candidate binary", binary_path), ("symbols file", symbols_path)):
-            if os.path.exists(in_path):
-                is_same = False
+        # If both target and input exist on disk, check samefile and st_dev/st_ino for hardlinks or alias handles
+        if os.path.exists(out_path) and os.path.exists(in_path):
+            is_same = False
+            try:
+                is_same = os.path.samefile(out_path, in_path)
+            except (OSError, AttributeError):
+                pass
+            if not is_same:
                 try:
-                    is_same = os.path.samefile(out_path, in_path)
-                except (OSError, AttributeError):
+                    st_out = os.stat(out_path)
+                    st_in = os.stat(in_path)
+                    is_same = (st_out.st_dev == st_in.st_dev and st_out.st_ino == st_in.st_ino)
+                except OSError:
                     pass
-                if not is_same:
-                    try:
-                        st_out = os.stat(out_path)
-                        st_in = os.stat(in_path)
-                        is_same = (st_out.st_dev == st_in.st_dev and st_out.st_ino == st_in.st_ino)
-                    except OSError:
-                        pass
-                if is_same:
-                    raise ValueError(
-                        f"Output collision error: --out path '{out_path}' refers to the same file as "
-                        f"{input_name} '{in_path}' (target would be clobbered). Refusing."
-                    )
+            if is_same:
+                raise ValueError(
+                    f"Output collision error: --out path '{out_path}' refers to the same file as "
+                    f"{input_name} '{in_path}' (target would be clobbered). Refusing."
+                )
 
 
 # =============================================================================
@@ -369,13 +382,19 @@ def run_preflight(
     # 1. Enforce path safety checks on all provided paths (fail-closed Phase 0 policy)
     validate_path_safety(binary_path)
     validate_path_safety(symbols_path)
-    if out_path:
-        validate_path_safety(out_path)
-        validate_output_target(out_path, binary_path, symbols_path)
     if inspector_metadata_path:
         validate_path_safety(inspector_metadata_path)
     if inspector_bin_path:
         validate_path_safety(inspector_bin_path)
+    if out_path:
+        validate_path_safety(out_path)
+        validate_output_target(
+            out_path,
+            binary_path,
+            symbols_path,
+            inspector_metadata_path=inspector_metadata_path,
+            inspector_bin_path=inspector_bin_path,
+        )
 
     # 2. Inspect candidate binary file
     if not os.path.isfile(binary_path):
@@ -433,13 +452,32 @@ def run_preflight(
                 meta_addr = None
                 meta_err = "Inspector metadata missing 'witness_address' field"
             else:
-                meta_addr = int(meta_raw, 16)
-                meta_err = None
+                try:
+                    meta_addr = int(meta_raw, 16)
+                    meta_err = None
+                except (ValueError, TypeError) as exc:
+                    meta_addr = None
+                    meta_err = f"Malformed inspector metadata 'witness_address': {exc}"
+
+            if meta_err is None and "witness_address_int" in meta_data:
+                meta_int = meta_data["witness_address_int"]
+                if type(meta_int) is not int:
+                    meta_err = f"Inspector metadata 'witness_address_int' is not an integer: {meta_int!r}"
+                elif meta_int != meta_addr:
+                    meta_err = (
+                        f"Inspector metadata 'witness_address_int' (0x{meta_int:08X}) "
+                        f"disagrees with 'witness_address' (0x{meta_addr:08X})"
+                    )
+                elif meta_int != EXPECTED_BOOT_WITNESS_ADDR:
+                    meta_err = (
+                        f"Inspector metadata 'witness_address_int' 0x{meta_int:08X} "
+                        f"!= 0x{EXPECTED_BOOT_WITNESS_ADDR:08X}"
+                    )
         except Exception as exc:
             meta_addr = None
             meta_err = f"Malformed inspector metadata: {exc}"
 
-        meta_pass = (meta_addr == EXPECTED_BOOT_WITNESS_ADDR)
+        meta_pass = (meta_err is None and meta_addr == EXPECTED_BOOT_WITNESS_ADDR)
         if meta_pass:
             meta_reason = None
         elif meta_err:
