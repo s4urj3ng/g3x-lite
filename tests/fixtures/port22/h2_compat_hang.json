@@ -1,0 +1,9 @@
+{
+  "synthetic": true,
+  "description": "Synthetic fixture for hypothesis H2: Loader reached, rear status LED pulsed ~1-2 s in prologue, then camera hung permanently in check_compat().",
+  "card_lock_state": "LOCKED",
+  "startup_timing": "hang (camera froze with black screen, never reached stock UI)",
+  "port20_led": "PULSES ~1-2 s",
+  "ramcmp": "UNREACHABLE",
+  "inspector_osd": "UNREACHABLE"
+}
