@@ -14,36 +14,26 @@ Verifies:
      includes the start address and its Thumb +1 variant) or the cited span covers the start.
      A range anchor 'ANCHOR: range <ID> <src> -> <dst>' needs <src> inside another recorded range
      and <dst> inside this one. Every range must reach a tracked root without cycles.
-   - A range with no valid anchor must be flagged 'ANCHOR: NONE' / 'SCOPE DEVIATION' and be listed
-     in the doc's Scope Deviations section; it must not support any VERIFIED candidate claim.
+   - The only range allowed without an anchor is the hard-coded allowlist entry
+     PORT20-ROM-LEDDRIVE, which must be flagged 'ANCHOR: NONE' / 'SCOPE DEVIATION' and carry the
+     Tech Lead acknowledgement string. Any other unanchored range fails.
    - No manifest entry has classification STATIC_VERIFIED while notes contain 'downgrad', 'unanchored' or 'REJECTED'.
 2. Manifest validator integration:
    - Manifest passes tools/port11c_evidence_validator.py with returncode == 0 and 0 errors.
 3. Candidate LED register table consistency (docs/PORT20_LED_EVIDENCE.md §2):
    - Table parsed strictly row by row without DOTALL leakage.
-   - Every row has an explicit label (VERIFIED, INFERRED, UNKNOWN, or REJECTED) and a filled citation.
-   - Only 0xD20B0884 is labelled VERIFIED for G3 X hardware, justified by GM1.10C ROM code citations.
-   - Reference-camera candidates (0xD20B0994, 0xD20B0810, 0xD20B0888) are at most INFERRED or REJECTED.
-   - Candidate bold formatting (**`0x...`** or **0x...**) handled robustly.
-4. Range ancestry & manifest anchor verification (docs/PORT20_LED_EVIDENCE.md §6):
-   - Every manifest range has an explicit anchor row in the Section 6 table.
-   - Each anchor row records start/end addresses, anchor citation, and anchor type.
-5. Loader context compatibility (docs/PORT20_LED_EVIDENCE.md §4):
-   - Evaluates CPU mode (privileged), MPU state (Region 2 Privileged RW), and Cache state (Device Memory).
-   - Loader-entry state and post-'cpsid if' state are split, with per-item labels; DSB is recommended.
-6. Conclusion line and polarity consistency:
-   - Terminates with an explicit conclusion line matching T2 GO or T2 STOP.
-   - If T2 GO, the ON/OFF values and active polarity match the candidate table exactly.
-7. Negative mutation tests:
-   - Removing a candidate row label fails.
-   - Marking any candidate VERIFIED when it only has other-camera citations fails.
-   - A conclusion line that disagrees with the candidate table polarity fails.
-   - Missing manifest anchor rows fail.
-   - A manifest entry without an anchor in notes fails.
-   - A cited anchor file that exists but whose line lacks the address fails; so do addresses
-     outside the range, missing files, bad parent links, anchor cycles, an unflagged unanchored
-     range, a deviation missing from the doc, and a VERIFIED claim drawn from a deviation range.
-   - A manifest entry with STATIC_VERIFIED contradicting downgrade/unanchored/REJECTED fails.
+   - Evidence label and status are separate columns. Every row, rejected or not, carries exactly
+     one of VERIFIED / INFERRED / UNKNOWN in the label column, plus a filled citation and status.
+   - A VERIFIED label needs a 'PRIMARY.BIN 0x...' citation inside an anchored range.
+   - Reference-camera candidates (0xD20B0994, 0xD20B0810, 0xD20B0888) are never VERIFIED.
+4. Quarantine of the acknowledged deviation:
+   - No candidate or claim outside §7 and its §6 accounting row cites an address inside it.
+   - §7 and the manifest carry the acknowledgement; §6 states the scope accounting line.
+5. Citations and identity:
+   - Every file:line citation in the doc points to a path listed by `git ls-files` and the line exists.
+   - The doc's firmware SHA-256 equals the value on docs/REPRODUCIBILITY_MANIFEST.md:62.
+6. Range ancestry rows (§6), loader context (§4), conclusion line and polarity consistency.
+7. Negative mutation tests for each of the above.
 """
 
 from __future__ import annotations
@@ -77,9 +67,32 @@ GO_CHAIN_RANGES = (
     "PORT20-ROM-LEDDRV-DISPATCH",
 )
 
+# The only unanchored range the Tech Lead acknowledged (task 90 revision-4 feedback).
+DEVIATION_ACK = (
+    "SCOPE DEVIATION — not pre-authorised; acknowledged by Tech Lead in the task 90 revision-4 "
+    "feedback; quarantined: no claim in this document relies on it."
+)
+ACKNOWLEDGED_DEVIATIONS = {"PORT20-ROM-LEDDRIVE": DEVIATION_ACK}
+SCOPE_ACCOUNTING_LINE = (
+    "T1 ROM-read scope: 7 anchored ranges compliant, 1 acknowledged deviation (PORT20-ROM-LEDDRIVE)"
+)
+
+FIRMWARE_HASH_SOURCE = ("docs/REPRODUCIBILITY_MANIFEST.md", 62)
+
+EVIDENCE_LABELS = ("VERIFIED", "INFERRED", "UNKNOWN")
+LABEL_PATTERN = re.compile(r"\b(VERIFIED|INFERRED|UNKNOWN)\b")
+REFERENCE_CANDIDATES = ("0xD20B0994", "0xD20B0810", "0xD20B0888")
+ROM_CITATION_PATTERN = re.compile(r"PRIMARY\.BIN`?\s+`?(0x[0-9A-Fa-f]+)")
+
 HEX64_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
+HEX64_SEARCH = re.compile(r"\b[0-9a-fA-F]{64}\b")
 CONCLUSION_PATTERN = re.compile(
     r"^T2 (?:GO:\s*(0x[0-9a-fA-F]+)\s+on=(0x[0-9a-fA-F]+)\s+off=(0x[0-9a-fA-F]+)\s+\(address/value\s+(VERIFIED|INFERRED|UNKNOWN),\s+polarity\s+(VERIFIED|INFERRED|UNKNOWN)\)|STOP:\s*.*)$"
+)
+# path:line citations, e.g. docs/X.md:38, vendor/.../lib.c:45-46, docs/PROJECT_STATE.md:223, 231
+FILE_LINE_CITATION = re.compile(
+    r"(?P<path>[A-Za-z0-9_\-.]+(?:/[A-Za-z0-9_\-.]+)+\.(?:md|c|h|S|py|json|txt)):"
+    r"(?P<lines>\d+(?:-\d+)?(?:,\s*\d+(?:-\d+)?)*)"
 )
 
 
@@ -98,8 +111,7 @@ def clean_markdown_cell(cell: str) -> str:
     return re.sub(r"[\*`]", "", cell).strip()
 
 
-def parse_candidate_table(doc_text: str) -> List[Dict[str, str]]:
-    """Parses Section 2 Candidate LED Registers Table strictly row by row."""
+def candidate_section(doc_text: str) -> str:
     section_match = re.search(
         r"## 2\. Candidate LED Registers Table\s*\n(.*?)(?:\n---|\n##|\Z)",
         doc_text,
@@ -107,10 +119,13 @@ def parse_candidate_table(doc_text: str) -> List[Dict[str, str]]:
     )
     if not section_match:
         raise ValueError("Section '## 2. Candidate LED Registers Table' not found in document")
+    return section_match.group(1)
 
-    lines = section_match.group(1).strip().splitlines()
+
+def parse_candidate_table(doc_text: str) -> List[Dict[str, str]]:
+    """Parses Section 2 Candidate LED Registers Table strictly row by row."""
     rows = []
-    for line in lines:
+    for line in candidate_section(doc_text).strip().splitlines():
         line = line.strip()
         if not line.startswith("|") or not line.endswith("|"):
             continue
@@ -122,16 +137,16 @@ def parse_candidate_table(doc_text: str) -> List[Dict[str, str]]:
             continue
 
         raw_addr = cols[0]
-        clean_addr = clean_markdown_cell(raw_addr)
         rows.append({
             "raw_address": raw_addr,
-            "clean_address": clean_addr,
+            "clean_address": clean_markdown_cell(raw_addr),
             "on_val": cols[1],
             "off_val": cols[2],
             "rmw": cols[3],
             "target": cols[4],
             "classification": cols[5],
             "citation": cols[6],
+            "status": cols[7] if len(cols) > 7 else "",
             "line": line,
         })
     return rows
@@ -147,9 +162,8 @@ def parse_anchor_table(doc_text: str) -> List[Dict[str, str]]:
     if not section_match:
         raise ValueError("Section '## 6. ROM Range Ancestry...' not found in document")
 
-    lines = section_match.group(1).strip().splitlines()
     rows = []
-    for line in lines:
+    for line in section_match.group(1).strip().splitlines():
         line = line.strip()
         if not line.startswith("|") or not line.endswith("|"):
             continue
@@ -173,147 +187,10 @@ def parse_anchor_table(doc_text: str) -> List[Dict[str, str]]:
     return rows
 
 
-def validate_candidate_table_rows(doc_text: str) -> None:
-    """Strictly validates candidate table rows without DOTALL multi-row leakage."""
-    rows = parse_candidate_table(doc_text)
-    if not rows:
-        raise ValueError("Candidate table has no valid data rows")
-
-    expected_candidates = {
-        "0xD20B0884",
-        "0xD20B0994",
-        "0xD20B0810",
-        "0xD20B0888",
-        "LEDDrive",
-        "LEDDrv.c",
-    }
-    found_candidates = set()
-
-    for r in rows:
-        clean_addr = r["clean_address"]
-        classification = r["classification"]
-        citation = r["citation"]
-
-        # Check for matching candidate
-        matching_key = None
-        for ec in expected_candidates:
-            if ec in clean_addr:
-                matching_key = ec
-                break
-        if matching_key:
-            found_candidates.add(matching_key)
-
-        # Every row must have an explicit label
-        valid_labels = {"VERIFIED", "INFERRED", "UNKNOWN", "REJECTED"}
-        has_label = any(label in classification for label in valid_labels)
-        if not has_label:
-            raise ValueError(f"Candidate row for '{clean_addr}' lacks explicit classification: '{classification}'")
-
-        # Every row must have a non-empty citation
-        if not citation or citation == "N/A":
-            raise ValueError(f"Candidate row for '{clean_addr}' lacks citation")
-
-        # Non-0xD20B0884 rows cannot be solely VERIFIED if they only cite other cameras or lack GM1.10C ROM code
-        is_primary_g3x = "0xD20B0884" in clean_addr
-        has_primary_rom_citation = "PRIMARY.BIN" in citation
-
-        if not is_primary_g3x:
-            # If it's an alternate or reference camera candidate, check it is not falsely claimed VERIFIED for G3 X
-            if "VERIFIED" in classification and not ("REJECTED" in classification or has_primary_rom_citation):
-                raise ValueError(
-                    f"Candidate '{clean_addr}' is marked VERIFIED without GM1.10C ROM code citation: '{classification}'"
-                )
-            if any(ref in citation for ref in ["g7x", "g5x", "g16", "sx710", "SX710"]) and not has_primary_rom_citation:
-                if "VERIFIED" in classification and "REJECTED" not in classification:
-                    raise ValueError(
-                        f"Candidate '{clean_addr}' marked VERIFIED based only on other-camera references: '{citation}'"
-                    )
-
-    missing = expected_candidates - found_candidates
-    if missing:
-        raise ValueError(f"Missing expected candidate entries in candidate table: {missing}")
-
-
-def validate_polarity_consistency(doc_text: str) -> None:
-    """Verifies that the candidate table and final conclusion agree on ON/OFF values and polarity."""
-    rows = parse_candidate_table(doc_text)
-    primary_row = None
-    for r in rows:
-        if "0xD20B0884" in r["clean_address"]:
-            primary_row = r
-            break
-    if not primary_row:
-        raise ValueError("Primary candidate 0xD20B0884 not found in candidate table")
-
-    table_on = int(clean_markdown_cell(primary_row["on_val"]), 16)
-    table_off = int(clean_markdown_cell(primary_row["off_val"]), 16)
-
-    lines = [line.strip() for line in doc_text.strip().splitlines() if line.strip()]
-    if not lines:
-        raise ValueError("Document is empty")
-    last_line = lines[-1]
-
-    match = CONCLUSION_PATTERN.match(last_line)
-    if not match:
-        raise ValueError(f"Final line '{last_line}' does not match conclusion pattern")
-
-    if last_line.startswith("T2 GO:"):
-        conc_addr = match.group(1)
-        conc_on = int(match.group(2), 16)
-        conc_off = int(match.group(3), 16)
-        val_status = match.group(4)
-        pol_status = match.group(5)
-
-        if conc_addr != "0xD20B0884":
-            raise ValueError(f"Conclusion register {conc_addr} does not match 0xD20B0884")
-        if conc_on != table_on:
-            raise ValueError(
-                f"Conclusion ON value {hex(conc_on)} disagrees with candidate table ON value {hex(table_on)}"
-            )
-        if conc_off != table_off:
-            raise ValueError(
-                f"Conclusion OFF value {hex(conc_off)} disagrees with candidate table OFF value {hex(table_off)}"
-            )
-        if val_status != "VERIFIED":
-            raise ValueError(f"Conclusion address/value status must be VERIFIED, got {val_status}")
-        if pol_status not in ("VERIFIED", "INFERRED"):
-            raise ValueError(f"Conclusion polarity status must be VERIFIED or INFERRED, got {pol_status}")
-
-
-def validate_manifest_anchors_in_doc(manifest: Dict[str, Any], doc_text: str) -> None:
-    """Ensures every manifest range has an explicit, valid anchor row in Section 6."""
-    anchor_rows = parse_anchor_table(doc_text)
-    anchor_dict = {r["range_id"]: r for r in anchor_rows}
-
-    for entry in manifest.get("evidence_entries", []):
-        eid = entry["evidence_id"]
-        if eid not in anchor_dict:
-            raise ValueError(f"Manifest entry '{eid}' is missing an anchor row in Section 6 table")
-
-        row = anchor_dict[eid]
-        # Start and end addresses must match
-        if int(row["start"], 16) != int(entry["start_address"], 16):
-            raise ValueError(
-                f"Anchor row start address {row['start']} does not match manifest start address {entry['start_address']} for {eid}"
-            )
-        if int(row["end"], 16) != int(entry["end_address"], 16):
-            raise ValueError(
-                f"Anchor row end address {row['end']} does not match manifest end address {entry['end_address']} for {eid}"
-            )
-        # Anchor citation and type must be non-empty
-        if not row["anchor"]:
-            raise ValueError(f"Anchor citation is empty for {eid}")
-        if not row["anchor_type"]:
-            raise ValueError(f"Anchor type is empty for {eid}")
-
-
 def get_tracked_files() -> set[str]:
-    """Returns set of relative paths tracked by git in this repository."""
-    try:
-        out = subprocess.check_output(["git", "ls-files"], cwd=str(REPO_ROOT), text=True)
-        return set(out.splitlines())
-    except Exception:
-        return set()
+    """Returns set of relative paths tracked by git in this repository (raises if git fails)."""
+    out = subprocess.check_output(["git", "ls-files"], cwd=str(REPO_ROOT), text=True)
+    return set(out.splitlines())
 
 
 TRACKED_ANCHOR_PATTERN = re.compile(
@@ -329,7 +206,7 @@ HEX_PATTERN = re.compile(r"0x[0-9A-Fa-f]+")
 
 def read_tracked_line(rel_path: str, line_no: int, tracked_files: set[str]) -> str | None:
     """Returns the content of a 1-indexed line of a tracked repository file, or None."""
-    if tracked_files and rel_path not in tracked_files:
+    if rel_path not in tracked_files:
         return None
     path = REPO_ROOT / rel_path
     if not path.is_file() or line_no < 1:
@@ -360,7 +237,7 @@ def tracked_anchor_is_valid(m: "re.Match[str]", start: int, end: int, tracked_fi
 
 
 def validate_manifest_entry_anchors(manifest: Dict[str, Any], tracked_files: set[str] | None = None) -> List[str]:
-    """Verifies the provenance of every manifest range and returns the disclosed scope deviations.
+    """Verifies the provenance of every manifest range and returns the acknowledged deviations.
 
     Each entry's notes must carry structured anchors:
     - 'ANCHOR: tracked <path>:<line> cites <addr>[..<addr>]': the tracked line content must
@@ -368,8 +245,8 @@ def validate_manifest_entry_anchors(manifest: Dict[str, Any], tracked_files: set
     - 'ANCHOR: range <ID> <src> -> <dst>': <ID> is another recorded range containing <src>,
       and <dst> (Thumb bit ignored) lies inside this range.
     Every range must reach a tracked root through valid parent links (no cycles).
-    Any range that does not must be flagged 'ANCHOR: NONE' and 'SCOPE DEVIATION';
-    a flagged range must not also claim a valid anchor."""
+    A range that does not is accepted only if it is in ACKNOWLEDGED_DEVIATIONS, is flagged
+    'ANCHOR: NONE' and 'SCOPE DEVIATION', carries the acknowledgement string and claims no anchor."""
     entries = manifest.get("evidence_entries", [])
     if not entries:
         raise ValueError("Manifest has no evidence entries")
@@ -418,15 +295,136 @@ def validate_manifest_entry_anchors(manifest: Dict[str, Any], tracked_files: set
             if flagged:
                 raise ValueError(f"Manifest entry '{eid}' is anchored but also flagged as a scope deviation")
             continue
-        if not flagged:
+        if eid not in ACKNOWLEDGED_DEVIATIONS:
             raise ValueError(
                 f"Manifest entry '{eid}' has no valid anchor chain to a tracked file:line "
-                f"(claimed anchors: {claimed_any[eid]}) and is not flagged as a disclosed scope deviation: {notes}"
+                f"(claimed anchors: {claimed_any[eid]}) and is not on the acknowledged-deviation allowlist"
             )
+        if not flagged:
+            raise ValueError(f"Acknowledged deviation '{eid}' is not flagged ANCHOR: NONE / SCOPE DEVIATION")
+        if ACKNOWLEDGED_DEVIATIONS[eid] not in notes:
+            raise ValueError(f"Acknowledged deviation '{eid}' lacks the Tech Lead acknowledgement string")
         if claimed_any[eid]:
             raise ValueError(f"Manifest entry '{eid}' is flagged as a scope deviation but still claims anchors")
         deviations.append(eid)
     return deviations
+
+
+def anchored_spans(manifest: Dict[str, Any]) -> List[tuple]:
+    deviations = set(validate_manifest_entry_anchors(manifest))
+    return [
+        (int(e["start_address"], 16), int(e["end_address"], 16), e["evidence_id"])
+        for e in manifest["evidence_entries"]
+        if e["evidence_id"] not in deviations
+    ]
+
+
+def validate_candidate_table_rows(doc_text: str, manifest: Dict[str, Any] | None = None) -> None:
+    """Strictly validates candidate table rows: label and status are separate fields; every row
+    carries exactly one evidence label; VERIFIED needs a ROM citation inside an anchored range."""
+    if manifest is None:
+        manifest = parse_manifest(MANIFEST_PATH)
+    spans = anchored_spans(manifest)
+    rows = parse_candidate_table(doc_text)
+    if not rows:
+        raise ValueError("Candidate table has no valid data rows")
+
+    expected_candidates = {"0xD20B0884", "0xD20B0994", "0xD20B0810", "0xD20B0888", "LEDDrv.c"}
+    found_candidates = set()
+
+    for r in rows:
+        clean_addr = r["clean_address"]
+        for ec in expected_candidates:
+            if ec in clean_addr:
+                found_candidates.add(ec)
+
+        labels = LABEL_PATTERN.findall(r["classification"])
+        if len(labels) != 1:
+            raise ValueError(
+                f"Candidate '{clean_addr}' must carry exactly one of {EVIDENCE_LABELS} in its label column, "
+                f"got {labels}: '{r['classification']}'"
+            )
+        if "REJECTED" in r["classification"]:
+            raise ValueError(f"Candidate '{clean_addr}' mixes status into the evidence label column")
+        if not r["status"]:
+            raise ValueError(f"Candidate '{clean_addr}' lacks a status")
+        if not r["citation"] or r["citation"] == "N/A":
+            raise ValueError(f"Candidate row for '{clean_addr}' lacks citation")
+
+        if labels[0] == "VERIFIED":
+            rom_addrs = [int(h, 16) for h in ROM_CITATION_PATTERN.findall(r["citation"])]
+            if not any(s <= a <= e for a in rom_addrs for s, e, _ in spans):
+                raise ValueError(
+                    f"Candidate '{clean_addr}' is VERIFIED without a GM1.10C ROM citation inside an anchored range"
+                )
+            if any(ref in clean_addr for ref in REFERENCE_CANDIDATES):
+                raise ValueError(f"Reference-camera candidate '{clean_addr}' must not be VERIFIED")
+
+    missing = expected_candidates - found_candidates
+    if missing:
+        raise ValueError(f"Missing expected candidate entries in candidate table: {missing}")
+
+
+def primary_polarity_label(row: Dict[str, str]) -> str:
+    m = re.search(r"polarity\s*`?\[(VERIFIED|INFERRED|UNKNOWN)", row["target"])
+    if not m:
+        raise ValueError("Primary candidate target cell does not label the polarity")
+    return m.group(1)
+
+
+def validate_polarity_consistency(doc_text: str) -> None:
+    """Verifies that the candidate table and final conclusion agree on ON/OFF values and polarity."""
+    rows = parse_candidate_table(doc_text)
+    primary_row = next((r for r in rows if "0xD20B0884" in r["clean_address"]), None)
+    if not primary_row:
+        raise ValueError("Primary candidate 0xD20B0884 not found in candidate table")
+
+    table_on = int(clean_markdown_cell(primary_row["on_val"]), 16)
+    table_off = int(clean_markdown_cell(primary_row["off_val"]), 16)
+
+    lines = [line.strip() for line in doc_text.strip().splitlines() if line.strip()]
+    if not lines:
+        raise ValueError("Document is empty")
+    last_line = lines[-1]
+
+    match = CONCLUSION_PATTERN.match(last_line)
+    if not match:
+        raise ValueError(f"Final line '{last_line}' does not match conclusion pattern")
+
+    if last_line.startswith("T2 GO:"):
+        if match.group(1) != "0xD20B0884":
+            raise ValueError(f"Conclusion register {match.group(1)} does not match 0xD20B0884")
+        if int(match.group(2), 16) != table_on:
+            raise ValueError(f"Conclusion ON value {match.group(2)} disagrees with candidate table ON value {hex(table_on)}")
+        if int(match.group(3), 16) != table_off:
+            raise ValueError(f"Conclusion OFF value {match.group(3)} disagrees with candidate table OFF value {hex(table_off)}")
+        if match.group(4) != "VERIFIED":
+            raise ValueError(f"Conclusion address/value status must be VERIFIED, got {match.group(4)}")
+        if match.group(5) != primary_polarity_label(primary_row):
+            raise ValueError(
+                f"Conclusion polarity {match.group(5)} disagrees with the candidate table polarity label"
+            )
+
+
+def validate_manifest_anchors_in_doc(manifest: Dict[str, Any], doc_text: str) -> None:
+    """Ensures every manifest range has an explicit, valid anchor row in Section 6."""
+    anchor_dict = {r["range_id"]: r for r in parse_anchor_table(doc_text)}
+
+    for entry in manifest.get("evidence_entries", []):
+        eid = entry["evidence_id"]
+        if eid not in anchor_dict:
+            raise ValueError(f"Manifest entry '{eid}' is missing an anchor row in Section 6 table")
+        row = anchor_dict[eid]
+        if int(row["start"], 16) != int(entry["start_address"], 16):
+            raise ValueError(f"Anchor row start {row['start']} does not match manifest {entry['start_address']} for {eid}")
+        if int(row["end"], 16) != int(entry["end_address"], 16):
+            raise ValueError(f"Anchor row end {row['end']} does not match manifest {entry['end_address']} for {eid}")
+        if row["sha256"].lower() != entry["sha256"].lower():
+            raise ValueError(f"Anchor row SHA-256 does not match manifest for {eid}")
+        if not row["anchor"]:
+            raise ValueError(f"Anchor citation is empty for {eid}")
+        if not row["anchor_type"]:
+            raise ValueError(f"Anchor type is empty for {eid}")
 
 
 def parse_scope_deviations_section(doc_text: str) -> str | None:
@@ -435,10 +433,14 @@ def parse_scope_deviations_section(doc_text: str) -> str | None:
 
 
 def validate_scope_deviations_disclosed(manifest: Dict[str, Any], doc_text: str) -> None:
-    """Every scope deviation in the manifest must be listed in the doc's Scope Deviations section,
-    marked as such in the Section 6 table, never STATIC_VERIFIED, and never the basis of a
-    VERIFIED candidate claim. The section must state that the conclusion does not depend on it."""
+    """Every acknowledged deviation must be listed in the doc's Scope Deviations section with the
+    acknowledgement string, marked SCOPE DEVIATION in the Section 6 table, never STATIC_VERIFIED.
+    The doc must use the scope accounting line and not call the T1 scope compliant otherwise."""
     deviations = validate_manifest_entry_anchors(manifest)
+    if SCOPE_ACCOUNTING_LINE not in doc_text:
+        raise ValueError("Doc lacks the T1 ROM-read scope accounting line")
+    if "compliant" in doc_text.replace(SCOPE_ACCOUNTING_LINE, ""):
+        raise ValueError("Doc calls the T1 ROM-read scope compliant outside the accounting line")
     if not deviations:
         return
     section = parse_scope_deviations_section(doc_text)
@@ -449,28 +451,79 @@ def validate_scope_deviations_disclosed(manifest: Dict[str, Any], doc_text: str)
 
     entries = {e["evidence_id"]: e for e in manifest["evidence_entries"]}
     anchor_rows = {r["range_id"]: r for r in parse_anchor_table(doc_text)}
-    dev_spans = []
     for eid in deviations:
         entry = entries[eid]
         if eid not in section:
             raise ValueError(f"Scope deviation '{eid}' is not listed in the doc's Scope Deviations section")
+        if ACKNOWLEDGED_DEVIATIONS[eid] not in section:
+            raise ValueError(f"Scope deviation '{eid}' lacks the acknowledgement string in the doc")
         if entry.get("classification") == "STATIC_VERIFIED":
             raise ValueError(f"Scope deviation '{eid}' must not be classified STATIC_VERIFIED")
         row = anchor_rows.get(eid)
         if row is None or "SCOPE DEVIATION" not in row["anchor_type"]:
             raise ValueError(f"Section 6 anchor row for '{eid}' is not marked SCOPE DEVIATION")
-        dev_spans.append((int(entry["start_address"], 16), int(entry["end_address"], 16), eid))
+        if "quarantined" not in row["claims"].lower():
+            raise ValueError(f"Section 6 row for '{eid}' must support no claims (quarantined)")
 
-    for r in parse_candidate_table(doc_text):
-        if not re.search(r"\bVERIFIED\b", r["classification"]):
-            continue
-        for h in HEX_PATTERN.findall(r["clean_address"] + " " + r["citation"]):
-            addr = int(h, 16)
-            for d_start, d_end, eid in dev_spans:
-                if d_start <= addr <= d_end:
-                    raise ValueError(
-                        f"VERIFIED candidate '{r['clean_address']}' cites {h} from unanchored range '{eid}'"
-                    )
+
+def validate_quarantine(manifest: Dict[str, Any], doc_text: str) -> None:
+    """No candidate or claim may cite an address inside a quarantined range. Only the §7 section
+    and the deviation's own §6 accounting row may mention its addresses."""
+    deviations = validate_manifest_entry_anchors(manifest)
+    entries = {e["evidence_id"]: e for e in manifest["evidence_entries"]}
+    text = doc_text
+    section = parse_scope_deviations_section(text)
+    if section:
+        text = text.replace(section, "")
+    for row in parse_anchor_table(doc_text):
+        if row["range_id"] in deviations:
+            text = text.replace(row["line"], "")
+    for eid in deviations:
+        start = int(entries[eid]["start_address"], 16)
+        end = int(entries[eid]["end_address"], 16)
+        for h in HEX_PATTERN.findall(text):
+            if start <= int(h, 16) <= end:
+                raise ValueError(f"Doc cites {h} inside quarantined range '{eid}'")
+
+
+def iter_file_line_citations(doc_text: str):
+    for m in FILE_LINE_CITATION.finditer(doc_text):
+        for part in m.group("lines").split(","):
+            for n in part.strip().split("-"):
+                yield m.group("path"), int(n)
+
+
+def validate_file_line_citations(doc_text: str, tracked_files: set[str] | None = None) -> int:
+    """Every path:line citation must point to a `git ls-files` path whose line exists."""
+    if tracked_files is None:
+        tracked_files = get_tracked_files()
+    count = 0
+    for path, line_no in iter_file_line_citations(doc_text):
+        if path not in tracked_files:
+            raise ValueError(f"Citation '{path}:{line_no}' points to a path not listed by git ls-files")
+        if read_tracked_line(path, line_no, tracked_files) is None:
+            raise ValueError(f"Citation '{path}:{line_no}' points to a line that does not exist")
+        count += 1
+    return count
+
+
+def validate_firmware_identity(doc_text: str) -> None:
+    """The doc's firmware SHA-256 must equal the value on docs/REPRODUCIBILITY_MANIFEST.md:62."""
+    target = next((l for l in doc_text.splitlines() if l.startswith("**Firmware Target**")), None)
+    if target is None:
+        raise ValueError("Doc lacks the Firmware Target line")
+    doc_hashes = HEX64_SEARCH.findall(target)
+    if len(doc_hashes) != 1:
+        raise ValueError(f"Firmware Target line must carry exactly one full SHA-256, got {doc_hashes}")
+    path, line_no = FIRMWARE_HASH_SOURCE
+    if f"{path}:{line_no}" not in target:
+        raise ValueError("Firmware Target line does not cite the tracked hash source")
+    line = read_tracked_line(path, line_no, get_tracked_files())
+    if line is None:
+        raise ValueError(f"Tracked hash source {path}:{line_no} not found")
+    tracked = HEX64_SEARCH.findall(line)
+    if len(tracked) != 1 or tracked[0].lower() != doc_hashes[0].lower():
+        raise ValueError(f"Doc firmware SHA-256 {doc_hashes[0]} does not match {path}:{line_no} {tracked}")
 
 
 def validate_manifest_classifications_and_notes(manifest: Dict[str, Any]) -> None:
@@ -479,17 +532,25 @@ def validate_manifest_classifications_and_notes(manifest: Dict[str, Any]) -> Non
     forbidden_terms = ("downgrad", "unanchored", "rejected")
     for entry in manifest.get("evidence_entries", []):
         eid = entry.get("evidence_id", "<unknown>")
-        cls_val = entry.get("classification", "")
-        notes = entry.get("notes", "")
-
-        if cls_val == "STATIC_VERIFIED":
-            notes_lower = notes.lower()
+        if entry.get("classification", "") == "STATIC_VERIFIED":
+            notes_lower = entry.get("notes", "").lower()
             for term in forbidden_terms:
                 if term in notes_lower:
                     raise ValueError(
                         f"Manifest entry '{eid}' has classification STATIC_VERIFIED "
-                        f"but its notes contain contradictory term '{term}': {notes}"
+                        f"but its notes contain contradictory term '{term}'"
                     )
+
+
+def mutate_candidate_cell(doc_text: str, address: str, col: int, value: str) -> str:
+    """Returns doc_text with one cell of the candidate row for `address` replaced."""
+    section = candidate_section(doc_text)
+    for line in section.splitlines():
+        if line.startswith(f"| **`{address}") or line.startswith(f"| **{address}"):
+            cols = line.split("|")
+            cols[col + 1] = f" {value} "
+            return doc_text.replace(line, "|".join(cols))
+    raise AssertionError(f"Candidate row '{address}' not found")
 
 
 class TestPort20ManifestLimits(unittest.TestCase):
@@ -504,22 +565,9 @@ class TestPort20ManifestLimits(unittest.TestCase):
         self.assertGreater(len(scopes), 0, "No authorization scopes declared in manifest")
         approved_ranges = scopes[0].get("approved_ranges", [])
         evidence_entries = self.manifest.get("evidence_entries", [])
-
-        self.assertLessEqual(
-            len(approved_ranges),
-            MAX_RANGES_LIMIT,
-            f"Approved ranges count {len(approved_ranges)} exceeds limit of {MAX_RANGES_LIMIT}",
-        )
-        self.assertLessEqual(
-            len(evidence_entries),
-            MAX_RANGES_LIMIT,
-            f"Evidence entries count {len(evidence_entries)} exceeds limit of {MAX_RANGES_LIMIT}",
-        )
-        self.assertEqual(
-            len(approved_ranges),
-            len(evidence_entries),
-            "Approved ranges and evidence entries counts mismatch",
-        )
+        self.assertLessEqual(len(approved_ranges), MAX_RANGES_LIMIT)
+        self.assertLessEqual(len(evidence_entries), MAX_RANGES_LIMIT)
+        self.assertEqual(len(approved_ranges), len(evidence_entries), "Approved ranges and evidence entries counts mismatch")
 
     def test_each_range_byte_count_within_limit(self):
         for entry in self.manifest.get("evidence_entries", []):
@@ -527,79 +575,51 @@ class TestPort20ManifestLimits(unittest.TestCase):
             start = int(entry["start_address"], 16)
             end = int(entry["end_address"], 16)
             byte_count = entry.get("expected_byte_count", 0)
-
-            self.assertGreater(end, start, f"[{eid}] Inverted range: {hex(start)} >= {hex(end)}")
-            self.assertEqual(
-                byte_count,
-                end - start + 1,
-                f"[{eid}] Byte count {byte_count} != {end - start + 1}",
-            )
-            self.assertLessEqual(
-                byte_count,
-                MAX_BYTES_PER_RANGE,
-                f"[{eid}] Byte count {byte_count} exceeds per-range limit {MAX_BYTES_PER_RANGE}",
-            )
+            self.assertGreater(end, start, f"[{eid}] Inverted range")
+            self.assertEqual(byte_count, end - start + 1, f"[{eid}] Byte count mismatch")
+            self.assertLessEqual(byte_count, MAX_BYTES_PER_RANGE, f"[{eid}] exceeds per-range limit")
 
     def test_total_byte_count_within_limit(self):
         total_bytes = sum(e.get("expected_byte_count", 0) for e in self.manifest.get("evidence_entries", []))
-        self.assertLessEqual(
-            total_bytes,
-            MAX_TOTAL_BYTES,
-            f"Total bytes {total_bytes} exceeds overall limit of {MAX_TOTAL_BYTES} bytes (32 KiB)",
-        )
+        self.assertLessEqual(total_bytes, MAX_TOTAL_BYTES)
 
     def test_sha256_format(self):
         for entry in self.manifest.get("evidence_entries", []):
-            eid = entry.get("evidence_id", "UNKNOWN")
-            digest = entry.get("sha256", "")
-            self.assertTrue(
-                HEX64_PATTERN.match(digest),
-                f"[{eid}] SHA-256 '{digest}' is not a valid 64-hex lowercase/uppercase string",
-            )
+            self.assertTrue(HEX64_PATTERN.match(entry.get("sha256", "")), f"[{entry.get('evidence_id')}] bad SHA-256")
 
     def test_spatial_disjointness_of_slices(self):
-        """Verifies that no two evidence slices overlap."""
-        entries = self.manifest.get("evidence_entries", [])
-        spans = []
-        for e in entries:
-            start = int(e["start_address"], 16)
-            end = int(e["end_address"], 16)
-            spans.append((start, end, e["evidence_id"]))
-
-        spans.sort(key=lambda s: s[0])
-        for i in range(len(spans) - 1):
-            cur_start, cur_end, cur_id = spans[i]
-            next_start, next_end, next_id = spans[i + 1]
-            self.assertLess(
-                cur_end,
-                next_start,
-                f"Slices '{cur_id}' ({hex(cur_start)}..{hex(cur_end)}) and "
-                f"'{next_id}' ({hex(next_start)}..{hex(next_end)}) overlap!",
-            )
+        spans = sorted(
+            (int(e["start_address"], 16), int(e["end_address"], 16), e["evidence_id"])
+            for e in self.manifest.get("evidence_entries", [])
+        )
+        for (cs, ce, cid), (ns, ne, nid) in zip(spans, spans[1:]):
+            self.assertLess(ce, ns, f"Slices '{cid}' and '{nid}' overlap")
 
     def test_validator_execution_passes(self):
         """Executes tools/port11c_evidence_validator.py on the manifest."""
         self.assertTrue(VALIDATOR_TOOL.exists(), f"Validator tool missing: {VALIDATOR_TOOL}")
         cmd = [sys.executable, str(VALIDATOR_TOOL), "--manifest", str(MANIFEST_PATH)]
         res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        self.assertEqual(
-            res.returncode,
-            0,
-            f"port11c_evidence_validator.py failed (exit {res.returncode}):\n{res.stdout}\n{res.stderr}",
-        )
-        self.assertIn("Result: VALID", res.stdout, "Validator did not output 'Result: VALID'")
-        self.assertIn("0 errors", res.stdout, "Validator reported errors")
+        self.assertEqual(res.returncode, 0, f"validator failed (exit {res.returncode}):\n{res.stdout}\n{res.stderr}")
+        self.assertIn("Result: VALID", res.stdout)
+        self.assertIn("0 errors", res.stdout)
 
     def test_manifest_entries_have_valid_anchors(self):
-        """Every range reaches a tracked file:line root or is a flagged scope deviation."""
+        """Every range reaches a tracked root, except the single allowlisted deviation."""
         deviations = validate_manifest_entry_anchors(self.manifest)
         self.assertEqual(deviations, ["PORT20-ROM-LEDDRIVE"])
-        # The ranges behind the T2 conclusion must all be anchored.
         for eid in GO_CHAIN_RANGES:
             self.assertNotIn(eid, deviations, f"T2 conclusion range '{eid}' is not anchored")
 
+    def test_deviation_manifest_notes_carry_acknowledgement(self):
+        entry = next(e for e in self.manifest["evidence_entries"] if e["evidence_id"] == "PORT20-ROM-LEDDRIVE")
+        self.assertIn(DEVIATION_ACK, entry["notes"])
+        self.assertIn(SCOPE_ACCOUNTING_LINE, entry["notes"])
+        self.assertNotIn("LEDDrive", entry["notes"])
+        self.assertNotIn("r1 < 8", entry["notes"])
+        self.assertNotIn("0xFC12D838", entry["notes"])
+
     def test_manifest_static_verified_classification_notes_agreement(self):
-        """No entry may say STATIC_VERIFIED while its notes contain 'downgrad', 'unanchored' or 'REJECTED'."""
         validate_manifest_classifications_and_notes(self.manifest)
 
 
@@ -612,83 +632,71 @@ class TestPort20DocEvidenceConsistency(unittest.TestCase):
         self.manifest = parse_manifest(MANIFEST_PATH)
 
     def test_candidate_registers_table_present(self):
-        """Ensures the candidate registers table is present with required columns."""
         self.assertIn("## 2. Candidate LED Registers Table", self.doc_text)
-        required_headers = [
+        for h in (
             "Candidate Address",
             "ON Value",
             "OFF Value",
             "RMW Mask",
             "Target Hardware LED",
-            "Verification Classification",
+            "Evidence Label",
             "Tracked Citation / Primary Disassembly",
-        ]
-        for h in required_headers:
+            "Status",
+        ):
             self.assertIn(h, self.doc_text, f"Table missing required header: {h}")
 
     def test_candidate_rows_strictly_validated(self):
-        """Validates candidate table row-by-row (no DOTALL) for labels, citations, and non-overclaims."""
-        validate_candidate_table_rows(self.doc_text)
+        validate_candidate_table_rows(self.doc_text, self.manifest)
 
     def test_verified_candidate_register_identified(self):
-        """0xD20B0884 must be identified with exact ON/OFF values and VERIFIED address/value label."""
-        rows = parse_candidate_table(self.doc_text)
-        primary_row = None
-        for r in rows:
-            if "0xD20B0884" in r["clean_address"]:
-                primary_row = r
-                break
+        """0xD20B0884 must be identified with exact ON/OFF values and a VERIFIED label."""
+        primary_row = next((r for r in parse_candidate_table(self.doc_text) if "0xD20B0884" in r["clean_address"]), None)
         self.assertIsNotNone(primary_row, "0xD20B0884 missing from candidate table")
         self.assertEqual(int(clean_markdown_cell(primary_row["on_val"]), 16), 0x4D0002)
         self.assertEqual(int(clean_markdown_cell(primary_row["off_val"]), 16), 0x4C0003)
-        self.assertIn("VERIFIED", primary_row["classification"])
-        self.assertIn("INFERRED", primary_row["classification"])  # Polarity/physical location inferred
+        self.assertEqual(LABEL_PATTERN.findall(primary_row["classification"]), ["VERIFIED"])
+        self.assertIn("INFERRED", primary_row["target"])  # physical location
+        self.assertIn(primary_polarity_label(primary_row), EVIDENCE_LABELS)
         self.assertIn("PRIMARY.BIN", primary_row["citation"])
 
     def test_manifest_anchors_present_in_doc(self):
-        """Verifies every manifest range has a corresponding anchor row in Section 6."""
         validate_manifest_anchors_in_doc(self.manifest, self.doc_text)
 
     def test_gm110c_rom_citations_and_disassembly_present(self):
-        """Key GM1.10C ROM functions establishing 0xD20B0884 must be cited with disassembly."""
-        citations = [
-            "0xFC075DC4",  # LED descriptor init with pin 33
-            "0xFC075D98",  # Turn ON routine / 0x4d0002 load
-            "0xFC075DAE",  # Turn OFF routine / 0x4c0003 load
-            "0xFC0D73C4",  # MMIO store routine
-            "0xFC0D73E4",  # 0xD20B0000 base literal
-            "0xFC075E00",  # 0x004d0002 literal
-            "0xFC075E04",  # 0x004c0003 literal
-        ]
-        for c in citations:
+        for c in (
+            "0xFC075DC4", "0xFC075D98", "0xFC075DAE", "0xFC0D73C4",
+            "0xFC0D73E4", "0xFC075E00", "0xFC075E04",
+        ):
             self.assertIn(c, self.doc_text, f"Missing critical ROM citation: {c}")
-
-        # Check disassembly snippets exist
         self.assertIn("str.w   r1, [r0, #2048]", self.doc_text)
         self.assertIn("add.w   r0, r2, r0, lsl #2", self.doc_text)
 
     def test_loader_context_requirements_addressed(self):
-        """Verifies section (c) covers CPU mode, MPU permissions, and cache coherence."""
-        self.assertIn("4. Loader Context Writability Analysis", self.doc_text)
-        self.assertIn("CPU Execution Mode", self.doc_text)
-        self.assertIn("Privileged", self.doc_text)
-        self.assertIn("MPU Memory Region Protection", self.doc_text)
-        self.assertIn("Region 2", self.doc_text)
-        self.assertIn("DRACR", self.doc_text)
-        self.assertIn("Cache Maintenance", self.doc_text)
-        self.assertIn("Device Memory", self.doc_text)
-        self.assertIn("Non-cacheable", self.doc_text)
+        for s in (
+            "4. Loader Context Writability Analysis", "CPU Execution Mode", "Privileged",
+            "MPU Memory Region Protection", "Region 2", "DRACR", "Cache Maintenance",
+            "Device Memory", "Non-cacheable",
+        ):
+            self.assertIn(s, self.doc_text)
 
     def test_conclusion_polarity_consistency(self):
-        """Document must end with an explicit conclusion line matching candidate table polarity."""
         validate_polarity_consistency(self.doc_text)
 
     def test_scope_deviations_disclosed(self):
-        """Every unanchored range is disclosed in the doc and supports no VERIFIED claim."""
         validate_scope_deviations_disclosed(self.manifest, self.doc_text)
 
+    def test_quarantined_range_not_cited(self):
+        validate_quarantine(self.manifest, self.doc_text)
+
+    def test_file_line_citations_are_tracked(self):
+        self.assertGreater(validate_file_line_citations(self.doc_text), 0)
+        self.assertNotIn("chdk-port/loader", self.doc_text.replace("`git ls-files chdk-port/loader`", ""))
+
+    def test_firmware_identity_matches_tracked_hash(self):
+        validate_firmware_identity(self.doc_text)
+        self.assertNotIn("d8ad5039", self.doc_text)
+
     def test_no_false_anchor_wording_for_leddrive(self):
-        """lib.c:55 / PORT17_TRACE_EVIDENCE.md:389 must not be presented as anchors for 0xFC5572B8."""
         self.assertNotIn("anchored by tracked platform declaration", self.doc_text)
         for entry in self.manifest["evidence_entries"]:
             if entry["evidence_id"] == "PORT20-ROM-LEDDRIVE":
@@ -696,9 +704,11 @@ class TestPort20DocEvidenceConsistency(unittest.TestCase):
                 self.assertNotIn("PORT17_TRACE_EVIDENCE.md:389", entry["notes"])
 
     def test_loader_state_split_and_labelled(self):
-        """Section 4 separates loader-entry state from post-cpsid state and labels each item."""
         self.assertIn("#### (1) At loader entry", self.doc_text)
-        self.assertIn("#### (2) After `cpsid if` at `chdk-port/loader/g3x/main_prototype.c:86`", self.doc_text)
+        self.assertIn(
+            "#### (2) After the loader's `cpsid if` (required by `chdk-port/platform/g3x/sub/110c/boot_prototype.c:95`)",
+            self.doc_text,
+        )
         entry_section = self.doc_text.split("#### (1) At loader entry", 1)[1].split("#### (2)", 1)[0]
         for item, label in (
             ("| Privilege level |", "**INFERRED**"),
@@ -713,7 +723,6 @@ class TestPort20DocEvidenceConsistency(unittest.TestCase):
         self.assertIn("mrs r0, cpsr", self.doc_text)
 
     def test_write_completion_requires_dsb(self):
-        """Section 4.3 must not claim Device writes are unbuffered; it must recommend a DSB."""
         self.assertNotIn("non-cacheable and unbuffered", self.doc_text)
         self.assertIn("store buffer", self.doc_text)
         self.assertIn("dsb sy", self.doc_text)
@@ -727,76 +736,6 @@ class TestNegativeMutations(unittest.TestCase):
         self.doc_text = parse_doc(DOC_PATH)
         self.manifest = parse_manifest(MANIFEST_PATH)
 
-    def test_mutation_removing_row_label_fails(self):
-        """Removing a row's label must fail validation."""
-        # Mutate row for 0xD20B0888 to remove its label
-        mutated = self.doc_text.replace(
-            "**`INFERRED`** (ref port) / **`REJECTED (ABSENT ON G3 X)`**",
-            "",
-        )
-        with self.assertRaises(ValueError):
-            validate_candidate_table_rows(mutated)
-
-    def test_mutation_other_camera_marked_verified_fails(self):
-        """Marking an other-camera candidate VERIFIED without GM1.10C ROM code must fail."""
-        # Mutate row for 0xD20B0994 to claim VERIFIED
-        mutated = self.doc_text.replace(
-            "**`INFERRED`** (ref ports) / **`REJECTED (CONTRADICTED FOR G3 X)`**",
-            "**`VERIFIED`**",
-        )
-        with self.assertRaises(ValueError):
-            validate_candidate_table_rows(mutated)
-
-    def test_mutation_conclusion_polarity_disagreement_fails(self):
-        """A conclusion line that disagrees with the candidate table polarity must fail."""
-        # Mutate conclusion line to invert ON and OFF
-        mutated = re.sub(
-            r"T2 GO:.*",
-            "T2 GO: 0xD20B0884 on=0x4c0003 off=0x4d0002 (address/value VERIFIED, polarity INFERRED)",
-            self.doc_text,
-        )
-        with self.assertRaises(ValueError):
-            validate_polarity_consistency(mutated)
-
-    def test_mutation_missing_anchor_row_fails(self):
-        """Removing an anchor row for a manifest range must fail validation."""
-        # Remove anchor row for PORT20-ROM-TASK-LEDCON-LOOP
-        mutated = re.sub(
-            r"\|\s*`PORT20-ROM-TASK-LEDCON-LOOP`\s*\|[^\n]*\n",
-            "",
-            self.doc_text,
-        )
-        with self.assertRaises(ValueError):
-            validate_manifest_anchors_in_doc(self.manifest, mutated)
-
-    def test_mutation_rejects_exceeded_range_limit(self):
-        """Mutating range count to 9 must exceed MAX_RANGES_LIMIT."""
-        fake_ranges = list(range(9))
-        self.assertGreater(len(fake_ranges), MAX_RANGES_LIMIT)
-
-    def test_mutation_rejects_invalid_conclusion_pattern(self):
-        """Invalid conclusion lines must fail the regex."""
-        invalid_conclusions = [
-            "GO: 0xD20B0884",
-            "T2 GO",
-            "Conclusion: T2 GO 0xD20B0884",
-            "T2 PROCEED",
-            "T2 GO: 0xD20B0884 (missing on/off)",
-        ]
-        for ic in invalid_conclusions:
-            self.assertIsNone(CONCLUSION_PATTERN.match(ic), f"Invalid conclusion '{ic}' unexpectedly passed")
-
-    def test_mutation_manifest_entry_missing_anchor_fails(self):
-        """A manifest entry whose notes lack both tracked file:line and other-range address must fail."""
-        mutated = copy.deepcopy(self.manifest)
-        # Clear anchor references from PORT20-ROM-MPU-REGION2-SETUP notes
-        for e in mutated["evidence_entries"]:
-            if e["evidence_id"] == "PORT20-ROM-MPU-REGION2-SETUP":
-                e["notes"] = "Plain CP15 MPU description without any tracked file or other address."
-                break
-        with self.assertRaises(ValueError):
-            validate_manifest_entry_anchors(mutated)
-
     def _with_notes(self, eid: str, notes: str) -> Dict[str, Any]:
         mutated = copy.deepcopy(self.manifest)
         for e in mutated["evidence_entries"]:
@@ -805,88 +744,188 @@ class TestNegativeMutations(unittest.TestCase):
                 return mutated
         self.fail(f"Manifest entry '{eid}' not found")
 
+    # --- candidate labels -------------------------------------------------------------
+
+    def test_mutation_removing_row_label_fails(self):
+        mutated = mutate_candidate_cell(self.doc_text, "0xD20B0888", 5, "")
+        with self.assertRaises(ValueError):
+            validate_candidate_table_rows(mutated, self.manifest)
+
+    def test_mutation_d20b0994_rejected_alone_fails(self):
+        """Reviewer mutation: the 0xD20B0994 label set to 'REJECTED' alone must fail."""
+        mutated = mutate_candidate_cell(self.doc_text, "0xD20B0994", 5, "REJECTED")
+        with self.assertRaises(ValueError):
+            validate_candidate_table_rows(mutated, self.manifest)
+
+    def test_mutation_d20b0994_verified_rejected_without_rom_citation_fails(self):
+        """Reviewer mutation: 'VERIFIED / REJECTED' with no ROM citation must fail."""
+        mutated = mutate_candidate_cell(self.doc_text, "0xD20B0994", 5, "VERIFIED / REJECTED")
+        with self.assertRaises(ValueError):
+            validate_candidate_table_rows(mutated, self.manifest)
+        mutated = mutate_candidate_cell(self.doc_text, "0xD20B0994", 5, "**`VERIFIED`**")
+        with self.assertRaises(ValueError):
+            validate_candidate_table_rows(mutated, self.manifest)
+
+    def test_mutation_two_labels_fails(self):
+        mutated = mutate_candidate_cell(self.doc_text, "0xD20B0810", 5, "VERIFIED / INFERRED")
+        with self.assertRaises(ValueError):
+            validate_candidate_table_rows(mutated, self.manifest)
+
+    def test_mutation_rejected_ledddrv_verified_without_rom_citation_fails(self):
+        """A rejected candidate labelled VERIFIED still needs an anchored ROM citation."""
+        mutated = mutate_candidate_cell(self.doc_text, "LEDDrv.c", 6, "`docs/PROJECT_STATE.md:223`")
+        with self.assertRaises(ValueError):
+            validate_candidate_table_rows(mutated, self.manifest)
+
+    def test_mutation_verified_from_quarantined_range_fails(self):
+        mutated = mutate_candidate_cell(self.doc_text, "0xD20B0810", 5, "**`VERIFIED`**")
+        mutated = mutate_candidate_cell(mutated, "0xD20B0810", 6, "`PRIMARY.BIN 0xFC5572C0`")
+        with self.assertRaises(ValueError):
+            validate_candidate_table_rows(mutated, self.manifest)
+
+    # --- conclusion -------------------------------------------------------------------
+
+    def test_mutation_conclusion_polarity_disagreement_fails(self):
+        mutated = re.sub(
+            r"T2 GO:.*",
+            "T2 GO: 0xD20B0884 on=0x4c0003 off=0x4d0002 (address/value VERIFIED, polarity UNKNOWN)",
+            self.doc_text,
+        )
+        with self.assertRaises(ValueError):
+            validate_polarity_consistency(mutated)
+
+    def test_mutation_conclusion_polarity_label_upgrade_fails(self):
+        mutated = re.sub(
+            r"T2 GO:.*",
+            "T2 GO: 0xD20B0884 on=0x004d0002 off=0x004c0003 (address/value VERIFIED, polarity INFERRED)",
+            self.doc_text,
+        )
+        with self.assertRaises(ValueError):
+            validate_polarity_consistency(mutated)
+
+    def test_mutation_rejects_invalid_conclusion_pattern(self):
+        for ic in (
+            "GO: 0xD20B0884",
+            "T2 GO",
+            "Conclusion: T2 GO 0xD20B0884",
+            "T2 PROCEED",
+            "T2 GO: 0xD20B0884 (missing on/off)",
+        ):
+            self.assertIsNone(CONCLUSION_PATTERN.match(ic), f"Invalid conclusion '{ic}' unexpectedly passed")
+
+    def test_mutation_conclusion_citing_quarantined_range_fails(self):
+        mutated = self.doc_text.rstrip() + " via 0xFC5572B9\n"
+        with self.assertRaises(ValueError):
+            validate_quarantine(self.manifest, mutated)
+
+    # --- manifest anchors and deviations ----------------------------------------------
+
+    def test_mutation_missing_anchor_row_fails(self):
+        mutated = re.sub(r"\|\s*`PORT20-ROM-TASK-LEDCON-LOOP`\s*\|[^\n]*\n", "", self.doc_text)
+        with self.assertRaises(ValueError):
+            validate_manifest_anchors_in_doc(self.manifest, mutated)
+
+    def test_mutation_rejects_exceeded_range_limit(self):
+        mutated = copy.deepcopy(self.manifest)
+        mutated["evidence_entries"].append(copy.deepcopy(mutated["evidence_entries"][0]))
+        self.assertGreater(len(mutated["evidence_entries"]), MAX_RANGES_LIMIT)
+
+    def test_mutation_manifest_entry_missing_anchor_fails(self):
+        mutated = self._with_notes("PORT20-ROM-MPU-REGION2-SETUP", "Plain CP15 MPU description.")
+        with self.assertRaises(ValueError):
+            validate_manifest_entry_anchors(mutated)
+
+    def test_mutation_second_unanchored_range_fails(self):
+        """A second unanchored range fails even when flagged and carrying the acknowledgement."""
+        mutated = self._with_notes(
+            "PORT20-ROM-SS-LED-CONTROL", f"ANCHOR: NONE. {DEVIATION_ACK}"
+        )
+        with self.assertRaises(ValueError):
+            validate_manifest_entry_anchors(mutated)
+        extra = copy.deepcopy(self.manifest)
+        extra["evidence_entries"].append({
+            "evidence_id": "PORT20-ROM-EXTRA",
+            "start_address": "0xFC600000",
+            "end_address": "0xFC6000FF",
+            "expected_byte_count": 256,
+            "sha256": "0" * 64,
+            "classification": "INFERRED",
+            "notes": f"ANCHOR: NONE. {DEVIATION_ACK}",
+        })
+        with self.assertRaises(ValueError):
+            validate_manifest_entry_anchors(extra)
+
+    def test_mutation_deviation_without_acknowledgement_fails(self):
+        mutated = self._with_notes("PORT20-ROM-LEDDRIVE", "ANCHOR: NONE. SCOPE DEVIATION: unanchored read.")
+        with self.assertRaises(ValueError):
+            validate_manifest_entry_anchors(mutated)
+
+    def test_mutation_doc_candidate_citing_quarantined_address_fails(self):
+        """A doc candidate or claim citing an address inside 0xFC5572B8..0xFC5573B7 fails."""
+        mutated = mutate_candidate_cell(self.doc_text, "0xD20B0810", 6, "`PRIMARY.BIN 0xFC5572B9` (LEDDrive)")
+        with self.assertRaises(ValueError):
+            validate_quarantine(self.manifest, mutated)
+        mutated = self.doc_text.replace(
+            "### 3.5 Step 5: Polarity Analysis & Uncertainty\n",
+            "### 3.5 Step 5: Polarity Analysis & Uncertainty\n- `LEDDrive` at `0xFC5573B7` maps action 0 to lit.\n",
+        )
+        self.assertNotEqual(mutated, self.doc_text)
+        with self.assertRaises(ValueError):
+            validate_quarantine(self.manifest, mutated)
+
     def test_mutation_anchor_file_exists_but_lacks_address_fails(self):
-        """A cited tracked file that exists but whose line does not contain the address must fail."""
         line = read_tracked_line("docs/PROJECT_STATE.md", 1, get_tracked_files())
         self.assertIsNotNone(line, "Precondition: docs/PROJECT_STATE.md:1 must exist")
         self.assertNotIn(0xFC0045B0, {int(h, 16) for h in HEX_PATTERN.findall(line)})
-        mutated = self._with_notes(
-            "PORT20-ROM-MPU-REGION2-SETUP",
-            "ANCHOR: tracked docs/PROJECT_STATE.md:1 cites 0xFC0045B0.",
-        )
+        mutated = self._with_notes("PORT20-ROM-MPU-REGION2-SETUP", "ANCHOR: tracked docs/PROJECT_STATE.md:1 cites 0xFC0045B0.")
         with self.assertRaises(ValueError):
             validate_manifest_entry_anchors(mutated)
 
     def test_mutation_anchor_address_outside_range_fails(self):
-        """A tracked line that really contains an address outside the range is not an anchor."""
-        mutated = self._with_notes(
-            "PORT20-ROM-MPU-REGION2-SETUP",
-            "ANCHOR: tracked docs/PROJECT_STATE.md:223 cites 0xFC12D724.",
-        )
+        mutated = self._with_notes("PORT20-ROM-MPU-REGION2-SETUP", "ANCHOR: tracked docs/PROJECT_STATE.md:223 cites 0xFC12D724.")
         with self.assertRaises(ValueError):
             validate_manifest_entry_anchors(mutated)
 
     def test_mutation_anchor_missing_file_fails(self):
-        mutated = self._with_notes(
-            "PORT20-ROM-MPU-REGION2-SETUP",
-            "ANCHOR: tracked docs/DOES_NOT_EXIST.md:1 cites 0xFC0045B0.",
-        )
+        mutated = self._with_notes("PORT20-ROM-MPU-REGION2-SETUP", "ANCHOR: tracked docs/DOES_NOT_EXIST.md:1 cites 0xFC0045B0.")
         with self.assertRaises(ValueError):
             validate_manifest_entry_anchors(mutated)
 
     def test_mutation_range_anchor_source_outside_parent_fails(self):
-        mutated = self._with_notes(
-            "PORT20-ROM-SS-LED-CONTROL",
-            "ANCHOR: range PORT20-ROM-LEDDRV-INIT 0xFC000000 -> 0xFC075DC4 (bl).",
-        )
+        mutated = self._with_notes("PORT20-ROM-SS-LED-CONTROL", "ANCHOR: range PORT20-ROM-LEDDRV-INIT 0xFC000000 -> 0xFC075DC4 (bl).")
         with self.assertRaises(ValueError):
             validate_manifest_entry_anchors(mutated)
 
     def test_mutation_range_anchor_via_scope_deviation_fails(self):
-        """A range anchored only through the unanchored range must fail."""
-        mutated = self._with_notes(
-            "PORT20-ROM-SS-LED-CONTROL",
-            "ANCHOR: range PORT20-ROM-LEDDRIVE 0xFC5572C0 -> 0xFC075DC4 (bl).",
-        )
+        mutated = self._with_notes("PORT20-ROM-SS-LED-CONTROL", "ANCHOR: range PORT20-ROM-LEDDRIVE 0xFC5572C0 -> 0xFC075DC4 (bl).")
         with self.assertRaises(ValueError):
             validate_manifest_entry_anchors(mutated)
 
     def test_mutation_anchor_cycle_without_tracked_root_fails(self):
-        """LEDDRV-INIT and LEDDRV-DISPATCH anchoring each other without a tracked root must fail."""
-        mutated = self._with_notes(
-            "PORT20-ROM-LEDDRV-INIT",
-            "ANCHOR: range PORT20-ROM-LEDDRV-DISPATCH 0xFC12D838 -> 0xFC12D750 (forward).",
-        )
+        mutated = self._with_notes("PORT20-ROM-LEDDRV-INIT", "ANCHOR: range PORT20-ROM-LEDDRV-DISPATCH 0xFC12D838 -> 0xFC12D750 (forward).")
         with self.assertRaises(ValueError):
             validate_manifest_entry_anchors(mutated)
 
     def test_mutation_unflagged_unanchored_range_fails(self):
-        """The unanchored range without its SCOPE DEVIATION flag must fail."""
-        mutated = self._with_notes(
-            "PORT20-ROM-LEDDRIVE",
-            "Candidate LEDDrive entry at 0xFC5572B8, branches to 0xFC12D838.",
-        )
+        mutated = self._with_notes("PORT20-ROM-LEDDRIVE", "Candidate entry at 0xFC5572B8.")
         with self.assertRaises(ValueError):
             validate_manifest_entry_anchors(mutated)
 
     def test_mutation_old_false_anchor_wording_fails(self):
-        """Citing lib.c:55 (which does not contain 0xFC5572B8) as an anchor must fail."""
-        mutated = self._with_notes(
-            "PORT20-ROM-LEDDRIVE",
-            "ANCHOR: tracked vendor/g3x-platform/platform/g3x/lib.c:55 cites 0xFC5572B9.",
-        )
+        mutated = self._with_notes("PORT20-ROM-LEDDRIVE", "ANCHOR: tracked vendor/g3x-platform/platform/g3x/lib.c:55 cites 0xFC5572B9.")
         with self.assertRaises(ValueError):
             validate_manifest_entry_anchors(mutated)
 
     def test_mutation_doc_missing_scope_deviation_fails(self):
-        """Dropping the deviation from the doc's Scope Deviations section must fail."""
-        mutated = re.sub(
-            r"(## 7\. Scope Deviations\s*\n).*?(\n---)",
-            r"\1\n- None.\n\2",
-            self.doc_text,
-            flags=re.DOTALL,
-        )
+        mutated = re.sub(r"(## 7\. Scope Deviations\s*\n).*?(\n---)", r"\1\n- None.\n\2", self.doc_text, flags=re.DOTALL)
         self.assertNotEqual(mutated, self.doc_text)
+        with self.assertRaises(ValueError):
+            validate_scope_deviations_disclosed(self.manifest, mutated)
+
+    def test_mutation_doc_calls_scope_compliant_fails(self):
+        mutated = self.doc_text.replace(
+            SCOPE_ACCOUNTING_LINE, "The T1 ROM-read scope is fully compliant."
+        )
         with self.assertRaises(ValueError):
             validate_scope_deviations_disclosed(self.manifest, mutated)
 
@@ -898,18 +937,7 @@ class TestNegativeMutations(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_scope_deviations_disclosed(mutated, self.doc_text)
 
-    def test_mutation_verified_claim_from_unanchored_range_fails(self):
-        """Marking the LEDDrive candidate VERIFIED (it cites only the unanchored range) must fail."""
-        mutated = self.doc_text.replace(
-            "**`INFERRED`** (unanchored read, §7) / **`REJECTED (FATAL PRE-KERNEL)`**",
-            "**`VERIFIED`** (ROM entry)",
-        )
-        self.assertNotEqual(mutated, self.doc_text)
-        with self.assertRaises(ValueError):
-            validate_scope_deviations_disclosed(self.manifest, mutated)
-
     def test_mutation_manifest_static_verified_contradiction_fails(self):
-        """A manifest entry with STATIC_VERIFIED whose notes contain 'downgrad', 'unanchored', or 'REJECTED' must fail."""
         for term in ("downgraded", "unanchored", "REJECTED"):
             mutated = copy.deepcopy(self.manifest)
             for e in mutated["evidence_entries"]:
@@ -919,6 +947,26 @@ class TestNegativeMutations(unittest.TestCase):
                     break
             with self.assertRaises(ValueError):
                 validate_manifest_classifications_and_notes(mutated)
+
+    # --- citations and identity -------------------------------------------------------
+
+    def test_mutation_untracked_loader_citation_fails(self):
+        mutated = self.doc_text + "\nSee `chdk-port/loader/g3x/main_prototype.c:86`.\n"
+        with self.assertRaises(ValueError):
+            validate_file_line_citations(mutated)
+
+    def test_mutation_citation_line_out_of_range_fails(self):
+        mutated = self.doc_text + "\nSee `vendor/g3x-platform/platform/g3x/lib.c:99999`.\n"
+        with self.assertRaises(ValueError):
+            validate_file_line_citations(mutated)
+
+    def test_mutation_wrong_firmware_hash_fails(self):
+        mutated = self.doc_text.replace(
+            "9911855772e433c877a9914f16d3735e15a48ca63352633e8f10364182912578", "d8ad5039" + "0" * 56
+        )
+        self.assertNotEqual(mutated, self.doc_text)
+        with self.assertRaises(ValueError):
+            validate_firmware_identity(mutated)
 
 
 if __name__ == "__main__":

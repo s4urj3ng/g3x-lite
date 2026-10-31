@@ -84,7 +84,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT20-LED",
       "classification": "STATIC_VERIFIED",
-      "notes": "0xFC075DC4 initializes pin 33 (0x21) in [r0, #8]; 0xFC075D98 loads pin 33 and 0x4d0002 (literal 0xFC075E00, action 0 / ON), calling 0xFC0D73C4; 0xFC075DAE loads pin 33 and 0x4c0003 (literal 0xFC075E04, action 1 / OFF), calling 0xFC0D73C4. ANCHOR: range PORT20-ROM-LEDDRV-INIT 0xFC12D6DC -> 0xFC075DC4 (bl 0xfc075dc4)."
+      "notes": "0xFC075DC4 initializes pin 33 (0x21) in [r0, #8]; 0xFC075D98 loads pin 33 and 0x4d0002 (literal 0xFC075E00, action 0), calling 0xFC0D73C4; 0xFC075DAE loads pin 33 and 0x4c0003 (literal 0xFC075E04, action 1), calling 0xFC0D73C4. ANCHOR: range PORT20-ROM-LEDDRV-INIT 0xFC12D6DC -> 0xFC075DC4 (bl 0xfc075dc4)."
     },
     {
       "evidence_id": "PORT20-ROM-GPIO-WRITE-MMIO",
@@ -129,7 +129,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT20-LED",
       "classification": "STATIC_VERIFIED",
-      "notes": "task_LEDCon state jump table (tbb [pc, r6] at 0xFC12D510) dispatching r6=0 (action 0 / ON) to 0xFC12D550 (bl 0xFC075D98) and r6=1 (action 1 / OFF) to 0xFC12D548 (bl 0xFC075DAE). ANCHOR: range PORT20-ROM-TASK-LEDCON-ENTRY 0xFC12D4EE -> 0xFC12D506 (beq.n 0xfc12d506)."
+      "notes": "task_LEDCon state jump table (tbb [pc, r6] at 0xFC12D510) dispatching r6=0 (action 0) to 0xFC12D550 (bl 0xFC075D98) and r6=1 (action 1) to 0xFC12D548 (bl 0xFC075DAE). ANCHOR: range PORT20-ROM-TASK-LEDCON-ENTRY 0xFC12D4EE -> 0xFC12D506 (beq.n 0xfc12d506)."
     },
     {
       "evidence_id": "PORT20-ROM-LEDDRV-INIT",
@@ -174,7 +174,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT20-LED",
       "classification": "INFERRED",
-      "notes": "ANCHOR: NONE. SCOPE DEVIATION: this read had no tracked anchor. No tracked file:line contains 0xFC5572B8 or 0xFC5572B9, and no instruction or literal inside the other seven recorded ranges branches to or points at it, so the read breaks the T1 ROM-read rule. It is recorded here only to keep the read accounting complete. Unanchored-read observation (at most INFERRED): candidate LEDDrive entry at 0xFC5572B8 (Thumb 0xFC5572B9) checks r1 < 8 and branches to 0xFC12D838. No VERIFIED claim and no T2 conclusion depends on this range."
+      "notes": "ANCHOR: NONE. SCOPE DEVIATION — not pre-authorised; acknowledged by Tech Lead in the task 90 revision-4 feedback; quarantined: no claim in this document relies on it. No tracked file:line contains an address inside this range, and no instruction or literal inside the other seven recorded ranges points into it. Recorded only to keep the read accounting (start, length, SHA-256) complete. T1 ROM-read scope: 7 anchored ranges compliant, 1 acknowledged deviation (PORT20-ROM-LEDDRIVE)."
     }
   ]
 }
