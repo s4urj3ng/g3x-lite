@@ -1,0 +1,293 @@
+{
+  "manifest_version": "1.0.0",
+  "authorization_scopes": [
+    {
+      "scope_id": "SCOPE-PORT21-RAM-LIFETIME",
+      "firmware_revision": "GM1.10C",
+      "approved_ranges": [
+        {
+          "start_address": "0xFC020000",
+          "end_address": "0xFC0201FF",
+          "label": "PORT21-ROM-BOOT-EARLY"
+        },
+        {
+          "start_address": "0xFC05B3C0",
+          "end_address": "0xFC05B53F",
+          "label": "PORT21-ROM-HEAP-SETUP"
+        },
+        {
+          "start_address": "0xFC05B540",
+          "end_address": "0xFC05B73F",
+          "label": "PORT21-ROM-INIT-TASK"
+        },
+        {
+          "start_address": "0xFC05B8E0",
+          "end_address": "0xFC05BBDF",
+          "label": "PORT21-ROM-STARTUP-TASKS"
+        },
+        {
+          "start_address": "0xFC0D0120",
+          "end_address": "0xFC0D01FF",
+          "label": "PORT21-ROM-CONTINUATION"
+        },
+        {
+          "start_address": "0xFC31B400",
+          "end_address": "0xFC31B47F",
+          "label": "PORT21-ROM-KERNEL-INIT-VENEER"
+        }
+      ],
+      "max_bytes_total": 65536,
+      "allowed_classifications": [
+        "STATIC_VERIFIED",
+        "INFERRED",
+        "UNKNOWN"
+      ],
+      "description": "PORT-21 T1 GM1.10C RAM lifetime, boot path, and DryOS heap boundary evidence scope (budget: at most 4 KiB per read, 64 KiB total)"
+    },
+    {
+      "scope_id": "SCOPE-PORT21-DISKBOOT-TIMING",
+      "firmware_revision": "GM1.10C",
+      "approved_ranges": [
+        {
+          "start_address": "0xFC05BBEA",
+          "end_address": "0xFC05BDE9",
+          "label": "PORT21-ROM-STARTDISKBOOT"
+        },
+        {
+          "start_address": "0xFC54DE00",
+          "end_address": "0xFC54E1FF",
+          "label": "PORT21-ROM-EXEC-VALIDATE"
+        },
+        {
+          "start_address": "0xFC421800",
+          "end_address": "0xFC421BFF",
+          "label": "PORT21-ROM-DANCINGBITS-MAIN"
+        },
+        {
+          "start_address": "0xFC469100",
+          "end_address": "0xFC4692FF",
+          "label": "PORT21-ROM-DANCINGBITS-DANCE"
+        },
+        {
+          "start_address": "0xFC7C0F80",
+          "end_address": "0xFC7C107F",
+          "label": "PORT21-ROM-ROW13-TABLE"
+        },
+        {
+          "start_address": "0xFC0D9C00",
+          "end_address": "0xFC0D9DFF",
+          "label": "PORT21-ROM-PREPARE-EXEC"
+        },
+        {
+          "start_address": "0xFC000780",
+          "end_address": "0xFC00087F",
+          "label": "PORT21-ROM-PAYLOAD-HANDOFF"
+        }
+      ],
+      "max_bytes_total": 32768,
+      "allowed_classifications": [
+        "STATIC_VERIFIED",
+        "INFERRED",
+        "UNKNOWN"
+      ],
+      "description": "PORT-21 T2 GM1.10C StartDiskboot reject vs accept timing scope (budget: at most 4 KiB per read, 32 KiB total)"
+    }
+  ],
+  "evidence_entries": [
+    {
+      "evidence_id": "PORT21-ROM-BOOT-EARLY",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC020000",
+      "end_address": "0xFC0201FF",
+      "expected_byte_count": 512,
+      "sha256": "23082470c3f8d0628c5b6661c2ddb2b2ca010c88e0afc8580754fa887b3a5b2f",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT21-RAM-LIFETIME",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Stock early boot 0xFC020000..0xFC0201FF: reset entry 0xFC02000C, vector copy 0xFC020016, High RAM copy 0xFC020024..36, ATCM copy 0xFC020040..52, Low RAM copy 0xFC020054..66 (overwriting 0x8000..0x3F4F4), Canon BSS zero loop 0xFC020068..78 (zeroing 0x3F4F4..0x3489B4), branch to DryOS init 0xFC02007A, and literal pool 0xFC0200B0..DF; starts at cited address; no exception needed"
+    },
+    {
+      "evidence_id": "PORT21-ROM-HEAP-SETUP",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC05B3C0",
+      "end_address": "0xFC05B53F",
+      "expected_byte_count": 384,
+      "sha256": "68e60a1c4ffdf3ce29c97120aac275f1758df3726f8f5829a23e33b73c6908d6",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT21-RAM-LIFETIME",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Stock DryOS heap configuration 0xFC05B3C0..0xFC05B53F: sub_fc05b3c8 loading stock heap base r4=0x003489B4 from [0xFC05B450], upper limit 0x006CE000 from [0xFC05B454], headroom check >=0x000B1FEC from [0xFC05B458], pool 0 limit 0x0060E000 from [0xFC05B470], populating sp[8]=r4=0x003489B4, sp[0xC]=size 0x002B7660, sp[0x10]=0x00600014 from [0xFC05B474], continuation 0xFC05B559 from [0xFC05B478], and calling DryOS init sub_fc31b408; read-start exception: starts 8 bytes before 0xFC05B3C8; approved after the fact by Tech Lead decision, AgentBridge task 93 revision 3 (2026-10-31)"
+    },
+    {
+      "evidence_id": "PORT21-ROM-INIT-TASK",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC05B540",
+      "end_address": "0xFC05B73F",
+      "expected_byte_count": 512,
+      "sha256": "15a153beaeabe9770d5016f7240b0b5bbd9ff6ebf56141341cb1e5eebf2a97fe",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT21-RAM-LIFETIME",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Stock initial task initialization 0xFC05B540..0xFC05B73F: sub_fc05b558 verifying USER_MEM bounds, initializing termDriver, termDevice, stdio, stdlib, extlib, and branching b.w 0xFC05B962 to startup task creator; read-start exception: starts 24 bytes before 0xFC05B558; approved after the fact by Tech Lead decision, AgentBridge task 93 revision 3 (2026-10-31)"
+    },
+    {
+      "evidence_id": "PORT21-ROM-STARTUP-TASKS",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC05B8E0",
+      "end_address": "0xFC05BBDF",
+      "expected_byte_count": 768,
+      "sha256": "749dd4f383eec258850e14f1488b853c7902156f106a4924d54788f47fa35e0e",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT21-RAM-LIFETIME",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Stock task_Startup (0xFC05B8FC) and creator sub_fc05b962 (0xFC05B962) 0xFC05B8E0..0xFC05BBDF: sub_fc05b962 spawning task_Startup; task_Startup calling StartDiskboot at 0xFC05B90E (bl 0xFC05BBEA), then continuing via sub_fc1283d2 (task_PhySw) to terminal branch 0xFC05B95E (b.w 0xFC0D0126); read-start exception: starts 28 bytes before 0xFC05B8FC; approved after the fact by Tech Lead decision, AgentBridge task 93 revision 3 (2026-10-31)"
+    },
+    {
+      "evidence_id": "PORT21-ROM-CONTINUATION",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC0D0120",
+      "end_address": "0xFC0D01FF",
+      "expected_byte_count": 224,
+      "sha256": "1d536b259e101bf27771a54cd76a617a23ea2f8ea8759c14b054698084959692",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT21-RAM-LIFETIME",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Stock firmware continuation 0xFC0D0120..0xFC0D01FF: sub_fc0d0126 continuation target where task_Startup and task_Startup_my transfer control into main Canon application tasks; read-start exception: starts 6 bytes before 0xFC0D0126; approved after the fact by Tech Lead decision, AgentBridge task 93 revision 3 (2026-10-31)"
+    },
+    {
+      "evidence_id": "PORT21-ROM-KERNEL-INIT-VENEER",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC31B400",
+      "end_address": "0xFC31B47F",
+      "expected_byte_count": 128,
+      "sha256": "be7ee2c5d2b00286374e2ace906811cc775f0ff2d4c7e16d50855df8d0e589c4",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT21-RAM-LIFETIME",
+      "classification": "STATIC_VERIFIED",
+      "notes": "DryOS kernel initialization veneer 0xFC31B400..0xFC31B47F: sub_fc31b408 ARM veneer jumping to ATCM entry point 0xBFE10F79; read-start exception: starts 8 bytes before 0xFC31B408; approved after the fact by Tech Lead decision, AgentBridge task 93 revision 3 (2026-10-31)"
+    },
+    {
+      "evidence_id": "PORT21-ROM-STARTDISKBOOT",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC05BBEA",
+      "end_address": "0xFC05BDE9",
+      "expected_byte_count": 512,
+      "sha256": "a2ea19dfed6f386b32074c65ec682a557a24cf3ddcdeb73f29108ae16854acfc",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT21-DISKBOOT-TIMING",
+      "classification": "STATIC_VERIFIED",
+      "notes": "StartDiskboot entry 0xFC05BBEA..0xFC05BDE9 (512 B): StartDiskboot entry at 0xFC05BBEA, SD write-protect switch check at 0xFC05BC04, unlocked branch bypass to 0xFC05BC34, VBR BOOTDISK check at 0xFC05BC18, debug banner print at 0xFC05BC20, and sub_fc05bc3c file stat/read call at 0xFC05BC42; cited in docs/PORT19_DISKBOOT_ENCODING.md:44, 76, 79."
+    },
+    {
+      "evidence_id": "PORT21-ROM-EXEC-VALIDATE",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC54DE00",
+      "end_address": "0xFC54E1FF",
+      "expected_byte_count": 1024,
+      "sha256": "570ac7e7702b065b4c27a62590cbcdea9db7ca09670b22b96a08ce8315d3ca6b",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT21-DISKBOOT-TIMING",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Header validation routine sub_fc54de38 0xFC54DE00..0xFC54E1FF (1024 B): Gate 1 byte 0 null check at 0xFC54DE3A..0xFC54DE3C, Gate 2 gaonisoy check at 0xFC54DE3E..0xFC54DE4C, in-place shift loop at 0xFC54DE4E..0xFC54DE5E, and call to DancingBits decoder at 0xFC54DE60; direct branch target of bl 0xfc54de38 at 0xFC05BC62, cited in docs/PORT19_DISKBOOT_ENCODING.md:45, 130, 153."
+    },
+    {
+      "evidence_id": "PORT21-ROM-DANCINGBITS-MAIN",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC421800",
+      "end_address": "0xFC421BFF",
+      "expected_byte_count": 1024,
+      "sha256": "845863414ef9691aa46e096d8ae12fe7339f532ad10121dedf907a653e9b627d",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT21-DISKBOOT-TIMING",
+      "classification": "STATIC_VERIFIED",
+      "notes": "DancingBits main decoder sub_fc42189c 0xFC421800..0xFC421BFF (1024 B): 8-byte block permutation loop at 0xFC4218BC..0xFC4218D6, byte descrambling loop at 0xFC4218D8..0xFC4218FA, and remainder loop at 0xFC421904..0xFC421922; direct branch target of bl 0xfc42189c at 0xFC54DE60, cited in docs/PORT19_DISKBOOT_ENCODING.md:46, 180, 194."
+    },
+    {
+      "evidence_id": "PORT21-ROM-DANCINGBITS-DANCE",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC469100",
+      "end_address": "0xFC4692FF",
+      "expected_byte_count": 512,
+      "sha256": "00b960cbbdb3d0c077b36209a020a450ce04e5beb84da59df94d169f8ede102c",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT21-DISKBOOT-TIMING",
+      "classification": "STATIC_VERIFIED",
+      "notes": "DancingBits helper functions 0xFC469100..0xFC4692FF (512 B): sub_fc469180 (permutation table lookup) at 0xFC469180 and sub_fc469188 (_dance byte transformation) at 0xFC469188; cited in docs/PORT19_DISKBOOT_ENCODING.md:47, 264, 278."
+    },
+    {
+      "evidence_id": "PORT21-ROM-ROW13-TABLE",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC7C0F80",
+      "end_address": "0xFC7C107F",
+      "expected_byte_count": 256,
+      "sha256": "dbcbc94e7228055ac95454c92be4b9bef56c2b6a5afa3f1ef76c167f76bd50ca",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT21-DISKBOOT-TIMING",
+      "classification": "STATIC_VERIFIED",
+      "notes": "DancingBits Row 13 permutation table 0xFC7C0F80..0xFC7C107F (256 B): 8-word permutation table [6, 5, 3, 7, 0, 2, 4, 1] at 0xFC7C0F8C, referenced by literal pool pointer at 0xFC4691B0; cited in docs/PORT19_DISKBOOT_ENCODING.md:48, 266, 271."
+    },
+    {
+      "evidence_id": "PORT21-ROM-PREPARE-EXEC",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC0D9C00",
+      "end_address": "0xFC0D9DFF",
+      "expected_byte_count": 512,
+      "sha256": "8c891f7dc8fc758510f36a69d95ff323cee00a7ac0e853128d1be27d8598d644",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT21-DISKBOOT-TIMING",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Execution preparation routine sub_fc0d9c9c 0xFC0D9C00..0xFC0D9DFF (512 B): interrupt disable at 0xFC0D9CA2, D/I cache invalidate at 0xFC0D9CAC, MPU Region 7 configuration at 0xFC0D9CB0, and handoff branch bx ip to 0xFC0007C1 at 0xFC0D9CCA; direct branch target of bl 0xfc0d9c9c at 0xFC05BC7A, cited in docs/PORT19_DISKBOOT_ENCODING.md:49, 140, 299."
+    },
+    {
+      "evidence_id": "PORT21-ROM-PAYLOAD-HANDOFF",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC000780",
+      "end_address": "0xFC00087F",
+      "expected_byte_count": 256,
+      "sha256": "59f6ea920dc02a41983c3434eb62e3828802d9fb52f5ebf46618fff1639eb214",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT21-DISKBOOT-TIMING",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Payload copy, verify, and branch routine sub_fc0007c0 0xFC000780..0xFC00087F (256 B): byte-by-byte copy loop to 0x40008000 at 0xFC0007DC..0xFC0007E8, word verify loop at 0xFC0007EE..0xFC000832, and terminal branch bx ip to 0x8001 in Thumb state at 0xFC000840; cited in docs/PORT19_DISKBOOT_ENCODING.md:50, 315."
+    }
+  ]
+}
