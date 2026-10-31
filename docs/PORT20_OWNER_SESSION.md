@@ -21,7 +21,7 @@ stat -c %s candidate_led/DISKBOOT.BIN
 ```
 
 - **File for SD card root**: `candidate_led/DISKBOOT.BIN` `[VERIFIED: docs/PORT20_LED_CANDIDATE.md:26-30, 71]`.
-- **Exact Byte Size**: **`118041`** bytes (`0x1CCF1`, exactly +40 B over default build) `[VERIFIED: docs/PORT20_LED_CANDIDATE.md:71, 250]`.
+- **Exact Byte Size**: **`118041`** bytes (`0x1CD19`, exactly +40 B over default build) `[VERIFIED: docs/PORT20_LED_CANDIDATE.md:71, 250]`.
 - **Exact SHA-256**: **`757dfb7f7824ba968951724416a058a6881ad99a7a7a6cf7cd6e6f0e44db5286`** `[VERIFIED: docs/PORT20_LED_CANDIDATE.md:71]`.
 - **Witness Address Alignment**: Target `boot_witness` address is pinned at `0x0035F7A0` (identical across default and LED builds) `[VERIFIED: docs/PORT20_LED_CANDIDATE.md:85, 94-96]`.
 
@@ -56,7 +56,7 @@ Reuse the verified PORT-19 card configuration per `docs/PORT18_OWNER_TRIAL_PLAN.
   1. Camera powered off; insert charged battery and LOCKED trial card `[INFERRED: docs/PORT18_OWNER_TRIAL_PLAN.md:222]`.
   2. Power on by pressing **Playback** button once; immediately observe rear green status LED and stopwatch `[VERIFIED: docs/PORT18_OWNER_TRIAL_PLAN.md:224]`.
   3. If Playback UI appears, press center **`FUNC./SET`** once to execute `extend.m`, then switch to Live View (half-press shutter) `[VERIFIED: docs/PORT18_OWNER_TRIAL_PLAN.md:238-240]`.
-  4. Observe OSD readout. *Note*: on this camera, `LCDMsg_ChangeColor` index 3 renders **light blue**, not red `[VERIFIED: owner PORT-19 trial session observation; docs/PORT18_OWNER_TRIAL_PLAN.md:267]`.
+  4. Observe OSD readout. *Note*: on this camera, `LCDMsg_ChangeColor` index 3 renders **light blue**, not red `[owner-reported observation: PORT-20 milestone goal (2026-11-01, outcome O6, 'LCDMsg_ChangeColor index 3 is not red on this camera'); docs/PORT18_OWNER_TRIAL_PLAN.md:267]`.
 
 ---
 
