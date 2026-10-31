@@ -6,24 +6,9 @@
       "firmware_revision": "GM1.10C",
       "approved_ranges": [
         {
-          "start_address": "0xFC5572B8",
-          "end_address": "0xFC5573B7",
-          "label": "PORT20-ROM-LEDDRIVE"
-        },
-        {
-          "start_address": "0xFC12D620",
-          "end_address": "0xFC12D81F",
-          "label": "PORT20-ROM-LEDDRV-INIT"
-        },
-        {
-          "start_address": "0xFC12D820",
-          "end_address": "0xFC12D91F",
-          "label": "PORT20-ROM-LEDDRV-DISPATCH"
-        },
-        {
-          "start_address": "0xFC12D500",
-          "end_address": "0xFC12D5FF",
-          "label": "PORT20-ROM-TASK-LEDCON-LOOP"
+          "start_address": "0xFC0045B0",
+          "end_address": "0xFC0046AF",
+          "label": "PORT20-ROM-MPU-REGION2-SETUP"
         },
         {
           "start_address": "0xFC075D80",
@@ -36,9 +21,29 @@
           "label": "PORT20-ROM-GPIO-WRITE-MMIO"
         },
         {
-          "start_address": "0xFC0045B0",
-          "end_address": "0xFC0046AF",
-          "label": "PORT20-ROM-MPU-REGION2-SETUP"
+          "start_address": "0xFC12D3E0",
+          "end_address": "0xFC12D4FF",
+          "label": "PORT20-ROM-TASK-LEDCON-ENTRY"
+        },
+        {
+          "start_address": "0xFC12D500",
+          "end_address": "0xFC12D5FF",
+          "label": "PORT20-ROM-TASK-LEDCON-LOOP"
+        },
+        {
+          "start_address": "0xFC12D620",
+          "end_address": "0xFC12D81F",
+          "label": "PORT20-ROM-LEDDRV-INIT"
+        },
+        {
+          "start_address": "0xFC12D820",
+          "end_address": "0xFC12D91F",
+          "label": "PORT20-ROM-LEDDRV-DISPATCH"
+        },
+        {
+          "start_address": "0xFC5572B8",
+          "end_address": "0xFC5573B7",
+          "label": "PORT20-ROM-LEDDRIVE"
         }
       ],
       "max_bytes_total": 32768,
@@ -52,64 +57,19 @@
   ],
   "evidence_entries": [
     {
-      "evidence_id": "PORT20-ROM-LEDDRIVE",
+      "evidence_id": "PORT20-ROM-MPU-REGION2-SETUP",
       "firmware_revision": "GM1.10C",
-      "start_address": "0xFC5572B8",
-      "end_address": "0xFC5573B7",
+      "start_address": "0xFC0045B0",
+      "end_address": "0xFC0046AF",
       "expected_byte_count": 256,
-      "sha256": "9a23088b4d321bd65e1728451354023c7814d0915c3ad9e4d6ce74af56208399",
+      "sha256": "8768fa98243fd4899d01ede804bec51b43b0fe1bcb098152fbaaafdbbbe53140",
       "provenance_source": {
         "type": "ROM_VERIFIED",
         "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
       },
       "authorization_scope_id": "SCOPE-PORT20-LED",
       "classification": "STATIC_VERIFIED",
-      "notes": "LEDDrive entry point at 0xFC5572B8 (Thumb 0xFC5572B9; stubs_entry.S:250; funcs_by_address.csv:1609). Validates r1 < 8, branches to LEDDrv.c 0xFC12D838."
-    },
-    {
-      "evidence_id": "PORT20-ROM-LEDDRV-INIT",
-      "firmware_revision": "GM1.10C",
-      "start_address": "0xFC12D620",
-      "end_address": "0xFC12D81F",
-      "expected_byte_count": 512,
-      "sha256": "f905d002702bf182a2a92762fa50295e1cbb696d704c5b69690afac28de665c3",
-      "provenance_source": {
-        "type": "ROM_VERIFIED",
-        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
-      },
-      "authorization_scope_id": "SCOPE-PORT20-LED",
-      "classification": "STATIC_VERIFIED",
-      "notes": "LEDDrv_Init (0xFC12D624) allocating 14 LED structs and invoking 0xFC075DC4 at 0xFC12D6DC to configure LED 0. Contains pre-kernel assertions on *0x9BA4 == 1."
-    },
-    {
-      "evidence_id": "PORT20-ROM-LEDDRV-DISPATCH",
-      "firmware_revision": "GM1.10C",
-      "start_address": "0xFC12D820",
-      "end_address": "0xFC12D91F",
-      "expected_byte_count": 256,
-      "sha256": "c6f3aa05396d8ff9cff0b0bd954191f03706ef932ca8aac3bfacf0c7db7c9b8b",
-      "provenance_source": {
-        "type": "ROM_VERIFIED",
-        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
-      },
-      "authorization_scope_id": "SCOPE-PORT20-LED",
-      "classification": "STATIC_VERIFIED",
-      "notes": "LEDDrv routine 0xFC12D838 handling LED 4 (AF assist lamp duty cycle) and forwarding to 0xFC12D750 / 0xFC12D7A4; table setter 0xFC12D8B6; IPC queue sender 0xFC12D8AC."
-    },
-    {
-      "evidence_id": "PORT20-ROM-TASK-LEDCON-LOOP",
-      "firmware_revision": "GM1.10C",
-      "start_address": "0xFC12D500",
-      "end_address": "0xFC12D5FF",
-      "expected_byte_count": 256,
-      "sha256": "6e7abdb12c6e80115aa951f0b356732f7d3691a02b18817183a7e0675f89a791",
-      "provenance_source": {
-        "type": "ROM_VERIFIED",
-        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
-      },
-      "authorization_scope_id": "SCOPE-PORT20-LED",
-      "classification": "STATIC_VERIFIED",
-      "notes": "task_LEDCon state jump table (tbb [pc, r6] at 0xFC12D510) dispatching r6=0 (OFF) to 0xFC12D550 (bl 0xFC075D98) and r6=1 (ON) to 0xFC12D548 (bl 0xFC075DAE)."
+      "notes": "CP15 c6 MPU Region 2 setup: base 0x80000000, size 2 GiB (0x80000000..0xFFFFFFFF), DRACR = 0x1105 (Privileged RW, Device Memory, Non-cacheable, XN=1), covering 0xD20B0884 without caching. Anchored by tracked files docs/PROJECT_STATE.md:254 and docs/HANDOFF.md:628."
     },
     {
       "evidence_id": "PORT20-ROM-SS-LED-CONTROL",
@@ -124,7 +84,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT20-LED",
       "classification": "STATIC_VERIFIED",
-      "notes": "0xFC075DC4 initializes pin 33 (0x21) in [r0, #8]; 0xFC075D98 loads pin 33 and 0x4d0002 (literal 0xFC075E00), calling 0xFC0D73C4; 0xFC075DAE loads pin 33 and 0x4c0003 (literal 0xFC075E04), calling 0xFC0D73C4."
+      "notes": "0xFC075DC4 initializes pin 33 (0x21) in [r0, #8]; 0xFC075D98 loads pin 33 and 0x4d0002 (literal 0xFC075E00, action 0 / ON), calling 0xFC0D73C4; 0xFC075DAE loads pin 33 and 0x4c0003 (literal 0xFC075E04, action 1 / OFF), calling 0xFC0D73C4. Anchored by instruction 0xFC12D6DC in PORT20-ROM-LEDDRV-INIT."
     },
     {
       "evidence_id": "PORT20-ROM-GPIO-WRITE-MMIO",
@@ -139,22 +99,82 @@
       },
       "authorization_scope_id": "SCOPE-PORT20-LED",
       "classification": "STATIC_VERIFIED",
-      "notes": "0xFC0D73C4 loads MMIO base 0xD20B0000 from literal 0xFC0D73E4, computes 0xD20B0000 + (pin * 4), and stores r1 to offset 0x800 (str.w r1, [r0, #2048]). For pin 33, target is 0xD20B0884."
+      "notes": "0xFC0D73C4 loads MMIO base 0xD20B0000 from literal 0xFC0D73E4, computes 0xD20B0000 + (pin * 4), and stores r1 to offset 0x800 (str.w r1, [r0, #2048]). For pin 33, target is 0xD20B0884. Anchored by instructions 0xFC075DA4 and 0xFC075DBA in PORT20-ROM-SS-LED-CONTROL."
     },
     {
-      "evidence_id": "PORT20-ROM-MPU-REGION2-SETUP",
+      "evidence_id": "PORT20-ROM-TASK-LEDCON-ENTRY",
       "firmware_revision": "GM1.10C",
-      "start_address": "0xFC0045B0",
-      "end_address": "0xFC0046AF",
-      "expected_byte_count": 256,
-      "sha256": "8768fa98243fd4899d01ede804bec51b43b0fe1bcb098152fbaaafdbbbe53140",
+      "start_address": "0xFC12D3E0",
+      "end_address": "0xFC12D4FF",
+      "expected_byte_count": 288,
+      "sha256": "fd8cc7ffbfadcc303eebdc96a72be278eaee89816762b1253f56a8e27e58c754",
       "provenance_source": {
         "type": "ROM_VERIFIED",
         "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
       },
       "authorization_scope_id": "SCOPE-PORT20-LED",
       "classification": "STATIC_VERIFIED",
-      "notes": "CP15 c6 MPU Region 2 setup: base 0x80000000, size 2 GiB (0x80000000..0xFFFFFFFF), DRACR = 0x1105 (Privileged RW, Device Memory, Non-cacheable, XN=1), covering 0xD20B0884 without caching."
+      "notes": "task_LEDCon entry routine at 0xFC12D3E0 (Thumb 0xFC12D3E1) pointed to by literal 0xFC12D8D0 in PORT20-ROM-LEDDRV-DISPATCH; processes LED message queue and branches at 0xFC12D4EE to 0xFC12D506 into PORT20-ROM-TASK-LEDCON-LOOP."
+    },
+    {
+      "evidence_id": "PORT20-ROM-TASK-LEDCON-LOOP",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC12D500",
+      "end_address": "0xFC12D5FF",
+      "expected_byte_count": 256,
+      "sha256": "6e7abdb12c6e80115aa951f0b356732f7d3691a02b18817183a7e0675f89a791",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT20-LED",
+      "classification": "STATIC_VERIFIED",
+      "notes": "task_LEDCon state jump table (tbb [pc, r6] at 0xFC12D510) dispatching r6=0 (action 0 / ON) to 0xFC12D550 (bl 0xFC075D98) and r6=1 (action 1 / OFF) to 0xFC12D548 (bl 0xFC075DAE). Anchored by branch 0xFC12D4EE in PORT20-ROM-TASK-LEDCON-ENTRY."
+    },
+    {
+      "evidence_id": "PORT20-ROM-LEDDRV-INIT",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC12D620",
+      "end_address": "0xFC12D81F",
+      "expected_byte_count": 512,
+      "sha256": "f905d002702bf182a2a92762fa50295e1cbb696d704c5b69690afac28de665c3",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT20-LED",
+      "classification": "STATIC_VERIFIED",
+      "notes": "LEDDrv_Init (0xFC12D624) allocating 14 LED structs and invoking 0xFC075DC4 at 0xFC12D6DC to configure LED 0. Contains pre-kernel assertions on *0x9BA4 == 1. Anchored by tracked file docs/PORT17_TRACE_EVIDENCE.md:410 citing 0xFC12D724."
+    },
+    {
+      "evidence_id": "PORT20-ROM-LEDDRV-DISPATCH",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC12D820",
+      "end_address": "0xFC12D91F",
+      "expected_byte_count": 256,
+      "sha256": "c6f3aa05396d8ff9cff0b0bd954191f03706ef932ca8aac3bfacf0c7db7c9b8b",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT20-LED",
+      "classification": "STATIC_VERIFIED",
+      "notes": "LEDDrv routine 0xFC12D838 handling LED 4 (AF assist lamp duty cycle) and forwarding to 0xFC12D750 / 0xFC12D7A4; table setter 0xFC12D8B6; IPC queue sender 0xFC12D8AC; literal 0xFC12D8D0 pointing to task_LEDCon (0xFC12D3E1). Anchored by instruction 0xFC12D658 in PORT20-ROM-LEDDRV-INIT."
+    },
+    {
+      "evidence_id": "PORT20-ROM-LEDDRIVE",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC5572B8",
+      "end_address": "0xFC5573B7",
+      "expected_byte_count": 256,
+      "sha256": "9a23088b4d321bd65e1728451354023c7814d0915c3ad9e4d6ce74af56208399",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT20-LED",
+      "classification": "STATIC_VERIFIED",
+      "notes": "High-level firmware LEDDrive entry point at 0xFC5572B8 (Thumb 0xFC5572B9). Validates r1 < 8, branches to LEDDrv.c 0xFC12D838. Unanchored from tracked files; downgraded to INFERRED / REJECTED pre-kernel."
     }
   ]
 }
