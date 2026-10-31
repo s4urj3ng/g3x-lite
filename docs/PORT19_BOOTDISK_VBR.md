@@ -15,7 +15,7 @@
 
 The apparent contradiction between VBR offsets **`0x1E0`** and **`0x40`** in tracked documentation (`docs/PORT18_OWNER_TRIAL_PLAN.md:23, 188`, `docs/PROJECT_STATE.md:201, 333`, `docs/HANDOFF.md:435, 923`) is **not** an ambiguity or conflicting ROM implementation. Rather, the offset is **filesystem-dependent** and determined dynamically at partition mount time by `Mounter.c` routine `0xFC37A4B6` `[VERIFIED: 0xFC37A4B6-0xFC37A658]`.
 
-### 1.2 Stated Answers per Filesystem Type
+### 1.2 Stated Answers per Filesystem Type: BOOTDISK Marker
 
 | Filesystem Type | `BOOTDISK` Marker Offset | Marker String & Length | Status & Classification | ROM Address Citations |
 |---|---|---|---|---|
@@ -24,7 +24,7 @@ The apparent contradiction between VBR offsets **`0x1E0`** and **`0x40`** in tra
 | **exFAT** | **`UNSUPPORTED`** (No offset / not checked) | None | `VERIFIED` | `0xFC37A4CE`, `0xFC37A508-0xFC37A524`, `0xFC37A556`, `0xFC37A55C` |
 | **FAT12** | **`0x40`** (64 dec) | `"BOOTDISK"` (8 ASCII bytes) | `VERIFIED` | `0xFC37A63E`, `0xFC37A650`, `0xFC37A654`, `0xFC37B2AE`, `0xFC37B3A8` |
 
-### 1.3 Secondary Marker: `SCRIPT` (Canon Basic Boot / Dual-Boot)
+### 1.3 Secondary Marker: SCRIPT Marker (Canon Basic Boot / Dual-Boot)
 
 | Filesystem Type | `SCRIPT` Marker Offset | Marker String & Length | Status & Classification | ROM Address Citations |
 |---|---|---|---|---|
@@ -33,9 +33,15 @@ The apparent contradiction between VBR offsets **`0x1E0`** and **`0x40`** in tra
 | **exFAT** | **`UNSUPPORTED`** (No offset / not checked) | None | `VERIFIED` | `0xFC37A4D0`, `0xFC37A55C` |
 | **FAT12** | **`0x1F0`** (496 dec) | `"SCRIPT"` (6 ASCII bytes) | `VERIFIED` | `0xFC37A668`, `0xFC37A66C`, `0xFC37A670`, `0xFC37A67C`, `0xFC37A7F0` |
 
-### 1.4 Other Markers: `EOS_DEVELOP`
-- **Answer**: **`ABSENT / NOT CHECKED`** `[VERIFIED: 0xFC37A400-0xFC37B3FF]`.
-- Neither `"EOS_DEVELOP"` nor any variant string exists in GM1.10C `Mounter.c` or bootloader code. GM1.10C is a PowerShot camera (DIGIC 6 / DryOS 57). The `"EOS_DEVELOP"` marker string is an EOS DSLR specific bootloader token and has no role in PowerShot G3 X boot or script discovery.
+### 1.4 Other Markers: EOS_DEVELOP Marker
+
+| Marker Name | Scope / Target | Offset / Status | Status & Classification | ROM Address Citations & Evidence |
+|---|---|---|---|---|
+| **EOS_DEVELOP** | Inspected Mounter VBR-check routine (`0xFC37A4B6-0xFC37A680`) | Not checked (routine compares only `BOOTDISK` and `SCRIPT`) | `VERIFIED` | `0xFC37A4B6-0xFC37A680`, `0xFC37B2AE-0xFC37B2C2` |
+| **EOS_DEVELOP** | GM1.10C elsewhere in bootloader / ROM | Unverified beyond inspected Mounter window | `UNKNOWN` | `0xFC37A400-0xFC37B3FF` (window boundary) |
+
+- **Scoped Verification**: **`VERIFIED`** that the inspected Mounter VBR-check routine (`0xFC37A4B6-0xFC37A680`, with helper `0xFC37B2AE-0xFC37B2C2`) compares only `BOOTDISK` and `SCRIPT` and does not compare `EOS_DEVELOP`; **`UNKNOWN`** whether `EOS_DEVELOP` is checked anywhere else in GM1.10C.
+- **Analysis Scope**: Inspection is strictly bounded by the Phase 0 read budget to the 4 KiB window `0xFC37A400-0xFC37B3FF`. Within this routine, partition headers are inspected solely for `"BOOTDISK"` and `"SCRIPT"`. Because no full-ROM or unbudgeted string scans are permitted in Phase 0, global absence across the remaining bootloader and firmware code cannot be proven and remains `UNKNOWN`.
 
 ---
 
