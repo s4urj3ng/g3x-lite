@@ -9,10 +9,12 @@ Validates that:
    - Summary table of hypothesis, change, evidence, and confirming reading.
    - List of open UNKNOWNs.
 2. Every claim bullet or row carries a VERIFIED, INFERRED, or UNKNOWN label.
-3. Every path:line (or path:start-end) citation resolves to an existing file in the repo
-   with at least that many lines.
+3. Every path:line (or path:start-end, comma-separated) citation resolves to a tracked file
+   in the repository with valid line bounds.
 4. No hex address appears without an epistemic label and citation, unless it is labelled UNKNOWN.
-5. Scope integrity: only approved files are modified, and no ROM files are accessed.
+5. Evidence citations adhere strictly to the allowed source boundary (PORT16-PORT21 docs and manifests),
+   and every hex literal not labelled UNKNOWN appears verbatim in allowed sources.
+6. Scope integrity: only approved files are modified, and no ROM files are accessed.
 """
 
 from __future__ import annotations
@@ -20,29 +22,75 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import re
+import subprocess
 import unittest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOC_PATH = REPO_ROOT / "docs" / "PORT22_REMEDIATION_PLAN.md"
 
 HEX_PATTERN = re.compile(r"\b0x[0-9a-fA-F]+\b")
-CITATION_PATTERN = re.compile(r"([a-zA-Z0-9_\-./]+?\.[a-zA-Z0-9]+):(\d+)(?:-(\d+))?")
+CITATION_PATTERN = re.compile(r"([a-zA-Z0-9_\-./]+?\.[a-zA-Z0-9]+):(\d+(?:-\d+)?(?:\s*,\s*\d+(?:-\d+)?)*)")
 LABEL_PATTERN = re.compile(r"\[(VERIFIED|INFERRED|UNKNOWN)[^\]]*\]")
+ALLOWED_SOURCE_PATTERN = re.compile(r"^(docs/PORT(1[6-9]|2[0-1])_.*\.md|docs/agentbridge/PORT.*_EVIDENCE_MANIFEST\.json)$")
+
+
+def parse_citations(text: str) -> list[tuple[str, list[tuple[int, int]]]]:
+    """Parses path:line or path:start-end (including comma-separated ranges) citations."""
+    results = []
+    for match in CITATION_PATTERN.finditer(text):
+        fpath = match.group(1)
+        range_str = match.group(2)
+        parsed_ranges = []
+        for r in range_str.split(","):
+            r = r.strip()
+            if not r:
+                continue
+            if "-" in r:
+                parts = r.split("-")
+                s = int(parts[0])
+                e = int(parts[1])
+            else:
+                s = e = int(r)
+            parsed_ranges.append((s, e))
+        results.append((fpath, parsed_ranges))
+    return results
 
 
 class TestPort22RemediationPlan(unittest.TestCase):
-    """Validates structural and content requirements of docs/PORT22_REMEDIATION_PLAN.md."""
+    """Validates structural, content, and evidential requirements of docs/PORT22_REMEDIATION_PLAN.md."""
 
     @classmethod
     def setUpClass(cls):
+        # Must fail, not skip, if the document does not exist
         if not DOC_PATH.is_file():
-            raise unittest.SkipTest(f"Missing doc file: {DOC_PATH}")
+            raise AssertionError(f"Required document does not exist: {DOC_PATH}")
         cls.content = DOC_PATH.read_text(encoding="utf-8")
         cls.lines = cls.content.splitlines()
 
+        # Query git ls-files via subprocess from REPO_ROOT
+        try:
+            cls.tracked_files = set(
+                subprocess.check_output(["git", "ls-files"], cwd=REPO_ROOT, text=True).splitlines()
+            )
+        except Exception as e:
+            raise AssertionError(f"Failed to query git ls-files: {e}")
+
+        # Assemble corpus of allowed source documents
+        cls.allowed_sources = [
+            f for f in cls.tracked_files
+            if ALLOWED_SOURCE_PATTERN.match(f)
+        ]
+        corpus_parts = []
+        for rel_path in cls.allowed_sources:
+            full_path = REPO_ROOT / rel_path
+            if full_path.is_file():
+                corpus_parts.append(full_path.read_text(encoding="utf-8").lower())
+        cls.allowed_corpus = " ".join(corpus_parts)
+
     def test_doc_exists_and_non_empty(self):
-        """Verifies docs/PORT22_REMEDIATION_PLAN.md exists and has substantive content."""
+        """Verifies docs/PORT22_REMEDIATION_PLAN.md exists, is tracked, and has substantive content."""
         self.assertTrue(DOC_PATH.is_file(), "docs/PORT22_REMEDIATION_PLAN.md must exist")
+        self.assertIn("docs/PORT22_REMEDIATION_PLAN.md", self.tracked_files, "Doc must be tracked in git")
         self.assertGreater(len(self.content), 2000, "Doc must contain substantive remediation design")
 
     def test_each_h1_to_h4_has_section(self):
@@ -56,7 +104,6 @@ class TestPort22RemediationPlan(unittest.TestCase):
 
     def test_each_section_contains_required_components(self):
         """Verifies each hypothesis section states candidate change, evidence, and confirming reading."""
-        # Split document by top-level section markers
         section_splits = re.split(r"\n##\s+", self.content)
         sec_map = {}
         for part in section_splits:
@@ -81,14 +128,25 @@ class TestPort22RemediationPlan(unittest.TestCase):
             self.assertIn("Target File", text, f"Section {h} missing Target File specification")
             self.assertIn("Target Function", text, f"Section {h} missing Target Function specification")
 
-            # Must target chdk-port/ or tools/build_candidate_*.py
-            has_valid_target_file = (
-                "chdk-port/" in text or "tools/build_candidate_" in text
-            )
-            self.assertTrue(
-                has_valid_target_file,
-                f"Section {h} Target File must be in chdk-port/ or tools/build_candidate_*.py",
-            )
+            # Extract Target File path(s) and verify tracked under chdk-port/ or tools/build_candidate_*.py
+            target_line_match = re.search(r"-\s+\*\*Target File\*\*:\s*([^\n]+)", text)
+            self.assertIsNotNone(target_line_match, f"Section {h} missing Target File line")
+            target_line = target_line_match.group(1)
+            target_files = [
+                span for span in re.findall(r"`([^`]+)`", target_line)
+                if span.startswith("chdk-port/") or span.startswith("tools/")
+            ]
+            self.assertGreaterEqual(len(target_files), 1, f"Section {h} must specify at least one Target File")
+            for tf in target_files:
+                self.assertTrue(
+                    tf.startswith("chdk-port/") or tf.startswith("tools/build_candidate_"),
+                    f"Section {h} Target File {tf} must be under chdk-port/ or tools/build_candidate_*.py",
+                )
+                self.assertIn(
+                    tf,
+                    self.tracked_files,
+                    f"Section {h} Target File {tf} must be tracked in git",
+                )
 
             # Check (2) Supporting evidence
             self.assertIn("Supporting Evidence", text, f"Section {h} missing Supporting Evidence section")
@@ -115,7 +173,6 @@ class TestPort22RemediationPlan(unittest.TestCase):
             for h in ("H1", "H2", "H3", "H4"):
                 if f"**{h}**" in cells[0]:
                     hypotheses_found.add(h)
-                    # Check each cell has label and citation
                     for idx, cell in enumerate(cells, start=1):
                         self.assertTrue(
                             LABEL_PATTERN.search(cell),
@@ -160,16 +217,14 @@ class TestPort22RemediationPlan(unittest.TestCase):
 
         for i, line in enumerate(self.lines, start=1):
             stripped = line.strip()
-            # Check bullets
             if stripped.startswith(("- ", "* ")) or re.match(r"^\d+\.\s", stripped):
                 if not LABEL_PATTERN.search(stripped):
                     unlabeled_bullets.append(f"Line {i}: {stripped}")
-            # Check table content rows
             elif stripped.startswith("|") and stripped.endswith("|"):
                 if re.match(r"^\|[\s\-:|]+\|$", stripped):
-                    continue  # Table separator row
+                    continue
                 if "Hypothesis ID" in stripped:
-                    continue  # Table header row
+                    continue
                 if not LABEL_PATTERN.search(stripped):
                     unlabeled_rows.append(f"Line {i}: {stripped}")
 
@@ -184,44 +239,67 @@ class TestPort22RemediationPlan(unittest.TestCase):
             f"Found unlabeled table rows in docs/PORT22_REMEDIATION_PLAN.md:\n" + "\n".join(unlabeled_rows),
         )
 
-    def test_every_path_line_citation_resolves(self):
-        """Verifies every path:line citation resolves to an existing file and line number."""
-        citations = CITATION_PATTERN.findall(self.content)
+    def test_every_path_line_citation_resolves_and_is_tracked(self):
+        """Verifies every citation resolves to a tracked file in git and has valid line numbers."""
+        citations = parse_citations(self.content)
         self.assertGreaterEqual(len(citations), 20, "Doc must contain substantive citations")
 
         file_cache: dict[str, int] = {}
         citation_errors = []
 
-        for fpath, s, e in citations:
-            p = REPO_ROOT / fpath
-            if not p.is_file():
-                citation_errors.append(f"Cited file does not exist: {fpath}")
+        for fpath, ranges in citations:
+            if fpath not in self.tracked_files:
+                citation_errors.append(f"Cited file is not tracked in git: {fpath}")
                 continue
 
+            p = REPO_ROOT / fpath
             if fpath not in file_cache:
                 file_cache[fpath] = len(p.read_text(encoding="utf-8").splitlines())
             total_lines = file_cache[fpath]
 
-            start_line = int(s)
-            end_line = int(e) if e else start_line
-
-            if start_line < 1 or start_line > total_lines:
-                citation_errors.append(
-                    f"Invalid start line in {fpath}:{s} (file has {total_lines} lines)"
-                )
-            if end_line < 1 or end_line > total_lines:
-                citation_errors.append(
-                    f"Invalid end line in {fpath}:{s}-{e} (file has {total_lines} lines)"
-                )
-            if end_line < start_line:
-                citation_errors.append(
-                    f"End line before start line in {fpath}:{s}-{e}"
-                )
+            for s, e in ranges:
+                if s < 1 or s > total_lines:
+                    citation_errors.append(
+                        f"Invalid start line in {fpath}:{s} (file has {total_lines} lines)"
+                    )
+                if e < 1 or e > total_lines:
+                    citation_errors.append(
+                        f"Invalid end line in {fpath}:{s}-{e} (file has {total_lines} lines)"
+                    )
+                if e < s:
+                    citation_errors.append(
+                        f"End line before start line in {fpath}:{s}-{e}"
+                    )
 
         self.assertEqual(
             citation_errors,
             [],
             f"Citation errors in docs/PORT22_REMEDIATION_PLAN.md:\n" + "\n".join(citation_errors),
+        )
+
+    def test_evidence_citations_source_boundary(self):
+        """Verifies every evidence citation points to PORT16-PORT21 docs or manifests."""
+        boundary_violations = []
+
+        for i, line in enumerate(self.lines, start=1):
+            stripped = line.strip()
+            # Target File lines name change targets under chdk-port/ or tools/
+            is_target_file_line = "Target File" in stripped
+            citations = parse_citations(stripped)
+
+            for fpath, _ in citations:
+                if is_target_file_line and (
+                    fpath.startswith("chdk-port/") or fpath.startswith("tools/build_candidate_")
+                ):
+                    continue
+
+                if not ALLOWED_SOURCE_PATTERN.match(fpath):
+                    boundary_violations.append(f"Line {i}: citation {fpath} outside allowed sources")
+
+        self.assertEqual(
+            boundary_violations,
+            [],
+            f"Evidence citations violating source boundary:\n" + "\n".join(boundary_violations),
         )
 
     def test_no_hex_address_without_label_and_citation(self):
@@ -247,6 +325,30 @@ class TestPort22RemediationPlan(unittest.TestCase):
             hex_violations,
             [],
             f"Hex addresses without label and citation (not labeled UNKNOWN):\n" + "\n".join(hex_violations),
+        )
+
+    def test_every_hex_literal_not_unknown_appears_in_allowed_sources(self):
+        """Verifies every hex literal not labelled UNKNOWN appears verbatim in allowed sources."""
+        unverified_hex = []
+
+        for i, line in enumerate(self.lines, start=1):
+            stripped = line.strip()
+            hex_matches = HEX_PATTERN.findall(stripped)
+            if not hex_matches:
+                continue
+
+            # If line is explicitly marked UNKNOWN or in Open UNKNOWNs section, skip
+            if "UNKNOWN" in stripped:
+                continue
+
+            for h in hex_matches:
+                if h.lower() not in self.allowed_corpus:
+                    unverified_hex.append(f"Line {i}: Hex literal {h} not in allowed sources corpus")
+
+        self.assertEqual(
+            unverified_hex,
+            [],
+            f"Hex literals not in allowed sources corpus:\n" + "\n".join(unverified_hex),
         )
 
 
