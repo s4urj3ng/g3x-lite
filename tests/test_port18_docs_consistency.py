@@ -380,7 +380,18 @@ class TestPort18DocsConsistency(unittest.TestCase):
                     full_path.exists(),
                     f"Path cited in {doc_name} does not exist on disk: {rel_path}",
                 )
-                if self.tracked_files and rel_path != "tests/test_port18_docs_consistency.py":
+                # Pre-commit worktree exemption: when unittest runs in an uncommitted
+                # AgentBridge task worktree before AgentBridge executes `git add` /
+                # `git commit`, newly created task files (`tests/test_port18_docs_consistency.py`
+                # in PORT-18 T4, and `docs/PORT19_GO_NOGO.md` / `tests/test_port19_go_nogo.py`
+                # in PORT-19 T4) exist on disk (`full_path.exists()` verified above)
+                # but are not yet in `git ls-files`. Once committed, they are tracked.
+                pre_commit_new_files = {
+                    "tests/test_port18_docs_consistency.py",
+                    "docs/PORT19_GO_NOGO.md",
+                    "tests/test_port19_go_nogo.py",
+                }
+                if self.tracked_files and rel_path not in pre_commit_new_files:
                     if full_path.is_dir():
                         has_tracked_children = any(
                             f.startswith(rel_path + "/") for f in self.tracked_files
@@ -526,7 +537,9 @@ class TestPort18DocsConsistency(unittest.TestCase):
         self._validate_gitignore_citations(good_range_doc)
 
     def test_git_shas_resolve(self):
-        """Check that every commit SHA cited in the added sections resolves in git."""
+        """Check that every commit SHA cited in the added sections resolves in git and is reachable from origin/main."""
+        # List only commits reachable from origin/main (do NOT hardcode branch-only
+        # PORT-19 task or integration SHAs that can disappear after squash or rebase).
         shas = [
             "258359485a",
             "1031ace",
@@ -538,6 +551,9 @@ class TestPort18DocsConsistency(unittest.TestCase):
             "2f4aa72",
             "cc7a5b9",
             "06abcd2",
+            "04723e7",
+            "013d2d8",
+            "f9c1bdc",
         ]
         for sha in shas:
             res = subprocess.run(
@@ -547,6 +563,17 @@ class TestPort18DocsConsistency(unittest.TestCase):
                 stderr=subprocess.DEVNULL,
             )
             self.assertEqual(res.returncode, 0, f"Git commit SHA {sha} does not resolve")
+            anc = subprocess.run(
+                ["git", "merge-base", "--is-ancestor", sha, "origin/main"],
+                cwd=REPO_ROOT,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            self.assertEqual(
+                anc.returncode,
+                0,
+                f"Git commit SHA {sha} is not reachable from origin/main",
+            )
 
     def test_static_test_counts_match_files(self):
         """Recompute every '`tests/...py` (N static `def test_` definitions)' count from the file."""
@@ -562,6 +589,11 @@ class TestPort18DocsConsistency(unittest.TestCase):
             "tests/test_port17_trace_parser.py",
             "tests/test_port18_trial_preflight.py",
             "tests/test_port18_trial_report.py",
+            "tests/test_port18_docs_consistency.py",
+            "tests/test_port19_diskboot_encoding.py",
+            "tests/test_port19_bootdisk_vbr.py",
+            "tests/test_port19_witness_address.py",
+            "tests/test_port19_go_nogo.py",
         }
         for doc_name, doc_text in [
             ("docs/PROJECT_STATE.md", self.project_state_text),
