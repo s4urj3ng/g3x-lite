@@ -60,6 +60,8 @@ TRACE_O_NAME = f"{TRACE_MOD}.o"
 TRACE_RING_SYM = f"{TRACE_MOD}_ring"
 TRACE_TEXT_SECT = f".{TRACE_MOD}_text"
 CANDIDATE_TRACE_DIR = os.path.join(REPO_ROOT, "candidate_trace")
+CANDIDATE_LED_DIR = os.path.join(REPO_ROOT, "candidate_led")
+
 
 
 def extract_symbol_addr_from_nm(nm_text: str, sym_name: str) -> int:
@@ -445,10 +447,28 @@ SECTIONS
     return core_elf, core_bin
 
 
-def build_candidate_loader(core_elf, core_bin, candidate_dir=CANDIDATE_DIR, trace=False):
+def build_candidate_loader(
+    core_elf, core_bin, candidate_dir=CANDIDATE_DIR, trace=False, led=False
+):
     print("--- Building Candidate Loader (@ 0x00008000) ---")
     loader_c = os.path.join(LOADER_DIR, "main_prototype.c")
-    loader_entry_o = os.path.join(LOADER_DIR, "entry.o")
+    if led:
+        loader_entry_s = os.path.join(SUB_DIR, "loader_entry_led.S")
+        loader_entry_o = os.path.join(candidate_dir, "entry_led.o")
+        entry_cmd = [
+            CC,
+            "-march=armv7-r",
+            "-mthumb",
+            "-DTHUMB_FW",
+            "-nostdinc",
+            "-c",
+            "-o",
+            loader_entry_o,
+            loader_entry_s,
+        ]
+        run_cmd(entry_cmd, cwd=LOADER_DIR)
+    else:
+        loader_entry_o = os.path.join(LOADER_DIR, "entry.o")
     blobs_s = os.path.join(LOADER_DIR, "blobs.S")
 
     loader_o = os.path.join(candidate_dir, "main_prototype.o")
@@ -849,7 +869,7 @@ def generate_candidate_inspector(witness_addr: int = EXPECTED_BOOT_WITNESS_ADDR,
     verify_inspector_binding(dst_meta, dst_bin, witness_addr)
     print(
         f"  [OK] Inspector script and payload ({bin_size} B, target 0x{witness_addr:08X}) "
-        f"verified and associated in candidate_port2a/"
+        f"verified and associated in {os.path.relpath(candidate_dir, REPO_ROOT)}/"
     )
     return dst_m, dst_bin
 
@@ -891,6 +911,8 @@ def generate_manifest(
     core_end_addr=0x00366CB0,
     candidate_dir=CANDIDATE_DIR,
     trace=False,
+    led=False,
+    inspector_verified=False,
 ):
     print("--- Generating Locked Candidate Manifest ---")
     manifest_path = os.path.join(candidate_dir, "candidate_manifest.json")
@@ -911,13 +933,22 @@ def generate_manifest(
         for name, path in artifacts.items()
     }
 
-    status_str = "OFFLINE_TRACE_CANDIDATE_BUILT" if trace else "OFFLINE_CANDIDATE_BUILT"
-    trial_readiness_notes = (
-        "TODO (Q-P17-01, Q-P17-04): Trace candidate is NOT trial-ready; "
-        "no matching inspector associated and flush/LED are off."
-        if trace
-        else "Candidate core and associated witness inspector verified offline."
-    )
+    if led:
+        status_str = "OFFLINE_LED_CANDIDATE_BUILT"
+        trial_readiness_notes = (
+            "LED candidate built offline with loader-entry prologue; associated witness inspector verified offline."
+            if inspector_verified
+            else "LED candidate built offline with loader-entry prologue; witness inspector NOT verified."
+        )
+    elif trace:
+        status_str = "OFFLINE_TRACE_CANDIDATE_BUILT"
+        trial_readiness_notes = (
+            "TODO (Q-P17-01, Q-P17-04): Trace candidate is NOT trial-ready; "
+            "no matching inspector associated and flush/LED are off."
+        )
+    else:
+        status_str = "OFFLINE_CANDIDATE_BUILT"
+        trial_readiness_notes = "Candidate core and associated witness inspector verified offline."
 
     manifest = {
         "milestone": "CHDK-PORT-2A",
@@ -933,6 +964,13 @@ def generate_manifest(
         manifest["trial_ready"] = False
         manifest["trial_readiness_notes"] = trial_readiness_notes
         manifest[f"{TRACE_MOD}_enabled"] = trace
+    if led:
+        manifest["trial_ready"] = bool(inspector_verified)
+        manifest["trial_readiness_notes"] = trial_readiness_notes
+        manifest["led_prologue_enabled"] = True
+        manifest["led_register"] = "0xD20B0884"
+        manifest["led_values"] = {"action_0": "0x004d0002", "action_1": "0x004c0003"}
+        manifest["led_busy_wait_iterations"] = "0x06000000"
     manifest["production_invariance"] = prod_hashes
     manifest["architectural_invariants"] = {
         "loader_entry": "0x00008000",
@@ -983,9 +1021,14 @@ def main():
         help="Enable opt-in compile-time trace core integration (-DG3X_TRACE=1)",
     )
     parser.add_argument(
+        "--led",
+        action="store_true",
+        help="Enable opt-in loader-entry LED blink prologue (PORT-20 T2 candidate)",
+    )
+    parser.add_argument(
         "--out-dir",
         default=None,
-        help="Custom output directory for candidate artifacts (defaults to candidate_port2a/ or candidate_trace/)",
+        help="Custom output directory for candidate artifacts (defaults to candidate_port2a/, candidate_trace/, or candidate_led/)",
     )
     args = parser.parse_args()
 
@@ -999,18 +1042,27 @@ def main():
         args.trace
         or os.environ.get("G3X_TRACE", "").strip() in ("1", "true", "TRUE", "yes", "YES")
     )
+    led_opt = bool(
+        args.led
+        or os.environ.get("G3X_LED", "").strip() in ("1", "true", "TRUE", "yes", "YES")
+    )
 
     if args.out_dir:
         candidate_dir = os.path.abspath(args.out_dir)
+    elif led_opt:
+        candidate_dir = CANDIDATE_LED_DIR
+    elif trace_opt:
+        candidate_dir = CANDIDATE_TRACE_DIR
     else:
-        candidate_dir = CANDIDATE_TRACE_DIR if trace_opt else CANDIDATE_DIR
+        candidate_dir = CANDIDATE_DIR
     os.makedirs(candidate_dir, exist_ok=True)
     core_elf, core_bin = build_candidate_core(trace=trace_opt, candidate_dir=candidate_dir)
     loader_elf, loader_bin, witness_addr, core_end_addr = build_candidate_loader(
-        core_elf, core_bin, candidate_dir=candidate_dir, trace=trace_opt
+        core_elf, core_bin, candidate_dir=candidate_dir, trace=trace_opt, led=led_opt
     )
     diskboot_bin = encode_candidate_diskboot(loader_bin, candidate_dir=candidate_dir)
 
+    insp_verified = False
     if trace_opt:
         print(
             "--- Trace Candidate: NOT trial-ready (no matching inspector; flush/LED off; Q-P17-01, Q-P17-04) ---"
@@ -1028,11 +1080,13 @@ def main():
                 expected_witness_addr=witness_addr,
                 candidate_dir=candidate_dir,
             )
+            insp_verified = True
         else:
             insp_m, insp_bin = generate_candidate_inspector(
                 witness_addr,
                 candidate_dir=candidate_dir,
             )
+            insp_verified = True
 
         artifacts = {
             "candidate_main.elf": core_elf,
@@ -1050,6 +1104,8 @@ def main():
         core_end_addr=core_end_addr,
         candidate_dir=candidate_dir,
         trace=trace_opt,
+        led=led_opt,
+        inspector_verified=insp_verified,
     )
     print("\nCANDIDATE BUILD COMPLETE (OFFLINE ONLY).")
 
