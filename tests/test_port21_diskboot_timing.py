@@ -330,6 +330,61 @@ class TestPort21EvidenceManifestAppendOnly(unittest.TestCase):
                 f"Range {eid} (0x{start:08X}..0x{end:08X}) is not inside any approved range",
             )
 
+        # Parse and assert on every inline [VERIFIED: ... ROM 0x...(-0x...)? ...; EVIDENCE-ID] citation in doc body
+        inline_re = re.compile(
+            r"\[VERIFIED:[^\]]*?\bROM\s+([^;\]]+);\s*(PORT21-ROM-[A-Z0-9-]+)[^\]]*\]"
+        )
+        inline_matches = inline_re.findall(doc_content)
+        self.assertGreater(len(inline_matches), 0, "No inline ROM citations found in doc")
+
+        for addr_part, eid in inline_matches:
+            # (a) EVIDENCE-ID exists in the manifest
+            self.assertIn(
+                eid,
+                manifest_entries,
+                f"Inline citation evidence ID '{eid}' does not exist in manifest",
+            )
+            entry = manifest_entries[eid]
+            e_start = int(entry["start_address"], 16)
+            e_end = int(entry["end_address"], 16)
+
+            # (b) Every cited address, or start-end range, lies inside that entry's start_address..end_address
+            tokens = [t.strip() for t in addr_part.split(",") if t.strip()]
+            for tok in tokens:
+                if "-" in tok:
+                    parts = tok.split("-")
+                    s = int(parts[0].strip(), 16)
+                    e = int(parts[1].strip(), 16)
+                elif ".." in tok:
+                    parts = tok.split("..")
+                    s = int(parts[0].strip(), 16)
+                    e = int(parts[1].strip(), 16)
+                else:
+                    s = int(tok.strip(), 16)
+                    e = s
+                self.assertTrue(
+                    e_start <= s and e <= e_end,
+                    f"Cited address/range 0x{s:08X}..0x{e:08X} in '{addr_part}' does not lie inside "
+                    f"'{eid}' bounds (0x{e_start:08X}..0x{e_end:08X})",
+                )
+
+    def test_old_line_122_citation_fails_bounds_check(self):
+        """Verify that the old line-122 citation ([VERIFIED: ROM 0xFC05BBE4-0xFC05BBE6; PORT21-ROM-STARTDISKBOOT])
+        fails condition (b) because 0xFC05BBE4-0xFC05BBE6 falls in the unread gap before PORT21-ROM-STARTDISKBOOT."""
+        manifest_entries = {e["evidence_id"]: e for e in self.manifest.get("evidence_entries", [])}
+        self.assertIn("PORT21-ROM-STARTDISKBOOT", manifest_entries)
+        entry = manifest_entries["PORT21-ROM-STARTDISKBOOT"]
+        e_start = int(entry["start_address"], 16)
+        e_end = int(entry["end_address"], 16)
+
+        old_cite_start = 0xFC05BBE4
+        old_cite_end = 0xFC05BBE6
+        # Assert that old line 122 fails condition (b)
+        self.assertFalse(
+            e_start <= old_cite_start and old_cite_end <= e_end,
+            "Old line 122 citation must fail bounds check against PORT21-ROM-STARTDISKBOOT",
+        )
+
     def test_t2_scope_approved_ranges_and_budget_compliant(self):
         """All approved T2 ranges are present in SCOPE-PORT21-DISKBOOT-TIMING and within budget."""
         scopes = {s["scope_id"]: s for s in self.manifest.get("authorization_scopes", [])}

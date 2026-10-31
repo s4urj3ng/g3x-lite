@@ -24,17 +24,17 @@ Using the `StartDiskboot` call chain mapped in `docs/PORT19_DISKBOOT_ENCODING.md
    - BOTH the reject path and the accept path execute:
      - Partition VBR sector read and `"BOOTDISK"` marker verification at `0xFC05BC18` `[VERIFIED: ROM 0xFC05BC18; PORT21-ROM-STARTDISKBOOT]`;
      - Debug banner print `"\nStartDiskboot\n"` at `0xFC05BC20` `[VERIFIED: ROM 0xFC05BC20; PORT21-ROM-STARTDISKBOOT]`;
-     - FAT directory search and file stat for `"A/DISKBOOT.BIN"` in `sub_fc05bb98` (`0xFC05BC42`, `0xFC37B5CC`) `[VERIFIED: ROM 0xFC05BC42, 0xFC05BBA2; PORT21-ROM-STARTDISKBOOT]`;
-     - Dynamic DRAM buffer allocation of 118,001 bytes via `sub_fc092440` at `0xFC05BBAE` `[VERIFIED: ROM 0xFC05BBAE; PORT21-ROM-STARTDISKBOOT]`;
-     - Physical reading of all 118,001 bytes from the SD card across the SD bus into DRAM via `sub_fc37b552` at `0xFC05BBD8` `[VERIFIED: ROM 0xFC05BBD8; PORT21-ROM-STARTDISKBOOT]`.
+     - FAT directory search and file stat for `"A/DISKBOOT.BIN"` in `sub_fc05bb98` (`0xFC05BC42`, `0xFC37B5CC`) `[VERIFIED: ROM 0xFC05BC42; PORT21-ROM-STARTDISKBOOT] [VERIFIED: ROM 0xFC05BBA2; PORT21-ROM-STARTUP-TASKS]`;
+     - Dynamic DRAM buffer allocation of 118,001 bytes via `sub_fc092440` at `0xFC05BBAE` `[VERIFIED: ROM 0xFC05BBAE; PORT21-ROM-STARTUP-TASKS]`;
+     - Physical reading of all 118,001 bytes from the SD card across the SD bus into DRAM via `sub_fc37b552` at `0xFC05BBD8` `[VERIFIED: ROM 0xFC05BBD8; PORT21-ROM-STARTUP-TASKS]`.
    - Because an unlocked card skips ALL of these operations while a locked card executes them on BOTH the reject path and the accept path, **the observation of a slower start-up only when the card is locked does NOT, on its own, discriminate H1 (rejected after reading) from H2–H4 (accepted and executed)** `[INFERRED: logical deduction from verified control flow]`.
 
 3. **Operations Diverging After the Header Validation**:
    - **Reject Path** (`sub_fc54de38` returns 1, "not executable"):
-     - Fails Gate 1 (`byte 0 != 0x00` at `0xFC54DE3C`) or Gate 2 (gaonisoy signature match at `0xFC54DE4C`) `[VERIFIED: ROM 0xFC54DE3C, 0xFC54DE4C; PORT21-ROM-EXEC-VALIDATE]`.
+     - Fails Gate 1 (`byte 0 != 0x00` at `0xFC54DE3C`) or Gate 2 (gaonisoy signature match at `0xFC54DE4C`) `[VERIFIED: ROM 0xFC54DE3C; PORT21-ROM-EXEC-VALIDATE] [VERIFIED: ROM 0xFC54DE4C; PORT21-ROM-EXEC-VALIDATE]`.
      - Prints `"not executable\n"` via `sub_fc383178` at `0xFC05BC68` `[VERIFIED: ROM 0xFC05BC68; PORT21-ROM-STARTDISKBOOT]`.
      - Frees the 118,001-byte DRAM buffer via `sub_fc0924fa` (`0xFC0924FA`) called at `0xFC05BC70` `[VERIFIED: ROM 0xFC05BC70; PORT21-ROM-STARTDISKBOOT]`.
-     - Returns cleanly to `task_Startup` at `0xFC05BC38` to continue normal stock boot `[VERIFIED: ROM 0xFC05BC74, 0xFC05BC38; PORT21-ROM-STARTDISKBOOT]`.
+     - Returns cleanly to `task_Startup` at `0xFC05BC38` to continue normal stock boot `[VERIFIED: ROM 0xFC05BC74; PORT21-ROM-STARTDISKBOOT] [VERIFIED: ROM 0xFC05BC38; PORT21-ROM-STARTDISKBOOT]`.
      - Does NOT execute the 118,000-byte shift loop, does NOT execute the 236,000 descrambler function calls, does NOT configure MPU/caches, does NOT copy payload to `0x40008000`, does NOT verify payload memory, and does NOT branch to `0x8001` `[VERIFIED: ROM 0xFC05BC66-0xFC05BC7E; PORT21-ROM-STARTDISKBOOT]`.
    - **Accept Path** (`sub_fc54de38` returns 0, "executable"):
      - Executes in-place shift loop stripping byte 0 across 118,000 bytes at `0xFC54DE4E..0xFC54DE5E` `[VERIFIED: ROM 0xFC54DE4E-0xFC54DE5E; PORT21-ROM-EXEC-VALIDATE]`.
@@ -53,7 +53,7 @@ Using the `StartDiskboot` call chain mapped in `docs/PORT19_DISKBOOT_ENCODING.md
        ```bash
        python3 -c "import hashlib; d=open('candidate_port2a/DISKBOOT.BIN','rb').read(); assert hashlib.sha256(d).hexdigest() == '9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136'; assert d[0] == 0; assert d[16:20] != b'gaon'; assert d[32:36] != b'isoy'; print('PASS')"
        ```
-     - For a binary matching this SHA-256 and build structure, `byte 0 == 0x00` and `offset 16/32 != "gaonisoy"`, so the static gate checks in `sub_fc54de38` evaluate to pass `[VERIFIED: static ROM logic at 0xFC54DE3A-0xFC54DE4C]`.
+     - For a binary matching this SHA-256 and build structure, `byte 0 == 0x00` and `offset 16/32 != "gaonisoy"`, so the static gate checks in `sub_fc54de38` evaluate to pass `[VERIFIED: static ROM logic; ROM 0xFC54DE3A-0xFC54DE4C; PORT21-ROM-EXEC-VALIDATE]`.
      - That the candidate binary passes the static gates in ROM is `[INFERRED]`.
      - **Whether the file actually present on the owner's SD card during the physical trial matched this host build bit-for-bit is strictly `[UNKNOWN]`** `[UNKNOWN: uninstrumented physical hardware deployment]`.
 
@@ -95,11 +95,11 @@ flowchart TD
 ### 2.1 Step-by-Step Execution Sequence
 
 #### Step 1: Write-Protect Switch Check (`0xFC05BBEA..0xFC05BC0A`)
-- In `task_Startup` (`0xFC05B8FC`), stock firmware invokes `StartDiskboot` (`0xFC05BBEA`) `[VERIFIED: docs/HANDOFF.md:921; ROM 0xFC05B90E, 0xFC05BBEA; PORT21-ROM-STARTUP-TASKS; PORT21-ROM-STARTDISKBOOT]`.
+- In `task_Startup` (`0xFC05B8FC`), stock firmware invokes `StartDiskboot` (`0xFC05BBEA`) `[VERIFIED: docs/HANDOFF.md:921] [VERIFIED: ROM 0xFC05B90E; PORT21-ROM-STARTUP-TASKS] [VERIFIED: ROM 0xFC05BBEA; PORT21-ROM-STARTDISKBOOT]`.
 - `0xFC05BBFE`: Calls `sub_fc31b1f4` (`SD1stInit`), initializing the SD card bus `[VERIFIED: ROM 0xFC05BBFE; PORT21-ROM-STARTDISKBOOT]`.
 - `0xFC05BC04`: Calls `sub_fc05c4e0(1)` to read the physical SD card write-protect switch GPIO register `[VERIFIED: ROM 0xFC05BC04; PORT21-ROM-STARTDISKBOOT]`.
 - `0xFC05BC08..0xFC05BC0A`: Shifts bit 31 (`lsls r0, r0, #31`) and executes conditional branch `beq.n 0xfc05bc34`:
-  - **If Card UNLOCKED** (`bit 31 == 0`): Branches directly to `0xFC05BC34`, restores `{r4, lr}`, and branches to `sub_fc05c4de` (`0xFC05BC38`), returning to `task_Startup` `[VERIFIED: ROM 0xFC05BC0A, 0xFC05BC34-0xFC05BC38; PORT21-ROM-STARTDISKBOOT]`. Total duration is negligible (< 10 µs beyond initial card bus setup `[INFERRED]`). Start-up is fast.
+  - **If Card UNLOCKED** (`bit 31 == 0`): Branches directly to `0xFC05BC34`, restores `{r4, lr}`, and branches to `sub_fc05c4de` (`0xFC05BC38`), returning to `task_Startup` `[VERIFIED: ROM 0xFC05BC0A; PORT21-ROM-STARTDISKBOOT] [VERIFIED: ROM 0xFC05BC34-0xFC05BC38; PORT21-ROM-STARTDISKBOOT]`. Total duration is negligible (< 10 µs beyond initial card bus setup `[INFERRED]`). Start-up is fast.
   - **If Card LOCKED** (`bit 31 == 1`): Branch is not taken. Execution proceeds into diskboot sequence `[VERIFIED: ROM 0xFC05BC0A-0xFC05BC0C; PORT21-ROM-STARTDISKBOOT]`.
 
 #### Step 2: VBR Marker Validation (`0xFC05BC0C..0xFC05BC1C`)
@@ -107,19 +107,19 @@ flowchart TD
 - `0xFC05BC1C`: `cbz r0, 0xfc05bc34`. If `"BOOTDISK"` is missing, returns cleanly to `task_Startup` `[VERIFIED: ROM 0xFC05BC1C; PORT21-ROM-STARTDISKBOOT]`.
 
 #### Step 3: Debug Banner Print (`0xFC05BC1E..0xFC05BC2A`)
-- `0xFC05BC20`: Calls `sub_fc383178` (DryOS debug `printf`) passing literal string `"\nStartDiskboot\n"` located at `0xFC05BC80` `[VERIFIED: ROM 0xFC05BC1E-0xFC05BC20, 0xFC05BC80; PORT21-ROM-STARTDISKBOOT]`.
+- `0xFC05BC20`: Calls `sub_fc383178` (DryOS debug `printf`) passing literal string `"\nStartDiskboot\n"` located at `0xFC05BC80` `[VERIFIED: ROM 0xFC05BC1E-0xFC05BC20; PORT21-ROM-STARTDISKBOOT] [VERIFIED: ROM 0xFC05BC80; PORT21-ROM-STARTDISKBOOT]`.
 - `0xFC05BC2A`: Calls `sub_fc05bc3c` to ingest and process the diskboot binary `[VERIFIED: ROM 0xFC05BC2A; PORT21-ROM-STARTDISKBOOT]`.
 
 #### Step 4: File Ingestion & DRAM Buffer Allocation in `sub_fc05bc3c` (`0xFC05BC3C..0xFC05BC58`)
-- `0xFC05BC3E`: Sets `r0` to `"A/DISKBOOT.BIN"` (`0xFC05BC90`), `r1 = sp` (pointer to receive file size) `[VERIFIED: ROM 0xFC05BC3E-0xFC05BC40, 0xFC05BC90; PORT21-ROM-STARTDISKBOOT]`.
+- `0xFC05BC3E`: Sets `r0` to `"A/DISKBOOT.BIN"` (`0xFC05BC90`), `r1 = sp` (pointer to receive file size) `[VERIFIED: ROM 0xFC05BC3E-0xFC05BC40; PORT21-ROM-STARTDISKBOOT] [VERIFIED: ROM 0xFC05BC90; PORT21-ROM-STARTDISKBOOT]`.
 - `0xFC05BC42`: Calls `sub_fc05bb98` (`0xFC05BB98`):
-  - Calls `sub_fc37b5cc` to stat `"A/DISKBOOT.BIN"` on the FAT filesystem `[VERIFIED: ROM 0xFC05BBA2; PORT21-ROM-STARTDISKBOOT]`.
-  - Obtains file size `sp[8] = 118,001` bytes for the candidate build `[VERIFIED: candidate_port2a/DISKBOOT.BIN; ROM 0xFC05BBA8; PORT21-ROM-STARTDISKBOOT]`.
-  - Calls `sub_fc092440` (DryOS dynamic heap allocation) to allocate an in-memory buffer of 118,001 bytes `[VERIFIED: ROM 0xFC05BBAE; PORT21-ROM-STARTDISKBOOT]`.
-  - Calls `sub_fc37b4ae` to open the file `[VERIFIED: ROM 0xFC05BBC2; PORT21-ROM-STARTDISKBOOT]`.
-  - Calls `sub_fc37b552` to read all 118,001 bytes across the physical SD bus into DRAM `[VERIFIED: ROM 0xFC05BBD8; PORT21-ROM-STARTDISKBOOT]`.
-  - Calls `sub_fc37b4b0` to close the file `[VERIFIED: ROM 0xFC05BBDE; PORT21-ROM-STARTDISKBOOT]`.
-  - Returns allocated buffer pointer `r0` and writes `file_size` to caller stack `[sp, #0]` `[VERIFIED: ROM 0xFC05BBE4-0xFC05BBE6; PORT21-ROM-STARTDISKBOOT]`.
+  - Calls `sub_fc37b5cc` to stat `"A/DISKBOOT.BIN"` on the FAT filesystem `[VERIFIED: ROM 0xFC05BBA2; PORT21-ROM-STARTUP-TASKS]`.
+  - Obtains file size `sp[8] = 118,001` bytes for the candidate build `[VERIFIED: candidate_port2a/DISKBOOT.BIN] [VERIFIED: ROM 0xFC05BBA8; PORT21-ROM-STARTUP-TASKS]`.
+  - Calls `sub_fc092440` (DryOS dynamic heap allocation) to allocate an in-memory buffer of 118,001 bytes `[VERIFIED: ROM 0xFC05BBAE; PORT21-ROM-STARTUP-TASKS]`.
+  - Calls `sub_fc37b4ae` to open the file `[VERIFIED: ROM 0xFC05BBC2; PORT21-ROM-STARTUP-TASKS]`.
+  - Calls `sub_fc37b552` to read all 118,001 bytes across the physical SD bus into DRAM `[VERIFIED: ROM 0xFC05BBD8; PORT21-ROM-STARTUP-TASKS]`.
+  - Calls `sub_fc37b4b0` to close the file `[VERIFIED: ROM 0xFC05BBDE; PORT21-ROM-STARTUP-TASKS]`.
+  - Returns allocated buffer pointer `r0` and writes `file_size` to caller stack `[sp, #0]` `[INFERRED: sub_fc05bb98 return sequence at 0xFC05BBE4..0xFC05BBE6 falls in unread gap 0xFC05BBE0..0xFC05BBE9 between PORT21-ROM-STARTUP-TASKS (ends 0xFC05BBDF) and PORT21-ROM-STARTDISKBOOT (starts 0xFC05BBEA); inferred from standard AAPCS calling convention and caller stack offset sp[0] loaded at 0xFC05BC5E]`.
 
 #### Step 5: Header Validation & Gating in `sub_fc54de38` (`0xFC05BC5E..0xFC05BC66`, `0xFC54DE38..0xFC54DE4C`)
 - `0xFC05BC5E..0xFC05BC62`: Loads `r1 = file_size` (118,001), `r0 = buffer`, and calls `sub_fc54de38` via direct branch `bl 0xfc54de38` at `0xFC05BC62` `[VERIFIED: ROM 0xFC05BC5E-0xFC05BC62; PORT21-ROM-STARTDISKBOOT]`.
@@ -132,15 +132,15 @@ flowchart TD
   - `0xFC54DE4E..0xFC54DE5E`: The left-shift loop decrements `r1` to `file_size - 1` (118,000) and executes `buffer[index] = buffer[index + 1]` for `index = 0 .. 117,999`, completely stripping byte 0 `[VERIFIED: ROM 0xFC54DE4E-0xFC54DE5E; PORT21-ROM-EXEC-VALIDATE]`.
   - `0xFC54DE60`: Calls `sub_fc42189c` (DancingBits main block decoder) via direct branch `bl 0xfc42189c` at `0xFC54DE60` `[VERIFIED: ROM 0xFC54DE60; PORT21-ROM-EXEC-VALIDATE]`:
     - The payload contains `118,000 / 8 = 14,750` blocks `[VERIFIED: candidate_port2a/candidate_loader.bin; derived: 118000 / 8 = 14750]`.
-    - Inner Loop 1 (`0xFC4218BC..0xFC4218D6`): Calls `sub_fc469180` via `blx r1` 8 times per block (14,750 × 8 = **118,000 indirect calls**), reading Row 13 permutation table `[6, 5, 3, 7, 0, 2, 4, 1]` at `0xFC7C0F8C` and permuting bytes into a stack temporary `[VERIFIED: ROM 0xFC4218BC-0xFC4218D6, 0xFC469180, 0xFC7C0F8C; PORT21-ROM-DANCINGBITS-MAIN; PORT21-ROM-DANCINGBITS-DANCE; PORT21-ROM-ROW13-TABLE; derived: 14750 * 8 = 118000]`.
-    - Inner Loop 2 (`0xFC4218D8..0xFC4218FA`): Calls `sub_fc469188` (`_dance`) via `blx r2` 8 times per block (14,750 × 8 = **118,000 indirect calls**), computing `udiv` and `mls` (`fudgey % 3`), bitwise XORs (`^ 0xFF`, `^ 0xA0`), and nibble swaps, writing descrambled bytes back into payload DRAM `[VERIFIED: ROM 0xFC4218D8-0xFC4218FA, 0xFC469188; PORT21-ROM-DANCINGBITS-MAIN; PORT21-ROM-DANCINGBITS-DANCE; derived: 14750 * 8 = 118000]`.
+    - Inner Loop 1 (`0xFC4218BC..0xFC4218D6`): Calls `sub_fc469180` via `blx r1` 8 times per block (14,750 × 8 = **118,000 indirect calls**), reading Row 13 permutation table `[6, 5, 3, 7, 0, 2, 4, 1]` at `0xFC7C0F8C` and permuting bytes into a stack temporary `[VERIFIED: ROM 0xFC4218BC-0xFC4218D6; PORT21-ROM-DANCINGBITS-MAIN] [VERIFIED: ROM 0xFC469180; PORT21-ROM-DANCINGBITS-DANCE] [VERIFIED: ROM 0xFC7C0F8C; PORT21-ROM-ROW13-TABLE] [VERIFIED: derived: 14750 * 8 = 118000]`.
+    - Inner Loop 2 (`0xFC4218D8..0xFC4218FA`): Calls `sub_fc469188` (`_dance`) via `blx r2` 8 times per block (14,750 × 8 = **118,000 indirect calls**), computing `udiv` and `mls` (`fudgey % 3`), bitwise XORs (`^ 0xFF`, `^ 0xA0`), and nibble swaps, writing descrambled bytes back into payload DRAM `[VERIFIED: ROM 0xFC4218D8-0xFC4218FA; PORT21-ROM-DANCINGBITS-MAIN] [VERIFIED: ROM 0xFC469188; PORT21-ROM-DANCINGBITS-DANCE] [VERIFIED: derived: 14750 * 8 = 118000]`.
     - Remainder loop (`0xFC421904..0xFC421922`): `118,000 % 8 = 0`, so 0 remainder iterations execute `[VERIFIED: ROM 0xFC421904-0xFC421922; PORT21-ROM-DANCINGBITS-MAIN; derived: 118000 % 8 = 0]`.
     - Returns `r0 = 0` (SUCCESS) at `0xFC54DE64` `[VERIFIED: ROM 0xFC54DE64; PORT21-ROM-EXEC-VALIDATE]`.
 
 #### Step 7: The Reject Path ("not executable")
 - If `sub_fc54de38` returned 1 (`0xFC54DE68`):
   - `0xFC05BC66`: `cbz r0, 0xfc05bc76` is NOT taken `[VERIFIED: ROM 0xFC05BC66; PORT21-ROM-STARTDISKBOOT]`.
-  - `0xFC05BC68..0xFC05BC6A`: Loads pointer to literal `"not executable\n"` (`0xFC05BCCC`) and calls DryOS debug `printf` (`sub_fc383178`) `[VERIFIED: ROM 0xFC05BC68-0xFC05BC6A, 0xFC05BCCC; PORT21-ROM-STARTDISKBOOT]`.
+  - `0xFC05BC68..0xFC05BC6A`: Loads pointer to literal `"not executable\n"` (`0xFC05BCCC`) and calls DryOS debug `printf` (`sub_fc383178`) `[VERIFIED: ROM 0xFC05BC68-0xFC05BC6A; PORT21-ROM-STARTDISKBOOT] [VERIFIED: ROM 0xFC05BCCC; PORT21-ROM-STARTDISKBOOT]`.
   - `0xFC05BC6E..0xFC05BC70`: Sets `r0 = 1` and calls `sub_fc0924fa` (`0xFC0924FA`) to free the 118,001-byte DRAM buffer `[VERIFIED: ROM 0xFC05BC6E-0xFC05BC70; PORT21-ROM-STARTDISKBOOT]`.
   - `0xFC05BC74`: Pops `{r3, r4, r5, pc}`, returning to `StartDiskboot` at `0xFC05BC2E` `[VERIFIED: ROM 0xFC05BC74; PORT21-ROM-STARTDISKBOOT]`.
   - `0xFC05BC2E..0xFC05BC38`: Calls cleanup `sub_fc37ae2a`, restores `{r4, lr}`, and branches to `sub_fc05c4de`, returning to `task_Startup` `[VERIFIED: ROM 0xFC05BC2E-0xFC05BC38; PORT21-ROM-STARTDISKBOOT]`.
@@ -186,9 +186,9 @@ All latency figures below are static estimates based on architectural assumption
 |---|---|:---:|:---:|:---:|---|
 | **SD1stInit / Card Bus Initialization** | `0xFC05BBFE` | Yes | Yes | ~50 – 150 ms | **INFERRED** (assumption: SD clock negotiation, CMD0/CMD8/ACMD41 command handshakes; control flow `[VERIFIED: ROM 0xFC05BBFE; PORT21-ROM-STARTDISKBOOT]`) |
 | **VBR Sector Read & Marker Parse** | `0xFC05BC18` | Yes | Yes | ~10 – 30 ms | **INFERRED** (assumption: 512-byte single-sector SD read and ASCII string compare; control flow `[VERIFIED: ROM 0xFC05BC18; PORT21-ROM-STARTDISKBOOT]`) |
-| **Directory Search & FAT Stat for DISKBOOT.BIN** | `0xFC37B5CC` | Yes | Yes | ~15 – 40 ms | **INFERRED** (assumption: root directory cluster read and FAT entry parsing; control flow `[VERIFIED: ROM 0xFC05BBA2; PORT21-ROM-STARTDISKBOOT]`) |
-| **DRAM Buffer Allocation (118,001 B)** | `0xFC092440` | Yes | Yes | < 1 ms | **INFERRED** (assumption: DryOS heap block header update; control flow `[VERIFIED: ROM 0xFC05BBAE; PORT21-ROM-STARTDISKBOOT]`) |
-| **Physical SD Card File Read (118,001 B across SD Bus)** | `0xFC37B552` | Yes | Yes | ~30 – 100 ms | **INFERRED** (assumption: 24 MHz SD clock, 4-bit bus mode, ~1.5–3.5 MB/s transfer rate; control flow `[VERIFIED: ROM 0xFC05BBD8; PORT21-ROM-STARTDISKBOOT]`) |
+| **Directory Search & FAT Stat for DISKBOOT.BIN** | `0xFC37B5CC` | Yes | Yes | ~15 – 40 ms | **INFERRED** (assumption: root directory cluster read and FAT entry parsing; control flow `[VERIFIED: ROM 0xFC05BBA2; PORT21-ROM-STARTUP-TASKS]`) |
+| **DRAM Buffer Allocation (118,001 B)** | `0xFC092440` | Yes | Yes | < 1 ms | **INFERRED** (assumption: DryOS heap block header update; control flow `[VERIFIED: ROM 0xFC05BBAE; PORT21-ROM-STARTUP-TASKS]`) |
+| **Physical SD Card File Read (118,001 B across SD Bus)** | `0xFC37B552` | Yes | Yes | ~30 – 100 ms | **INFERRED** (assumption: 24 MHz SD clock, 4-bit bus mode, ~1.5–3.5 MB/s transfer rate; control flow `[VERIFIED: ROM 0xFC05BBD8; PORT21-ROM-STARTUP-TASKS]`) |
 | **Byte 0 Stripping In-Place Left Shift (118,000 B)** | `0xFC54DE4E` | **No** (skipped) | Yes | ~1 – 3 ms | **INFERRED** (assumption: 118,000 byte-by-byte memory moves in DRAM at CPU clock; control flow `[VERIFIED: ROM 0xFC54DE4E-0xFC54DE5E; PORT21-ROM-EXEC-VALIDATE]`) |
 | **DancingBits Row 13 Descrambler (236,000 function calls)** | `0xFC42189C` | **No** (skipped) | Yes | ~100 – 250 ms | **INFERRED** (assumption: 236,000 indirect calls via `blx` with `udiv`/`mls` in early/uncached DRAM; control flow `[VERIFIED: ROM 0xFC42189C-0xFC421922; PORT21-ROM-DANCINGBITS-MAIN]`) |
 | **Cache Clean/Invalidate & MPU Region 7 Config** | `0xFC0D9CAC` | **No** (skipped) | Yes | ~1 – 5 ms | **INFERRED** (assumption: CP15 cache maintenance and MPU register writes; control flow `[VERIFIED: ROM 0xFC0D9CAC-0xFC0D9CB0; PORT21-ROM-PREPARE-EXEC]`) |
@@ -239,7 +239,7 @@ We now evaluate hypotheses **H1–H4** against the start-up timing observation a
     ```bash
     python3 -c "import hashlib; d=open('candidate_port2a/DISKBOOT.BIN','rb').read(); assert hashlib.sha256(d).hexdigest() == '9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136'; assert d[0] == 0; assert d[16:20] != b'gaon'; assert d[32:36] != b'isoy'; print('PASS')"
     ```
-  - For a binary matching this SHA-256 and build structure, `byte 0 == 0x00` and `offset 16/32 != "gaonisoy"`, so the static gate checks in `sub_fc54de38` evaluate to pass `[VERIFIED: static ROM logic at 0xFC54DE3A-0xFC54DE4C]`.
+  - For a binary matching this SHA-256 and build structure, `byte 0 == 0x00` and `offset 16/32 != "gaonisoy"`, so the static gate checks in `sub_fc54de38` evaluate to pass `[VERIFIED: static ROM logic; ROM 0xFC54DE3A-0xFC54DE4C; PORT21-ROM-EXEC-VALIDATE]`.
   - That the candidate binary passes the static gates in ROM is `[INFERRED]`.
   - Whether the file actually present on the owner's SD card during the physical trial matched this host build bit-for-bit is strictly `[UNKNOWN]`. If the card file matched the build, H1 would be ruled out; if the file on the card was corrupted or unencoded, H1 would occur.
 
@@ -274,8 +274,8 @@ We now evaluate hypotheses **H1–H4** against the start-up timing observation a
 | Finding ID | Finding Description | Confidence | H1 | H2 | H3 | H4 | Epistemic Rationale & Timing Significance |
 |:---|:---|:---:|:---:|:---:|:---:|:---:|:---|
 | **TF1** | Unlocked SD card branches away at `0xFC05BC0A` before any disk I/O, file reading, decoding, or payload copying. | **VERIFIED** `[VERIFIED: ROM 0xFC05BC0A-0xFC05BC38; PORT21-ROM-STARTDISKBOOT]` | neutral | neutral | neutral | neutral | Explains why unlocked boot is fast and establishes baseline timing. |
-| **TF2** | Reject path reads 118,001 B from SD card, but skips shift loop, DancingBits decoding, DRAM handoff, and core boot. | **VERIFIED** `[VERIFIED: ROM 0xFC05BC66-0xFC05BC74, 0xFC54DE38-0xFC54DE6A; PORT21-ROM-STARTDISKBOOT; PORT21-ROM-EXEC-VALIDATE]` | **consistent with** | neutral | neutral | neutral | Reject path does extra SD I/O (~100–250 ms), so "slower only when locked" does NOT rule out H1. |
-| **TF3** | Host candidate build (`9468257364...`) has byte 0 == 0x00 and non-gaonisoy header, evaluating to pass in ROM `sub_fc54de38`. | **INFERRED** (tied to SHA-256 build; card match **UNKNOWN**) `[VERIFIED: host check; ROM 0xFC54DE3A-0xFC54DE4C]` | disfavours (if file matched) | consistent with | consistent with | consistent with | Conclusively proves candidate binary passes gates if host build was on card; card file match is UNKNOWN. |
+| **TF2** | Reject path reads 118,001 B from SD card, but skips shift loop, DancingBits decoding, DRAM handoff, and core boot. | **VERIFIED** `[VERIFIED: ROM 0xFC05BC66-0xFC05BC74; PORT21-ROM-STARTDISKBOOT] [VERIFIED: ROM 0xFC54DE38-0xFC54DE6A; PORT21-ROM-EXEC-VALIDATE]` | **consistent with** | neutral | neutral | neutral | Reject path does extra SD I/O (~100–250 ms), so "slower only when locked" does NOT rule out H1. |
+| **TF3** | Host candidate build (`9468257364...`) has byte 0 == 0x00 and non-gaonisoy header, evaluating to pass in ROM `sub_fc54de38`. | **INFERRED** (tied to SHA-256 build; card match **UNKNOWN**) `[VERIFIED: host check] [VERIFIED: ROM 0xFC54DE3A-0xFC54DE4C; PORT21-ROM-EXEC-VALIDATE]` | disfavours (if file matched) | consistent with | consistent with | consistent with | Conclusively proves candidate binary passes gates if host build was on card; card file match is UNKNOWN. |
 | **TF4** | Accept path executes DancingBits Row 13 descrambling involving 236,000 function calls (`sub_fc469180` and `sub_fc469188`). | **VERIFIED** (calls) / **INFERRED** (latency ~100–250 ms) `[VERIFIED: ROM 0xFC42189C-0xFC421922; PORT21-ROM-DANCINGBITS-MAIN]` | rules out | supports | supports | supports | Introduces substantial CPU execution latency (~100–250 ms) unique to accept path. |
 | **TF5** | Accept path executes memory handoff in `sub_fc0007c0`, copying 118,001 B to `0x40008000` and verifying words before `bx 0x8001`. | **VERIFIED** `[VERIFIED: ROM 0xFC0007DC-0xFC000840; PORT21-ROM-PAYLOAD-HANDOFF]` | rules out | supports | supports | supports | Proves candidate payload is physically copied into `0x40008000` prior to execution. |
 | **TF6** | Candidate core `boot()` software reboot trampoline executes double kernel initialization and zeroes 3.18 MiB Canon BSS. | **VERIFIED** (body) / **INFERRED** (reached) `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:85-161; docs/PORT21_RAM_LIFETIME.md:19-24]` | rules out | rules out (uninterrupted) | **supports** | supports | Introduces massive ~400–800 ms latency that fully accounts for "visibly slower" start-up. |
