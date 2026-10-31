@@ -173,8 +173,8 @@
         "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
       },
       "authorization_scope_id": "SCOPE-PORT20-LED",
-      "classification": "STATIC_VERIFIED",
-      "notes": "High-level firmware LEDDrive entry point at 0xFC5572B8 (Thumb 0xFC5572B9). Validates r1 < 8, branches to LEDDrv.c 0xFC12D838. Unanchored from tracked files; downgraded to INFERRED / REJECTED pre-kernel."
+      "classification": "INFERRED",
+      "notes": "High-level firmware LEDDrive candidate entry point at 0xFC5572B8 (Thumb 0xFC5572B9). Validates r1 < 8, branches to LEDDrv.c 0xFC12D838. Anchored by tracked file vendor/g3x-platform/platform/g3x/lib.c:55 (declaring _LEDDrive) and docs/PORT17_TRACE_EVIDENCE.md:389."
     }
   ]
 }

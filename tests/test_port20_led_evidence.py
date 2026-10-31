@@ -8,6 +8,8 @@ Verifies:
    - Total bytes read is at most 32 KiB (32768 bytes).
    - Every range has a 64-hex SHA-256 digest.
    - All approved ranges are mutually disjoint (zero spatial overlap).
+   - Every manifest entry has a valid anchor in its notes (tracked file:line or another recorded range).
+   - No manifest entry has classification STATIC_VERIFIED while notes contain 'downgrad', 'unanchored' or 'REJECTED'.
 2. Manifest validator integration:
    - Manifest passes tools/port11c_evidence_validator.py with returncode == 0 and 0 errors.
 3. Candidate LED register table consistency (docs/PORT20_LED_EVIDENCE.md §2):
@@ -29,10 +31,13 @@ Verifies:
    - Marking any candidate VERIFIED when it only has other-camera citations fails.
    - A conclusion line that disagrees with the candidate table polarity fails.
    - Missing manifest anchor rows fail.
+   - A manifest entry without an anchor in notes fails.
+   - A manifest entry with STATIC_VERIFIED contradicting downgrade/unanchored/REJECTED fails.
 """
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 import re
@@ -280,6 +285,84 @@ def validate_manifest_anchors_in_doc(manifest: Dict[str, Any], doc_text: str) ->
             raise ValueError(f"Anchor type is empty for {eid}")
 
 
+def get_tracked_files() -> set[str]:
+    """Returns set of relative paths tracked by git in this repository."""
+    try:
+        out = subprocess.check_output(["git", "ls-files"], cwd=str(REPO_ROOT), text=True)
+        return set(out.splitlines())
+    except Exception:
+        return set()
+
+
+def validate_manifest_entry_anchors(manifest: Dict[str, Any]) -> None:
+    """Verifies that every manifest entry has an anchor:
+    its notes contain either a tracked file:line that exists in the repo,
+    or an address that falls inside another recorded range."""
+    entries = manifest.get("evidence_entries", [])
+    if not entries:
+        raise ValueError("Manifest has no evidence entries")
+
+    ranges = []
+    for e in entries:
+        start = int(e["start_address"], 16)
+        end = int(e["end_address"], 16)
+        ranges.append((start, end, e.get("evidence_id", "")))
+
+    tracked_files = get_tracked_files()
+    file_line_pattern = re.compile(r"([a-zA-Z0-9_\-./]+\.[a-zA-Z0-9_]+):(\d+)")
+    hex_addr_pattern = re.compile(r"0x[0-9a-fA-F]+")
+
+    for entry in entries:
+        eid = entry.get("evidence_id", "<unknown>")
+        notes = entry.get("notes", "")
+        has_anchor = False
+
+        # Check (a): tracked file:line that exists in repo
+        for m in file_line_pattern.finditer(notes):
+            rel_path = m.group(1)
+            # Must be a tracked file in git or an existing file on disk
+            if (tracked_files and rel_path in tracked_files) or (REPO_ROOT / rel_path).is_file():
+                has_anchor = True
+                break
+
+        # Check (b): address that falls inside another recorded range
+        if not has_anchor:
+            for m in hex_addr_pattern.finditer(notes):
+                addr = int(m.group(0), 16)
+                for start, end, other_id in ranges:
+                    if other_id != eid and start <= addr <= end:
+                        has_anchor = True
+                        break
+                if has_anchor:
+                    break
+
+        if not has_anchor:
+            raise ValueError(
+                f"Manifest entry '{eid}' lacks a valid anchor in notes: "
+                f"notes do not contain a tracked file:line that exists in the repo, "
+                f"nor an address within another recorded range: {notes}"
+            )
+
+
+def validate_manifest_classifications_and_notes(manifest: Dict[str, Any]) -> None:
+    """Verifies that no entry has classification STATIC_VERIFIED while its notes
+    contain 'downgrad', 'unanchored' or 'REJECTED'."""
+    forbidden_terms = ("downgrad", "unanchored", "rejected")
+    for entry in manifest.get("evidence_entries", []):
+        eid = entry.get("evidence_id", "<unknown>")
+        cls_val = entry.get("classification", "")
+        notes = entry.get("notes", "")
+
+        if cls_val == "STATIC_VERIFIED":
+            notes_lower = notes.lower()
+            for term in forbidden_terms:
+                if term in notes_lower:
+                    raise ValueError(
+                        f"Manifest entry '{eid}' has classification STATIC_VERIFIED "
+                        f"but its notes contain contradictory term '{term}': {notes}"
+                    )
+
+
 class TestPort20ManifestLimits(unittest.TestCase):
     """Verifies that PORT20_EVIDENCE_MANIFEST.json strictly complies with Tech Lead limits."""
 
@@ -377,6 +460,14 @@ class TestPort20ManifestLimits(unittest.TestCase):
         )
         self.assertIn("Result: VALID", res.stdout, "Validator did not output 'Result: VALID'")
         self.assertIn("0 errors", res.stdout, "Validator reported errors")
+
+    def test_manifest_entries_have_valid_anchors(self):
+        """Every manifest entry notes must contain a tracked file:line or an address in another recorded range."""
+        validate_manifest_entry_anchors(self.manifest)
+
+    def test_manifest_static_verified_classification_notes_agreement(self):
+        """No entry may say STATIC_VERIFIED while its notes contain 'downgrad', 'unanchored' or 'REJECTED'."""
+        validate_manifest_classifications_and_notes(self.manifest)
 
 
 class TestPort20DocEvidenceConsistency(unittest.TestCase):
@@ -525,6 +616,29 @@ class TestNegativeMutations(unittest.TestCase):
         ]
         for ic in invalid_conclusions:
             self.assertIsNone(CONCLUSION_PATTERN.match(ic), f"Invalid conclusion '{ic}' unexpectedly passed")
+
+    def test_mutation_manifest_entry_missing_anchor_fails(self):
+        """A manifest entry whose notes lack both tracked file:line and other-range address must fail."""
+        mutated = copy.deepcopy(self.manifest)
+        # Clear anchor references from PORT20-ROM-MPU-REGION2-SETUP notes
+        for e in mutated["evidence_entries"]:
+            if e["evidence_id"] == "PORT20-ROM-MPU-REGION2-SETUP":
+                e["notes"] = "Plain CP15 MPU description without any tracked file or other address."
+                break
+        with self.assertRaises(ValueError):
+            validate_manifest_entry_anchors(mutated)
+
+    def test_mutation_manifest_static_verified_contradiction_fails(self):
+        """A manifest entry with STATIC_VERIFIED whose notes contain 'downgrad', 'unanchored', or 'REJECTED' must fail."""
+        for term in ("downgraded", "unanchored", "REJECTED"):
+            mutated = copy.deepcopy(self.manifest)
+            for e in mutated["evidence_entries"]:
+                if e["evidence_id"] == "PORT20-ROM-MPU-REGION2-SETUP":
+                    e["classification"] = "STATIC_VERIFIED"
+                    e["notes"] = f"Tracked file docs/PROJECT_STATE.md:254 with contradictory term {term} present."
+                    break
+            with self.assertRaises(ValueError):
+                validate_manifest_classifications_and_notes(mutated)
 
 
 if __name__ == "__main__":

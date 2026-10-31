@@ -47,7 +47,7 @@ The table below lists all candidate LED registers evaluated from GM1.10C ROM ana
 | **`0xD20B0994`** | `0x004d0002` | `0x004c0003` | None | G5 X / SX710 / M10 Green LED (pin 101); wrong pin on G3 X | **`INFERRED`** (ref ports) / **`REJECTED (CONTRADICTED FOR G3 X)`** | Reference ports `chdk-port/loader/g7x/main.c:17, 28` and `loader/g5x/main.c:17, 28`; explicitly rejected for G3 X in `vendor/g3x-platform/platform/g3x/lib.c:45-46` |
 | **`0xD20B0810`** | `0x004d0002` | `0x004c0003` | None | Front AF Assist Lamp (pin 4) | **`INFERRED`** (unverified direct store in ROM) | Forum post 149971 cited in `docs/RESEARCH_LOG.md:38` (E025); calculated as GPIO pin 4 (`0xD20B0800 + 4*4`), but no direct store verified in GM1.10C ROM |
 | **`0xD20B0888`** | `0x004d0002` | `0x004c0003` | None | OVF Bezel Orange LED on G16 (pin 34) | **`INFERRED`** (ref port) / **`REJECTED (ABSENT ON G3 X)`** | Reference port `chdk-port/loader/g16/main.c:8`; no evidence of OVF bezel orange LED on G3 X hardware |
-| **`LEDDrive (0xFC5572B9)`** | N/A (`action=0`) | N/A (`action=1`) | N/A | High-level firmware function calling `LEDDrv.c` | **`INFERRED`** (heuristic ROM entry) / **`REJECTED (FATAL PRE-KERNEL)`** | Unanchored heuristic discovery at `0xFC5572B9` (Thumb); branches to `0xFC12D838` in `LEDDrv.c` which panics at `0xFC12D75C` / `0xFC12D7B0` if `*0x9BA4 == 0` |
+| **`LEDDrive (0xFC5572B9)`** | N/A (`action=0`) | N/A (`action=1`) | N/A | High-level firmware function calling `LEDDrv.c` | **`INFERRED`** (candidate ROM entry) / **`REJECTED (FATAL PRE-KERNEL)`** | Candidate `LEDDrive` declared in `vendor/g3x-platform/platform/g3x/lib.c:55` and `docs/PORT17_TRACE_EVIDENCE.md:389`; entry at `0xFC5572B9` (Thumb); branches to `0xFC12D838` in `LEDDrv.c` which panics at `0xFC12D75C` / `0xFC12D7B0` if `*0x9BA4 == 0` |
 | **`LEDDrv.c (0xFC12D724)`** | N/A | N/A | N/A | Stock DryOS LED task & driver | **`VERIFIED`** (ROM driver) / **`REJECTED (FATAL PRE-KERNEL)`** | Anchored by `docs/PORT17_TRACE_EVIDENCE.md:410`, `docs/PROJECT_STATE.md:223`, and `docs/HANDOFF.md:509`; panics at `0xFC12D75C` / `0xFC12D7B0` before kernel driver initialization |
 
 ---
@@ -222,7 +222,7 @@ Writing to `0xD20B0884` directly from loader context (`0x00008000` / `0x40008000
 ## 5. Audit of Alternative Candidate Indicators
 
 ### 5.1 Route 1: Stock Firmware `LEDDrive` (`0xFC5572B9`) — REJECTED (FATAL PRE-KERNEL)
-- Entry point: `0xFC5572B9` (Thumb) `[INFERRED]`.
+- Entry point: `0xFC5572B9` (Thumb) `[INFERRED]`, anchored by tracked platform declaration `vendor/g3x-platform/platform/g3x/lib.c:55` and `docs/PORT17_TRACE_EVIDENCE.md:389`.
 - Disassembly in slice `PORT20-ROM-LEDDRIVE` shows `LEDDrive` immediately jumps to `0xFC12D838` in `LEDDrv.c`.
 - `LEDDrv.c` routines (`0xFC12D750`, `0xFC12D7A4`) check `ldr r0, [0x00009BA4]; cmp r0, #1; bne panic` (`blx 0xfc31bff4`).
 - During early loader execution, `*0x00009BA4 == 0`. Calling `LEDDrive` triggers an unhandled assert panic and freezes the core `[VERIFIED: PRIMARY.BIN 0xFC12D75C, 0xFC12D7B0]`.
@@ -253,7 +253,10 @@ All ROM reads performed for this investigation comply strictly with the Tech Lea
 | `PORT20-ROM-TASK-LEDCON-LOOP` | `0xFC12D500` | `0xFC12D5FF` | 256 | `6e7abdb12c6e80115aa951f0b356732f7d3691a02b18817183a7e0675f89a791` | Instruction `0xFC12D4EE` in `PORT20-ROM-TASK-LEDCON-ENTRY` (`beq.n 0xFC12D506`) | Instruction branch in recorded range | State jump table `tbb [pc, r6]` dispatching action 0 to `0xFC075D98` and action 1 to `0xFC075DAE` `[VERIFIED]` |
 | `PORT20-ROM-LEDDRV-INIT` | `0xFC12D620` | `0xFC12D81F` | 512 | `f905d002702bf182a2a92762fa50295e1cbb696d704c5b69690afac28de665c3` | `docs/PORT17_TRACE_EVIDENCE.md:410`; `docs/PROJECT_STATE.md:223` (cites `0xFC12D724`) | Tracked repo artifact (`path:line`) | Allocation of 14 LED descriptors and registration of LED 0 via `bl 0xFC075DC4` `[VERIFIED]` |
 | `PORT20-ROM-LEDDRV-DISPATCH` | `0xFC12D820` | `0xFC12D91F` | 256 | `c6f3aa05396d8ff9cff0b0bd954191f03706ef932ca8aac3bfacf0c7db7c9b8b` | Instructions `0xFC12D658` (`bl 0xFC12D8B6`) and `0xFC12D6C6` in `PORT20-ROM-LEDDRV-INIT` | Instruction `bl` in recorded range | Dispatcher assert check on `*0x9BA4 == 1` and `task_LEDCon` entry pointer literal `0xFC12D8D0` `[VERIFIED]` |
-| `PORT20-ROM-LEDDRIVE` | `0xFC5572B8` | `0xFC5573B7` | 256 | `9a23088b4d321bd65e1728451354023c7814d0915c3ad9e4d6ce74af56208399` | Unanchored from tracked repository files | Unanchored (exploratory) | High-level `LEDDrive` entry point `0xFC5572B9` (Thumb) `[INFERRED / REJECTED PRE-KERNEL]` |
+| `PORT20-ROM-LEDDRIVE` | `0xFC5572B8` | `0xFC5573B7` | 256 | `9a23088b4d321bd65e1728451354023c7814d0915c3ad9e4d6ce74af56208399` | `vendor/g3x-platform/platform/g3x/lib.c:55`; `docs/PORT17_TRACE_EVIDENCE.md:389` | Tracked repo artifact (`path:line`) | High-level `LEDDrive` candidate entry point `0xFC5572B9` (Thumb) `[INFERRED / REJECTED PRE-KERNEL]` |
+
+> [!NOTE] Anchor & Status Note on PORT20-ROM-LEDDRIVE:
+> Range `PORT20-ROM-LEDDRIVE` is anchored by tracked platform declaration `vendor/g3x-platform/platform/g3x/lib.c:55` (`extern int _LEDDrive(int, int);`) and `docs/PORT17_TRACE_EVIDENCE.md:389`. Classified as `INFERRED` in the manifest as an exploratory candidate entry point to evaluate the stock firmware `LEDDrive` route; it is fatal pre-kernel (`REJECTED`) and no `VERIFIED` claim or T2 conclusion depends on this range.
 
 - Total slices read: **8** (limit: $\le 8$)
 - Maximum slice size: **512 bytes** (limit: $\le 4096$ bytes)
@@ -266,4 +269,4 @@ All ROM reads performed for this investigation comply strictly with the Tech Lea
 
 A visible LED register has been conclusively established from GM1.10C ROM code disassembly: writing `0x004d0002` to MMIO address `0xD20B0884` activates logical LED descriptor 0 (inferred as the rear green status / top power LED), and writing `0x004c0003` deactivates it. In loader context, the CPU operates in privileged mode with MPU Region 2 configured as Device Memory (Privileged RW, Non-cacheable), guaranteeing immediate and deterministic physical signaling without kernel dependencies.
 
-T2 GO: 0xD20B0884 on=0x4d0002 off=0x4c0003 (address/value VERIFIED, polarity INFERRED)
+T2 GO: 0xD20B0884 on=0x004d0002 off=0x004c0003 (address/value VERIFIED, polarity INFERRED)
