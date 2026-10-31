@@ -411,14 +411,26 @@ int main(void) {
         self.assertEqual(sc3, 4)
 
     def test_exhaustive_rejection_modes_mapping_to_witness_invalid(self):
-        """Prove which exact memory conditions map to WITNESS_INVALID / INVALID / CORRUPT."""
+        """Prove which conditions map to WITNESS_INVALID / INVALID / CORRUPT.
+
+        Note on buffer truncation:
+        The short buffer case (<32 bytes) is strictly a host-API rejection test of the Python
+        reference emulator (tools/validate_witness_inspector.py:244-245). It is NOT a native-parser
+        outcome or a physical on-camera memory state, because the native inspector payload takes
+        no buffer length and reads directly from BOOT_WITNESS_ADDR (firmware/tools/witness_inspector_payload.S:57-90).
+        All other cases represent physical memory states checked identically by both the native
+        inspector payload and the reference emulator.
+        """
         valid_stage3 = vwi.pack_witness(
             BOOT_WITNESS_MAGIC, BOOT_WITNESS_VERSION, BOOT_WITNESS_FIXED_NONCE,
             7, LOADER_INITIAL_SP, CORE_ENTRY_THUMB_PC, PROTOTYPE_CONT_TICK
         )
 
         cases = [
-            ("Short buffer (<32 bytes)", b"\x00" * 31),
+            (
+                "Host-API rejection only: Short buffer (<32 bytes, tools/validate_witness_inspector.py:244-245)",
+                b"\x00" * 31,
+            ),
             ("Corrupted magic", vwi.pack_witness(0xDEADBEEF, BOOT_WITNESS_VERSION, BOOT_WITNESS_FIXED_NONCE, 7, LOADER_INITIAL_SP, CORE_ENTRY_THUMB_PC, 100)),
             ("Unsupported version", vwi.pack_witness(BOOT_WITNESS_MAGIC, 0x00020000, BOOT_WITNESS_FIXED_NONCE, 7, LOADER_INITIAL_SP, CORE_ENTRY_THUMB_PC, 100)),
             ("Single bit flip in checksum", bytes(bytearray(valid_stage3)[:31] + bytes([valid_stage3[31] ^ 0x01]))),

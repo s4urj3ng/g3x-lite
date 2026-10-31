@@ -74,7 +74,7 @@ This audit conducts a host-based, field-by-field verification comparing the witn
 | **`core_entry_pc`** | `0x14` (Word 5) | Writes `0` | Core writes `0x003489B5` (Thumb bit set for `MEMISOSTART`) | Not checked at Stage 1 or 2; at Stage 3, requires exact match `core_entry_pc == 0x003489B5` | **MATCH (`[VERIFIED]`)** | `main_prototype.c:53`; `boot_prototype.c:40`; `payload.S:154-159`; `vwi.py:269` |
 | **`cont_tick`** | `0x18` (Word 6) | Writes `0` | Continuation writes `0x0014F200` | Checked only as part of polynomial checksum computation | **MATCH (`[VERIFIED]`)** | `main_prototype.c:54`; `boot_prototype.c:53`; `boot_witness.h:41`; `payload.S:80-87` |
 | **`checksum`** | `0x1C` (Word 7) | `compute_witness_checksum()` over first 7 words | Recomputed at each core transition | Loops 7 words (offsets `0x00..0x18`), accumulates `c = (c * 31) ^ w`, compares with offset `0x1C` | **MATCH (`[VERIFIED]`)** | `boot_witness.h:33-43`; `payload.S:75-92`; `vwi.py:96-100, 254-256` |
-| **Record Size** | N/A | `sizeof(boot_witness_t) == 32` (8 x 4B words) | 32 bytes (`aligned(16)`) | Unpacks 32 bytes (`<IIIIIIII`); rejects buffer < 32 bytes | **MATCH (`[VERIFIED]`)** | `boot_witness.h:30`; `vwi.py:244-247` |
+| **Record Size** | N/A | `sizeof(boot_witness_t) == 32` (8 x 4B words) | 32 bytes (`aligned(16)`) | Reads 8 32-bit words (32 bytes) at `BOOT_WITNESS_ADDR` (`payload.S:57-90`); reference emulator unpacks 32 bytes (`<IIIIIIII`) with host-API `len(buf) >= 32` check (`vwi.py:244-247`) | **MATCH (`[VERIFIED]`)** | `boot_witness.h:30`; `payload.S:57-90`; `vwi.py:244-247` |
 | **Alignment** | N/A | Placed at `0x0035F7A0` (16-byte aligned) | `boot_witness` in `.data` at `0x0035F7A0` | `BOOT_WITNESS_ADDR = 0x0035F7A0` (16-byte aligned) | **MATCH (`[VERIFIED]`)** | `build_candidate_port2a.py:54, 506`; `validate_candidate_port2a.py:48` |
 | **Endianness** | N/A | ARMv7-R Cortex-R4 Little-Endian | ARMv7-R Cortex-R4 Little-Endian | Little-Endian struct read / unpack (`<IIIIIIII`) | **MATCH (`[VERIFIED]`)** | `entry.S`; `main_prototype.c`; `payload.S:39-41`; `vwi.py:247` |
 
@@ -101,14 +101,22 @@ In `firmware/tools/witness_inspector_payload.S:190-198` and `tools/validate_witn
     Return Sentinel:  0x574954EE (SENTINEL_INVALID)
 ```
 
-The inspector maps each of the following distinct memory states to this identical output:
-1. **Truncated Buffer**: Memory buffer under 32 bytes (`len(buf) < 32`) `[VERIFIED]`.
-2. **Corrupted Magic**: `magic != 0x5749544E` (e.g. all-zeros `0x00000000`, stock pointers, uninitialized RAM) `[VERIFIED]`.
-3. **Unsupported Version**: `version != 0x00010001` `[VERIFIED]`.
-4. **Checksum Mismatch**: Any single bit flip or modification in any field without recalculating `checksum` `[VERIFIED]`.
-5. **Illegal Stage Mask**: `stage_state` not in `{1, 3, 7}` (e.g. `0x00` empty, `0x02` core-only, `0x04` continuation-only, `0x05` core-skipped) `[VERIFIED]`.
-6. **Continuation Core Entry Mismatch**: At Stage 3 (`stage_state == 7`), `core_entry_pc != 0x003489B5` `[VERIFIED]`.
-7. **Continuation Stack Misalignment**: At Stage 3 (`stage_state == 7`), `loader_sp % 8 != 0` `[VERIFIED]`.
+### 4.1 Native Payload vs Reference Emulator Behavior
+- **Native Assembly Inspector (`firmware/tools/witness_inspector_payload.S:57-90`)**:
+  The native assembly inspector executes directly on ARM hardware in the camera's execution context. It does **not** receive a buffer pointer or buffer length argument. Instead, it hardcodes `BOOT_WITNESS_ADDR` (`0x0035F7A0`) into register `r7` via `movw`/`movt` (`payload.S:57-58`) and performs direct 32-bit memory loads (`ldr r0, [r7, #offset]`) across the 8 consecutive 32-bit words (32 bytes). Physical memory at `0x0035F7A0` is always present and addressable; the native inspector has no concept of buffer length, cannot detect truncation, and never returns `INVALID` due to buffer length `[VERIFIED: firmware/tools/witness_inspector_payload.S:57-90]`.
+- **Python Reference Emulator (`tools/validate_witness_inspector.py:244-245`)**:
+  The host Python reference emulator takes an arbitrary Python byte sequence `buf` and executes `if len(buf) < 32: return SENTINEL_INVALID, "WITNESS_INVALID", "INVALID / CORRUPT", 3, 3`. This check is strictly a **host-API safety guard** to prevent `struct.unpack` indexing exceptions on short buffers during host test execution. It is **not** a native-parser outcome or a physical on-camera memory state `[VERIFIED: tools/validate_witness_inspector.py:244-245]`.
+
+### 4.2 Failure Conditions Reaching `.Lstate_invalid`
+On-camera physical memory states route to `.Lstate_invalid` (`0x574954EE`) based on the structural checks implemented in `firmware/tools/witness_inspector_payload.S:61-163` and replicated in `tools/validate_witness_inspector.py:250-273`. Both the native payload and the reference emulator evaluate these physical memory states identically:
+1. **Corrupted Magic**: `magic != 0x5749544E` (e.g. all-zeros `0x00000000`, stock pointers, uninitialized RAM) `[VERIFIED: payload.S:61-65; vwi.py:250]`.
+2. **Unsupported Version**: `version != 0x00010001` `[VERIFIED: payload.S:67-71; vwi.py:250]`.
+3. **Checksum Mismatch**: Any single bit flip or modification in any field without recalculating `checksum` `[VERIFIED: payload.S:78-92; vwi.py:254-256]`.
+4. **Illegal Stage Mask**: `stage_state` not in `{1, 3, 7}` (e.g. `0x00` empty, `0x02` core-only, `0x04` continuation-only, `0x05` core-skipped) `[VERIFIED: payload.S:117-129; vwi.py:264-273]`.
+5. **Continuation Core Entry Mismatch**: At Stage 3 (`stage_state == 7`), `core_entry_pc != 0x003489B5` `[VERIFIED: payload.S:154-159; vwi.py:269-270]`.
+6. **Continuation Stack Misalignment**: At Stage 3 (`stage_state == 7`), `loader_sp % 8 != 0` `[VERIFIED: payload.S:161-163; vwi.py:269-270]`.
+
+*(Host-API only)*: In the host reference emulator only, `len(buf) < 32` returns `SENTINEL_INVALID` (`vwi.py:244-245`), but this cannot occur on hardware (`payload.S:57-90`).
 
 ---
 
@@ -133,16 +141,36 @@ The real inspector parsing code (`vwi.emulate_inspector_parse`) produces the fol
 | **Continuation-attempted** | Valid Stage 3 record (`stage_state = 0x07`) | `CONT_ATTEMPTED` | `FRESHNESS_UNVERIFIED` | `4, 4` (Yellow/Yellow) | `0x57495404` | **NO (`[VERIFIED]`)** |
 
 ### 5.2 Exhaustive Raw Memory State Classes Yielding Exactly `WITNESS_INVALID / INVALID / CORRUPT`
-Every memory state that produces `0x574954EE` falls into one of the following distinct classes:
-1. **Class 1: Power-on uninitialized or cleared DRAM (all zeros `0x00*32`)**: Word 0 (`magic = 0x00000000`) fails magic check `0x5749544E`.
-2. **Class 2: Stock Canon OS heap / task data overwrite**: Word 0 is a stock ROM/RAM pointer or DryOS data structure, or fails checksum.
-3. **Class 3: Uniform or floating DRAM patterns (`0xFF*32`, `0xAA*32`, random noise)**: Word 0 does not match `0x5749544E`.
-4. **Class 4: Partial or aborted witness writes**: The loader began executing `my_restart()`, but a hardware exception, watchdog reset, or interrupt intervened before all 8 words and checksum were committed to DRAM.
-5. **Class 5: Checksum corruption / single-bit errors**: All 8 fields were populated, but memory decay, background DMA collision, or cache flush failure corrupted one or more bits before the inspector read DRAM.
-6. **Class 6: Invalid / illegal stage bitmask**: Word 3 contains an unsupported stage value (`0x00`, `0x02`, `0x04`, `0x05`, `0x06`, etc.).
-7. **Class 7: Incompatible version field**: Word 1 contains a version other than `0x00010001`.
-8. **Class 8: Truncated buffer**: Buffer provided to the inspector is shorter than 32 bytes (`len < 32`).
-9. **Class 9: Stage 3 validation failure**: Word 3 indicates Stage 3 (`0x07`), but `core_entry_pc != 0x003489B5` or `loader_sp` is not 8-byte aligned.
+Every memory state on the physical camera that produces `0x574954EE` falls into one of the following 8 distinct physical classes. For each class, both the native payload and the reference emulator evaluate to `WITNESS_INVALID / INVALID / CORRUPT`:
+
+1. **Class 1: Power-on uninitialized or cleared DRAM (all zeros `0x00*32`)**:
+   - Failure point: Word 0 (`magic = 0x00000000`) fails magic check `0x5749544E`.
+   - Parser evaluation: **Both** native payload (`firmware/tools/witness_inspector_payload.S:61-65`) and reference emulator (`tools/validate_witness_inspector.py:250-251`) reach `SENTINEL_INVALID` `[VERIFIED]`.
+2. **Class 2: Stock Canon OS heap / task data overwrite**:
+   - Failure point: Word 0 is a stock ROM/RAM pointer or DryOS data structure (failing magic `0x5749544E`), or subsequent words fail version (`0x00010001`) or polynomial checksum.
+   - Parser evaluation: **Both** native payload (`payload.S:61-65, 67-71, 89-92`) and reference emulator (`vwi.py:250, 256`) reach `SENTINEL_INVALID` `[VERIFIED]`.
+3. **Class 3: Uniform or floating DRAM patterns (`0xFF*32`, `0xAA*32`, random noise)**:
+   - Failure point: Word 0 does not match `0x5749544E`.
+   - Parser evaluation: **Both** native payload (`payload.S:61-65`) and reference emulator (`vwi.py:250`) reach `SENTINEL_INVALID` `[VERIFIED]`.
+4. **Class 4: Partial or aborted witness writes**:
+   - Failure point: The loader began executing `my_restart()`, but an exception, watchdog reset, or interrupt intervened before all 8 words and checksum were committed to DRAM; fails magic, version, or checksum.
+   - Parser evaluation: **Both** native payload (`payload.S:61-92`) and reference emulator (`vwi.py:250-256`) reach `SENTINEL_INVALID` `[VERIFIED]`.
+5. **Class 5: Checksum corruption / single-bit errors**:
+   - Failure point: All 8 fields were populated, but memory decay, background DMA collision, or cache flush failure corrupted one or more bits before the inspector read DRAM.
+   - Parser evaluation: **Both** native payload (`payload.S:89-92`) and reference emulator (`vwi.py:254-256`) reach `SENTINEL_INVALID` `[VERIFIED]`.
+6. **Class 6: Invalid / illegal stage bitmask**:
+   - Failure point: Word 3 contains an unsupported stage value (`0x00`, `0x02`, `0x04`, `0x05`, `0x06`, etc.).
+   - Parser evaluation: **Both** native payload (`payload.S:117-129`) and reference emulator (`vwi.py:264-273`) reach `SENTINEL_INVALID` `[VERIFIED]`.
+7. **Class 7: Incompatible version field**:
+   - Failure point: Word 1 contains a version other than `0x00010001`.
+   - Parser evaluation: **Both** native payload (`payload.S:67-71`) and reference emulator (`vwi.py:250`) reach `SENTINEL_INVALID` `[VERIFIED]`.
+8. **Class 8: Stage 3 validation failure**:
+   - Failure point: Word 3 indicates Stage 3 (`0x07`), but `core_entry_pc != 0x003489B5` or `loader_sp` is not 8-byte aligned.
+   - Parser evaluation: **Both** native payload (`payload.S:154-163`) and reference emulator (`vwi.py:269-270`) reach `SENTINEL_INVALID` `[VERIFIED]`.
+
+> [!NOTE]
+> **Separation of Native Payload vs Reference Emulator Behavior**:
+> Buffer truncation (`len(buf) < 32`) is **omitted** from the physical memory state classes above because it is physically impossible on the camera. The native inspector takes no buffer length argument and directly reads the 8 consecutive words at `BOOT_WITNESS_ADDR = 0x0035F7A0` (`firmware/tools/witness_inspector_payload.S:57-90`). The `< 32` bytes check exists solely in `tools/validate_witness_inspector.py:244-245` as a host Python reference emulator API safety check. Thus, truncation is strictly a host-API rejection outcome and cannot explain the on-camera O6 trial observation `[VERIFIED: tools/validate_witness_inspector.py:244-245; firmware/tools/witness_inspector_payload.S:57-90]`.
 
 ### 5.3 Consistency of Memory State Classes with Hypotheses H1–H4
 We evaluate how each memory state class stays consistent with hypotheses H1–H4, and emphasize that **no single hypothesis is ruled out by observation O6 alone**:
@@ -157,7 +185,7 @@ We evaluate how each memory state class stays consistent with hypotheses H1–H4
 ### 5.4 Summary of Hardware Conclusions
 1. The loader witness record as compiled in `candidate_loader.elf` is **not malformed**: when executed to completion, its output is parsed by the inspector as valid `LOADER_REACHED` (`0x57495401`) `[VERIFIED]`.
 2. The actual RAM contents at `0x0035F7A0` during the O6 trial session and whether the loader writer ever executed on hardware remain **`UNKNOWN`** `[UNKNOWN]`.
-3. Because multiple physical classes of memory states evaluate identically to `WITNESS_INVALID / INVALID / CORRUPT`, **observation O6 alone does not single out or rule out any of H1, H2, H3, or H4** `[VERIFIED]`.
+3. Because multiple physical classes of memory states evaluate identically to `WITNESS_INVALID / INVALID / CORRUPT` (specifically, 8 distinct physical raw memory state classes on hardware), **observation O6 alone does not single out or rule out any of H1, H2, H3, or H4** `[VERIFIED]`.
 
 ---
 
@@ -199,7 +227,7 @@ A comprehensive unit test suite has been implemented in `tests/test_port21_witne
 - `test_all_zero_region_yields_witness_invalid`: Confirms 32 bytes of zeros yields `WITNESS_INVALID` / `INVALID / CORRUPT` (Sentinel `0x574954EE`, Colors `3, 3`).
 - `test_overwritten_stock_boot_data_yields_witness_invalid`: Evaluates 5 patterns of stock-boot and uninitialized memory, proving all yield `WITNESS_INVALID`.
 - `test_valid_records_across_all_stages`: Tests Stage 1, Stage 2, and Stage 3 valid records.
-- `test_exhaustive_rejection_modes_mapping_to_witness_invalid`: Exhaustively tests short buffer, invalid magic, invalid version, bit flips, illegal stage progressions, invalid core entry PC, and misaligned loader stack.
+- `test_exhaustive_rejection_modes_mapping_to_witness_invalid`: Exhaustively tests invalid magic, invalid version, bit flips, illegal stage progressions, invalid core entry PC, and misaligned loader stack across physical memory states, as well as the host-API short buffer rejection in the Python reference emulator.
 - `test_color_index_3_selection_and_rendering_invariance`: Verifies that the INVALID outcome selects Color Index 3 in both `vwi.emulate_inspector_parse` and `witness_inspector_payload.S:193-194`, and proves inspector parsing is independent of rendering context.
 
 All tests execute offline and pass cleanly without requiring ROM reads or camera hardware.
