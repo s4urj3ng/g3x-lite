@@ -69,7 +69,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT20-LED",
       "classification": "STATIC_VERIFIED",
-      "notes": "CP15 c6 MPU Region 2 setup: base 0x80000000, size 2 GiB (0x80000000..0xFFFFFFFF), DRACR = 0x1105 (Privileged RW, Device Memory, Non-cacheable, XN=1), covering 0xD20B0884 without caching. Anchored by tracked files docs/PROJECT_STATE.md:254 and docs/HANDOFF.md:628."
+      "notes": "CP15 c6 MPU Region 2 setup: base 0x80000000, size 2 GiB (0x80000000..0xFFFFFFFF), DRACR = 0x1105 (Privileged RW, Device Memory, Non-cacheable, XN=1), covering 0xD20B0884 without caching. ANCHOR: tracked docs/PROJECT_STATE.md:254 cites 0xFC00457A..0xFC004652. ANCHOR: tracked docs/HANDOFF.md:628 cites 0xFC00457A..0xFC004652. (The cited MPU setup span contains this range's start address.)"
     },
     {
       "evidence_id": "PORT20-ROM-SS-LED-CONTROL",
@@ -84,7 +84,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT20-LED",
       "classification": "STATIC_VERIFIED",
-      "notes": "0xFC075DC4 initializes pin 33 (0x21) in [r0, #8]; 0xFC075D98 loads pin 33 and 0x4d0002 (literal 0xFC075E00, action 0 / ON), calling 0xFC0D73C4; 0xFC075DAE loads pin 33 and 0x4c0003 (literal 0xFC075E04, action 1 / OFF), calling 0xFC0D73C4. Anchored by instruction 0xFC12D6DC in PORT20-ROM-LEDDRV-INIT."
+      "notes": "0xFC075DC4 initializes pin 33 (0x21) in [r0, #8]; 0xFC075D98 loads pin 33 and 0x4d0002 (literal 0xFC075E00, action 0 / ON), calling 0xFC0D73C4; 0xFC075DAE loads pin 33 and 0x4c0003 (literal 0xFC075E04, action 1 / OFF), calling 0xFC0D73C4. ANCHOR: range PORT20-ROM-LEDDRV-INIT 0xFC12D6DC -> 0xFC075DC4 (bl 0xfc075dc4)."
     },
     {
       "evidence_id": "PORT20-ROM-GPIO-WRITE-MMIO",
@@ -99,7 +99,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT20-LED",
       "classification": "STATIC_VERIFIED",
-      "notes": "0xFC0D73C4 loads MMIO base 0xD20B0000 from literal 0xFC0D73E4, computes 0xD20B0000 + (pin * 4), and stores r1 to offset 0x800 (str.w r1, [r0, #2048]). For pin 33, target is 0xD20B0884. Anchored by instructions 0xFC075DA4 and 0xFC075DBA in PORT20-ROM-SS-LED-CONTROL."
+      "notes": "0xFC0D73C4 loads MMIO base 0xD20B0000 from literal 0xFC0D73E4, computes 0xD20B0000 + (pin * 4), and stores r1 to offset 0x800 (str.w r1, [r0, #2048]). For pin 33, target is 0xD20B0884. ANCHOR: range PORT20-ROM-SS-LED-CONTROL 0xFC075DA4 -> 0xFC0D73C4 (bl 0xfc0d73c4). ANCHOR: range PORT20-ROM-SS-LED-CONTROL 0xFC075DBA -> 0xFC0D73C4 (bl 0xfc0d73c4)."
     },
     {
       "evidence_id": "PORT20-ROM-TASK-LEDCON-ENTRY",
@@ -114,7 +114,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT20-LED",
       "classification": "STATIC_VERIFIED",
-      "notes": "task_LEDCon entry routine at 0xFC12D3E0 (Thumb 0xFC12D3E1) pointed to by literal 0xFC12D8D0 in PORT20-ROM-LEDDRV-DISPATCH; processes LED message queue and branches at 0xFC12D4EE to 0xFC12D506 into PORT20-ROM-TASK-LEDCON-LOOP."
+      "notes": "task_LEDCon entry routine at 0xFC12D3E0 (Thumb 0xFC12D3E1); processes LED message queue and branches at 0xFC12D4EE to 0xFC12D506 into PORT20-ROM-TASK-LEDCON-LOOP. ANCHOR: range PORT20-ROM-LEDDRV-DISPATCH 0xFC12D8D0 -> 0xFC12D3E1 (literal pointer)."
     },
     {
       "evidence_id": "PORT20-ROM-TASK-LEDCON-LOOP",
@@ -129,7 +129,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT20-LED",
       "classification": "STATIC_VERIFIED",
-      "notes": "task_LEDCon state jump table (tbb [pc, r6] at 0xFC12D510) dispatching r6=0 (action 0 / ON) to 0xFC12D550 (bl 0xFC075D98) and r6=1 (action 1 / OFF) to 0xFC12D548 (bl 0xFC075DAE). Anchored by branch 0xFC12D4EE in PORT20-ROM-TASK-LEDCON-ENTRY."
+      "notes": "task_LEDCon state jump table (tbb [pc, r6] at 0xFC12D510) dispatching r6=0 (action 0 / ON) to 0xFC12D550 (bl 0xFC075D98) and r6=1 (action 1 / OFF) to 0xFC12D548 (bl 0xFC075DAE). ANCHOR: range PORT20-ROM-TASK-LEDCON-ENTRY 0xFC12D4EE -> 0xFC12D506 (beq.n 0xfc12d506)."
     },
     {
       "evidence_id": "PORT20-ROM-LEDDRV-INIT",
@@ -144,7 +144,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT20-LED",
       "classification": "STATIC_VERIFIED",
-      "notes": "LEDDrv_Init (0xFC12D624) allocating 14 LED structs and invoking 0xFC075DC4 at 0xFC12D6DC to configure LED 0. Contains pre-kernel assertions on *0x9BA4 == 1. Anchored by tracked file docs/PORT17_TRACE_EVIDENCE.md:410 citing 0xFC12D724."
+      "notes": "LEDDrv_Init (0xFC12D624) allocating 14 LED structs and invoking 0xFC075DC4 at 0xFC12D6DC to configure LED 0. Contains pre-kernel assertions on *0x9BA4 == 1. ANCHOR: tracked docs/PORT17_TRACE_EVIDENCE.md:410 cites 0xFC12D724. ANCHOR: tracked docs/PROJECT_STATE.md:223 cites 0xFC12D724. (The cited LEDDrv.c address 0xFC12D724 lies inside this range, 0x104 bytes after its start.)"
     },
     {
       "evidence_id": "PORT20-ROM-LEDDRV-DISPATCH",
@@ -159,7 +159,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT20-LED",
       "classification": "STATIC_VERIFIED",
-      "notes": "LEDDrv routine 0xFC12D838 handling LED 4 (AF assist lamp duty cycle) and forwarding to 0xFC12D750 / 0xFC12D7A4; table setter 0xFC12D8B6; IPC queue sender 0xFC12D8AC; literal 0xFC12D8D0 pointing to task_LEDCon (0xFC12D3E1). Anchored by instruction 0xFC12D658 in PORT20-ROM-LEDDRV-INIT."
+      "notes": "LEDDrv routine 0xFC12D838 handling LED 4 (AF assist lamp duty cycle) and forwarding to 0xFC12D750 / 0xFC12D7A4; table setter 0xFC12D8B6; IPC queue sender 0xFC12D8AC; literal 0xFC12D8D0 pointing to task_LEDCon (0xFC12D3E1). ANCHOR: range PORT20-ROM-LEDDRV-INIT 0xFC12D658 -> 0xFC12D8B6 (bl 0xfc12d8b6)."
     },
     {
       "evidence_id": "PORT20-ROM-LEDDRIVE",
@@ -174,7 +174,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT20-LED",
       "classification": "INFERRED",
-      "notes": "High-level firmware LEDDrive candidate entry point at 0xFC5572B8 (Thumb 0xFC5572B9). Validates r1 < 8, branches to LEDDrv.c 0xFC12D838. Anchored by tracked file vendor/g3x-platform/platform/g3x/lib.c:55 (declaring _LEDDrive) and docs/PORT17_TRACE_EVIDENCE.md:389."
+      "notes": "ANCHOR: NONE. SCOPE DEVIATION: this read had no tracked anchor. No tracked file:line contains 0xFC5572B8 or 0xFC5572B9, and no instruction or literal inside the other seven recorded ranges branches to or points at it, so the read breaks the T1 ROM-read rule. It is recorded here only to keep the read accounting complete. Unanchored-read observation (at most INFERRED): candidate LEDDrive entry at 0xFC5572B8 (Thumb 0xFC5572B9) checks r1 < 8 and branches to 0xFC12D838. No VERIFIED claim and no T2 conclusion depends on this range."
     }
   ]
 }
