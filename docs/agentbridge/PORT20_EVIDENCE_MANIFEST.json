@@ -174,7 +174,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT20-LED",
       "classification": "INFERRED",
-      "notes": "ANCHOR: NONE. SCOPE DEVIATION — not pre-authorised; acknowledged by Tech Lead in the task 90 revision-4 feedback; quarantined: no claim in this document relies on it. No tracked file:line contains an address inside this range, and no instruction or literal inside the other seven recorded ranges points into it. Recorded only to keep the read accounting (start, length, SHA-256) complete. T1 ROM-read scope: 7 anchored ranges compliant, 1 acknowledged deviation (PORT20-ROM-LEDDRIVE)."
+      "notes": "ANCHOR: NONE. SCOPE DEVIATION: unanchored read, waived retroactively by Tech Lead exception TL-EXC-P20-T1-01 (task 90 revision-5 feedback) for accounting only; quarantined: no claim in this document relies on it. No tracked file:line contains an address inside this range, and no instruction or literal inside the other seven recorded ranges points into it. Recorded only to keep the read accounting (start, length, SHA-256) complete. T1 ROM-read scope: 7 ranges anchored, 1 range covered by exception TL-EXC-P20-T1-01 (PORT20-ROM-LEDDRIVE)."
     }
   ]
 }

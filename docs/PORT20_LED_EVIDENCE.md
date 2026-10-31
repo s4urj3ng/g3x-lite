@@ -16,7 +16,7 @@ The evidence label (VERIFIED / INFERRED / UNKNOWN) and the candidate status (ACT
 
 ## 1. Executive Summary & Verification Outcome
 
-The GM1.10C firmware was examined offline with bounded static disassembly. Eight ROM ranges (2,336 bytes) were read; every claim in this document rests on the seven anchored ranges (2,080 bytes). The eighth range is quarantined (§7). The goal was an MMIO register that can drive a visible G3 X LED from loader context (`0x8000` / `0x40008000`), before DryOS or its drivers are set up.
+The GM1.10C firmware was examined offline with bounded static disassembly. Eight ROM ranges (2,336 bytes) were read; every claim in this document rests on the seven anchored ranges (2,080 bytes). The eighth range is an unanchored read, covered for accounting only by Tech Lead exception TL-EXC-P20-T1-01 and quarantined (§7, §7.1). The goal was an MMIO register that can drive a visible G3 X LED from loader context (`0x8000` / `0x40008000`), before DryOS or its drivers are set up.
 
 ### Key Technical Findings:
 1. **Primary MMIO LED Register**:
@@ -40,13 +40,13 @@ The GM1.10C firmware was examined offline with bounded static disassembly. Eight
 
 The table lists every candidate evaluated from anchored GM1.10C ROM analysis and tracked notes. `Evidence Label` holds exactly one of VERIFIED / INFERRED / UNKNOWN; `Status` is separate.
 
-| Candidate Address | ON Value | OFF Value | RMW Mask | Target Hardware LED | Evidence Label | Tracked Citation / Primary Disassembly | Status |
-|:---:|:---:|:---:|:---:|:---:|:---:|:---|:---:|
-| **`0xD20B0884`** | `0x004d0002` | `0x004c0003` | None (Direct 32-bit `str.w`) | Logical LED descriptor 0 (GPIO pin 33) `[VERIFIED]`; physically the rear green status LED `[INFERRED: docs/RESEARCH_LOG.md:38]`; polarity `[UNKNOWN]` (ON/OFF columns = action-0 / action-1 values) | **`VERIFIED`** | `PRIMARY.BIN 0xFC075DC4` (pin 33), `PRIMARY.BIN 0xFC075D98` (`0x4d0002`), `PRIMARY.BIN 0xFC075DAE` (`0x4c0003`), `PRIMARY.BIN 0xFC0D73C4` (MMIO store); physical location from `docs/RESEARCH_LOG.md:38` (E025) | ACTIVE |
-| **`0xD20B0994`** | `0x004d0002` | `0x004c0003` | None | G5 X / M10 / SX710 LED in the reference loaders (pin 101 under the GM1.10C formula) | **`INFERRED`** | Reference-loader values and address recorded in `docs/RESEARCH_LOG.md:38` (E025) and `docs/RESEARCH_LOG.md:96` (C006); warning in `vendor/g3x-platform/platform/g3x/lib.c:45-46` | REJECTED (contradicted for G3 X, §5.3) |
-| **`0xD20B0810`** | `0x004d0002` | `0x004c0003` | None | Front AF Assist Lamp (pin 4) | **`INFERRED`** | Forum post 149971 cited in `docs/RESEARCH_LOG.md:38` (E025); equals GPIO pin 4 (`0xD20B0800 + 4*4`), but no store to it was found in the anchored ranges | NOT RECOMMENDED (§5.2) |
-| **`0xD20B0888`** | `0x004d0002` | `0x004c0003` | None | Pin 34 under the GM1.10C formula; no tracked artifact names an LED on it | **`UNKNOWN`** | No tracked file:line names this address; only the formula from `PRIMARY.BIN 0xFC0D73C4` gives it a pin number | NOT RECOMMENDED |
-| **`LEDDrv.c (0xFC12D724)`** | N/A | N/A | N/A | Stock DryOS LED task & driver | **`VERIFIED`** | `PRIMARY.BIN 0xFC12D75C`, `PRIMARY.BIN 0xFC12D7B0` (panic unless `*0x9BA4 == 1`); address from `docs/PORT17_TRACE_EVIDENCE.md:410` and `docs/PROJECT_STATE.md:223` | REJECTED (fatal pre-kernel, §5.1) |
+| Candidate Address | Action-0 Value | Action-1 Value | ON/OFF Polarity | RMW Mask | Target Hardware LED | Evidence Label | Tracked Citation / Primary Disassembly | Status |
+|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---|:---:|
+| **`0xD20B0884`** | `0x004d0002` `[VERIFIED]` | `0x004c0003` `[VERIFIED]` | polarity `[UNKNOWN]` | None (Direct 32-bit `str.w`) `[VERIFIED]` | Logical LED descriptor 0 (GPIO pin 33) `[VERIFIED]`; physically the rear green status LED `[INFERRED: docs/RESEARCH_LOG.md:38]` | **`VERIFIED`** | `PRIMARY.BIN 0xFC075DC4` (pin 33), `PRIMARY.BIN 0xFC075D98` (`0x4d0002`), `PRIMARY.BIN 0xFC075DAE` (`0x4c0003`), `PRIMARY.BIN 0xFC0D73C4` (MMIO store); physical location from `docs/RESEARCH_LOG.md:38` (E025) | ACTIVE |
+| **`0xD20B0994`** | `0x004d0002` | `0x004c0003` | polarity `[UNKNOWN]` | None | G5 X / M10 / SX710 LED in the reference loaders (pin 101 under the GM1.10C formula) | **`INFERRED`** | Reference-loader values and address recorded in `docs/RESEARCH_LOG.md:38` (E025) and `docs/RESEARCH_LOG.md:96` (C006); warning in `vendor/g3x-platform/platform/g3x/lib.c:45-46` | REJECTED (contradicted for G3 X, §5.3) |
+| **`0xD20B0810`** | `0x004d0002` | `0x004c0003` | polarity `[UNKNOWN]` | None | Front AF Assist Lamp (pin 4) | **`INFERRED`** | Forum post 149971 cited in `docs/RESEARCH_LOG.md:38` (E025); equals GPIO pin 4 (`0xD20B0800 + 4*4`), but no store to it was found in the anchored ranges | NOT RECOMMENDED (§5.2) |
+| **`0xD20B0888`** | `0x004d0002` | `0x004c0003` | polarity `[UNKNOWN]` | None | Pin 34 under the GM1.10C formula; no tracked artifact names an LED on it | **`UNKNOWN`** | No tracked file:line names this address; only the formula from `PRIMARY.BIN 0xFC0D73C4` gives it a pin number | NOT RECOMMENDED |
+| **`LEDDrv.c (0xFC12D724)`** | N/A | N/A | N/A | N/A | Stock DryOS LED task & driver | **`VERIFIED`** | `PRIMARY.BIN 0xFC12D75C`, `PRIMARY.BIN 0xFC12D7B0` (panic unless `*0x9BA4 == 1`); address from `docs/PORT17_TRACE_EVIDENCE.md:410` and `docs/PROJECT_STATE.md:223` | REJECTED (fatal pre-kernel, §5.1) |
 
 ---
 
@@ -196,7 +196,7 @@ Where in the loader `cpsid if` runs, and what runs before it, is UNKNOWN in trac
 - T2 should not switch modes with `cps #mode`: that would bank a different `SP`/`LR`, and the entry `SP` is already UNKNOWN.
 - Because the entry `SP` is UNKNOWN, the LED sequence should use registers only (no `push`/`pop`, no calls) so it does not depend on the stack.
 - A `cpsid if` before the LED sequence is harmless (a NOP at PL0, masks both at PL1), so FIQ state does not have to be assumed.
-- The sequence should alternate `0x004d0002` and `0x004c0003` (a blink), because polarity is UNKNOWN (§3.5).
+- The sequence should alternate `0x004d0002` and `0x004c0003` (a blink), because polarity is UNKNOWN (§3.5); the exact T2 prologue sequence is in §8.
 
 ### 4.2 MPU Memory Region Protection: Privileged Read/Write `[VERIFIED attributes]`
 - DIGIC 6 uses an ARM Cortex-R4 with a PMSAv7 MPU, not an MMU `[VERIFIED: docs/PROJECT_STATE.md:254; docs/HANDOFF.md:628]`.
@@ -243,9 +243,9 @@ Where in the loader `cpsid if` runs, and what runs before it, is UNKNOWN in trac
 
 ## 6. ROM Range Ancestry & Evidence Manifest Accounting
 
-T1 ROM-read scope: 7 anchored ranges compliant, 1 acknowledged deviation (PORT20-ROM-LEDDRIVE).
+T1 ROM-read scope: 7 ranges anchored, 1 range covered by exception TL-EXC-P20-T1-01 (PORT20-ROM-LEDDRIVE).
 
-Eight ranges were read. Seven are anchored. Each is either the root of a chain (a tracked file:line whose content contains an address inside the range, or an address span that covers its start) or is reached by a `bl`/branch/literal inside another anchored range that points into it. One range, `PORT20-ROM-LEDDRIVE`, has no anchor and is quarantined (§7). Each manifest entry carries its anchors as `ANCHOR:` clauses in `notes`, which `tests/test_port20_led_evidence.py` checks against the actual line content and the recorded ranges.
+Eight ranges were read. Seven are anchored. Each is either the root of a chain (a tracked file:line whose content contains an address inside the range, or an address span that covers its start) or is reached by a `bl`/branch/literal inside another anchored range that points into it. One range, `PORT20-ROM-LEDDRIVE`, has no anchor. SCOPE DEVIATION: unanchored read, waived retroactively by Tech Lead exception TL-EXC-P20-T1-01 (task 90 revision-5 feedback) for accounting only; quarantined: no claim in this document relies on it. The original read did not meet the anchoring rule (§7, §7.1). Each manifest entry carries its anchors as `ANCHOR:` clauses in `notes`, which `tests/test_port20_led_evidence.py` checks against the actual line content and the recorded ranges.
 
 | Range ID | Start Address | End Address | Length (Bytes) | SHA-256 Digest | Anchor Citation / Parent Range | Anchor Type | Claims Supported & Classification |
 |---|:---:|:---:|:---:|---|---|---|---|
@@ -256,28 +256,34 @@ Eight ranges were read. Seven are anchored. Each is either the root of a chain (
 | `PORT20-ROM-TASK-LEDCON-LOOP` | `0xFC12D500` | `0xFC12D5FF` | 256 | `6e7abdb12c6e80115aa951f0b356732f7d3691a02b18817183a7e0675f89a791` | `PORT20-ROM-TASK-LEDCON-ENTRY` `0xFC12D4EE` (`beq.n 0xFC12D506`) | Instruction branch in recorded range | `tbb [pc, r6]` dispatch of action 0 to `0xFC075D98` and action 1 to `0xFC075DAE` `[VERIFIED]` |
 | `PORT20-ROM-LEDDRV-INIT` | `0xFC12D620` | `0xFC12D81F` | 512 | `f905d002702bf182a2a92762fa50295e1cbb696d704c5b69690afac28de665c3` | `docs/PORT17_TRACE_EVIDENCE.md:410` and `docs/PROJECT_STATE.md:223` cite `0xFC12D724`, inside the range (start + `0x104`) | Tracked repo artifact (`path:line`, root) | 14 LED descriptors and registration of LED 0 via `bl 0xFC075DC4`; pre-kernel asserts `[VERIFIED]` |
 | `PORT20-ROM-LEDDRV-DISPATCH` | `0xFC12D820` | `0xFC12D91F` | 256 | `c6f3aa05396d8ff9cff0b0bd954191f03706ef932ca8aac3bfacf0c7db7c9b8b` | `PORT20-ROM-LEDDRV-INIT` `0xFC12D658` (`bl 0xFC12D8B6`) | Instruction `bl` in recorded range | Dispatcher, IPC sender, `task_LEDCon` pointer literal `0xFC12D8D0` `[VERIFIED]` |
-| `PORT20-ROM-LEDDRIVE` | `0xFC5572B8` | `0xFC5573B7` | 256 | `9a23088b4d321bd65e1728451354023c7814d0915c3ad9e4d6ce74af56208399` | None | SCOPE DEVIATION (quarantined, §7) | None (quarantined) |
+| `PORT20-ROM-LEDDRIVE` | `0xFC5572B8` | `0xFC5573B7` | 256 | `9a23088b4d321bd65e1728451354023c7814d0915c3ad9e4d6ce74af56208399` | None | SCOPE DEVIATION (unanchored; exception TL-EXC-P20-T1-01; quarantined, §7) | None (quarantined) |
 
 - Total ranges read: **8** (limit: at most 8)
 - Largest range: **512 bytes** (limit: at most 4096 bytes)
 - Total bytes read: **2,336 bytes** (limit: at most 32,768 bytes); bytes behind claims: **2,080** (the seven anchored ranges)
-- No new ROM ranges were read in revisions 3 and 4. Only the manifest `notes` fields changed. Addresses, lengths and SHA-256 digests are unchanged.
+- No new ROM ranges were read in revisions 3, 4 and 5. Only the manifest `notes` fields changed. Addresses, lengths and SHA-256 digests are unchanged.
 - Validator: `python3 tools/port11c_evidence_validator.py --manifest docs/agentbridge/PORT20_EVIDENCE_MANIFEST.json` must report `Result: VALID` with 0 errors. The expected single WARNING is the self-declared-scope trust notice (`tools/port11c_evidence_validator.py:606`). `tests/test_port20_led_evidence.py` enforces this.
 
 ---
 
 ## 7. Scope Deviations
 
-- `PORT20-ROM-LEDDRIVE` (`0xFC5572B8..0xFC5573B7`, 256 bytes, SHA-256 `9a23088b4d321bd65e1728451354023c7814d0915c3ad9e4d6ce74af56208399`): SCOPE DEVIATION — not pre-authorised; acknowledged by Tech Lead in the task 90 revision-4 feedback; quarantined: no claim in this document relies on it.
+- `PORT20-ROM-LEDDRIVE` (`0xFC5572B8..0xFC5573B7`, 256 bytes, SHA-256 `9a23088b4d321bd65e1728451354023c7814d0915c3ad9e4d6ce74af56208399`): SCOPE DEVIATION: unanchored read, waived retroactively by Tech Lead exception TL-EXC-P20-T1-01 (task 90 revision-5 feedback) for accounting only; quarantined: no claim in this document relies on it.
   - The read had no tracked anchor: no tracked file:line contains an address inside it, and no instruction or literal inside the other seven recorded ranges points into it.
   - It stays in the manifest only so that the read accounting (start, length, SHA-256) is complete.
   - Nothing read from it is used anywhere in this document: no candidate, no polarity argument and no loader-context claim cites it.
 - **The T2 GO/STOP conclusion does not depend on this range.** The chain behind the conclusion uses only anchored ranges: `PORT20-ROM-LEDDRV-INIT` (tracked root `0xFC12D724`) → `0xFC12D6DC` → `PORT20-ROM-SS-LED-CONTROL` (`0xFC075DC4` pin 33; `0xFC075D98` / `0xFC075DAE` with literals `0xFC075E00` / `0xFC075E04`) → `PORT20-ROM-GPIO-WRITE-MMIO` (`0xFC0D73C4`, store to `0xD20B0884`). The `task_LEDCon` dispatch (`PORT20-ROM-LEDDRV-DISPATCH` → `PORT20-ROM-TASK-LEDCON-ENTRY` → `PORT20-ROM-TASK-LEDCON-LOOP` → `0xFC075D98` / `0xFC075DAE`) also descends from `PORT20-ROM-LEDDRV-INIT`. The MPU attributes come from `PORT20-ROM-MPU-REGION2-SETUP` (tracked root).
 
+### 7.1 Governing exceptions
+
+| Exception ID | Range | Reason | Scope | Authority |
+|---|---|---|---|---|
+| `TL-EXC-P20-T1-01` | `PORT20-ROM-LEDDRIVE` `0xFC5572B8..0xFC5573B7` (256 bytes, SHA-256 `9a23088b4d321bd65e1728451354023c7814d0915c3ad9e4d6ce74af56208399`) | The read had already happened; it is within the T1 limits (8 ranges, at most 4096 bytes each, at most 32 KiB total); it is quarantined. Waived retroactively for read accounting only. | This range only. No other unanchored range is covered. | Charter: the Tech Lead decides which ROM ranges a task reads (task 90 revision-5 feedback). |
+
 ---
 
 ## 8. Conclusion
 
-Anchored GM1.10C ROM code shows the stock `LEDDrv` storing `0x004d0002` (action 0) and `0x004c0003` (action 1) to MMIO address `0xD20B0884` for LED descriptor 0 (GPIO pin 33) `[VERIFIED]`. That this is the rear green status LED is `[INFERRED]`. Which of the two values lights it is `[UNKNOWN]`, so T2 must alternate both values (a blink) rather than rely on a single "on" store; `on=` / `off=` below name the action-0 / action-1 values. The loader can write the register only at PL1 (`[INFERRED]`; entry mode `[UNKNOWN]`), so T2 must check `CPSR.M` before the store rather than assume a mode, and must not depend on the stack. No cache maintenance is needed, but T2 must issue a `DSB` after each store before any busy-wait. Even then the visible effect is not guaranteed while the physical LED is only INFERRED.
+Anchored GM1.10C ROM code shows the stock `LEDDrv` storing `0x004d0002` (action 0) and `0x004c0003` (action 1) to MMIO address `0xD20B0884` for LED descriptor 0 (GPIO pin 33) `[VERIFIED]`. That this is the rear green status LED is `[INFERRED]`. Which of the two values lights it is `[UNKNOWN]`, so T2 must alternate both values (a blink) rather than rely on a single store. For T2, the prologue must alternate the two values (write action0, wait about 1 s, write action1, wait about 1 s, then write action0 and action1 once more); this gives a visible transition whichever value lights the LED, and the owner reports which phase was lit. The loader can write the register only at PL1 (`[INFERRED]`; entry mode `[UNKNOWN]`), so T2 must check `CPSR.M` before the store rather than assume a mode, and must not depend on the stack. No cache maintenance is needed, but T2 must issue a `DSB` after each store before any busy-wait. Even then the visible effect is not guaranteed while the physical LED is only INFERRED.
 
-T2 GO: 0xD20B0884 on=0x004d0002 off=0x004c0003 (address/value VERIFIED, polarity UNKNOWN)
+T2 GO: 0xD20B0884 action0=0x004d0002 action1=0x004c0003 (address/values VERIFIED, ON/OFF polarity UNKNOWN)
