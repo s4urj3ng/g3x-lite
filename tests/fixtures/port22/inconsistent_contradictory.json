@@ -1,0 +1,15 @@
+{
+  "synthetic": true,
+  "description": "Synthetic fixture for INCONSISTENT outcome: NO_PULSE reported (implies reject path H1), but r_c4=1 and r_ct=1 (core present and continuation intact, contradicting H1/H2/H3).",
+  "card_lock_state": "LOCKED",
+  "startup_timing": "normal (~1.0s to stock Playback UI)",
+  "port20_led": "NO_PULSE",
+  "ramcmp": {
+    "r_l8": 0,
+    "r_l4": 0,
+    "r_c4": 1,
+    "r_ct": 1,
+    "r_wm": 0
+  },
+  "inspector_osd": "WITNESS_INVALID"
+}

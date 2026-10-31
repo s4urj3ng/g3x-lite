@@ -1,0 +1,15 @@
+{
+  "synthetic": true,
+  "description": "Synthetic fixture for AMBIGUOUS outcome: Rear green status LED was unobserved/unavailable, so H1 and H3 cannot be distinguished by RAMCMP alone (docs/PORT21_OWNER_SESSION_PLAN.md:147).",
+  "card_lock_state": "LOCKED",
+  "startup_timing": "slow (~2.5-3.5s to stock Playback UI)",
+  "port20_led": "UNOBSERVED",
+  "ramcmp": {
+    "r_l8": 0,
+    "r_l4": 0,
+    "r_c4": 0,
+    "r_ct": 0,
+    "r_wm": 0
+  },
+  "inspector_osd": "WITNESS_INVALID"
+}
