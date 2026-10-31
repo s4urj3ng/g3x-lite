@@ -21,6 +21,10 @@ Validates that:
 6. ROM-word tests (skipped when PRIMARY.BIN is absent) check the SHA-256 of every slice and every
    literal-pool value claimed in the doc and the manifest notes.
 7. No PORT-20-owned files are modified.
+8. Review 4 fixes: loop byte counts and exclusive ends are recomputed from the boot_prototype.c
+   loop bounds; the H3 witness-overwrite and fallback-execution claims are UNKNOWN and no table
+   row supports H3; no VERIFIED claim rests only on the loader-describing doc lines
+   PROJECT_STATE.md:5, HANDOFF.md:118, PORT_READINESS.md:27 or PORT18_OWNER_TRIAL_PLAN.md:230.
 
 PORT21_ROM_PATH overrides the ROM location, e.g. PORT21_ROM_PATH=/nonexistent to run without the ROM.
 """
@@ -85,6 +89,61 @@ def skip_without_rom() -> None:
 
         pytest.skip(reason)
     raise unittest.SkipTest(reason)
+
+
+# Tracked doc lines that describe loader behaviour without showing its (untracked) source.
+# A VERIFIED claim must not rest on these lines alone (review 4, [P2] loader citations).
+WEAK_LOADER_CITATIONS = frozenset(
+    {
+        ("docs/PROJECT_STATE.md", 5),
+        ("docs/HANDOFF.md", 118),
+        ("docs/PORT_READINESS.md", 27),
+        ("docs/PORT18_OWNER_TRIAL_PLAN.md", 230),
+    }
+)
+FILE_CITATION_RE = re.compile(r"^([a-zA-Z0-9_\-\./]+):([\d,\s\-]+)$")
+
+
+def _cited_file_lines(citation: str) -> set[tuple[str, int]] | None:
+    """Return the (file, line) pairs of a file:line citation, or None for any other citation."""
+    m = FILE_CITATION_RE.match(citation)
+    if not m:
+        return None
+    pairs = set()
+    for part in m.group(2).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        lo, _, hi = part.partition("-")
+        for n in range(int(lo), int(hi or lo) + 1):
+            pairs.add((m.group(1), n))
+    return pairs
+
+
+def weak_only_verified_blocks(text: str) -> list[str]:
+    """Return the VERIFIED citation blocks whose only support is WEAK_LOADER_CITATIONS."""
+    weak = []
+    for m in CITATION_BLOCK_RE.finditer(text):
+        body = m.group(1) or ""
+        cits = [c.strip() for c in body.split(";") if c.strip()]
+        if not cits:
+            continue
+        pairs: set[tuple[str, int]] = set()
+        for cit in cits:
+            cited = _cited_file_lines(cit)
+            if cited is None:
+                break
+            pairs |= cited
+        else:
+            if pairs and pairs <= WEAK_LOADER_CITATIONS:
+                weak.append(m.group(0))
+    return weak
+
+
+def stored_byte_count(start: int, bound: int) -> tuple[int, int]:
+    """Bytes written by a 'while dest < bound: *dest++ = word' loop, and its exclusive end."""
+    words = (bound - start + 3) // 4
+    return words * 4, start + words * 4
 
 
 def find_forbidden_paths(changed_paths: list[str]) -> list[str]:
@@ -470,7 +529,8 @@ class TestPort21RamLifetimeDoc(unittest.TestCase):
         self.assertIn("rules out", self.content)
         self.assertIn("supports", self.content)
         self.assertIn("neutral", self.content)
-        self.assertIn("consistent with / plausible", self.content)
+        self.assertIn("consistent with / not ruled out", self.content)
+        self.assertNotIn("plausible", self.content)
         self.assertNotIn("STRONGLY SUPPORTED", self.content)
         self.assertIn("check_compat.c:108-118", self.content)
         self.assertIn("OWNER-REPORTED (PORT-21 milestone brief, 2026-11-01 session", self.content)
@@ -737,6 +797,132 @@ class TestPort21AddressCitations(unittest.TestCase):
             )
 
 
+class TestPort21Review4Fixes(unittest.TestCase):
+    """Byte counts, H3 labels and loader-behaviour citations (codex-reviewer review 4)."""
+
+    BOOT_SRC = REPO_ROOT / "chdk-port" / "platform" / "g3x" / "sub" / "110c" / "boot_prototype.c"
+    COPY_LOOP_RE = re.compile(
+        r'ldr\s+r1,\s*=(0x[0-9a-fA-F]+)\\n"\s*"\s*ldr\s+r3,\s*=(0x[0-9a-fA-F]+)\\n"\s*"(loc_copy_\w+):'
+    )
+    BSS_LOOP_RE = re.compile(
+        r'ldr\s+r3,\s*=(0x[0-9a-fA-F]+)\\n"\s*"\s*ldr\s+r1,\s*=(0x[0-9a-fA-F]+)\\n"\s*"[^"]*"\s*"(loc_zero_bss):'
+    )
+
+    @classmethod
+    def setUpClass(cls):
+        cls.content = DOC_PATH.read_text(encoding="utf-8")
+        cls.lines = cls.content.splitlines()
+        src = cls.BOOT_SRC.read_text(encoding="utf-8")
+        cls.loops = {
+            m.group(3): (int(m.group(1), 16), int(m.group(2), 16))
+            for regex in (cls.COPY_LOOP_RE, cls.BSS_LOOP_RE)
+            for m in regex.finditer(src)
+        }
+
+    def test_loop_bounds_found_in_source(self):
+        self.assertEqual(
+            self.loops,
+            {
+                "loc_copy_highram": (0x010E1000, 0x01107D00),
+                "loc_copy_atcm": (0xBFE10800, 0xBFE17419),
+                "loc_copy_lowram": (0x00008000, 0x0003F4F4),
+                "loc_zero_bss": (0x0003F4F4, 0x003489B4),
+            },
+        )
+
+    def test_byte_counts_recomputed_from_loop_bounds(self):
+        """Each loop's byte count and exclusive end, recomputed from the source bounds, is in the doc."""
+        for label, (start, bound) in self.loops.items():
+            count, end = stored_byte_count(start, bound)
+            self.assertIn(f"{count:,} bytes", self.content, label)
+            self.assertIn(f"0x{count:X}", self.content, label)
+            self.assertIn(f"0x{end:08X}", self.content, label)
+            naive = bound - start
+            if naive != count:
+                self.assertNotIn(f"{naive:,} bytes", self.content, label)
+        self.assertEqual(stored_byte_count(0x0003F4F4, 0x003489B4), (3183808, 0x003489B4))
+        self.assertEqual(stored_byte_count(0xBFE10800, 0xBFE17419), (27676, 0xBFE1741C))
+        self.assertNotIn("3,183,360", self.content)
+        self.assertIn("exclusive end `0xBFE1741C`", self.content)
+
+    def test_other_byte_counts(self):
+        """Other stated sizes match their cited bounds."""
+        for (hi, lo), text in {
+            (0x00024CF0, 0x00008000): "118,000",
+            (0x00366CB0, 0x003489B4): "123,644",
+            (0x0035F7A0, 0x003489B4): "93,676",
+            (0x006CE000, 0x00366CB0): "3,568,464",
+            (0x00600014, 0x003489B4): "2,848,352",
+            (0x00600014, 0x00366CB0): "2,724,708",
+        }.items():
+            self.assertEqual(f"{hi - lo:,}", text)
+            self.assertIn(text, self.content)
+        self.assertNotIn("93.6 KiB", self.content)
+        self.assertNotIn("3.52 MiB available", self.content)
+
+    def _lines_with(self, phrase: str) -> list[str]:
+        found = [l for l in self.lines if phrase in l]
+        self.assertTrue(found, f"no line contains {phrase!r}")
+        return found
+
+    def test_h3_witness_overwrite_and_fallback_are_unknown(self):
+        for phrase in (
+            "actually overwritten before Canon Basic",
+            "sends execution to the stock boot",
+        ):
+            for line in self._lines_with(phrase):
+                self.assertIn("UNKNOWN", line, line)
+                self.assertNotIn("[INFERRED", line, line)
+                self.assertNotIn("[VERIFIED", line, line)
+        h3 = self.content.split("- **H3 (", 1)[1].split("- **H4 (", 1)[0]
+        self.assertIn("CONSISTENT WITH / NOT RULED OUT", h3)
+        self.assertIn("Conditional explanation: if", h3)
+        self.assertIn("Whether the witness is actually overwritten before Canon Basic runs is `[UNKNOWN]`", h3)
+        self.assertIn("Whether a failed candidate heap shift sends execution to the stock boot is `[UNKNOWN]`", h3)
+
+    def test_h3_table_column_not_supported(self):
+        """No finding row claims to support or confirm H3 (no cited writer exists)."""
+        rows = [l for l in self.lines if re.match(r"^\| \*\*F\d+\w*\*\* \|", l)]
+        self.assertGreaterEqual(len(rows), 10)
+        h3_cells = []
+        for row in rows:
+            cells = [c.strip() for c in re.split(r"(?<!\\)\|", row)[1:-1]]
+            self.assertEqual(len(cells), 8, row)
+            h3_cells.append(cells[5])
+            self.assertNotRegex(cells[5].lower(), r"support|confirm", row)
+        self.assertIn("consistent with / not ruled out", h3_cells)
+        unknown_rows = {
+            cells[0]: cells[2]
+            for cells in ([c.strip() for c in r.split("|")[1:-1]] for r in rows)
+        }
+        self.assertEqual(unknown_rows["**F4**"], "**UNKNOWN**")
+        self.assertEqual(unknown_rows["**F4b**"], "**UNKNOWN**")
+
+    def test_no_verified_claim_rests_only_on_weak_loader_docs(self):
+        self.assertEqual(weak_only_verified_blocks(self.content), [])
+
+    def test_loader_behaviour_lines_are_not_verified(self):
+        section = self.content.split("### 2.1 Loader Handoff Sequence", 1)[1].split("### 2.2", 1)[0]
+        behaviour = [l for l in section.splitlines() if l.strip().startswith("- Behaviour:")]
+        self.assertEqual(len(behaviour), 5, "one behaviour line per loader step")
+        for line in behaviour:
+            self.assertIn("`[INFERRED]`", line, line)
+            self.assertNotIn("[VERIFIED", line, line)
+        self.assertIn("not tracked", section)
+
+    def test_weak_citation_helper_negative(self):
+        bad = (
+            "check_compat() checks 0x32A8 `[VERIFIED: docs/PROJECT_STATE.md:5; docs/HANDOFF.md:118]`; "
+            "core_copy `[VERIFIED: docs/PORT18_OWNER_TRIAL_PLAN.md:230]`."
+        )
+        self.assertEqual(len(weak_only_verified_blocks(bad)), 2)
+        ok = (
+            "`[VERIFIED: docs/PORT18_OWNER_TRIAL_PLAN.md:230; tools/validate_candidate_port2a.py:50]` "
+            "`[VERIFIED: ROM 0xFC05B450; PORT21-ROM-HEAP-SETUP]`"
+        )
+        self.assertEqual(weak_only_verified_blocks(ok), [])
+
+
 class TestPort21ScopeIntegrity(unittest.TestCase):
     """Ensures no PORT-20-owned files are touched."""
 
@@ -803,6 +989,7 @@ class TestPort21WithoutRom(unittest.TestCase):
             TestPort21EvidenceManifest,
             TestPort21RomWords,
             TestPort21AddressCitations,
+            TestPort21Review4Fixes,
             TestPort21ScopeIntegrity,
         ):
             suite.addTests(loader.loadTestsFromTestCase(cls))
