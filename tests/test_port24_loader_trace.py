@@ -4,23 +4,25 @@
 Validates that:
 1. docs/agentbridge/PORT24_EVIDENCE_MANIFEST.json:
    - Validates using tools/port11c_evidence_validator.py with 0 errors.
-   - Preserves all 14 T1 approved ranges and appends 5 T2 approved ranges.
-   - Each window is <= 4 KiB, and total bytes <= 32 KiB.
+   - Contains all 21 approved ranges (15 T1 and 6 T2) and 2 disclosed out-of-scope ranges (23 total).
+   - Each window is <= 4 KiB, and total bytes (5,944 B) <= 32 KiB.
    - Total bytes of T2 entries <= 32 KiB, each T2 entry <= 4 KiB.
    - Contains no overlapping evidence slices.
    - If PRIMARY.BIN is present, slice SHA-256 digests match actual ROM dump on disk.
 2. docs/PORT24_LOADER_TRACE.md:
    - File exists and contains all required core sections (Sections 1-7 and ## Restart path).
-   - T1 trace and tables intact (Steps 1 to 29, failure ranking, stubs, size pairs).
+   - Lists every loader step from 0x8000 to the CHDK core and firmware hand-off (including Step 22b).
+   - Compares each step with StartDiskboot hand-off state (0x8001 Thumb, registers, stack, cache/MMU, IRQs).
+   - Step trace table (Steps 1 to 29 and Step 22b) and ranked failure table (including Rank 4 stray IRQ panic hang).
    - '## Restart path' section exists and explains what decides whether a power-on
      runs StartDiskboot on GM1.10C with exact citations.
    - Explains the repeated/long-press stock-boot observation and states whether a later
      power-on can skip StartDiskboot and under which conditions (citing branch addresses).
    - Connects the held power button to the O1 result (CONT_ATTEMPTED / FRESHNESS_UNVERIFIED).
-   - '## Restart path' contains no 'STATIC_VERIFIED' and no 'X / Y' combined labels.
-   - Every claim in '## Restart path' carries exactly one label from {VERIFIED, INFERRED, UNKNOWN}.
-   - Every 0xFC...... and 0xFD...... address cited falls inside an approved manifest range.
-   - Concludes with a list of observable physical cues for the owner (used by T4).
+   - Every claim carries exactly one label from {VERIFIED, INFERRED, UNKNOWN}. STATIC_VERIFIED does not appear.
+   - Every ROM address cited in the doc (0xFC000000-0xFFFFFFFF) falls strictly within an approved
+     manifest entry or within the verified source operand allowlist.
+   - Every '0xHEX = N bytes' conversion (and 'N bytes (M words)' pair) is arithmetically exact.
 3. Scope integrity:
    - git ls-files tracks no build outputs or ROM images.
    - The evidence manifest holds only ranges, digests and metadata, never raw ROM bytes.
@@ -51,11 +53,11 @@ ROM_PATH = Path(
     )
 )
 VALIDATOR_TOOL = REPO_ROOT / "tools" / "port11c_evidence_validator.py"
-
-# ROM base and size as defined by repository sources:
 ROM_BASE = 0xFC000000
 ROM_SIZE = 0x02000000
-ROM_END = ROM_BASE + ROM_SIZE
+ROM_DUMP_END = ROM_BASE + ROM_SIZE
+ROM_COVERAGE_START = 0xFC000000
+ROM_COVERAGE_END = 0xFFFFFFFF
 
 # Canonical PORT-24 T1 evidence entries (15 approved ranges)
 APPROVED_ENTRIES_T1 = {
@@ -193,6 +195,249 @@ APPROVED_ENTRIES_T2 = {
 
 APPROVED_ENTRIES = {**APPROVED_ENTRIES_T1, **APPROVED_ENTRIES_T2}
 
+# Disclosed out-of-scope reads from earlier attempts per task instructions;
+# marked out of scope and not relied upon as evidence.
+OUT_OF_SCOPE_ENTRIES: dict[str, tuple[int, int, int, str]] = {
+    "PORT24-ROM-OUT-OF-SCOPE-VER": (
+        0xFC54E000,
+        0xFC54E0FF,
+        256,
+        "6828d1a977736227ecad15c6fee4b6b4bd358749a585c1b1ebcc55b7f7dec413",
+    ),
+    "PORT24-ROM-OUT-OF-SCOPE-PID": (
+        0xFDF20200,
+        0xFDF202FF,
+        256,
+        "19a0057d572b8040e18349f9266768b6ece0bf8e60c41591a964cca8d9bb1733",
+    ),
+}
+
+# Explicit, narrow allowlist of source-level operands (literals in candidate source/build,
+# where the claim is strictly about the operand value in the source code / ELF literal pool,
+# not about unread ROM firmware contents).
+# Each entry: address_int: (justification, file_line)
+ROM_SOURCE_OPERAND_ALLOWLIST: dict[int, tuple[str, str]] = {
+    # 3 Copy Source Operands from boot_prototype.c:
+    0xFC05B4B4: (
+        "End bound operand for vector table copy loop in sub_fc02007e and boot_prototype.c:93",
+        "chdk-port/platform/g3x/sub/110c/boot_prototype.c:93",
+    ),
+    0xFCEC854C: (
+        "Literal pool operand for High RAM copy source address in boot(); claim is about the operand loaded into r0, not the unread ROM image contents",
+        "chdk-port/platform/g3x/sub/110c/boot_prototype.c:107",
+    ),
+    0xFCEEF24C: (
+        "Literal pool operand for ATCM copy source address in boot(); claim is about the operand loaded into r0, not the unread ROM image contents",
+        "chdk-port/platform/g3x/sub/110c/boot_prototype.c:123",
+    ),
+    0xFCE91058: (
+        "Literal pool operand for Low RAM copy source address in boot(); claim is about the operand loaded into r0, not the unread ROM image contents",
+        "chdk-port/platform/g3x/sub/110c/boot_prototype.c:134",
+    ),
+    # 6 Literal String Pointer Operands from boot_prototype.c:
+    0xFC05B630: (
+        "Literal pool pointer operand for error string 'dmSetup' in boot(); claim is about the operand loaded into r0, not ROM contents",
+        "chdk-port/platform/g3x/sub/110c/boot_prototype.c:296",
+    ),
+    0xFC05B638: (
+        "Literal pool pointer operand for error string 'termDriverInit' in boot(); claim is about the operand loaded into r0, not ROM contents",
+        "chdk-port/platform/g3x/sub/110c/boot_prototype.c:302",
+    ),
+    0xFC05B648: (
+        "Literal pool pointer operand for error string 'termDeviceCreate' in boot(); claim is about the operand loaded into r0, not ROM contents",
+        "chdk-port/platform/g3x/sub/110c/boot_prototype.c:309",
+    ),
+    0xFC05B65C: (
+        "Literal pool pointer operand for error string 'stdioSetup' in boot(); claim is about the operand loaded into r0, not ROM contents",
+        "chdk-port/platform/g3x/sub/110c/boot_prototype.c:316",
+    ),
+    0xFC05B668: (
+        "Literal pool pointer operand for error string 'stdlibSetup' in boot(); claim is about the operand loaded into r0, not ROM contents",
+        "chdk-port/platform/g3x/sub/110c/boot_prototype.c:322",
+    ),
+    0xFC05B674: (
+        "Literal pool pointer operand for error string 'extlib_setup' in boot(); claim is about the operand loaded into r0, not ROM contents",
+        "chdk-port/platform/g3x/sub/110c/boot_prototype.c:328",
+    ),
+    # 6 Local Branch Labels in boot_prototype.c (named after ROM addresses):
+    0xFC05B598: (
+        "Local branch label operand loc_fc05b598 in boot(); operand label from source, target is prototype ELF symbol",
+        "chdk-port/platform/g3x/sub/110c/boot_prototype.c:298",
+    ),
+    0xFC05B5A6: (
+        "Local branch label operand loc_fc05b5a6 in boot(); operand label from source, target is prototype ELF symbol",
+        "chdk-port/platform/g3x/sub/110c/boot_prototype.c:304",
+    ),
+    0xFC05B5B6: (
+        "Local branch label operand loc_fc05b5b6 in boot(); operand label from source, target is prototype ELF symbol",
+        "chdk-port/platform/g3x/sub/110c/boot_prototype.c:311",
+    ),
+    0xFC05B5C6: (
+        "Local branch label operand loc_fc05b5c6 in boot(); operand label from source, target is prototype ELF symbol",
+        "chdk-port/platform/g3x/sub/110c/boot_prototype.c:318",
+    ),
+    0xFC05B5D4: (
+        "Local branch label operand loc_fc05b5d4 in boot(); operand label from source, target is prototype ELF symbol",
+        "chdk-port/platform/g3x/sub/110c/boot_prototype.c:324",
+    ),
+    0xFC05B5E2: (
+        "Local branch label operand loc_fc05b5e2 in boot(); operand label from source, target is prototype ELF symbol",
+        "chdk-port/platform/g3x/sub/110c/boot_prototype.c:330",
+    ),
+    # 29 External Canon Driver Stubs from stubs_prototype.S (uncovered by manifest):
+    0xFC05C5BC: (
+        "Driver stub address operand stub_fc05c5bc from STUB(fc05c5bc); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:11",
+    ),
+    0xFC05B5EA: (
+        "Driver stub address operand stub_fc05b5ea from STUB(fc05b5ea); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:12",
+    ),
+    0xFC05C7D4: (
+        "Driver stub address operand stub_fc05c7d4 from STUB(fc05c7d4); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:16",
+    ),
+    0xFC05C862: (
+        "Driver stub address operand stub_fc05c862 from STUB(fc05c862); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:17",
+    ),
+    0xFC05B794: (
+        "Driver stub address operand stub_fc05b794 from STUB(fc05b794); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:18",
+    ),
+    0xFC05B8D8: (
+        "Driver stub address operand stub_fc05b8d8 from STUB(fc05b8d8); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:19",
+    ),
+    0xFC05E910: (
+        "Driver stub address operand stub_fc05e910 from STUB(fc05e910); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:20",
+    ),
+    0xFC382C8C: (
+        "Driver stub address operand stub_fc382c8c from STUB(fc382c8c); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:25",
+    ),
+    0xFC418EEC: (
+        "Driver stub address operand stub_fc418eec from STUB(fc418eec); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:29",
+    ),
+    0xFC0BBA02: (
+        "Driver stub address operand stub_fc0bba02 from STUB(fc0bba02); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:30",
+    ),
+    0xFC0D046C: (
+        "Driver stub address operand stub_fc0d046c from STUB(fc0d046c); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:31",
+    ),
+    0xFC090674: (
+        "Driver stub address operand stub_fc090674 from STUB(fc090674); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:35",
+    ),
+    0xFC0D0472: (
+        "Driver stub address operand stub_fc0d0472 from STUB(fc0d0472); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:36",
+    ),
+    0xFC1283D2: (
+        "Driver stub address operand stub_fc1283d2 from STUB(fc1283d2); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:37",
+    ),
+    0xFC2A75F6: (
+        "Driver stub address operand stub_fc2a75f6 from STUB(fc2a75f6); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:38",
+    ),
+    0xFC0D0488: (
+        "Driver stub address operand stub_fc0d0488 from STUB(fc0d0488); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:39",
+    ),
+    0xFC127F24: (
+        "Driver stub address operand stub_fc127f24 from STUB(fc127f24); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:40",
+    ),
+    0xFC0BB76E: (
+        "Driver stub address operand stub_fc0bb76e from STUB(fc0bb76e); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:41",
+    ),
+    0xFC0D02DE: (
+        "Driver stub address operand stub_fc0d02de from STUB(fc0d02de); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:42",
+    ),
+    0xFC0BB9CC: (
+        "Driver stub address operand stub_fc0bb9cc from STUB(fc0bb9cc); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:43",
+    ),
+    0xFC0BB72A: (
+        "Driver stub address operand stub_fc0bb72a from STUB(fc0bb72a); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:44",
+    ),
+    0xFC33319A: (
+        "Driver stub address operand stub_fc33319a from STUB(fc33319a); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:46",
+    ),
+    0xFC0BB6FE: (
+        "Driver stub address operand stub_fc0bb6fe from STUB(fc0bb6fe); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:47",
+    ),
+    0xFC05C4E0: (
+        "Driver stub address operand stub_fc05c4e0 from STUB(fc05c4e0); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:48",
+    ),
+    0xFC31BFAC: (
+        "Driver stub address operand stub_fc31bfac from STUB2(fc31bfac); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:52",
+    ),
+    0xFC31B408: (
+        "Driver stub address operand stub_fc31b408 from STUB2(fc31b408); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:53",
+    ),
+    0xFC31B460: (
+        "Driver stub address operand stub_fc31b460 from STUB2(fc31b460); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:54",
+    ),
+    0xFC31BBC4: (
+        "Driver stub address operand stub_fc31bbc4 from STUB2(fc31bbc4); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:55",
+    ),
+    0xFC31B1F4: (
+        "Driver stub address operand stub_fc31b1f4 from STUB2(fc31b1f4); claim is about literal pool operand in stub veneer, contents unread from ROM",
+        "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:56",
+    ),
+    # 2 Pointer Operands from bin_compat.h (disclosed out-of-scope reads, covered as source literals):
+    0xFC54E08D: (
+        "Literal pointer operand for version string GM1.10C in bin_compat.h:4; claim is about the pointer constant in source, contents unverified as evidence",
+        "chdk-port/platform/g3x/sub/110c/bin_compat.h:4",
+    ),
+    0xFDF20270: (
+        "Literal pointer operand for PLATFORMID in bin_compat.h:7; claim is about the pointer constant in source, contents unverified as evidence",
+        "chdk-port/platform/g3x/sub/110c/bin_compat.h:7",
+    ),
+}
+
+def verify_source_operand_allowlist_entry(addr: int, file_line: str) -> tuple[bool, str]:
+    """Verify that an allowlist entry address literally occurs in its cited source file at the given line."""
+    if not (ROM_COVERAGE_START <= addr <= ROM_COVERAGE_END):
+        return False, f"Invalid allowlist address: 0x{addr:08X}"
+    if ":" not in file_line:
+        return False, f"Invalid file:line citation '{file_line}' for 0x{addr:08X}"
+    rel_file, line_num_str = file_line.split(":", 1)
+    if not rel_file.endswith((".c", ".h", ".S")):
+        return False, f"Allowlist citation file '{rel_file}' for 0x{addr:08X} is not a C, header, or assembly source file"
+    file_path = REPO_ROOT / rel_file
+    if not file_path.exists():
+        return False, f"Allowlist citation file missing: {file_path}"
+    try:
+        line_num = int(line_num_str)
+    except ValueError:
+        return False, f"Invalid line number in citation: '{file_line}'"
+    file_lines = file_path.read_text(encoding="utf-8").splitlines()
+    if not (1 <= line_num <= len(file_lines)):
+        return False, f"Line {line_num} out of bounds for {rel_file} (total {len(file_lines)})"
+    line_text = file_lines[line_num - 1].lower()
+    hex_8 = f"{addr:08x}".lower()
+    hex_var = f"{addr:x}".lower()
+    if hex_8 in line_text or hex_var in line_text:
+        return True, ""
+    return False, f"Address 0x{addr:08X} does not literally occur in {rel_file} at line {line_num}: {file_lines[line_num - 1]!r}"
+
 # Strict label pattern: only VERIFIED, INFERRED, UNKNOWN allowed
 LABEL_PATTERN = re.compile(
     r"\[(VERIFIED|INFERRED|UNKNOWN)[^\]]*\]"
@@ -201,7 +446,8 @@ LABEL_PATTERN = re.compile(
 # Build-output / binary patterns that must never be tracked (matched against the basename).
 FORBIDDEN_TRACKED_PATTERNS = ("*.bin", "*.BIN", "*.elf", "*.o", "*.fir", "DISKBOOT*", "PRIMARY*")
 
-# Tracked before PORT-24 and outside this task's scope: the witness inspector payload.
+# Tracked before PORT-24 and outside this task's scope: the witness inspector payload
+# (source firmware/tools/witness_inspector_payload.S), not a DISKBOOT candidate build output.
 PRE_EXISTING_TRACKED_BINARIES = {
     "firmware/tools/witness_inspector_payload.bin",
 }
@@ -212,15 +458,17 @@ FORBIDDEN_MANIFEST_KEYS = {
     "payload", "content", "contents", "base64", "dump", "rom_bytes",
 }
 
+
 ALLOWED_EVIDENCE_ENTRY_KEYS = {
     "evidence_id", "firmware_revision", "start_address", "end_address",
     "expected_byte_count", "sha256", "provenance_source", "authorization_scope_id",
-    "classification", "notes",
+    "classification", "notes", "status", "out_of_scope", "relied_upon",
 }
+
 
 P_ROM_HEX = re.compile(r"\b0x([fF][c-fC-F0-9][0-9a-fA-F]{5,6})\b")
 P_ROM_DISASM = re.compile(r"\b([fF][c-fC-F0-9][0-9a-fA-F]{6}):")
-P_ROM_SYM = re.compile(r"\b(?:sub|loc|stub)_([fF][cC0-9][0-9a-fA-F]{6})\b", re.IGNORECASE)
+P_ROM_SYM = re.compile(r"\b(?:sub|loc|stub)_([fF][c-fC-F0-9][0-9a-fA-F]{6})\b", re.IGNORECASE)
 
 
 class TestPort24LoaderTrace(unittest.TestCase):
@@ -248,11 +496,13 @@ class TestPort24LoaderTrace(unittest.TestCase):
         self.assertEqual(res.returncode, 0, f"Validator failed:\n{res.stderr}\n{res.stdout}")
         self.assertIn("Result: VALID (0 errors", res.stdout)
 
+    
     def test_all_approved_ranges_present_and_match(self):
         """All approved evidence ranges (T1 and T2) are declared with exact bounds and SHA-256."""
         entries = {e["evidence_id"]: e for e in self.manifest.get("evidence_entries", [])}
         self.assertEqual(len(APPROVED_ENTRIES_T1), 15, "Expected exactly 15 T1 approved ranges")
-        self.assertEqual(len(entries), len(APPROVED_ENTRIES))
+        self.assertEqual(len(APPROVED_ENTRIES_T2), 6, "Expected exactly 6 T2 approved ranges")
+        self.assertEqual(len(entries), len(APPROVED_ENTRIES) + len(OUT_OF_SCOPE_ENTRIES))
 
         for eid, (start, end, count, sha) in APPROVED_ENTRIES_T1.items():
             self.assertIn(eid, entries, f"T1 evidence entry '{eid}' missing from manifest")
@@ -282,8 +532,23 @@ class TestPort24LoaderTrace(unittest.TestCase):
             self.assertEqual(entry["firmware_revision"], "GM1.10C")
             self.assertEqual(entry["provenance_source"]["reference"], "firmware/dumps/GM1.10C/PRIMARY.BIN")
 
+    def test_out_of_scope_entries_present_and_marked(self):
+        """The two disclosed out-of-scope reads are recorded with out-of-scope status and not relied upon."""
+        entries = {e["evidence_id"]: e for e in self.manifest.get("evidence_entries", [])}
+        for eid, (start, end, count, sha) in OUT_OF_SCOPE_ENTRIES.items():
+            self.assertIn(eid, entries, f"Out-of-scope entry '{eid}' missing from manifest")
+            entry = entries[eid]
+            self.assertEqual(int(entry["start_address"], 16), start)
+            self.assertEqual(int(entry["end_address"], 16), end)
+            self.assertEqual(entry["expected_byte_count"], count)
+            self.assertEqual(entry["sha256"], sha)
+            self.assertEqual(entry.get("classification"), "UNKNOWN")
+            self.assertEqual(entry.get("status"), "out_of_scope")
+            self.assertTrue(entry.get("out_of_scope"))
+            self.assertFalse(entry.get("relied_upon"))
+            self.assertIn("OUT-OF-SCOPE", entry.get("notes", ""))
     def test_range_and_budget_limits(self):
-        """Each slice is <= 4 KiB and total budget is <= 32 KiB (both overall and T2 specific)."""
+        """Each slice is <= 4 KiB and total budget is <= 32 KiB (both overall and T2 specific), matching doc byte total."""
         entries = self.manifest.get("evidence_entries", [])
         total_bytes = 0
         for entry in entries:
@@ -291,6 +556,14 @@ class TestPort24LoaderTrace(unittest.TestCase):
             self.assertLessEqual(count, 4096, f"Slice '{entry['evidence_id']}' exceeds 4 KiB limit")
             total_bytes += count
         self.assertLessEqual(total_bytes, 32768, f"Total byte count ({total_bytes}) exceeds 32 KiB budget")
+        self.assertEqual(total_bytes, 5944)
+        self.assertEqual(len(entries), 23)
+
+        # Assert doc declared byte total equals manifest total
+        doc_total_matches = re.findall(r"total\s+([\d,]+)\s*B", self.content)
+        self.assertTrue(doc_total_matches, "Doc does not declare total byte count")
+        doc_total = int(doc_total_matches[0].replace(",", ""))
+        self.assertEqual(total_bytes, doc_total, f"Manifest total ({total_bytes}) != doc total ({doc_total})")
 
         # T2 budget verification
         entries_by_id = {e["evidence_id"]: e for e in entries}
@@ -321,7 +594,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
                 f"Range overlap between {curr_id} (0x{curr_start:08X}..0x{curr_end:08X}) "
                 f"and {next_id} (0x{next_start:08X}..0x{next_end:08X})",
             )
-
     def test_hashes_match_primary_bin_if_present(self):
         """If PRIMARY.BIN is present on disk, actual slice SHA-256 matches declared digest."""
         if not ROM_PATH.exists():
@@ -339,7 +611,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
                     expected_sha,
                     f"SHA-256 mismatch for {eid} at offset 0x{offset:08X}",
                 )
-
     def test_required_sections_exist(self):
         """PORT24_LOADER_TRACE.md contains all required structural sections including ## Restart path."""
         required_headers = [
@@ -369,7 +640,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
         self.assertIn("0x40008000", self.content)
         self.assertIn("cpsid", self.content)
         self.assertIn("watchdog", self.content.lower())
-
     def test_no_static_verified_labels(self):
         """Ensure STATIC_VERIFIED does not appear anywhere in docs/PORT24_LOADER_TRACE.md."""
         matches = re.findall(r"\bSTATIC_VERIFIED\b", self.content)
@@ -379,9 +649,8 @@ class TestPort24LoaderTrace(unittest.TestCase):
             f"Found STATIC_VERIFIED in {DOC_PATH}: {len(matches)} occurrences. "
             f"Use only VERIFIED, INFERRED, UNKNOWN.",
         )
-
     def test_step_trace_matrix_complete(self):
-        """Step trace table covers all 29 distinct steps from 0x8000 to continuation."""
+        """Step trace table covers all 29 distinct steps and Step 22b from 0x8000 to continuation."""
         table_section = self.content.split("## 5. Summary Trace Matrix (Steps 1 to 29)", 1)[1]
         table_section = table_section.split("## 6. Ranked Table", 1)[0]
 
@@ -391,7 +660,13 @@ class TestPort24LoaderTrace(unittest.TestCase):
                 re.search(pattern, table_section),
                 f"Step {step_num} missing from summary trace matrix",
             )
+        self.assertTrue(
+            re.search(r"\|\s*\*\*22b\*\*\s*\|", table_section),
+            "Step 22b missing from summary trace matrix",
+        )
+        self.assertIn("IC Reinit & First IRQ Unmask", table_section)
 
+        # Check key transitional symbols
         self.assertIn("`_start` (`0x8000`)", table_section)
         self.assertIn("`check_compat`", table_section)
         self.assertIn("`core_copy`", table_section)
@@ -410,6 +685,7 @@ class TestPort24LoaderTrace(unittest.TestCase):
         self.assertIn("Power Cut Action", table_section)
         self.assertIn("Firmware Handoff", table_section)
 
+        # Check that every detail step in Section 4 has a Comparison line
         section4 = self.content.split("## 4. Comprehensive Step Trace", 1)[1]
         section4 = section4.split("## 5. Summary Trace Matrix", 1)[0]
         for step_num in range(1, 30):
@@ -418,20 +694,23 @@ class TestPort24LoaderTrace(unittest.TestCase):
                 re.search(step_header_re, section4),
                 f"Step {step_num} detail header missing in Section 4",
             )
+        self.assertTrue(
+            re.search(r"-\s*\*\*Step 22b:", section4),
+            "Step 22b detail header missing in Section 4",
+        )
 
         comparison_count = len(re.findall(r"-\s*Comparison with StartDiskboot Hand-Off:", section4, re.IGNORECASE))
         self.assertEqual(
             comparison_count,
-            29,
-            f"Expected exactly 29 'Comparison with StartDiskboot Hand-Off' lines in Section 4, found {comparison_count}",
+            30,
+            f"Expected exactly 30 'Comparison with StartDiskboot Hand-Off' lines in Section 4, found {comparison_count}",
         )
-
     def test_failure_steps_ranking_present(self):
         """Ranked table ranks candidate failure steps and identifies primary root cause."""
         ranking_section = self.content.split("## 6. Ranked Table of Failure Steps", 1)[1]
         ranking_section = ranking_section.split("## 7. Offline Evidence Manifest", 1)[0]
 
-        for rank_num in range(1, 6):
+        for rank_num in range(1, 7):
             pattern = rf"\|\s*\*\*{rank_num}\*\*\s*\|"
             self.assertTrue(
                 re.search(pattern, ranking_section),
@@ -442,7 +721,28 @@ class TestPort24LoaderTrace(unittest.TestCase):
         self.assertIn("sub_fc1284ac", ranking_section)
         self.assertIn("sub_fc05ba56", ranking_section)
         self.assertIn("0xD20B099C", ranking_section)
-
+        self.assertTrue(
+            "loc_fc05b3d8" in ranking_section or "Headroom" in ranking_section,
+            "Headroom verification halt loop missing from ranking table",
+        )
+        self.assertTrue(
+            "startup" in ranking_section.lower() and "shutdown" in ranking_section.lower(),
+            "startup() sanity-check/shutdown halt step missing from ranking table",
+        )
+        # Check Rank 4 Panic Hang from stray interrupt vs direct power cut comparison
+        self.assertIn("Step 22b", ranking_section)
+        self.assertIn("Illegal inter", ranking_section)
+        self.assertIn("docs/RESTART_IRQ_PENDING_AUDIT.md", ranking_section)
+        self.assertIn("Contrast with Direct Power Cut", ranking_section)
+        self.assertIn("LED flashed, then LCD backlight off", ranking_section)
+        self.assertIn("MEDIUM confidence", ranking_section)
+        self.assertNotIn("HIGH confidence", ranking_section)
+        # Qualified panic-hang checks (Issue 3):
+        self.assertNotIn("eventually", ranking_section.lower())
+        self.assertNotIn("regardless of button", ranking_section.lower())
+        self.assertIn("POSSIBLE but UNKNOWN", ranking_section)
+        self.assertIn("docs/PORT23_POWER_SUPERVISION.md:21, 242", ranking_section)
+        self.assertIn("conditional mechanism", ranking_section.lower())
     def test_all_claim_bullets_and_rows_carry_epistemic_labels(self):
         """Every claim bullet, numbered item, table row, prose paragraph, and diagram line carries an epistemic label."""
         unlabeled_bullets = []
@@ -543,86 +843,16 @@ class TestPort24LoaderTrace(unittest.TestCase):
             f"Found unlabeled diagram lines in docs/PORT24_LOADER_TRACE.md:\n"
             + "\n".join(unlabeled_diagram_elements[:10]),
         )
-
-    def check_rom_addresses_coverage(self, text_or_lines):
-        """Extract all ROM addresses and check if they are covered by manifest evidence entries."""
-        if isinstance(text_or_lines, str):
-            lines = text_or_lines.splitlines()
-        else:
-            lines = text_or_lines
-
-        entries = self.manifest.get("evidence_entries", [])
-        evidence_ranges = [
-            (int(e["start_address"], 16), int(e["end_address"], 16), e["evidence_id"])
-            for e in entries
-        ]
-
-        def is_in_evidence_entries(addr_int: int) -> bool:
-            return any(start <= addr_int <= end for start, end, _ in evidence_ranges)
-
-        verified_rom_addrs = set()
-        uncovered_addrs = []
-
-        for line_no, line in enumerate(lines, start=1):
-            hex_matches = P_ROM_HEX.findall(line)
-            disasm_matches = P_ROM_DISASM.findall(line)
-            sym_matches = P_ROM_SYM.findall(line)
-            all_addr_strs = set(hex_matches + disasm_matches + sym_matches)
-            if not all_addr_strs:
-                continue
-
-            is_sb = bool(re.search(r"\bsource/build\b", line, re.IGNORECASE))
-
-            for addr_str in all_addr_strs:
-                val = int(addr_str, 16)
-                if not (ROM_BASE <= val < ROM_END):
-                    continue
-
-                if is_in_evidence_entries(val):
-                    verified_rom_addrs.add(f"0x{val:08X}")
-                elif is_sb:
-                    continue
-                else:
-                    uncovered_addrs.append(
-                        f"Line {line_no}: 0x{val:08X} lies in ROM mapping [0x{ROM_BASE:08X}, 0x{ROM_END:08X}) but is outside manifest evidence entries: {line.strip()}"
-                    )
-
-        return uncovered_addrs, verified_rom_addrs
-
-    def test_every_cited_rom_address_covered_by_manifest_entries(self):
-        """Strict coverage test: every ROM address cited in the doc must fall within
-        an evidence entry declared in docs/agentbridge/PORT24_EVIDENCE_MANIFEST.json.
-        """
-        uncovered_addrs, verified_rom_addrs = self.check_rom_addresses_coverage(self.lines)
-
-        self.assertGreater(
-            len(verified_rom_addrs),
-            15,
-            f"Too few verified manifest addresses found in doc ({len(verified_rom_addrs)})",
-        )
-        self.assertEqual(
-            uncovered_addrs,
-            [],
-            f"Found uncovered ROM addresses in docs/PORT24_LOADER_TRACE.md:\n"
-            + "\n".join(uncovered_addrs[:10]),
-        )
-
-    def test_negative_checker_reports_uncovered_for_bare_disasm_and_stub(self):
-        """Negative unit tests: checker reports bare disasm addresses ('fcdead00: bx lr')
-        and stub symbols ('call stub_fcdead00') as uncovered when outside manifest entries.
-        """
-        uncovered_disasm, _ = self.check_rom_addresses_coverage("fcdead00: bx lr")
-        self.assertTrue(
-            any("FCDEAD00" in u for u in uncovered_disasm),
-            f"Bare disassembly address 'fcdead00: bx lr' was not reported as uncovered: {uncovered_disasm}",
-        )
-
-        uncovered_stub, _ = self.check_rom_addresses_coverage("call stub_fcdead00")
-        self.assertTrue(
-            any("FCDEAD00" in u for u in uncovered_stub),
-            f"Stub symbol 'call stub_fcdead00' was not reported as uncovered: {uncovered_stub}",
-        )
-
+    def test_ranking_judgements_not_verified(self):
+        """Every ranking row's final epistemic status is INFERRED or UNKNOWN, never VERIFIED."""
+        ranking = self.content.split("## 6. Ranked Table of Failure Steps", 1)[1]
+        ranking = ranking.split("## 7. Offline Evidence Manifest", 1)[0]
+        rows = [l for l in ranking.splitlines() if re.match(r"^\|\s*\*\*\d+\*\*\s*\|", l.strip())]
+        self.assertGreaterEqual(len(rows), 5)
+        for row in rows:
+            status_cell = row.strip().strip("|").split("|")[-1]
+            self.assertRegex(status_cell, r"\[(INFERRED|UNKNOWN)\b", f"Ranking row not INFERRED/UNKNOWN: {row}")
+            self.assertNotIn("[VERIFIED", status_cell, f"Ranking judgement labelled VERIFIED: {row}")
     def test_offline_manifest_table_matches_json(self):
         """Offline evidence table in Section 7 matches PORT24_EVIDENCE_MANIFEST.json T1 entries."""
         section7 = self.content.split("## 7. Offline Evidence Manifest & Citations", 1)[1]
@@ -641,7 +871,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
             self.assertEqual(int(end_str, 16), int(entry["end_address"], 16))
             self.assertEqual(int(byte_count_str), entry["expected_byte_count"])
             self.assertEqual(sha.lower(), entry["sha256"].lower())
-
     def test_atcm_copied_extent_in_step_table(self):
         """Step table (Section 5, Step 15) must state the ATCM copied extent 0x6C1C = 27,676 B."""
         table = self.content.split("## 5. Summary Trace Matrix (Steps 1 to 29)", 1)[1]
@@ -653,7 +882,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
         self.assertIn("27,676", step15_row)
         self.assertIn("27,673", step15_row)
         self.assertIn("6,919 words", step15_row)
-
     def test_step28_branch_trace_and_stubs_table(self):
         """Step 28 must include the branch trace for boot_prototype.c:397-407 and all 46 stubs."""
         step28_text = self.content.split("- **Step 28: Driver Initialization", 1)[1]
@@ -668,7 +896,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
         self.assertEqual(len(stubs), 46)
         for s in stubs:
             self.assertIn(f"stub_{s}", step28_text)
-
     def test_hex_decimal_size_conversions_exact(self):
         """Every '0xHEX = N bytes' pair, 'N bytes (`0xHEX`)' pair and 'N bytes (M words)' pair is exact."""
         p_hex_eq = re.compile(r"`?0x([0-9A-Fa-f]+)`?\s*=\s*`?([\d,]+)`?\s*(?:bytes|B)\b")
@@ -694,6 +921,7 @@ class TestPort24LoaderTrace(unittest.TestCase):
                     errors.append(f"Line {line_no}: {n} bytes != 4 * {w} words")
         self.assertEqual(errors, [], "Inexact size conversions:\n" + "\n".join(errors))
 
+        # The step table itself must state each copy/zero length as an exact hex/decimal pair.
         table = self.content.split("## 5. Summary Trace Matrix (Steps 1 to 29)", 1)[1]
         table = table.split("## 6. Ranked Table", 1)[0]
         table_pairs = p_hex_eq.findall(table)
@@ -701,18 +929,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
         for h, n in table_pairs:
             self.assertEqual(int(h, 16), num(n), f"Step table: 0x{h} != {n} bytes")
         self.assertGreater(pairs, len(table_pairs))
-
-    def test_ranking_judgements_not_verified(self):
-        """Every ranking row's final epistemic status is INFERRED or UNKNOWN, never VERIFIED."""
-        ranking = self.content.split("## 6. Ranked Table of Failure Steps", 1)[1]
-        ranking = ranking.split("## 7. Offline Evidence Manifest", 1)[0]
-        rows = [l for l in ranking.splitlines() if re.match(r"^\|\s*\*\*\d+\*\*\s*\|", l.strip())]
-        self.assertGreaterEqual(len(rows), 5)
-        for row in rows:
-            status_cell = row.strip().strip("|").split("|")[-1]
-            self.assertRegex(status_cell, r"\[(INFERRED|UNKNOWN)\b", f"Ranking row not INFERRED/UNKNOWN: {row}")
-            self.assertNotIn("[VERIFIED", status_cell, f"Ranking judgement labelled VERIFIED: {row}")
-
     def test_led_build_provenance_disclosed(self):
         """Section 6 states that observations (b)/(c) came from the LED build and compares its prologue."""
         ranking = self.content.split("## 6. Ranked Table of Failure Steps", 1)[1]
@@ -720,6 +936,531 @@ class TestPort24LoaderTrace(unittest.TestCase):
         self.assertIn("docs/PORT23_POWER_SUPERVISION.md:20-21, 34", ranking)
         self.assertIn("loader_entry_led.S:47-49", ranking)
         self.assertIn("entry.S:7-8", ranking)
+    def check_rom_addresses_coverage(self, text_or_lines, manifest=None):
+        """Extract all ROM addresses and check if they are covered by manifest evidence entries.
+
+        As required by PORT-24:
+        - Default rule is EXACT matching. Every ROM-region address (0xFC000000-0xFFFFFFFF)
+          anywhere in the doc, odd or even, in prose or in tables, must lie inside a manifest range
+          (exact byte containment, no bit-0 masking) or be listed in the enumerated allowlist
+          with a verified source file:line citation.
+        - No Thumb or odd emitted-target coverage exemption.
+        """
+        if isinstance(text_or_lines, str):
+            lines = text_or_lines.splitlines()
+        else:
+            lines = text_or_lines
+
+        if manifest is None:
+            manifest = self.manifest
+
+        entries = manifest.get("evidence_entries", [])
+        evidence_ranges = [
+            (int(e["start_address"], 16), int(e["end_address"], 16), e["evidence_id"])
+            for e in entries
+            if not e.get("out_of_scope") and e.get("relied_upon") is not False
+        ]
+
+        def is_in_evidence_entries(addr_int: int) -> bool:
+            return any(start <= addr_int <= end for start, end, _ in evidence_ranges)
+
+        def is_in_source_operand_allowlist(addr_int: int) -> bool:
+            return addr_int in ROM_SOURCE_OPERAND_ALLOWLIST
+
+        source_file_line_pattern = re.compile(r"\b[\w\-\.\/]+\.(?:c|h|S):\d+\b")
+        p_manifest_id = re.compile(r"\bPORT24-ROM-[A-Z0-9\-]+\b")
+        p_disasm_line = re.compile(r"\b(?:0x)?[fF][c-fC-F0-9][0-9a-fA-F]{6}\s*:\s*[a-zA-Z]", re.IGNORECASE)
+        p_rom_cite = re.compile(r"\bROM\s+(?:at\s+)?[`*_]*0x[0-9a-fA-F]+", re.IGNORECASE)
+        p_rom_content_claim = re.compile(
+            r"\b(?:ROM\s+(?:at\s+)?(?:source\s+address\s+)?(?:`?0x[0-9a-fA-F]+`?\s+)?(?:contains?|holds?)|bytes\s+at|instructions?\s+at|disassembly|reads\b|loads?\s+from\s+ROM|ROM\s+contents?|image\s+in\s+ROM)\b",
+            re.IGNORECASE,
+        )
+
+        verified_rom_addrs = set()
+        allowed_source_operands = set()
+        uncovered_addrs = []
+
+        for line_no, line in enumerate(lines, start=1):
+            hex_matches = P_ROM_HEX.findall(line)
+            disasm_matches = P_ROM_DISASM.findall(line)
+            sym_matches = P_ROM_SYM.findall(line)
+            all_addr_strs = set(hex_matches + disasm_matches + sym_matches)
+            if not all_addr_strs:
+                continue
+
+            # Line-wide disqualification flags for allowlisted addresses:
+            # (a) Any ROM disassembly line (pattern like `fcXXXXXX: <mnemonic>`)
+            has_disasm_line = bool(disasm_matches) or bool(p_disasm_line.search(line))
+
+            # (b) Any `ROM 0x...` citation claiming ROM content/address directly as evidence,
+            # in any form including Markdown-wrapped `ROM \`0x...\`` or `ROM **0x...**`
+            has_rom_citation = bool(p_rom_cite.search(line))
+
+            # (c) Any manifest evidence ID (any PORT24-ROM-* identifier)
+            has_manifest_id = bool(p_manifest_id.search(line))
+
+            # (d) Any ROM content claim (e.g. 'ROM contains', 'ROM holds', 'bytes at', 'instruction at', 'disassembly', 'reads', 'loads from ROM')
+            has_rom_content_claim = bool(p_rom_content_claim.search(line))
+
+            # (e) Allowlisted addresses may be exempt ONLY when they appear as explicit
+            # source-code operands or constants cited by file:line
+            has_source_citation = bool(source_file_line_pattern.search(line))
+
+            for addr_str in all_addr_strs:
+                val = int(addr_str, 16)
+                if not (ROM_COVERAGE_START <= val <= ROM_COVERAGE_END):
+                    continue
+
+                if is_in_evidence_entries(val):
+                    verified_rom_addrs.add(f"0x{val:08X}")
+                elif is_in_source_operand_allowlist(val):
+                    if has_disasm_line:
+                        uncovered_addrs.append(
+                            f"Line {line_no}: 0x{val:08X} is allowlisted but appears on a ROM disassembly line: {line.strip()}"
+                        )
+                    elif has_rom_citation:
+                        uncovered_addrs.append(
+                            f"Line {line_no}: 0x{val:08X} is allowlisted but appears on a line with a ROM citation: {line.strip()}"
+                        )
+                    elif has_manifest_id:
+                        uncovered_addrs.append(
+                            f"Line {line_no}: 0x{val:08X} is allowlisted but appears on a line with a manifest evidence ID: {line.strip()}"
+                        )
+                    elif has_rom_content_claim:
+                        uncovered_addrs.append(
+                            f"Line {line_no}: 0x{val:08X} is allowlisted but appears on a line with a ROM content claim: {line.strip()}"
+                        )
+                    elif not has_source_citation:
+                        uncovered_addrs.append(
+                            f"Line {line_no}: 0x{val:08X} is in allowlist but lacks an explicit source file:line citation: {line.strip()}"
+                        )
+                    else:
+                        allowed_source_operands.add(f"0x{val:08X}")
+                else:
+                    uncovered_addrs.append(
+                        f"Line {line_no}: 0x{val:08X} lies in ROM region [0x{ROM_COVERAGE_START:08X}, 0x{ROM_COVERAGE_END:08X}] but is outside manifest evidence entries and source allowlist: {line.strip()}"
+                    )
+
+        return uncovered_addrs, verified_rom_addrs
+    def test_every_cited_rom_address_covered_by_manifest_entries(self):
+        """Strict coverage test: every ROM address cited in the doc must fall within
+        an evidence entry declared in docs/agentbridge/PORT24_EVIDENCE_MANIFEST.json
+        unless it is an operand cited from source/build only.
+        """
+        uncovered_addrs, verified_rom_addrs = self.check_rom_addresses_coverage(self.lines)
+
+        self.assertGreater(
+            len(verified_rom_addrs),
+            15,
+            f"Too few verified manifest addresses found in doc ({len(verified_rom_addrs)})",
+        )
+        self.assertEqual(
+            uncovered_addrs,
+            [],
+            f"Found uncovered ROM addresses in docs/PORT24_LOADER_TRACE.md:\n"
+            + "\n".join(uncovered_addrs[:10]),
+        )
+    def test_negative_checker_reports_uncovered_for_bare_disasm_and_stub(self):
+        """Negative unit tests: checker reports bare disasm addresses ('fcdead00: bx lr')
+        and stub symbols ('call stub_fcdead00') as uncovered when outside manifest entries.
+        """
+        uncovered_disasm, _ = self.check_rom_addresses_coverage("fcdead00: bx lr")
+        self.assertTrue(
+            any("FCDEAD00" in u for u in uncovered_disasm),
+            f"Bare disassembly address 'fcdead00: bx lr' was not reported as uncovered: {uncovered_disasm}",
+        )
+
+        uncovered_stub, _ = self.check_rom_addresses_coverage("call stub_fcdead00")
+        self.assertTrue(
+            any("FCDEAD00" in u for u in uncovered_stub),
+            f"Stub symbol 'call stub_fcdead00' was not reported as uncovered: {uncovered_stub}",
+        )
+    def test_negative_source_build_line_fails_coverage_without_allowlist(self):
+        """Negative test proving that a line like 'fcdead00: bx lr [VERIFIED (source/build): unrelated.c:1]'
+        now FAILS coverage because blanket 'source/build' exemptions are removed.
+        """
+        uncovered, _ = self.check_rom_addresses_coverage("fcdead00: bx lr [VERIFIED (source/build): unrelated.c:1]")
+        self.assertTrue(
+            any("FCDEAD00" in u for u in uncovered),
+            f"Line with 'source/build' outside allowlist should have failed coverage: {uncovered}",
+        )
+    def test_negative_allowlisted_address_in_disasm_or_rom_citation_fails_coverage(self):
+        """Negative tests: an allowlisted address fails coverage if on a ROM disassembly line,
+        if cited as 'ROM 0x...', or if asserting a ROM-content claim outside manifest.
+        """
+        # Synthetic doc line 1: ROM disassembly line with ROM citation at allowlisted address
+        uncovered_disasm, _ = self.check_rom_addresses_coverage(
+            "fc05c5bc: bx lr [VERIFIED: ROM 0xFC05C5BC]"
+        )
+        self.assertTrue(
+            any("FC05C5BC" in u for u in uncovered_disasm),
+            f"Line 'fc05c5bc: bx lr [VERIFIED: ROM 0xFC05C5BC]' should have failed coverage: {uncovered_disasm}",
+        )
+
+        # Synthetic doc line 2: ROM content claim at an allowlisted address outside manifest
+        uncovered_content, _ = self.check_rom_addresses_coverage(
+            "ROM contents at 0xFC05C5BC are 0x4770 [VERIFIED: chdk-port/platform/g3x/sub/110c/stubs_prototype.S:11]"
+        )
+        self.assertTrue(
+            any("FC05C5BC" in u for u in uncovered_content),
+            f"Line with ROM content claim at 0xFC05C5BC should have failed coverage: {uncovered_content}",
+        )
+
+        # Synthetic doc line 3: 'ROM at 0x... contains' claim at allowlisted address outside manifest
+        uncovered_contains, _ = self.check_rom_addresses_coverage(
+            "ROM at 0xFC05C5BC contains: bx lr [VERIFIED: chdk-port/platform/g3x/sub/110c/stubs_prototype.S:11]"
+        )
+        self.assertTrue(
+            any("FC05C5BC" in u for u in uncovered_contains),
+            f"Line with 'ROM at ... contains' at 0xFC05C5BC should have failed coverage: {uncovered_contains}",
+        )
+    def test_positive_legitimate_source_operand_mention_passes_coverage(self):
+        """Positive test: an allowlisted address cited legitimately as an explicit
+        source-code operand with file:line and without ROM content claim passes coverage.
+        """
+        sample_stub_line = (
+            "| `stub_fc05c5bc` (`stubs_prototype.S:11`) | `STUB` | `0x00349894: ldr.w pc, [pc]` | "
+            "`0x00349898` | `0xFC05C5BC, Thumb bit set` | `1` | `Thumb` | "
+            "[VERIFIED (source/build): candidate_main.elf:0x00349898; stubs_prototype.S:11; stubs_asm.h:60] "
+            "[UNKNOWN: callee target unread from ROM] |"
+        )
+        uncovered, verified = self.check_rom_addresses_coverage(sample_stub_line)
+        self.assertEqual(
+            uncovered,
+            [],
+            f"Legitimate source-operand line failed coverage: {uncovered}",
+        )
+    def test_source_operand_allowlist_entries_are_justified(self):
+        """Every entry in ROM_SOURCE_OPERAND_ALLOWLIST is justified and literally occurs at its cited source line."""
+        for addr, (justification, file_line) in ROM_SOURCE_OPERAND_ALLOWLIST.items():
+            self.assertTrue(justification and len(justification) > 10, f"Missing justification for 0x{addr:08X}")
+            ok, msg = verify_source_operand_allowlist_entry(addr, file_line)
+            self.assertTrue(ok, msg)
+    def test_regression_unmanifested_address_with_source_citation_fails_coverage(self):
+        """Regression test: an unmanifested ROM address on a line with a source file:line citation must FAIL coverage."""
+        unmanifested_addr = 0xFC778899  # In ROM range, not in manifest, not in allowlist
+        synthetic_line = (
+            f"Candidate step references unmanifested address 0x{unmanifested_addr:08X} "
+            f"as cited in chdk-port/platform/g3x/sub/110c/boot_prototype.c:100 [INFERRED]."
+        )
+        uncovered, verified = self.check_rom_addresses_coverage(synthetic_line)
+        self.assertTrue(
+            any(f"{unmanifested_addr:08X}" in u for u in uncovered),
+            f"Unmanifested address 0x{unmanifested_addr:08X} with file:line citation should have failed coverage: {uncovered}",
+        )
+    def test_regression_allowlist_entry_with_wrong_source_line_fails(self):
+        """Regression test: an allowlist entry whose source line does not contain the address must FAIL verification."""
+        # Legitimate entry must pass
+        ok, msg = verify_source_operand_allowlist_entry(0xFC05B4B4, "chdk-port/platform/g3x/sub/110c/boot_prototype.c:93")
+        self.assertTrue(ok, f"Legitimate entry failed: {msg}")
+
+        # Legitimate header (.h) entry must pass
+        ok_h, msg_h = verify_source_operand_allowlist_entry(0xFC54E08D, "chdk-port/platform/g3x/sub/110c/bin_compat.h:4")
+        self.assertTrue(ok_h, f"Legitimate .h entry failed: {msg_h}")
+
+        # Wrong line must fail
+        ok_wrong, _ = verify_source_operand_allowlist_entry(0xFC05B4B4, "chdk-port/platform/g3x/sub/110c/boot_prototype.c:100")
+        self.assertFalse(ok_wrong, "Allowlist entry with wrong source line should have failed")
+
+        # Non-occurring address on line 93 must fail
+        ok_nonexistent, _ = verify_source_operand_allowlist_entry(0xFC999999, "chdk-port/platform/g3x/sub/110c/boot_prototype.c:93")
+        self.assertFalse(ok_nonexistent, "Allowlist entry with non-occurring address should have failed")
+    def test_regression_address_in_out_of_scope_range_without_allowlist_fails_coverage(self):
+        """Regression test for Point 1: an address inside an out-of-scope manifest range,
+        with no allowlist entry, must FAIL coverage.
+        """
+        synth_line_ver = "Candidate references 0xFC54E050 without allowlist entry [UNKNOWN]."
+        uncovered_ver, _ = self.check_rom_addresses_coverage(synth_line_ver)
+        self.assertTrue(
+            any("FC54E050" in u for u in uncovered_ver),
+            f"Address 0xFC54E050 inside out-of-scope range without allowlist must fail coverage: {uncovered_ver}",
+        )
+        synth_line_pid = "Candidate references 0xFDF20250 without allowlist entry [UNKNOWN]."
+        uncovered_pid, _ = self.check_rom_addresses_coverage(synth_line_pid)
+        self.assertTrue(
+            any("FDF20250" in u for u in uncovered_pid),
+            f"Address 0xFDF20250 inside out-of-scope PID range without allowlist must fail coverage: {uncovered_pid}",
+        )
+    def test_regression_rom_coverage_interval_fe_and_ff_fail(self):
+        """Regression test for coverage upper bound: interval is 0xFC000000..0xFFFFFFFF inclusive.
+        Synthetic docs citing 0xFE123456, and separately 0xFFFFFFFF, with no manifest range must FAIL coverage.
+        """
+        uncovered_fe, _ = self.check_rom_addresses_coverage("Candidate cites address 0xFE123456 [UNKNOWN].")
+        self.assertTrue(
+            any("FE123456" in u for u in uncovered_fe),
+            f"Synthetic citation of 0xFE123456 outside manifest should have failed coverage: {uncovered_fe}",
+        )
+
+        uncovered_fe_sym, _ = self.check_rom_addresses_coverage("Candidate calls symbol sub_fe123456 [UNKNOWN].")
+        self.assertTrue(
+            any("FE123456" in u for u in uncovered_fe_sym),
+            f"Synthetic symbol sub_fe123456 outside manifest should have failed coverage: {uncovered_fe_sym}",
+        )
+
+        uncovered_ff, _ = self.check_rom_addresses_coverage("Candidate cites address 0xFFFFFFFF [UNKNOWN].")
+        self.assertTrue(
+            any("FFFFFFFF" in u for u in uncovered_ff),
+            f"Synthetic citation of 0xFFFFFFFF outside manifest should have failed coverage: {uncovered_ff}",
+        )
+    def test_regression_allowlisted_address_with_rom_citation_fails(self):
+        """Regression tests for line-wide ROM citation exclusion:
+        (a) An allowlisted address plus a ROM citation of a different address on the same line must FAIL.
+        (b) 'ROM `0xFCEC854C`' in backticks must FAIL.
+        """
+        # (a) Allowlisted address 0xFCEC854C paired with a ROM citation of a different address (0xFC127A62)
+        line_a = "0xFCEC854C is defined in chdk-port/platform/g3x/sub/110c/boot_prototype.c:107 [VERIFIED: ROM 0xFC127A62]"
+        uncovered_a, _ = self.check_rom_addresses_coverage(line_a)
+        self.assertTrue(
+            any("FCEC854C" in u for u in uncovered_a),
+            f"Allowlisted address paired with ROM citation on same line must fail coverage: {uncovered_a}",
+        )
+
+        # (b) 'ROM `0xFCEC854C`' in backticks
+        line_b = "ROM `0xFCEC854C` [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:107]"
+        uncovered_b, _ = self.check_rom_addresses_coverage(line_b)
+        self.assertTrue(
+            any("FCEC854C" in u for u in uncovered_b),
+            f"'ROM `0xFCEC854C`' in backticks must fail coverage: {uncovered_b}",
+        )
+    def _check_stub_table_row(self, row: str) -> None:
+        """Validate a single row of the stubs branch table.
+        Every STUB row whose text claims Thumb / low bit = 1 must either show an odd
+        emitted target equal to its source operand | 1, or state the covered even operand
+        with the Thumb bit indicated symbolically (e.g. '0x..., Thumb bit set' or 'emitted = operand | 1').
+        Fails if any such row shows a bare even emitted target without the Thumb bit set.
+        """
+        cols = [c.strip() for c in row.split("|")[1:-1]]
+        if len(cols) < 7:
+            return
+        symbol_col = cols[0]
+        macro_col = cols[1]
+        target_col = cols[4]
+        low_bit_col = cols[5]
+        state_col = cols[6]
+
+        is_thumb_claim = (
+            "Thumb" in state_col
+            or low_bit_col == "`1`"
+            or low_bit_col == "1"
+            or "`STUB`" in macro_col
+        )
+        if not is_thumb_claim:
+            return
+
+        m_sym = re.search(r"stub_([0-9a-fA-F]{8})", symbol_col)
+        self.assertIsNotNone(m_sym, f"Failed to extract stub symbol address from {symbol_col}")
+        source_operand = int(m_sym.group(1), 16)
+
+        has_symbolic_thumb = bool(
+            re.search(r"(?:Thumb bit set|operand\s*\|\s*1|bit\s*0\s*set)", target_col, re.IGNORECASE)
+        )
+
+        m_target = re.search(r"0x([0-9a-fA-F]{8})", target_col)
+        if has_symbolic_thumb:
+            if m_target:
+                addr_in_target = int(m_target.group(1), 16)
+                self.assertEqual(
+                    addr_in_target,
+                    source_operand,
+                    f"STUB row for {symbol_col} target 0x{addr_in_target:08X} != source operand 0x{source_operand:08X}",
+                )
+            return
+
+        self.assertIsNotNone(m_target, f"Failed to extract target address from {target_col}")
+        emitted_target = int(m_target.group(1), 16)
+
+        self.assertEqual(
+            emitted_target & 1,
+            1,
+            f"STUB row for {symbol_col} shows an even emitted target 0x{emitted_target:08X}; "
+            f"Thumb emitted target must be odd (low bit = 1)",
+        )
+        self.assertEqual(
+            emitted_target,
+            source_operand | 1,
+            f"STUB row for {symbol_col} emitted target 0x{emitted_target:08X} "
+            f"!= source operand 0x{source_operand:08X} | 1",
+        )
+
+    def test_stubs_table_thumb_emitted_targets_odd_and_equal_operand_or_1(self):
+        """Regression test 3(a): every STUB row in lines ~658-695 whose text claims Thumb / low bit = 1
+        must show an odd emitted target equal to its source operand | 1. Fail if any such row shows an even emitted target.
+        """
+        stubs_section = self.content.split("#### Stubs LDR PC Branch Table (stubs_asm.h:60-74)", 1)[1]
+        stubs_section = stubs_section.split("####", 1)[0]
+
+        table_rows = [
+            line.strip()
+            for line in stubs_section.splitlines()
+            if line.strip().startswith("|") and "`stub_" in line
+        ]
+        self.assertEqual(len(table_rows), 46, f"Expected 46 stub rows, found {len(table_rows)}")
+
+        thumb_count = 0
+        for row in table_rows:
+            cols = [c.strip() for c in row.split("|")[1:-1]]
+            if "`STUB`" in cols[1] or "Thumb" in cols[6] or cols[5] == "`1`":
+                self._check_stub_table_row(row)
+                thumb_count += 1
+
+        self.assertEqual(thumb_count, 41, f"Expected 41 Thumb STUB rows, found {thumb_count}")
+
+    def test_regression_stub_row_with_even_emitted_target_fails(self):
+        """Regression test 3(a) failure case: a STUB row claiming Thumb with an even emitted target fails."""
+        bad_even_row = (
+            "| `stub_fc05c5bc` (`stubs_prototype.S:11`) | `STUB` | `0x00349894: ldr.w pc, [pc]` | "
+            "`0x00349898` | `0xFC05C5BC` | `1` | `Thumb` | "
+            "[VERIFIED (source/build): candidate_main.elf:0x00349898; stubs_prototype.S:11; stubs_asm.h:60] "
+            "[UNKNOWN: callee target unread from ROM] |"
+        )
+        with self.assertRaises(AssertionError) as ctx:
+            self._check_stub_table_row(bad_even_row)
+        self.assertIn("shows an even emitted target", str(ctx.exception))
+
+        bad_mismatch_row = (
+            "| `stub_fc05c5bc` (`stubs_prototype.S:11`) | `STUB` | `0x00349894: ldr.w pc, [pc]` | "
+            "`0x00349898` | `0xFC05B5EB` | `1` | `Thumb` | "
+            "[VERIFIED (source/build): candidate_main.elf:0x00349898; stubs_prototype.S:11; stubs_asm.h:60] "
+            "[UNKNOWN: callee target unread from ROM] |"
+        )
+        with self.assertRaises(AssertionError) as ctx:
+            self._check_stub_table_row(bad_mismatch_row)
+        self.assertIn("!= source operand", str(ctx.exception))
+
+    def test_regression_copy_source_literal_odd_address_fails_coverage(self):
+        """Regression test: The reviewer's synthetic line citing an odd address whose even
+        form is in the source allowlist must FAIL coverage under exact matching.
+        """
+        line = "Candidate uses copy-source literal 0xFCEC854D [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:107]"
+        uncovered, _ = self.check_rom_addresses_coverage(line)
+        self.assertTrue(
+            any("FCEC854D" in u for u in uncovered),
+            f"Reviewer synthetic line with odd address 0xFCEC854D should have failed coverage: {uncovered}",
+        )
+
+    def test_regression_odd_address_in_prose_whose_even_form_is_in_manifest_fails(self):
+        """Regression test: A synthetic odd address in prose whose even form IS in the manifest must FAIL.
+        Exact matching applies outside stub rows (no bit 0 clearing in general path).
+        """
+        synth_manifest = {
+            "evidence_entries": [
+                {
+                    "evidence_id": "PORT24-ROM-SYNTH-EVEN",
+                    "start_address": "0xFC880000",
+                    "end_address": "0xFC880000",
+                    "expected_byte_count": 1,
+                    "sha256": "0" * 64,
+                    "out_of_scope": False,
+                    "relied_upon": True,
+                }
+            ]
+        }
+        line = "Candidate branches to odd address 0xFC880001 in prose [VERIFIED: PORT24-ROM-SYNTH-EVEN]."
+        uncovered, _ = self.check_rom_addresses_coverage(line, manifest=synth_manifest)
+        self.assertTrue(
+            any("FC880001" in u for u in uncovered),
+            f"Odd address 0xFC880001 in prose should have failed coverage: {uncovered}",
+        )
+
+    def test_regression_synthetic_thumb_stub_row_with_uncovered_emitted_target_fails_coverage(self):
+        """Regression test: a synthetic doc with a Thumb-marked stub row whose emitted (odd) target
+        is not in the manifest and not allowlisted, even though the even operand IS covered, must FAIL coverage.
+        """
+        thumb_stub_line = (
+            "| `stub_fc05c5bc` (`stubs_prototype.S:11`) | `STUB` | `0x00349894: ldr.w pc, [pc]` | "
+            "`0x00349898` | `0xFC05C5BD` | `1` | `Thumb` | "
+            "[VERIFIED (source/build): candidate_main.elf:0x00349898; stubs_prototype.S:11; stubs_asm.h:60] "
+            "[UNKNOWN: callee target unread from ROM] |"
+        )
+        uncovered, _ = self.check_rom_addresses_coverage(thumb_stub_line)
+        self.assertTrue(
+            any("FC05C5BD" in u for u in uncovered),
+            f"Synthetic Thumb stub-table row with uncovered emitted target 0xFC05C5BD must fail coverage: {uncovered}",
+        )
+
+    def test_regression_synthetic_stub_row_marked_arm_with_odd_emitted_target_fails(self):
+        """Regression test: A synthetic stub-table row marked ARM whose emitted address is odd must FAIL."""
+        arm_odd_row = (
+            "| `stub_fc31bfac` (`stubs_prototype.S:52`) | `STUB2` | `0x003499CC: ldr pc, [pc, #-4]` | "
+            "`0x003499D0` | `0xFC31BFAD` | `0` | `ARM` | "
+            "[VERIFIED (source/build): candidate_main.elf:0x003499D0; stubs_prototype.S:52; stubs_asm.h:71] "
+            "[UNKNOWN: callee target unread from ROM] |"
+        )
+        uncovered, _ = self.check_rom_addresses_coverage(arm_odd_row)
+        self.assertTrue(
+            any("FC31BFAD" in u for u in uncovered),
+            f"Stub row marked ARM with odd emitted target 0xFC31BFAD must fail coverage: {uncovered}",
+        )
+
+    def test_regression_synthetic_stub_row_no_thumb_marking_with_odd_emitted_target_fails(self):
+        """Regression test: A synthetic stub-table row with no Thumb marking whose emitted address is odd must FAIL."""
+        no_thumb_row = (
+            "| `stub_fc05c5bc` (`stubs_prototype.S:11`) | `STUB` | `0x00349894: ldr.w pc, [pc]` | "
+            "`0x00349898` | `0xFC05C5BD` | `0` | `None` | "
+            "[VERIFIED (source/build): candidate_main.elf:0x00349898; stubs_prototype.S:11; stubs_asm.h:60] "
+            "[UNKNOWN: callee target unread from ROM] |"
+        )
+        uncovered, _ = self.check_rom_addresses_coverage(no_thumb_row)
+        self.assertTrue(
+            any("FC05C5BD" in u for u in uncovered),
+            f"Stub row with no Thumb marking and odd emitted target 0xFC05C5BD must fail coverage: {uncovered}",
+        )
+
+    def test_regression_synthetic_odd_address_whose_even_form_not_covered_fails_coverage(self):
+        """Regression test 3(c): A synthetic odd address whose even form is not covered still fails."""
+        # Bare unmapped odd address
+        synth_odd_uncovered = "Candidate executes branch to unmapped odd target 0xFC999991 [UNKNOWN]."
+        uncovered_odd, _ = self.check_rom_addresses_coverage(synth_odd_uncovered)
+        self.assertTrue(
+            any("FC999991" in u for u in uncovered_odd),
+            f"Odd address 0xFC999991 outside manifest and allowlist must fail coverage: {uncovered_odd}",
+        )
+
+        # Odd address on a line with a source file:line citation but address not in allowlist
+        synth_odd_with_source = (
+            "Candidate loads odd address 0xFC999991 [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:93]."
+        )
+        uncovered_odd_s, _ = self.check_rom_addresses_coverage(synth_odd_with_source)
+        self.assertTrue(
+            any("FC999991" in u for u in uncovered_odd_s),
+            f"Odd address 0xFC999991 not in allowlist must fail coverage even with file:line citation: {uncovered_odd_s}",
+        )
+    def test_regression_enforce_source_only_rule_for_allowlisted_addresses(self):
+        """Regression tests for Issue 2: allowlisted addresses must be rejected when on a line with:
+        (1) ROM content claim: 'At address 0xFCEC854C the ROM contains a copy image [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:107]'
+        (2) A manifest evidence ID (PORT24-ROM-*): line mixing an allowlisted operand with a PORT24-ROM-* ID
+        (3) Words indicating ROM content: 'ROM holds', 'bytes at', 'instruction at', 'disassembly', 'reads', 'loads from ROM'
+        """
+        # (1) Exact reviewer test sentence
+        line_content = "At address 0xFCEC854C the ROM contains a copy image [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:107]"
+        uncovered_c, _ = self.check_rom_addresses_coverage(line_content)
+        self.assertTrue(
+            any("FCEC854C" in u for u in uncovered_c),
+            f"Line with 'the ROM contains' should have failed coverage: {uncovered_c}",
+        )
+
+        # (2) Mixed allowlisted operand with PORT24-ROM-* ID
+        line_mixed = "0xFCEC854C operand is verified [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:107; PORT24-ROM-CACHE-HELPERS]"
+        uncovered_m, _ = self.check_rom_addresses_coverage(line_mixed)
+        self.assertTrue(
+            any("FCEC854C" in u for u in uncovered_m),
+            f"Line mixing allowlisted address with PORT24-ROM-* ID should have failed coverage: {uncovered_m}",
+        )
+
+        # (3) Other ROM content claim forms
+        for wording, test_line in [
+            ("ROM holds", "ROM holds data at 0xFCEC854C [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:107]"),
+            ("bytes at", "bytes at 0xFCEC854C are copied [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:107]"),
+            ("instruction at", "instruction at 0xFCEC854C executes [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:107]"),
+            ("disassembly", "disassembly of 0xFCEC854C shows veneer [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:107]"),
+            ("reads", "stub_fc05c5bc reads hardware state [VERIFIED: chdk-port/platform/g3x/sub/110c/stubs_prototype.S:11]"),
+            ("loads from ROM", "loads from ROM 0xFCEC854C [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:107]"),
+        ]:
+            uncovered_w, _ = self.check_rom_addresses_coverage(test_line)
+            self.assertTrue(
+                len(uncovered_w) > 0,
+                f"Line with wording '{wording}' should have failed coverage: {uncovered_w}",
+            )
 
     def test_no_build_outputs_or_rom_images_tracked(self):
         """git ls-files tracks no build outputs, binaries or ROM images (post-merge safe)."""
@@ -743,7 +1484,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
             and any(fnmatch.fnmatchcase(os.path.basename(p), pat) for pat in FORBIDDEN_TRACKED_PATTERNS)
         )
         self.assertEqual(offending, [], f"Build outputs / binaries tracked in git: {offending}")
-
     def test_manifest_has_no_raw_byte_payload(self):
         """The evidence manifest records only ranges, digests and metadata, never ROM bytes."""
         bad_keys = []
@@ -770,10 +1510,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
             extra = set(entry) - ALLOWED_EVIDENCE_ENTRY_KEYS
             self.assertEqual(extra, set(), f"Unexpected fields in {entry.get('evidence_id')}: {extra}")
             self.assertRegex(entry["sha256"], r"^[0-9a-f]{64}$")
-
-    # =========================================================================
-    # T2 specific tests: Restart path section, labels, and coverage
-    # =========================================================================
 
     def test_restart_path_section_content_coverage(self):
         """Section '## Restart path' exists and covers all required gating and restart logic."""
@@ -849,7 +1585,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
         self.assertNotIn("CALLED UNCONDITIONALLY", sec)
         self.assertNotIn("confirmed DISKBOOT was NOT skipped", sec)
         self.assertNotIn("confirmed DISKBOOT was not skipped", sec)
-
     def test_restart_path_mermaid_diagram_labeled(self):
         """Mermaid diagram in '## Restart path' has every node and edge labelled with epistemic status."""
         self.assertIn("## Restart path", self.content)
@@ -869,7 +1604,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
                 bool(LABEL_PATTERN.search(line)),
                 f"Mermaid diagram line missing epistemic label: {line}",
             )
-
     def test_restart_path_no_cue_claims_payload_skipped_without_led(self):
         """Owner cues must not claim the payload was skipped because there was no LED."""
         sec = self.content.split("## Restart path", 1)[1]
@@ -885,7 +1619,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
 
         # Diagnostic flash supports loader entry only, not later stages
         self.assertIn("Diagnostic flash supports loader entry only", cues_sec)
-
     def test_restart_path_cues_builds_and_epistemic_bounds(self):
         """Owner cues must each name an identified build by DISKBOOT / artifact SHA-256,
         list alternative explanations, and never state payload skipping or failure locations as VERIFIED.
@@ -940,7 +1673,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
                 "alternative explanation" in block.lower(),
                 f"Cue {cue_idx} missing alternative explanations: {block[:100]}",
             )
-
     def test_restart_path_cont_attempted_has_stale_ram_caveat(self):
         """CONT_ATTEMPTED discussion carries UNKNOWN or INFERRED label with a stale-RAM caveat."""
         sec = self.content.split("## Restart path", 1)[1]
@@ -960,7 +1692,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
                 any(l in {"UNKNOWN", "INFERRED"} for l in labels),
                 f"CONT_ATTEMPTED paragraph missing UNKNOWN or INFERRED label: {p}",
             )
-
     def test_restart_path_vbr_bootdisk_and_script_roles(self):
         """Section cites VBR 0x1E0 (FAT32) / 0x40 (FAT12/16), describes SCRIPT at 0x1F0, and confirms SCRIPT does not gate StartDiskboot."""
         sec = self.content.split("## Restart path", 1)[1]
@@ -970,7 +1701,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
         self.assertIn("SCRIPT", sec)
         self.assertIn("0x1F0", sec)
         self.assertTrue(bool(re.search(r"`?SCRIPT`? marker does not gate `?StartDiskboot`?", sec)))
-
     def test_restart_path_button_sampling_sub_fc08711a_and_bic(self):
         """Section cites sub_fc08711a, describes BIC active-low inversion, and separates raw inputs from normalized flags."""
         sec = self.content.split("## Restart path", 1)[1]
@@ -980,7 +1710,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
         self.assertIn("normalized pressed flag", sec.lower())
         # Direct polling at 0xFC0D73D0 must not be asserted
         self.assertNotIn("0xFC0D73D0: pin 151", sec)
-
     def test_restart_path_startdiskboot_conditional_claim(self):
         """Claim that StartDiskboot runs is conditional on prior callees returning normally."""
         sec = self.content.split("## Restart path", 1)[1]
@@ -989,7 +1718,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
         )
         self.assertNotIn("CALLED UNCONDITIONALLY", sec)
         self.assertIn("callee internals not read", sec)
-
     def test_restart_path_labels_strict(self):
         """Section '## Restart path' strictly follows epistemic labelling rules."""
         self.assertIn("## Restart path", self.content)
@@ -1014,7 +1742,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
                 {"VERIFIED", "INFERRED", "UNKNOWN"},
                 f"Invalid label type '{stripped}' in Restart path",
             )
-
     def test_restart_path_all_cited_rom_addresses_covered(self):
         """Every 0xFC...... and 0xFD...... address cited in '## Restart path' falls inside a manifest range."""
         self.assertIn("## Restart path", self.content)
@@ -1037,7 +1764,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
             [],
             f"Uncovered ROM addresses found in Restart path: {uncovered}",
         )
-
     def test_startdiskboot_return_sequence_instructions(self):
         """StartDiskboot return sequence cites 0xFC05BC34, 0xFC05BC38, 0xFC05C4DE, 0xFC05BBF2 and no pop.w {r4, pc}."""
         sec = self.content.split("## Restart path", 1)[1]
@@ -1048,7 +1774,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
         self.assertNotIn("pop.w {r4, pc}", sec)
         self.assertIn("ldmia.w sp!, {r4, lr}", sec)
         self.assertNotIn("0xFC05BBF0 to 0xFC05BC34", sec)
-
     def test_t2_manifest_quota_and_slice_bounds(self):
         """T2 manifest entries meet quota (total <= 32 KiB) and max slice (<= 4 KiB)."""
         entries_by_id = {e["evidence_id"]: e for e in self.manifest.get("evidence_entries", [])}
@@ -1060,7 +1785,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
             t2_bytes += count
 
         self.assertLessEqual(t2_bytes, 32768, f"Total T2 bytes exceed 32 KiB: {t2_bytes} B")
-
     def test_restart_path_cue_list_no_verified_no_flash_or_hypothetical_outcomes(self):
         """(a) Restart path cue list has no VERIFIED-labelled 'no flash' or hypothetical LED-build outcome."""
         sec = self.content.split("## Restart path", 1)[1]
@@ -1084,7 +1808,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
         self.assertIn("docs/PORT23_POWER_SUPERVISION.md:20-21", cues_sec)
         self.assertIn("docs/PORT23_POWER_SUPERVISION.md:22", cues_sec)
         self.assertIn("docs/PORT18_OWNER_TRIAL_PLAN.md:262", cues_sec)
-
     def test_doc_button_check_citation_uses_current_line_352(self):
         """(b) Doc does not cite boot_prototype.c:350 for the button check and does cite the correct current line (352)."""
         self.assertNotIn("boot_prototype.c:350", self.content, "Found outdated citation 'boot_prototype.c:350' in doc")
@@ -1093,7 +1816,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
         sec = self.content.split("## Restart path", 1)[1]
         self.assertIn("boot_prototype.c:352", sec)
         self.assertNotIn("boot_prototype.c:350", sec)
-
     def test_loc_fc05b976_described_as_candidate_ram_loop(self):
         """(c) loc_fc05b976 is described as the candidate (RAM) loop and distinguished from stock ROM loop 0xFC05B976."""
         sec = self.content.split("## Restart path", 1)[1]
@@ -1111,7 +1833,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
             bool(re.search(r"not the stock ROM loop at `?0xFC05B976`?", sec, re.IGNORECASE)),
             "loc_fc05b976 not explicitly distinguished from stock ROM loop at 0xFC05B976",
         )
-
     def test_no_line_labelled_verified_mentions_pull_up_or_ground(self):
         """(a) No line labelled VERIFIED mentions 'pull-up' or 'ground'."""
         verified_lines = [
@@ -1131,7 +1852,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
                 bool(re.search(r"\bground\b", line, re.IGNORECASE)),
                 f"Line {idx} labelled VERIFIED mentions 'ground': {line}",
             )
-
     def test_bic_instruction_addresses_cited_correctly(self):
         """(b) Document cites 0xFC1284CE and 0xFC1284E0 for BIC instructions and does not cite 0xFC1284D0 / 0xFC1284E2 as BIC addresses."""
         # 1. Document must cite 0xFC1284CE and 0xFC1284E0
@@ -1163,7 +1883,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
                 any(s <= addr <= e for s, e, _ in ranges),
                 f"Address {hex(addr)} not covered by evidence manifest",
             )
-
     def test_restart_path_unpowered_cue_does_not_mention_0x14e(self):
         """(a) Test that the 'completely unpowered' cue does not mention 0x14E."""
         sec = self.content.split("## Restart path", 1)[1]
@@ -1177,7 +1896,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
         cue_text = m.group(0)
         self.assertNotIn("0x14E", cue_text, f"'completely unpowered' cue mentions 0x14E: {cue_text}")
         self.assertNotIn("0x14e", cue_text.lower(), f"'completely unpowered' cue mentions 0x14e: {cue_text}")
-
     def test_restart_path_no_verified_line_contains_after_loader_execution(self):
         """(b) Test that no VERIFIED-labelled line in the Restart path section contains 'after loader execution'."""
         sec = self.content.split("## Restart path", 1)[1]
@@ -1188,7 +1906,6 @@ class TestPort24LoaderTrace(unittest.TestCase):
                     line,
                     f"Line {idx} in Restart path is labelled VERIFIED and contains 'after loader execution': {line}",
                 )
-
     def test_restart_path_repeated_presses_with_inferred_or_unknown_in_same_paragraph(self):
         """(c) Test that the section contains the word 'repeated' together with an INFERRED or UNKNOWN label in the same paragraph."""
         sec = self.content.split("## Restart path", 1)[1]
