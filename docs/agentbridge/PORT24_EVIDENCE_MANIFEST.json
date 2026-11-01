@@ -99,6 +99,11 @@
           "start_address": "0xFDF20380",
           "end_address": "0xFDF2038F",
           "label": "PORT24-ROM-NORMAL-FLAG"
+        },
+        {
+          "start_address": "0xFC087110",
+          "end_address": "0xFC08713F",
+          "label": "PORT24-ROM-GPIO-READ"
         }
       ],
       "max_bytes_total": 32768,
@@ -395,6 +400,21 @@
       "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
       "classification": "STATIC_VERIFIED",
       "notes": "Target mode byte referenced by IsNormalCameraMode_FW (0xFDF20380 byte value 0x00 in stock ROM)"
+    },
+    {
+      "evidence_id": "PORT24-ROM-GPIO-READ",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC087110",
+      "end_address": "0xFC08713F",
+      "expected_byte_count": 48,
+      "sha256": "2238807ba4260729bb4991960fa1a40f257bed76425e8b7bb3cb6111a5920059",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
+      "classification": "STATIC_VERIFIED",
+      "notes": "sub_fc08711a GPIO read veneer at 0xFC08711A (branch to 0xFC0D73D0)"
     }
   ]
 }

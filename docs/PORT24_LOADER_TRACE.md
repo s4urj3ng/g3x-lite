@@ -782,44 +782,44 @@ All ROM citations in this document are bounded slices recorded in `docs/agentbri
 
 ### 1. Executive Summary & Gating Decision Architecture
 
-On Canon PowerShot G3 X firmware GM1.10C, the decision of whether a power-on execution sequence runs `StartDiskboot` is governed by a strict hierarchical sequence of early boot gates [VERIFIED: ROM 0xFC05B960-0xFC05BBDF, 0xFC05BBEA-0xFC05BC7A; PORT24-ROM-STARTUP-TASKS; PORT24-ROM-STARTDISKBOOT]:
+On Canon PowerShot G3 X firmware GM1.10C, the decision of whether a power-on execution sequence runs `StartDiskboot` is governed by a hierarchical sequence of early boot gates [VERIFIED: ROM 0xFC05B960-0xFC05BBDF, 0xFC05BBEA-0xFC05BC7A; PORT24-ROM-STARTUP-TASKS; PORT24-ROM-STARTDISKBOOT]:
 
 ```mermaid
 flowchart TD
-    subgraph PowerOnGate ["1. Power-On Supervision Gate (sub_fc05b962)"]
-        PWR["Hardware Power On / Reset 0xFC02000C"] --> InitTask["Initial Task runs sub_fc05b962"]
-        InitTask --> ModeChk["sub_fc079404: IsNormalCameraMode_FW\n(Reads ROM byte 0xFDF20380 = 0x00 -> returns 1)"]
-        ModeChk --> PwChk{"sub_fc1284ac: Power-On Button Check\nSample GPIO 0x97 (Power), 0x98 (Play),\n0x88 (WiFi), 0x02"}
-        PwChk -->|"All Released (r0 == 0)"| PwCut["sub_fc05ba56: Write 0x004C0003 to GPIO 0x67\nCUT POWER & HANG at 0xFC05B976\n(task_Startup NEVER created)"]
-        PwChk -->|"Any Pressed (r0 == 1)"| SaveCause["sub_fc08ecbc: Save boot cause\nto *(0x9BC4 + 12) = 0x00009BD0\n(0x80000 Power, 0x100000 Play)"]
-        SaveCause --> SpawnStartup["CreateTask Startup (priority 25, entry 0xFC05B8FC)"]
+    subgraph PowerOnGate ["1. Power-On Supervision Gate (sub_fc05b962) [VERIFIED]"]
+        PWR["Hardware Power On / Reset 0xFC02000C [VERIFIED]"] -->|"Initial task entry [VERIFIED]"| InitTask["Initial Task runs sub_fc05b962 [VERIFIED]"]
+        InitTask -->|"Call mode check [VERIFIED]"| ModeChk["sub_fc079404: IsNormalCameraMode_FW (Reads ROM 0xFDF20380 = 0x00, returns 1) [VERIFIED]"]
+        ModeChk -->|"Call button check [VERIFIED]"| PwChk{"sub_fc1284ac: Button Check (Sample GPIO 0x97, 0x98, 0x88, 0x02 via sub_fc08711a and BIC) [VERIFIED]"}
+        PwChk -->|"If r0 == 0: all released [VERIFIED]"| PwCut["sub_fc05ba56: Write 0x004C0003 to GPIO 0x67 [VERIFIED]; cuts DC-DC power [INFERRED]; hang at 0xFC05B976 [VERIFIED]"]
+        PwChk -->|"If r0 == 1: any pressed [VERIFIED]"| SaveCause["sub_fc08ecbc: Save boot cause to *(0x00009BD0) [VERIFIED]"]
+        SaveCause -->|"Create task [VERIFIED]"| SpawnStartup["CreateTask Startup (priority 25, entry 0xFC05B8FC) [VERIFIED]"]
     end
 
-    subgraph StartupSeq ["2. task_Startup Execution Sequence"]
-        SpawnStartup --> T_Clk["0xFC05B8FE: ClockSave"]
-        T_Clk --> T_Dcdc["0xFC05B902: Dcdc / Power setup"]
-        T_Dcdc --> T_Dev["0xFC05B906..0xFC05B90A: SioDrv / Device init"]
-        T_Dev --> CallSDB["0xFC05B90E: bl 0xfc05bbea (StartDiskboot)\n(CALLED UNCONDITIONALLY)"]
+    subgraph StartupSeq ["2. task_Startup Execution Sequence [VERIFIED]"]
+        SpawnStartup -->|"Startup task entry [VERIFIED]"| T_Clk["0xFC05B8FE: ClockSave [VERIFIED]"]
+        T_Clk -->|"If callee returns [VERIFIED]"| T_Dcdc["0xFC05B902: Dcdc / Power setup [VERIFIED]"]
+        T_Dcdc -->|"If callee returns [VERIFIED]"| T_Dev["0xFC05B906..0xFC05B90A: SioDrv / Device init [VERIFIED]"]
+        T_Dev -->|"If prior inits return [VERIFIED]"| CallSDB["0xFC05B90E: bl 0xfc05bbea (StartDiskboot) [VERIFIED]"]
     end
 
-    subgraph DiskbootGates ["3. StartDiskboot Internal Hardware Gates (0xFC05BBEA)"]
-        CallSDB --> ChkPC{"0xFC05BBEC: PC check\nExecuting from ROM vs RAM?"}
-        ChkPC -->|"RAM (0x00xxxxxx)"| RetClean["Clean Return (0xFC05BC34)"]
-        ChkPC -->|"ROM (0xFCxxxxxx)"| ChkCD{"0xFC05BBF4: sub_fc05c4e0(0)\nGPIO 0x14E (SD Card Detect)"}
-        ChkCD -->|"Card Missing / Door Open"| RetClean
-        ChkCD -->|"Card Present"| InitSD["0xFC05BBFE: blx SD1stInit\nSD Host Controller & Bus Init"]
-        InitSD --> ChkWP{"0xFC05BC02: sub_fc05c4e0(1)\nGPIO 0x14F (SD Card Lock Switch)"}
-        ChkWP -->|"Unlocked (bit 0 == 0)"| RetClean
-        ChkWP -->|"Locked (bit 0 == 1)"| ChkVBR{"0xFC05BC18: sub_fc37aea6\nCheck VBR for BOOTDISK"}
-        ChkVBR -->|"Missing BOOTDISK"| RetClean
-        ChkVBR -->|"Valid BOOTDISK"| FindFile{"0xFC05BC3C: Search SD root\nfor A/DISKBOOT.BIN / A/Upgrader.bin"}
-        FindFile -->|"File Not Found"| RetClean
-        FindFile -->|"File Found"| ChkExe{"0xFC05BC62: 0xFC05BC62: Verify\nexecutable payload"}
-        ChkExe -->|"Invalid Format"| RetClean
-        ChkExe -->|"Valid Executable"| Handoff["0xFC05BC7A: bl sub_fc0d9c9c\nDisable IRQs (0xFC0D9CA2)\nFlush Cache (0xFC0D9CAC)\nCopy/Decrypt payload (0xFC0D9CB0)\nbx ip to 0x8001"]
+    subgraph DiskbootGates ["3. StartDiskboot Internal Hardware Gates (0xFC05BBEA) [VERIFIED]"]
+        CallSDB -->|"StartDiskboot entry [VERIFIED]"| ChkPC{"0xFC05BBEC: PC check (ROM vs RAM) [VERIFIED]"}
+        ChkPC -->|"If RAM: branch 0xFC05BBF0 to 0xFC05BC34 [VERIFIED]"| RetClean["Clean Return (0xFC05BC34) [VERIFIED]"]
+        ChkPC -->|"If ROM: fall through [VERIFIED]"| ChkCD{"0xFC05BBF4: sub_fc05c4e0(0) reads GPIO 0x14E (Card Detect) [VERIFIED]"}
+        ChkCD -->|"If bit 0 != 0: card missing / door open, branch 0xFC05BBFC to 0xFC05BC34 [VERIFIED]"| RetClean
+        ChkCD -->|"If bit 0 == 0: card present [VERIFIED]"| InitSD["0xFC05BBFE: blx SD1stInit (SD controller init) [VERIFIED]"]
+        InitSD -->|"Call lock check [VERIFIED]"| ChkWP{"0xFC05BC02: sub_fc05c4e0(1) reads GPIO 0x14F (Card Lock Switch) [VERIFIED]"}
+        ChkWP -->|"If bit 0 == 0: unlocked, branch 0xFC05BC0A to 0xFC05BC34 [VERIFIED]"| RetClean
+        ChkWP -->|"If bit 0 == 1: locked [VERIFIED]"| ChkVBR{"0xFC05BC18: sub_fc37aea6 checks is_bootdisk (VBR 0x1E0 on FAT32 / 0x40 on FAT12/16) [VERIFIED]"}
+        ChkVBR -->|"If is_bootdisk == 0: branch 0xFC05BC1C to 0xFC05BC34 [VERIFIED]"| RetClean
+        ChkVBR -->|"If is_bootdisk != 0 [VERIFIED]"| FindFile{"0xFC05BC3C: Search SD root for A/DISKBOOT.BIN / A/Upgrader.bin [VERIFIED]"}
+        FindFile -->|"If file missing: branch to 0xFC05BC34 [VERIFIED]"| RetClean
+        FindFile -->|"If file present [VERIFIED]"| ChkExe{"0xFC05BC62: Verify executable payload [VERIFIED]"}
+        ChkExe -->|"If invalid format: branch to 0xFC05BC34 [VERIFIED]"| RetClean
+        ChkExe -->|"If valid executable [VERIFIED]"| Handoff["0xFC05BC7A: bl sub_fc0d9c9c to hand off to DISKBOOT at 0x8001 [VERIFIED]"]
     end
 
-    RetClean --> ContStock["0xFC05B912: Continue task_Startup\n0xFC05B922: Start Watchdog (sub_fc418f2a)\n0xFC05B92E: CreateTask PhySw\nTransition to Stock UI!"]
+    RetClean -->|"Resume task_Startup [VERIFIED]"| ContStock["0xFC05B912: Continue task_Startup; 0xFC05B922: Start Watchdog; Transition to Stock UI [VERIFIED]"]
 ```
 
 ---
@@ -833,23 +833,30 @@ flowchart TD
    - In `sub_fc05b962`, ROM invokes `sub_fc079404` (`IsNormalCameraMode_FW`) at `0xFC05B968` [VERIFIED: ROM 0xFC05B968; PORT24-ROM-STARTUP-TASKS].
    - Routine `sub_fc079404` loads literal pointer `0xFC0794B0` pointing to ROM byte `0xFDF20380`, which contains `0x00`, returning `r0 = 1` (`NORMAL_MODE`) in stock configuration [VERIFIED: ROM 0xFC079404-0xFC079410; PORT24-ROM-NORMAL-MODE; ROM 0xFDF20380; PORT24-ROM-NORMAL-FLAG].
    - Caller `sub_fc05b962` at `0xFC05B96C` then calls `sub_fc1284ac` [VERIFIED: ROM 0xFC05B96C; PORT24-ROM-STARTUP-TASKS].
-   - Routine `sub_fc1284ac` (`0xFC1284AC..0xFC12851A`) polls physical power-on buttons via `GPIO_Read` at `0xFC0D73D0`: pin 151 (`0x97`, Power button) at `0xFC1284BC`, pin 152 (`0x98`, Playback button) at `0xFC1284C8`, pin 136 (`0x88`, Wi-Fi button) at `0xFC1284DA`, and pin 2 (`0x02`, GPIO 2) at `0xFC1284EC` [VERIFIED: ROM 0xFC1284BC-0xFC1284F2; PORT24-ROM-POWERON-CHECK; ROM 0xFC0D73D0; PORT24-ROM-GPIO-WRITE-MMIO; docs/PORT23_POWER_SUPERVISION.md:109-139].
-   - When any power-on button is pressed: `sub_fc1284ac` calls `sub_fc08ecbc` (`0xFC128510`) to write the startup cause bitmask into `*(0x9BC4 + 12)` (`0x00009BD0`) (`0x80000` for Power, `0x100000` for Playback, `0x40000` for Wi-Fi, `0x20000` for GPIO 2) and returns `r0 = 1` [VERIFIED: ROM 0xFC128506-0xFC128518; PORT24-ROM-POWERON-CHECK; ROM 0xFC08ECBC-0xFC08ECEC; PORT24-ROM-STARTCAUSE-SAVE; ROM 0xFC08EEF0; PORT24-ROM-STARTCAUSE-PTR].
-   - When all buttons are released (`r0 == 0`): `cbnz r0, 0xfc05b978` at `0xFC05B970` falls through to `0xFC05B972: bl sub_fc05ba56` [VERIFIED: ROM 0xFC05B970-0xFC05B972; PORT24-ROM-STARTUP-TASKS].
-   - Function `sub_fc05ba56` writes `0x004C0003` to GPIO 0x67 (pin 103, mapping to MMIO `0xD20B099C` via `GPIO_Write` at `0xFC0D73C4`), de-asserting the power-hold latch and cutting DC-DC power, then enters an infinite hang loop `0xFC05B976: b .` [VERIFIED: ROM 0xFC05BA56-0xFC05BA5A, 0xFC05B976; PORT24-ROM-STARTUP-TASKS; ROM 0xFC0D73C4; PORT24-ROM-GPIO-WRITE-MMIO; docs/PORT23_POWER_SUPERVISION.md:157-163].
-   - If this power cut occurs, `task_Startup` is never spawned and `StartDiskboot` never executes [VERIFIED: ROM 0xFC05B970-0xFC05B976; PORT24-ROM-STARTUP-TASKS].
+   - Routine `sub_fc1284ac` (`0xFC1284AC..0xFC12851A`) reads the physical power-on buttons by calling `sub_fc08711a` (`GPIO_Read` at `0xFC08711A`, which branches to `0xFC0D73D0`): pin 151 (`0x97`, Power button) at `0xFC1284BC`, pin 152 (`0x98`, Playback button) at `0xFC1284C8`, pin 136 (`0x88`, Wi-Fi button) at `0xFC1284DA`, and pin 2 (`0x02`, GPIO 2) at `0xFC1284EC` [VERIFIED: ROM 0xFC1284BC-0xFC1284F2; PORT24-ROM-POWERON-CHECK; ROM 0xFC087110-0xFC08713F; PORT24-ROM-GPIO-READ; docs/PORT23_POWER_SUPERVISION.md:109-139].
+   - Raw hardware inputs and normalized pressed flags operate through distinct logic [VERIFIED: ROM 0xFC1284BC-0xFC1284F2; PORT24-ROM-POWERON-CHECK; docs/PORT23_POWER_SUPERVISION.md:120-140]:
+     - **Raw hardware inputs**: The button GPIO lines are active-low electrical signals: when a physical switch is released, the pull-up holds the line high, so `sub_fc08711a` returns raw `1`; when a physical switch is depressed, the line is pulled to ground, returning raw `0` [VERIFIED: ROM 0xFC1284BE-0xFC1284F2; PORT24-ROM-POWERON-CHECK; docs/PORT23_POWER_SUPERVISION.md:120-140].
+     - **Normalized pressed flags**: Following each call to `sub_fc08711a`, `sub_fc1284ac` executes `bic.w rx, r6, r0` (where `r6 = 1`) to invert the active-low hardware reading into a normalized pressed flag: bitwise `1` if pressed (raw 0), and `0` if released (raw 1) [VERIFIED: ROM 0xFC1284C4, 0xFC1284D0, 0xFC1284E2, 0xFC1284F2; PORT24-ROM-POWERON-CHECK; docs/PORT23_POWER_SUPERVISION.md:120-140].
+   - **Statically verified conditional code behaviour** [VERIFIED: ROM 0xFC05B970-0xFC05BA5A; PORT24-ROM-STARTUP-TASKS]:
+     - If any button is pressed: at least one normalized flag is `1`, `sub_fc1284ac` calls `sub_fc08ecbc` (`0xFC128510`) to write the startup cause bitmask into `*(0x9BC4 + 12)` (`0x00009BD0`) (`0x80000` for Power, `0x100000` for Playback, `0x40000` for Wi-Fi, `0x20000` for GPIO 2) and returns `r0 = 1` [VERIFIED: ROM 0xFC128506-0xFC128518; PORT24-ROM-POWERON-CHECK; ROM 0xFC08ECBC-0xFC08ECEC; PORT24-ROM-STARTCAUSE-SAVE; ROM 0xFC08EEF0; PORT24-ROM-STARTCAUSE-PTR].
+     - If all buttons are released: all normalized flags are `0`, so `sub_fc1284ac` returns `r0 = 0` via `beq.n 0xfc12851a` at `0xFC128504` [VERIFIED: ROM 0xFC1284FC-0xFC128504, 0xFC12851A; PORT24-ROM-POWERON-CHECK].
+     - At `0xFC05B970`: if `r0 == 0`, branch `cbnz r0, 0xfc05b978` is not taken; execution falls through to `0xFC05B972: bl sub_fc05ba56` [VERIFIED: ROM 0xFC05B970-0xFC05B972; PORT24-ROM-STARTUP-TASKS].
+     - Function `sub_fc05ba56` loads `0x004C0003`, sets `r0 = 103` (GPIO `0x67`), calls `0xFC0D73C4` (`GPIO_Write` targeting MMIO `0xD20B099C`), and returns to hang loop `0xFC05B976: b .` [VERIFIED: ROM 0xFC05BA56-0xFC05BA5A, 0xFC05B976; PORT24-ROM-STARTUP-TASKS; ROM 0xFC0D73C4; PORT24-ROM-GPIO-WRITE-MMIO; docs/PORT23_POWER_SUPERVISION.md:157-163].
+   - **Inferred shutdown mechanism**: writing `0x004C0003` to GPIO 0x67 de-asserts the hardware power-hold latch, causing the power supply rails to collapse and cutting DC-DC power to the SoC [INFERRED: docs/PORT23_POWER_SUPERVISION.md:157-163].
+   - If this power cut occurs, `task_Startup` is never created and `StartDiskboot` never executes [VERIFIED: ROM 0xFC05B970-0xFC05B976; PORT24-ROM-STARTUP-TASKS].
 
-2. **Unconditional Execution of `StartDiskboot` within `task_Startup`** [VERIFIED: ROM 0xFC05B8FC-0xFC05B90E; PORT24-ROM-STARTUP-TASKS]:
-   - If `sub_fc1284ac` returns non-zero, `sub_fc05b962` branches to `0xFC05B978`, initializes ARAM heap `0x006CE000`, and creates task `"Startup"` (entry `0xFC05B8FC`, priority 25) [VERIFIED: ROM 0xFC05B978-0xFC05B98E; PORT24-ROM-STARTUP-TASKS].
-   - In `task_Startup` (`0xFC05B8FC`), execution proceeds sequentially through `0xFC05B8FE` (clock save), `0xFC05B902` (Dcdc/Power setup), `0xFC05B906`, and `0xFC05B90A` (device drivers) straight to `0xFC05B90E: bl 0xfc05bbea` (`StartDiskboot`) [VERIFIED: ROM 0xFC05B8FC-0xFC05B90E; PORT24-ROM-STARTUP-TASKS].
-   - There are zero conditional branches between `task_Startup` entry and `0xFC05B90E` [VERIFIED: ROM 0xFC05B8FC-0xFC05B90E; PORT24-ROM-STARTUP-TASKS].
-   - Therefore, `StartDiskboot` runs unconditionally on every power-on that successfully spawns `task_Startup` [VERIFIED: ROM 0xFC05B8FC-0xFC05B90E; PORT24-ROM-STARTUP-TASKS].
+2. **Conditional Reaching of `StartDiskboot` within `task_Startup`** [VERIFIED: ROM 0xFC05B8FC-0xFC05B90E; PORT24-ROM-STARTUP-TASKS]:
+   - If `sub_fc1284ac` returns non-zero (`r0 == 1`), `sub_fc05b962` branches to `0xFC05B978`, initializes ARAM heap `0x006CE000`, and creates task `"Startup"` (entry `0xFC05B8FC`, priority 25) [VERIFIED: ROM 0xFC05B978-0xFC05B98E; PORT24-ROM-STARTUP-TASKS].
+   - In `task_Startup` (`0xFC05B8FC`), execution proceeds sequentially through `0xFC05B8FE` (clock save), `0xFC05B902` (Dcdc/Power setup), `0xFC05B906` (SioDrv), and `0xFC05B90A` (device drivers) straight to `0xFC05B90E: bl 0xfc05bbea` (`StartDiskboot`) [VERIFIED: ROM 0xFC05B8FC-0xFC05B90E; PORT24-ROM-STARTUP-TASKS].
+   - Within `task_Startup`'s own instructions (`0xFC05B8FC`–`0xFC05B90E`), there are zero conditional branches [VERIFIED: ROM 0xFC05B8FC-0xFC05B90E; PORT24-ROM-STARTUP-TASKS].
+   - Therefore, `StartDiskboot` is reached if each prior initialization callee returns normally [VERIFIED: ROM 0xFC05B8FC-0xFC05B90E; PORT24-ROM-STARTUP-TASKS].
+   - Internal behavior of those four initialization callees is unread outside manifest ranges [UNKNOWN: callee internals not read]. Whether any callee can trap, hang, cut power, or abort before returning remains UNKNOWN [UNKNOWN].
 
-3. **Absence of Boot-Retry or Reset-Cause Lockout Flags** [VERIFIED: ROM 0xFC05B8FC-0xFC05B90E; PORT24-ROM-STARTUP-TASKS]:
-   - Within the ranges read (0xFC020000..0xFC0201FF, 0xFC05B8E0..0xFC05BBDF, 0xFC05BBEA..0xFC05BDE9, 0xFC05C4D0..0xFC05C51F, 0xFC079400..0xFC0794FF, 0xFC08ECB0..0xFC08ECFF, 0xFC08EEE0..0xFC08EEFF, 0xFC0D0080..0xFC0D023F, 0xFC0D73C0..0xFC0D74BF, 0xFC0D9C00..0xFC0D9DFF, 0xFC127A00..0xFC127B7F, 0xFC1284A0..0xFC1285DF, 0xFC135280..0xFC1352FF, 0xFC135C00..0xFC135E3F, 0xFC31BEE0..0xFC31BF3F, 0xFC37AE60..0xFC37AEFF, 0xFC418700..0xFC41875F, 0xFC418F20..0xFC418F7F, and 0xFDF20380..0xFDF2038F), no retry or lockout flag is read on the path from task_Startup to StartDiskboot [VERIFIED: ROM 0xFC05B8FC-0xFC05B90E; PORT24-ROM-STARTUP-TASKS].
-   - whether any other code stores or reads such a flag [UNKNOWN].
+3. **Absence of Boot-Retry or Reset-Cause Lockout Flags in Inspected Path** [VERIFIED: ROM 0xFC05B8FC-0xFC05B90E; PORT24-ROM-STARTUP-TASKS]:
+   - Within the caller's own instructions in the ranges read (0xFC020000..0xFC0201FF, 0xFC05B8E0..0xFC05BBDF, 0xFC05BBEA..0xFC05BDE9, 0xFC05C4D0..0xFC05C51F, 0xFC079400..0xFC0794FF, 0xFC087110..0xFC08713F, 0xFC08ECB0..0xFC08ECFF, 0xFC08EEE0..0xFC08EEFF, 0xFC0D0080..0xFC0D023F, 0xFC0D73C0..0xFC0D74BF, 0xFC0D9C00..0xFC0D9DFF, 0xFC127A00..0xFC127B7F, 0xFC1284A0..0xFC1285DF, 0xFC135280..0xFC1352FF, 0xFC135C00..0xFC135E3F, 0xFC31BEE0..0xFC31BF3F, 0xFC37AE60..0xFC37AEFF, 0xFC418700..0xFC41875F, 0xFC418F20..0xFC418F7F, and 0xFDF20380..0xFDF2038F), no retry or lockout flag is read on the path from task_Startup to StartDiskboot [VERIFIED: ROM 0xFC05B8FC-0xFC05B90E; PORT24-ROM-STARTUP-TASKS].
+   - Whether any other code stores or reads such a flag remains UNKNOWN [UNKNOWN].
    - The startup cause at `0x00009BD0` is stored in Low RAM copied from ROM during early boot, not in non-volatile storage [VERIFIED: ROM 0xFC08ECBC-0xFC08ECEC; PORT24-ROM-STARTCAUSE-SAVE; ROM 0xFC08EEF0; PORT24-ROM-STARTCAUSE-PTR].
-   - External sub-CPU handshake protocol and internal PMIC timeout registers reside entirely in the auxiliary microcontroller outside `PRIMARY.BIN` [UNKNOWN: external microcontroller firmware].
+   - Reset cause register definitions, persisted non-volatile state (such as RTC/backup RAM or EEPROM/flash flags), and external sub-CPU handshake behavior remain UNKNOWN [UNKNOWN: unread registers and external microcontroller firmware].
 
 ---
 
@@ -857,52 +864,67 @@ flowchart TD
 
 1. **Owner Observation of Short Press vs Long Press** [VERIFIED: owner-reported, 2026-11-01; milestone task brief; docs/PORT24_POWERON_FIX.md:16-29]:
    - With the PORT-19 default candidate build on a locked SD card, a short power-button press caused the camera to power completely off after loader execution, whereas repeated or continuous long presses sometimes brought up the stock UI [VERIFIED: owner-reported, 2026-11-01; milestone task brief; docs/PORT24_POWERON_FIX.md:16-29].
+   - Physical duration of a user button press before release was never instrumented or measured [UNKNOWN: button timing unmeasured].
+   - Physical power-latch timing and electrical holding characteristics cannot be verified from static ROM disassembly alone [INFERRED: docs/PORT23_POWER_SUPERVISION.md:157-163].
 
 2. **Mechanism of Power Cut on Short Press** [INFERRED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:350-354; docs/PORT23_POWER_SUPERVISION.md:43-50]:
-   - On initial power-on, the user actively depresses the power button, satisfying the first `sub_fc1284ac` check at `0xFC05B96C` [VERIFIED: ROM 0xFC05B96C-0xFC05B978; PORT24-ROM-STARTUP-TASKS].
+   - On initial power-on, the user actively depresses the physical power button (raw GPIO 0x97 reads `0`, normalized pressed flag is `1`), satisfying the first `sub_fc1284ac` check at `0xFC05B96C` [VERIFIED: ROM 0xFC05B96C-0xFC05B978; PORT24-ROM-STARTUP-TASKS; docs/PORT23_POWER_SUPERVISION.md:120-140].
    - Routine `sub_fc05b962` spawns `task_Startup` (`0xFC05B8FC`), which calls `StartDiskboot` (`0xFC05B90E`) [VERIFIED: ROM 0xFC05B8FC, 0xFC05B90E; PORT24-ROM-STARTUP-TASKS].
    - `StartDiskboot` loads and jumps to `DISKBOOT.BIN` at `0x8001` via `sub_fc0d9c9c` [VERIFIED: ROM 0xFC05BC7A; PORT24-ROM-STARTDISKBOOT; ROM 0xFC0D9CCA; PORT24-ROM-HANDOFF-PREPARE].
-   - The candidate loader runs `boot()` in `boot_prototype.c:85-161`, initializes DryOS, and enters `sub_fc05b962_my` (`boot_prototype.c:334`) [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:85-356].
+   - The candidate loader executes `boot()` in `boot_prototype.c:85-161`, initializes DryOS, and enters `sub_fc05b962_my` (`boot_prototype.c:334`) [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:85-356].
    - At line 350, `boot_prototype.c` re-runs `bl sub_fc1284ac` a **second time** [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:350].
-   - The exact duration of a short button tap before physical release is unmeasured offline [UNKNOWN].
-   - On a brief tap, the user has already released the button before line 350 executes; all polled button GPIOs return 0 (released), so `sub_fc1284ac` returns `0` [VERIFIED: ROM 0xFC1284BC-0xFC128504; PORT24-ROM-POWERON-CHECK].
-   - On zero return, `sub_fc05b962_my` invokes `sub_fc05ba56` (`0xFC05BA56`), writing `0x004C0003` to GPIO 0x67 (MMIO `0xD20B099C`), de-asserting the power-hold latch and cutting system power [VERIFIED: ROM 0xFC05BA56; PORT24-ROM-STARTUP-TASKS; ROM 0xFC0D73C4; PORT24-ROM-GPIO-WRITE-MMIO; chdk-port/platform/g3x/sub/110c/boot_prototype.c:350-354].
+   - On a brief button tap, the user has already released the physical button before line 350 executes; raw inputs read `1`, which `bic` normalizes to `0` (released); with all normalized flags at `0`, `sub_fc1284ac` returns `r0 = 0` [VERIFIED: ROM 0xFC1284BC-0xFC128504; PORT24-ROM-POWERON-CHECK; docs/PORT23_POWER_SUPERVISION.md:120-140].
+   - Statically verified conditional code behaviour: if `r0 == 0`, `boot_prototype.c:352-354` invokes `sub_fc05ba56`, writing `0x004C0003` to GPIO 0x67 (MMIO `0xD20B099C`) and entering infinite loop `0xFC05B976: b .` [VERIFIED: ROM 0xFC05BA56, 0xFC05B976; PORT24-ROM-STARTUP-TASKS; ROM 0xFC0D73C4; PORT24-ROM-GPIO-WRITE-MMIO; chdk-port/platform/g3x/sub/110c/boot_prototype.c:350-354].
+   - Inferred shutdown mechanism: de-asserting GPIO 0x67 drops the power-hold latch, terminating power to the camera [INFERRED: docs/PORT23_POWER_SUPERVISION.md:157-163].
 
-3. **Mechanism of Reaching Stock UI on Long Press (DISKBOOT Runs and Survives Second Check)** [INFERRED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:350, 425-438; docs/PORT18_OWNER_TRIAL_PLAN.md:262]:
-   - If the user holds the power button down continuously until the LCD illuminates, GPIO 0x97 remains asserted (`1`) when `sub_fc1284ac` runs its second check at `boot_prototype.c:350` [VERIFIED: ROM 0xFC1284BC-0xFC1284C4, 0xFC128518; PORT24-ROM-POWERON-CHECK; chdk-port/platform/g3x/sub/110c/boot_prototype.c:350].
-   - Routine `sub_fc1284ac` returns `1`, branching to `loc_fc05b978` (`boot_prototype.c:356`), which creates `task_Startup_my` and tail-calls stock continuation `sub_fc0d0126` (`boot_prototype.c:438`) [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:356, 438; ROM 0xFC0D0126; PORT24-ROM-FIRMWARE-CONT].
-   - Stock firmware initialization then takes over, powers the display, and reaches the normal camera UI [INFERRED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:438].
-   - In the O1 trial, the Canon Basic witness inspector subsequently reported `CONT_ATTEMPTED` (Stage 0x07) at `0x0035F7A0` [VERIFIED: owner-reported, 2026-11-01; docs/PORT18_OWNER_TRIAL_PLAN.md:262; firmware/tools/witness_inspector_gm110c.m:8-24].
-   - Because stage 0x07 is recorded exclusively by `task_Startup_my` immediately prior to branching to `sub_fc0d0126`, this confirms DISKBOOT was NOT skipped during those long-press stock boots [INFERRED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:425-438; docs/PORT18_OWNER_TRIAL_PLAN.md:262].
-   - Because DRAM contents persist across warm reboots and power transients, a fixed nonce (`0x32A80001`) cannot prove the record was newly written on that specific boot cycle rather than retained from an earlier execution (`FRESHNESS_UNVERIFIED`), meaning the record could theoretically be leftover state from an earlier boot [VERIFIED: docs/CHDK_PORT1G1_CRITICAL_FIXES.md:53-63; docs/PORT16_OWNER_TRIAL_PLAN.md:217].
+3. **Analysis of Long Press and Stale-RAM Caveat** [INFERRED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:350, 425-438; docs/PORT18_OWNER_TRIAL_PLAN.md:262]:
+   - Statically verified conditional code behaviour: if the user holds the power button down continuously through line 350, raw GPIO 0x97 reads `0`, which `bic` normalizes to `1` (pressed), causing `sub_fc1284ac` to return `1` [VERIFIED: ROM 0xFC1284BC-0xFC1284C4, 0xFC128518; PORT24-ROM-POWERON-CHECK; chdk-port/platform/g3x/sub/110c/boot_prototype.c:350].
+   - If `sub_fc1284ac` returns `1`: execution branches to `loc_fc05b978` (`boot_prototype.c:356`), creating `task_Startup_my` which writes the Stage 0x07 witness record and tail-calls stock continuation `sub_fc0d0126` (`boot_prototype.c:425-438`) [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:356, 425-438; ROM 0xFC0D0126; PORT24-ROM-FIRMWARE-CONT].
+   - In the O1 trial, the Canon Basic witness inspector subsequently reported `CONT_ATTEMPTED` (Stage 0x07) / `FRESHNESS_UNVERIFIED` at `0x0035F7A0` [VERIFIED: owner-reported, 2026-11-01; docs/PORT18_OWNER_TRIAL_PLAN.md:262; firmware/tools/witness_inspector_gm110c.m:8-24].
+   - **Stale-RAM Caveat & Attribution Uncertainty**: `CONT_ATTEMPTED` with `FRESHNESS_UNVERIFIED` cannot confirm that the long-press stock boots executed DISKBOOT [INFERRED: docs/CHDK_PORT1G1_CRITICAL_FIXES.md:53-63; docs/PORT16_OWNER_TRIAL_PLAN.md:217]. Because DRAM contents persist across warm reboots and power transients without dynamic session nonces, a static magic signature and stage record cannot identify which boot cycle wrote the value or prove that stock continuation was reached on that specific boot [INFERRED: docs/CHDK_PORT1G1_CRITICAL_FIXES.md:53-63; docs/PORT21_RAM_LIFETIME.md:44-48]. The O1 trial outcome table leaves attribution open, and the possibility of stale RAM persists [VERIFIED: docs/PORT18_OWNER_TRIAL_PLAN.md:262; docs/PORT21_RAM_LIFETIME.md:44-48].
+   - Therefore, whether long-press stock boots executed DISKBOOT or bypassed it entirely remains UNKNOWN [UNKNOWN: trial attribution unproven without freshness verification; stale RAM possibility remains].
 
 4. **Under Which Evidenced Conditions a Later Power-On Skips StartDiskboot** [VERIFIED: ROM 0xFC05BBEA-0xFC05BC74; PORT24-ROM-STARTDISKBOOT]:
    Inside `StartDiskboot`, execution skips payload loading and branches to clean return `0xFC05BC34` under exactly four evidenced conditions [VERIFIED: ROM 0xFC05BBEA-0xFC05BC74; PORT24-ROM-STARTDISKBOOT]:
    - *Condition 1: SD Card Lock Switch in UNLOCKED position* [VERIFIED: ROM 0xFC05BC02-0xFC05BC0A; PORT24-ROM-STARTDISKBOOT; ROM 0xFC05C4EC-0xFC05C4FA; PORT24-ROM-CARD-SWITCHES]: Routine `sub_fc05c4e0(1)` reads GPIO pin 335 (`0x14F`, SD write-protect switch, MMIO `0xD20B053C`); if bit 0 == 0 (unlocked), branch `0xFC05BC08..0xFC05BC0A: beq.n 0xfc05bc34` exits to clean return.
    - *Condition 2: SD Card Absent or Card Door Open* [VERIFIED: ROM 0xFC05BBF4-0xFC05BBFC; PORT24-ROM-STARTDISKBOOT; ROM 0xFC05C4E0-0xFC05C4EA; PORT24-ROM-CARD-SWITCHES]: Routine `sub_fc05c4e0(0)` reads GPIO pin 334 (`0x14E`, SD card detect switch, MMIO `0xD20B0538`); if bit 0 != 0 (card missing or door open), branch `0xFC05BBF8..0xFC05BBFC: bne.n 0xfc05bc34` exits to clean return.
-   - *Condition 3: Missing "BOOTDISK" Volume Marker* [VERIFIED: ROM 0xFC05BC18-0xFC05BC1C; PORT24-ROM-STARTDISKBOOT; ROM 0xFC37AEA6-0xFC37AED2; PORT24-ROM-VBR-CHECK]: Routine `sub_fc37aea6` checks the FAT Volume Boot Record at offset `0x40` for `"BOOTDISK"`; if absent, branch `0xFC05BC18..0xFC05BC1C: cbz r0, 0xfc05bc34` exits to clean return.
+   - *Condition 3: Missing "BOOTDISK" Volume Marker* [VERIFIED: ROM 0xFC05BC18-0xFC05BC1C; PORT24-ROM-STARTDISKBOOT; ROM 0xFC37AE60-0xFC37AEFF; PORT24-ROM-VBR-CHECK; docs/PORT19_BOOTDISK_VBR.md:12-25, 90-135]: Routine `sub_fc37aea6` reads the drive descriptor's `is_bootdisk` flag (at offset `0x74` in `drive_desc`), which is populated during volume mounting by the Mounter volume mounting routine [VERIFIED: ROM 0xFC05BC18; PORT24-ROM-STARTDISKBOOT; docs/PORT19_BOOTDISK_VBR.md:12-25, 126-135]. As proven in `docs/PORT19_BOOTDISK_VBR.md:12-25, 90-120`, the Mounter checks the Volume Boot Record at filesystem-dependent offsets: offset **`0x1E0`** (480 dec) on FAT32 media and offset **`0x40`** (64 dec) on FAT12/FAT16 media for the 8-byte ASCII string `"BOOTDISK"` [VERIFIED: docs/PORT19_BOOTDISK_VBR.md:12-25, 90-120]. If `is_bootdisk == 0` (marker absent or unverified), branch `0xFC05BC18..0xFC05BC1C: cbz r0, 0xfc05bc34` exits to clean return [VERIFIED: ROM 0xFC05BC18-0xFC05BC1C; PORT24-ROM-STARTDISKBOOT].
    - *Condition 4: Missing DISKBOOT.BIN or Invalid Executable Format* [VERIFIED: ROM 0xFC05BC3C-0xFC05BC74; PORT24-ROM-STARTDISKBOOT]: Routine `sub_fc05bc3c` searches SD root for `"A/DISKBOOT.BIN"` (`0xFC05BC90`) and `"A/Upgrader.bin"` (`0xFC05BCA0`); if neither file exists or if format validation at `0xFC05BC62` rejects the binary, execution branches to clean return `0xFC05BC34`.
    - On taking clean return `0xFC05BC34`, `StartDiskboot` returns to caller `task_Startup` at `0xFC05B912`, which proceeds through stock watchdog startup `0xFC05B922` (`sub_fc418f2a`) and launches stock camera UI tasks without executing DISKBOOT [VERIFIED: ROM 0xFC05B912-0xFC05B92E; PORT24-ROM-STARTUP-TASKS; ROM 0xFC418F2A; PORT24-ROM-WATCHDOG-START].
-   - Whether abrupt power-off desynchronizes the SD bus or host controller to cause a timeout on rapid retry [UNKNOWN: unverified hypothesis].
+   - Whether abrupt power-off desynchronizes the SD bus or host controller to cause a transient mount timeout on rapid retry remains UNKNOWN [UNKNOWN: unverified hypothesis].
+
+5. **Separate Role of the SCRIPT Marker (Canon Basic Activation)** [VERIFIED: docs/PORT19_BOOTDISK_VBR.md:28-36, 105-135]:
+   - During the filesystem VBR mount sequence, `Mounter.c` also checks for the 6-byte ASCII marker `"SCRIPT"` at fixed offset **`0x1F0`** (496 dec) on FAT12, FAT16, and FAT32 filesystems [VERIFIED: docs/PORT19_BOOTDISK_VBR.md:28-36, 105-120].
+   - If `"SCRIPT"` matches at offset `0x1F0`, the mounter sets the drive descriptor's `is_scriptdisk` field (offset `0x78`), enabling Canon Basic script activation (`script.req`) [VERIFIED: docs/PORT19_BOOTDISK_VBR.md:28-36].
+   - Gating determination: `StartDiskboot` checks only `is_bootdisk` via `sub_fc37aea6` at `0xFC05BC18` and never queries `is_scriptdisk` [VERIFIED: ROM 0xFC05BC18-0xFC05BC1C; PORT24-ROM-STARTDISKBOOT; docs/PORT19_BOOTDISK_VBR.md:121-135].
+   - Therefore, the `SCRIPT` marker does not gate `StartDiskboot` [VERIFIED: ROM 0xFC05BC18-0xFC05BC1C; PORT24-ROM-STARTDISKBOOT; docs/PORT19_BOOTDISK_VBR.md:121-135].
 
 ---
 
 ### 3. Observable Cues for Hand Inspection
 
-The following physical cues allow the camera owner to observe and distinguish the restart path during camera operations (for use in T4) [VERIFIED: docs/PORT23_POWER_SUPERVISION.md:20-22; docs/PORT18_OWNER_TRIAL_PLAN.md:262; docs/PORT24_POWERON_FIX.md:16-29]:
+The following physical cues allow the camera owner to observe and distinguish the restart path during camera operations (for use in T4), qualified by build type [VERIFIED: docs/PORT23_POWER_SUPERVISION.md:20-22; docs/PORT18_OWNER_TRIAL_PLAN.md:262; docs/PORT24_POWERON_FIX.md:16-29]:
 
-1. **Rear Green Status LED Activity** [VERIFIED: owner-reported, 2026-11-01; docs/PORT23_POWER_SUPERVISION.md:20-22]:
-   - Brief green flash or multi-second pulse, followed by immediate power-off with LCD remaining dark [VERIFIED: owner-reported, 2026-11-01; docs/PORT23_POWER_SUPERVISION.md:20-22].
-     - *Restart Path Implication*: `StartDiskboot` ran, SD card was locked with valid `"BOOTDISK"`, and `DISKBOOT.BIN` executed at `0x8001`; prototype reboot reached Stage 5 (`sub_fc05b962_my`) where the power button was found released; `sub_fc1284ac` returned `0`, calling `sub_fc05ba56` (GPIO 0x67 power cut) [INFERRED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:350-354; docs/PORT23_POWER_SUPERVISION.md:48].
-   - Zero green LED flash, camera remains completely unpowered [VERIFIED: owner-reported, 2026-11-01; docs/PORT23_POWER_SUPERVISION.md:20-22].
-     - *Restart Path Implication*: Cold-boot power-on check failed before `task_Startup` was spawned, or hardware power-hold collapsed before loader entry `0x8000`, or battery was exhausted / card door open [INFERRED: ROM 0xFC05B970-0xFC05B976; PORT24-ROM-STARTUP-TASKS].
-   - Zero green LED flash, but camera boots directly to stock UI [VERIFIED: owner-reported, 2026-11-01; docs/PORT18_OWNER_TRIAL_PLAN.md:262].
-     - *Restart Path Implication*: `StartDiskboot` was skipped (due to unlocked card, missing `BOOTDISK`, or missing `DISKBOOT.BIN`), taking clean return `0xFC05BC34` to stock `task_Startup` at `0xFC05B912` [INFERRED: ROM 0xFC05BC08-0xFC05BC34; PORT24-ROM-STARTDISKBOOT; ROM 0xFC05B912; PORT24-ROM-STARTUP-TASKS].
+1. **Rear Green Status LED Activity (Build-Qualified)** [VERIFIED: owner-reported, 2026-11-01; docs/PORT23_POWER_SUPERVISION.md:20-22]:
+   - **PORT-19 Default Control Build (No LED Prologue)** [VERIFIED: chdk-port/loader/g3x/main_prototype.c:1-120]:
+     - On the PORT-19 default build, no early LED prologue is compiled in [VERIFIED: chdk-port/loader/g3x/main_prototype.c:1-120].
+     - Seeing no LED flash does NOT show that the payload was skipped: DISKBOOT can execute at `0x8001`, run through loader and core, and either power off at Stage 5 or reach the stock UI without any LED activity [INFERRED: chdk-port/loader/g3x/main_prototype.c:1-120; chdk-port/platform/g3x/sub/110c/boot_prototype.c:350-354].
+     - Reaching the stock UI with zero LED flash can occur either when DISKBOOT ran and handed off to stock continuation `sub_fc0d0126` (e.g. held button) or when `StartDiskboot` was skipped (unlocked card / missing marker / missing file) [INFERRED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:438; ROM 0xFC05BC34; PORT24-ROM-STARTDISKBOOT].
+   - **PORT-23 LED Breadcrumb Builds** [VERIFIED: docs/PORT23_LED_BREADCRUMBS.md:39-54; docs/PORT23_POWER_SUPERVISION.md:20-22]:
+     - Brief green flash or multi-second pulse, followed by immediate power-off with LCD remaining dark [VERIFIED: owner-reported, 2026-11-01; docs/PORT23_POWER_SUPERVISION.md:20-22].
+       - *Restart Path Implication*: Diagnostic flash supports loader entry only (`loader_entry` at `0x8000`), proving that `StartDiskboot` was called and executed `DISKBOOT.BIN` [INFERRED: docs/PORT23_POWER_SUPERVISION.md:20-22]. It does NOT prove that Stage 5 or any later stage ran, and does NOT prove that Stage 5 caused the shutdown (shutdown could stem from a hardware power-hold collapse, interrupt fault, or Stage 5 check) [INFERRED].
+     - Zero green LED flash, camera remains completely unpowered [VERIFIED: owner-reported, 2026-11-01; docs/PORT23_POWER_SUPERVISION.md:20-22].
+       - *Restart Path Implication*: Cold-boot power-on check failed before `task_Startup` was spawned, or hardware power-hold collapsed before loader entry `0x8000`, or battery was exhausted / card door open, or diagnostic LED prologue failed to execute [INFERRED: ROM 0xFC05B970-0xFC05B976; PORT24-ROM-STARTUP-TASKS].
+     - Zero green LED flash, but camera boots directly to stock UI [VERIFIED: owner-reported, 2026-11-01; docs/PORT18_OWNER_TRIAL_PLAN.md:262].
+       - *Restart Path Implication*: `StartDiskboot` was skipped (due to unlocked card, missing `"BOOTDISK"` marker, or missing `DISKBOOT.BIN`), taking clean return `0xFC05BC34` to stock `task_Startup` at `0xFC05B912` [INFERRED: ROM 0xFC05BC08-0xFC05BC34; PORT24-ROM-STARTDISKBOOT; ROM 0xFC05B912; PORT24-ROM-STARTUP-TASKS].
+   - **T3 Diagnostic Ladder Builds** [INFERRED: docs/PORT23_LED_BREADCRUMBS.md:39-54]:
+     - LED pulse patterns correspond to progressive rungs (`loader_entry`, `before_copy`, `after_copy`, `witness_entry`, `witness_write`, `pre_jump`) [INFERRED: docs/PORT23_LED_BREADCRUMBS.md:39-54].
+     - A flash at a specific rung supports execution reaching that point only; absence of subsequent flashes leaves the terminal failure point between that rung and the next [INFERRED].
 
 2. **Power Button Hold Duration** [VERIFIED: owner-reported, 2026-11-01; docs/PORT24_POWERON_FIX.md:16-29]:
    - Short button tap [VERIFIED: owner-reported, 2026-11-01; docs/PORT24_POWERON_FIX.md:16-29].
      - *Restart Path Implication*: Camera powers off immediately post-loader because button is released before Stage 5 executes [INFERRED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:350].
-   - Continuous hold until LCD illuminates [VERIFIED: owner-reported, 2026-11-01; docs/PORT24_POWERON_FIX.md:16-29].
+   - Continuous hold until LCD illuminates [VERIFIED: owner-reported, 2026-11-01; docs/PORT24_POWERON_FIX.md:16-29]:
      - *Restart Path Implication*: Button remains pressed when the second `sub_fc1284ac` check runs in Stage 5, allowing execution to proceed past `sub_fc05ba56` and hand off to stock continuation `sub_fc0d0126` [INFERRED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:350, 438; ROM 0xFC0D0126; PORT24-ROM-FIRMWARE-CONT].
 
 3. **Playback Button Power-On** [VERIFIED: owner-reported, 2026-11-01; docs/PORT23_POWER_SUPERVISION.md:22]:
@@ -917,6 +939,6 @@ The following physical cues allow the camera owner to observe and distinguish th
 
 5. **Canon Basic Witness Inspector Display** [VERIFIED: docs/PORT18_OWNER_TRIAL_PLAN.md:262]:
    - `CONT_ATTEMPTED` / `FRESHNESS_UNVERIFIED` (Yellow/Yellow, Stage 0x07) [VERIFIED: owner-reported, 2026-11-01; docs/PORT18_OWNER_TRIAL_PLAN.md:262; firmware/tools/witness_inspector_gm110c.m:8-24].
-     - *Restart Path Implication*: Previous boot ran `DISKBOOT.BIN`, survived both power checks via held button, reached continuation `sub_fc0d0126`, and witness record survived stock firmware execution [INFERRED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:425-438; docs/PORT18_OWNER_TRIAL_PLAN.md:262].
+     - *Restart Path Implication*: Indicates that at some point `DISKBOOT.BIN` ran and attempted stock continuation, but because DRAM contents persist across reboots, this witness value cannot confirm that the most recent boot ran DISKBOOT or identify which boot wrote the record; attribution remains UNKNOWN due to the stale-RAM caveat [UNKNOWN: unverified freshness cannot distinguish current-boot continuation from retained stale DRAM from a prior attempt; docs/PORT18_OWNER_TRIAL_PLAN.md:262; docs/PORT21_RAM_LIFETIME.md:44-48].
    - `WITNESS_INVALID` (Light Blue / Color 5) [VERIFIED: owner-reported, 2026-11-01; docs/PORT23_POWER_SUPERVISION.md:19, 228-230].
      - *Restart Path Implication*: Previous attempt was cut off before writing stage 3 witness, or stock DryOS dynamic heap allocations reused `0x0035F7A0`, overwriting the witness structure [INFERRED: docs/PORT23_POWER_SUPERVISION.md:228-230; docs/PORT21_RAM_LIFETIME.md:44-48].

@@ -177,6 +177,12 @@ APPROVED_ENTRIES_T2 = {
         16,
         "7998b107f5214f071a101c994a4c8081a9c4abcd72e3970049a923c4bc137f64",
     ),
+    "PORT24-ROM-GPIO-READ": (
+        0xFC087110,
+        0xFC08713F,
+        48,
+        "2238807ba4260729bb4991960fa1a40f257bed76425e8b7bb3cb6111a5920059",
+    ),
 }
 
 APPROVED_ENTRIES = {**APPROVED_ENTRIES_T1, **APPROVED_ENTRIES_T2}
@@ -425,12 +431,14 @@ class TestPort24LoaderTrace(unittest.TestCase):
         self.assertIn("0xD20B099C", ranking_section)
 
     def test_all_claim_bullets_and_rows_carry_epistemic_labels(self):
-        """Every claim bullet, numbered item, table row, and prose paragraph carries an epistemic label."""
+        """Every claim bullet, numbered item, table row, prose paragraph, and diagram line carries an epistemic label."""
         unlabeled_bullets = []
         unlabeled_rows = []
         unlabeled_prose = []
+        unlabeled_diagram_elements = []
 
         in_code_block = False
+        in_mermaid_block = False
         paragraph_lines = []
         paragraph_start_line = 0
 
@@ -447,7 +455,21 @@ class TestPort24LoaderTrace(unittest.TestCase):
                 if not in_code_block and paragraph_lines:
                     check_paragraph(paragraph_lines, paragraph_start_line)
                     paragraph_lines = []
-                in_code_block = not in_code_block
+                if stripped.startswith("```mermaid"):
+                    in_mermaid_block = True
+                    in_code_block = True
+                    continue
+                elif in_mermaid_block and stripped == "```":
+                    in_mermaid_block = False
+                    in_code_block = False
+                    continue
+                else:
+                    in_code_block = not in_code_block
+                    continue
+            if in_mermaid_block:
+                if stripped and not stripped.startswith(("flowchart", "graph", "subgraph", "end", "%%")):
+                    if not LABEL_PATTERN.search(stripped):
+                        unlabeled_diagram_elements.append(f"Line {i}: {stripped}")
                 continue
             if in_code_block:
                 continue
@@ -501,6 +523,12 @@ class TestPort24LoaderTrace(unittest.TestCase):
             [],
             f"Found unlabeled prose paragraphs in docs/PORT24_LOADER_TRACE.md:\n"
             + "\n".join(unlabeled_prose[:10]),
+        )
+        self.assertEqual(
+            unlabeled_diagram_elements,
+            [],
+            f"Found unlabeled diagram lines in docs/PORT24_LOADER_TRACE.md:\n"
+            + "\n".join(unlabeled_diagram_elements[:10]),
         )
 
     def check_rom_addresses_coverage(self, text_or_lines):
@@ -785,6 +813,108 @@ class TestPort24LoaderTrace(unittest.TestCase):
         self.assertIn("Playback Button", sec)
         self.assertIn("SD Card Lock Switch", sec)
         self.assertIn("Witness Inspector", sec)
+
+        # Regressions guards: sub_fc08711a, 0x1E0, SCRIPT, stale RAM, build-qualified LED cues
+        self.assertIn("sub_fc08711a", sec)
+        self.assertIn("0x1E0", sec)
+        self.assertIn("SCRIPT", sec)
+        self.assertIn("0x1F0", sec)
+        self.assertIn("stale RAM", sec)
+        self.assertIn("PORT-19 Default Control Build (No LED Prologue)", sec)
+        self.assertIn("PORT-23 LED Breadcrumb Builds", sec)
+        self.assertIn("T3 Diagnostic Ladder Builds", sec)
+        self.assertIn("Seeing no LED flash does NOT show that the payload was skipped", sec)
+        self.assertTrue(
+            bool(re.search(r"`?StartDiskboot`? is reached if each prior initialization callee returns normally", sec))
+        )
+        self.assertNotIn("CALLED UNCONDITIONALLY", sec)
+        self.assertNotIn("confirmed DISKBOOT was NOT skipped", sec)
+        self.assertNotIn("confirmed DISKBOOT was not skipped", sec)
+
+    def test_restart_path_mermaid_diagram_labeled(self):
+        """Mermaid diagram in '## Restart path' has every node and edge labelled with epistemic status."""
+        self.assertIn("## Restart path", self.content)
+        sec = self.content.split("## Restart path", 1)[1]
+        mermaid_match = re.search(r"```mermaid\n(.*?)\n```", sec, re.DOTALL)
+        self.assertIsNotNone(mermaid_match, "Mermaid diagram missing in Restart path")
+        diagram = mermaid_match.group(1)
+
+        non_structural_lines = [
+            l.strip()
+            for l in diagram.strip().splitlines()
+            if l.strip() and not l.strip().startswith(("flowchart", "graph", "subgraph", "end", "%%"))
+        ]
+        self.assertGreater(len(non_structural_lines), 15, "Too few diagram elements in Mermaid diagram")
+        for line in non_structural_lines:
+            self.assertTrue(
+                bool(LABEL_PATTERN.search(line)),
+                f"Mermaid diagram line missing epistemic label: {line}",
+            )
+
+    def test_restart_path_no_cue_claims_payload_skipped_without_led(self):
+        """Owner cues must not claim the payload was skipped because there was no LED."""
+        sec = self.content.split("## Restart path", 1)[1]
+        cues_sec = sec.split("### 3. Observable Cues for Hand Inspection", 1)[1]
+
+        # Must explicitly state that no LED does not show payload skipped
+        self.assertIn("Seeing no LED flash does NOT show that the payload was skipped", cues_sec)
+
+        # Must qualify cues by build
+        self.assertIn("PORT-19 Default Control Build (No LED Prologue)", cues_sec)
+        self.assertIn("PORT-23 LED Breadcrumb Builds", cues_sec)
+        self.assertIn("T3 Diagnostic Ladder Builds", cues_sec)
+
+        # Diagnostic flash supports loader entry only, not later stages
+        self.assertIn("Diagnostic flash supports loader entry only", cues_sec)
+
+    def test_restart_path_cont_attempted_has_stale_ram_caveat(self):
+        """CONT_ATTEMPTED discussion carries UNKNOWN or INFERRED label with a stale-RAM caveat."""
+        sec = self.content.split("## Restart path", 1)[1]
+        self.assertIn("CONT_ATTEMPTED", sec)
+        self.assertIn("FRESHNESS_UNVERIFIED", sec)
+        self.assertIn("stale RAM", sec)
+
+        # Must not claim that DISKBOOT was confirmed not skipped
+        self.assertNotIn("confirmed DISKBOOT was not skipped", sec.lower())
+
+        # Paragraphs mentioning CONT_ATTEMPTED must carry UNKNOWN or INFERRED
+        cont_paras = [p for p in sec.split("\n\n") if "CONT_ATTEMPTED" in p]
+        self.assertGreater(len(cont_paras), 0)
+        for p in cont_paras:
+            labels = re.findall(r"\[(VERIFIED|INFERRED|UNKNOWN)(?::[^\]]*)?\]", p)
+            self.assertTrue(
+                any(l in {"UNKNOWN", "INFERRED"} for l in labels),
+                f"CONT_ATTEMPTED paragraph missing UNKNOWN or INFERRED label: {p}",
+            )
+
+    def test_restart_path_vbr_bootdisk_and_script_roles(self):
+        """Section cites VBR 0x1E0 (FAT32) / 0x40 (FAT12/16), describes SCRIPT at 0x1F0, and confirms SCRIPT does not gate StartDiskboot."""
+        sec = self.content.split("## Restart path", 1)[1]
+        self.assertIn("0x1E0", sec)
+        self.assertIn("0x40", sec)
+        self.assertIn("docs/PORT19_BOOTDISK_VBR.md", sec)
+        self.assertIn("SCRIPT", sec)
+        self.assertIn("0x1F0", sec)
+        self.assertTrue(bool(re.search(r"`?SCRIPT`? marker does not gate `?StartDiskboot`?", sec)))
+
+    def test_restart_path_button_sampling_sub_fc08711a_and_bic(self):
+        """Section cites sub_fc08711a, describes BIC active-low inversion, and separates raw inputs from normalized flags."""
+        sec = self.content.split("## Restart path", 1)[1]
+        self.assertIn("sub_fc08711a", sec)
+        self.assertIn("bic", sec.lower())
+        self.assertIn("active-low", sec.lower())
+        self.assertIn("normalized pressed flag", sec.lower())
+        # Direct polling at 0xFC0D73D0 must not be asserted
+        self.assertNotIn("0xFC0D73D0: pin 151", sec)
+
+    def test_restart_path_startdiskboot_conditional_claim(self):
+        """Claim that StartDiskboot runs is conditional on prior callees returning normally."""
+        sec = self.content.split("## Restart path", 1)[1]
+        self.assertTrue(
+            bool(re.search(r"`?StartDiskboot`? is reached if each prior initialization callee returns normally", sec))
+        )
+        self.assertNotIn("CALLED UNCONDITIONALLY", sec)
+        self.assertIn("callee internals not read", sec)
 
     def test_restart_path_labels_strict(self):
         """Section '## Restart path' strictly follows epistemic labelling rules."""
