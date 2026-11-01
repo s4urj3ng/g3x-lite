@@ -51,6 +51,16 @@ VALIDATOR_TOOL = REPO_ROOT / "tools" / "port11c_evidence_validator.py"
 BOOT_PROTOTYPE_C = REPO_ROOT / "chdk-port" / "platform" / "g3x" / "sub" / "110c" / "boot_prototype.c"
 ROM_BASE = 0xFC000000
 
+
+def setUpModule():
+    """Ensure platform bootstrap files exist before running any tests."""
+    platform_cam_h = REPO_ROOT / "chdk-port" / "platform" / "g3x" / "platform_camera.h"
+    if not platform_cam_h.is_file():
+        bootstrap_script = REPO_ROOT / "tools" / "bootstrap_chdk_platform.py"
+        if bootstrap_script.is_file():
+            subprocess.run(["python3", "-B", str(bootstrap_script)], cwd=str(REPO_ROOT), check=True)
+
+
 APPROVED_ENTRIES = {
     "PORT25-ROM-BOOT-EARLY": (
         0xFC020000,

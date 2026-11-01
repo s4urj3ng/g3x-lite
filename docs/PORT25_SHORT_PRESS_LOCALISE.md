@@ -31,7 +31,7 @@ In physical trials of the unchanged PORT-19 baseline build (`DISKBOOT.BIN` SHA-2
    - **Crucially, `sub_fc1284ac` is still called at line 349** `[VERIFIED: boot_prototype.c:349]`.
    - Inside `sub_fc1284ac` (`0xFC1284AC`..`0xFC12851A`), if all buttons are released, the routine branches to `0xFC12851A`, **skipping `bl sub_fc08ecbc` at `0xFC128510`** `[STATIC_VERIFIED: ROM 0xFC1284FC-0xFC12851A; PORT25-ROM-POWERON-CHECK]`.
    - Function `sub_fc08ecbc` is the start-cause recorder; skipping it leaves `*(0x00009BD0)` unwritten (`0x00000000` from initial Low RAM copy) `[STATIC_VERIFIED: ROM 0xFC08ECBC-0xFC08ECEC; PORT25-ROM-STARTCAUSE-SAVE; ROM 0xFC08EEF0; PORT25-ROM-STARTCAUSE-PTR]`.
-   - When downstream firmware tasks (such as `task_PhySw` or power property services) query the boot reason, a zero/unrecognized start cause can trigger an orderly or emergency shutdown via `TurnOffE1_FW` (`0xFC0D01EC`) or `ExecuteShutDownPropertyService_FW` (`0xFC1352BD`) `[INFERRED]`. This matches historical findings in sister port G3 X 1.10E (`g3x_110e.patch:1681-1703`), where ranma had to manually write the start cause `0x80000` to memory `[VERIFIED: docs/PORT6C_CHDK_INTEGRATION_GAPS.md:42]`.
+   - When downstream firmware tasks (such as `task_PhySw` or power property services) query the boot reason, a zero/unrecognized start cause can trigger an orderly or emergency shutdown via `TurnOffE1_FW` (`0xFC0D01EC`; `PORT25-ROM-FIRMWARE-CONT`) or `ExecuteShutDownPropertyService_FW` (`0xFC1352BD`; `PORT25-ROM-MPU-CONFIG`) `[INFERRED]`. This matches historical findings in sister port G3 X 1.10E (`g3x_110e.patch:1681-1703`), where ranma had to manually write the start cause `0x80000` to memory `[VERIFIED: docs/PORT6C_CHDK_INTEGRATION_GAPS.md:42]`.
 
 3. **Watchdog Expiration Risk [Rank 3 — INFERRED / STATIC_VERIFIED]**:
    - `task_Startup_my` arms the hardware watchdog timer via `sub_fc418f2a` at `boot_prototype.c:408` (`StartWDT_FW` `0xFC135D2C`, timeout ~2.0 seconds) `[STATIC_VERIFIED: ROM 0xFC418F2A; PORT25-ROM-WATCHDOG-START; ROM 0xFC135D2C; PORT25-ROM-WATCHDOG-MODULE]`.
@@ -216,7 +216,7 @@ Multiple DryOS tasks are spawned during the post-loader sequence:
 ---
 
 ### Candidate 4: `task_PhySw` Button Release / Button Event Dispatch
-- **Citations**: `boot_prototype.c:413`; ROM `0xFC1283D2` (`PORT25-ROM-PHYSW-TASK`), ROM `0xFC1283AD` (`task_PhySw`), ROM `0xFC128680`..`0xFC12877F` (`PORT25-ROM-PHYSW-LITERALS`).
+- **Citations**: `boot_prototype.c:413`; ROM `0xFC1283D2` (`PORT25-ROM-PHYSW-TASK`), ROM `0xFC1283AD` (`task_PhySw` in `PORT25-ROM-PHYSW-TASK`), ROM `0xFC128680`..`0xFC12877F` (`PORT25-ROM-PHYSW-LITERALS`).
 - **Classification**: `[STATIC_VERIFIED]` in ROM disassembly; `[INFERRED]` as runtime button supervision mechanism.
 - **Trigger Condition**: Physical button state transition detected after `task_PhySw` starts.
 - **Mechanism**:
