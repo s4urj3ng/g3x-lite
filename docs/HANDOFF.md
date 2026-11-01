@@ -2156,7 +2156,7 @@ python3 -B tools/port18_trial_report.py private/port18/trial_report.md --out pri
 - **Hardware Status**: **STRICT NO-GO** for autonomous agents (`AGENTS.md:18-22`; `docs/SAFETY.md:3-8`); technical verdict **`GO`** in `docs/PORT19_GO_NOGO.md:7` applies solely to the human owner's manual trial execution after P1 and P2 are satisfied `[VERIFIED: docs/PORT19_GO_NOGO.md:7-22]`.
 
 
-## Milestones PORT-16 to PORT-21 Summary & Current Next Step (2026-10-31)
+## Milestones PORT-16 to PORT-24 Summary & Current Next Step (2026-11-01)
 
 ### PORT-16 — First-Boot Candidate Pipeline Rebuild & Triage
 - **Status**: `MERGED` on `origin/main` `[VERIFIED: git merge-base --is-ancestor 1031ace origin/main]`.
@@ -2240,6 +2240,17 @@ python3 -B tools/port18_trial_report.py private/port18/trial_report.md --out pri
   - `tests/test_port21_diskboot_timing.py` (15 static tests), `tests/test_port21_owner_session_plan.py` (14 static tests), `tests/test_port21_ram_lifetime.py` (28 static tests), `tests/test_port21_witness_roundtrip.py` (11 static tests) `[VERIFIED: count of lines matching ^\s*def test_ in each file; recomputed by tests/test_port18_docs_consistency.py]`.
 - **Outstanding Owner Actions**: The owner executes the PORT-21 morning session (2026-11-01) by hand per `docs/PORT21_OWNER_SESSION_PLAN.md`, recording the physical LED behaviour (GPIO 33, `0xD20B0884`), the inspector OSD readout (`extend.m`), and the five RAMCMP observation readings (`r_l8`, `r_l4`, `r_c4`, `r_ct`, `r_wm`) `[VERIFIED: docs/PORT21_OWNER_SESSION_PLAN.md:4, 169-175]`.
 
+### PORT-24 — Post-Loader Shutdown Resolution & O1 First-Boot Result (2026-11-01)
+- **Status**: `IN_PROGRESS_ON_AGENTBRIDGE` (milestone `port-24-post-loader-shutdown`).
+- **Owner Trial Result (2026-11-01)**: **`FIRST BOOT REACHED`** `[VERIFIED] (owner observation, 2026-11-01)`, classified **`O1`** by `tools/port18_trial_report.py` (O1 category definition: `tools/port18_trial_report.py:92-96` `[VERIFIED: tools/port18_trial_report.py:92-96]`).
+- **Build**: PORT-19 default, DISKBOOT SHA-256 `9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136` `[VERIFIED: docs/PORT19_GO_NOGO.md:31; docs/PORT16_CANDIDATE_BUILD.md:362]`.
+- **Setup**: Card locked `[VERIFIED] (owner observation, 2026-11-01)`, FAT32, BOOTDISK `0x1E0`, SCRIPT `0x1F0` `[VERIFIED: docs/PORT19_BOOTDISK_VBR.md:23, 32]`.
+- **Held-Button Procedure**: The owner held the power button until the LCD came on and the camera reached the stock UI `[VERIFIED] (owner observation, 2026-11-01)`. Observation is labelled VERIFIED (owner) `[VERIFIED] (owner)`.
+- **Inspector Result**: The inspector (payload `241420a6...`, reads `0x0035F7A0` `[VERIFIED: docs/PORT19_WITNESS_ADDRESS.md:18-20; docs/PORT19_GO_NOGO.md:33]`; `candidate_port2a/witness_inspector_payload.bin` SHA-256 `241420a6eea2d7cbedd14046ec4f5988ed0404c5a82bb5d2ed6693fd74e612e2` `[VERIFIED: docs/PORT16_CANDIDATE_BUILD.md:364]`) showed `CONT_ATTEMPTED / FRESHNESS_UNVERIFIED` `[VERIFIED] (owner observation, 2026-11-01)`.
+- **Short-Press Caveat**: A short press still powers off after loader entry `[VERIFIED] (owner observation, 2026-11-01)`.
+- **Mechanism**: This is consistent with the PORT-23 T1 mechanism (second `sub_fc1284ac` check in `sub_fc05b962_my`, `boot_prototype.c:350`). The mechanism is labelled INFERRED with a citation to `boot_prototype.c:350` and `docs/PORT23_POWER_SUPERVISION.md` `[INFERRED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:350; docs/PORT23_POWER_SUPERVISION.md:43-50, 284-293]`. Post-handoff candidate execution re-runs the native power-on button check `sub_fc1284ac` in Stage 5 `sub_fc05b962_my` (`chdk-port/platform/g3x/sub/110c/boot_prototype.c:350`), which returns `0` if the button is released on a short press, branching to `sub_fc05ba56` to cut power via GPIO 0x67 (`0xD20B099C`), whereas holding the button keeps GPIO 0x97 asserted so `sub_fc1284ac` returns `1`, branching to `loc_fc05b978` and launching `task_Startup_my` to reach the stock UI.
+- **Superseded Tasks**: PORT-24 T2-T4 are superseded by `p24-poweron-fix` and `p24-session-sheet` per the owner instruction of 2026-11-01 `[VERIFIED] (owner instruction, 2026-11-01)`.
+
 ### Current Next Step
-- **Current next step**: The owner runs the PORT-21 morning session (2026-11-01) by hand and reports the readings `[VERIFIED: docs/PORT21_OWNER_SESSION_PLAN.md:4]`, then the readings are classified with tools\/port22_session_classify.py (planned PORT-22 T1 output), and then the next candidate is chosen using docs\/PORT22_REMEDIATION_PLAN.md (planned PORT-22 T2 output). Both are planned PORT-22 outputs and are not yet on main `[UNKNOWN until PORT-22 merge]`. This workflow supersedes earlier per-milestone next steps, such as the PORT-18 'Exact owner next step' `[INFERRED: docs/PORT21_OWNER_SESSION_PLAN.md:4; docs/PORT18_OWNER_TRIAL_PLAN.md:17-26]`.
+- **Current next step**: First boot was reached on hardware (outcome O1) `[VERIFIED] (owner observation, 2026-11-01)`. The shutdown on short press is consistent with the Stage 5 power check `sub_fc1284ac` in `sub_fc05b962_my` (`chdk-port/platform/g3x/sub/110c/boot_prototype.c:350; docs/PORT23_POWER_SUPERVISION.md:43-50, 284-293`) `[INFERRED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:350; docs/PORT23_POWER_SUPERVISION.md:43-50, 284-293]`. Tasks `p24-poweron-fix` (an opt-in short-press boot candidate, default output unchanged) and `p24-session-sheet` are next, and PORT-24 T2-T4 are superseded per the owner instruction of 2026-11-01 `[VERIFIED] (owner instruction, 2026-11-01)`.
 
