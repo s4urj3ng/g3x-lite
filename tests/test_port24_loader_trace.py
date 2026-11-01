@@ -1952,6 +1952,78 @@ class TestPort24LoaderTrace(unittest.TestCase):
             "Restart path section does not contain 'repeated' together with an INFERRED or UNKNOWN label in the same paragraph",
         )
 
+    def test_restart_path_mentions_normal_camera_mode_bypass(self):
+        """Test that the Restart path section notes the sub_fc1284ac button gate applies only in normal camera mode with citations."""
+        sec = self.content.split("## Restart path", 1)[1]
+        self.assertIn("normal camera mode", sec.lower(), "Restart path does not mention normal camera mode")
+        self.assertTrue(
+            "normal-camera-mode bypass" in sec or "mode-dependent bypass" in sec,
+            "Restart path does not mention mode bypass in sub_fc1284ac",
+        )
+        self.assertTrue(
+            bool(re.search(r"button gate applies only in normal camera mode", sec, re.IGNORECASE)),
+            "Restart path does not state that button gate applies only in normal camera mode",
+        )
+        has_citation = (
+            "0xFC1284F6-0xFC1284FA" in sec
+            or "0xFC1284FA" in sec
+            or "docs/PORT23_POWER_SUPERVISION.md:125,141" in sec
+        )
+        self.assertTrue(has_citation, "Restart path missing citation for normal-camera-mode bypass")
+        self.assertIn("0xFDF20380", sec, "Restart path missing citation for ROM flag at 0xFDF20380")
+
+    def test_no_verified_line_states_lock_position_mapping_of_0x14f(self):
+        """Test that no VERIFIED-labelled line states the physical LOCK-position mapping of GPIO 0x14F."""
+        sec = self.content.split("## Restart path", 1)[1]
+        for idx, line in enumerate(sec.splitlines(), start=1):
+            if "VERIFIED" in line:
+                self.assertNotIn(
+                    "lock position",
+                    line.lower(),
+                    f"Line {idx} in Restart path is labelled VERIFIED and mentions lock position: {line}",
+                )
+                self.assertFalse(
+                    bool(re.search(r"card lock switch.*\[verified", line, re.IGNORECASE)),
+                    f"Line {idx} labels Card Lock Switch as VERIFIED: {line}",
+                )
+                if "0x14f" in line.lower() and "bit 0 = 1" in line.lower():
+                    self.assertNotIn(
+                        "lock",
+                        line.lower(),
+                        f"Line {idx} labels GPIO 0x14F bit 0 = 1 LOCK mapping as VERIFIED: {line}",
+                    )
+        has_inferred_mapping = any(
+            "0x14F" in line and "LOCK" in line and "INFERRED" in line
+            for line in sec.splitlines()
+        )
+        self.assertTrue(has_inferred_mapping, "Physical LOCK mapping of GPIO 0x14F not labelled INFERRED")
+
+    def test_no_owner_reported_label_carries_bare_review_date(self):
+        """Test that owner-reported labels cite original reports rather than carrying bare review dates."""
+        owner_labels = re.findall(r"\[[^\]]*owner-reported[^\]]*\]", self.content)
+        self.assertGreater(len(owner_labels), 0, "No owner-reported labels found in document")
+        for label in owner_labels:
+            self.assertFalse(
+                bool(re.search(r"owner-reported,\s*\d{4}-\d{2}-\d{2}", label)),
+                f"Owner-reported label carries a bare review date: {label}",
+            )
+            has_doc_citation = any(
+                doc in label
+                for doc in (
+                    "docs/PORT23_POWER_SUPERVISION.md",
+                    "docs/PORT24_POWERON_FIX.md",
+                    "docs/PORT18_OWNER_TRIAL_PLAN.md",
+                )
+            )
+            self.assertTrue(
+                has_doc_citation,
+                f"Owner-reported label does not cite original report document: {label}",
+            )
+        self.assertFalse(
+            bool(re.search(r"\[VERIFIED:\s*owner-reported,\s*2026-11-01", self.content)),
+            "Found bare '[VERIFIED: owner-reported, 2026-11-01' in document",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
