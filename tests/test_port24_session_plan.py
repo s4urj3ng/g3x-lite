@@ -63,6 +63,34 @@ def parse_ladder_codes(ladder_doc_path: Path) -> list[str]:
     return codes
 
 
+def parse_ladder_power_on_numbers(doc_text: str) -> set[int]:
+    """Parse the doc text for ladder power-on instructions and return distinct power-on numbers.
+
+    Extracts numbers N from:
+    - Headings or steps like 'Power-On N' (e.g., 'Power-On 1', 'Power-On 2')
+    - Instructions or steps telling the owner to perform or proceed to Power-On N with the ladder card inserted
+    - Any branch or triage text referencing a Power-On N
+    """
+    matches = re.findall(r"Power-On\s*(\d+)", doc_text, re.IGNORECASE)
+    return {int(m) for m in matches}
+
+
+def validate_ladder_power_on_budget(doc_text: str) -> set[int]:
+    """Validate that all ladder power-on numbers in doc_text are a subset of {1, 2}.
+
+    Raises ValueError if any ladder power-on number outside {1, 2} is present, or if no power-ons are found.
+    """
+    numbers = parse_ladder_power_on_numbers(doc_text)
+    if not numbers:
+        raise ValueError("No ladder power-on instructions found in document text")
+    if not numbers.issubset({1, 2}):
+        invalid = sorted(numbers - {1, 2})
+        raise ValueError(
+            f"Power-on budget exceeded: document contains ladder power-on instructions for {invalid}, expected subset of {{1, 2}}"
+        )
+    return numbers
+
+
 class TestPort24SessionPlan(unittest.TestCase):
     """Test suite validating docs/PORT24_SESSION_PLAN.md against all acceptance criteria and reviewer feedback."""
 
@@ -159,17 +187,19 @@ class TestPort24SessionPlan(unittest.TestCase):
         )
         self.assertGreaterEqual(len(branch_matches), 4, "Must find triage branches in Section 2")
 
+        # Validate that the set of distinct ladder power-on numbers across the document is a subset of {1, 2}
+        distinct_numbers = validate_ladder_power_on_budget(self.content)
+        self.assertTrue(
+            distinct_numbers.issubset({1, 2}),
+            f"Set of distinct ladder power-on numbers {distinct_numbers} must be subset of {{1, 2}}",
+        )
+
+        # Validate each triage branch in Section 2: any power-on number mentioned must be in {1, 2}
         for branch_name, branch_body in branch_matches:
-            # Count ladder power-on steps in this branch.
-            # Base step is Power-On 1 (or direct single power-on).
-            # If branch mentions Power-On 2, ladder power-ons = 2; else 1.
-            ladder_power_on_count = 1
-            if re.search(r"Power-On\s*2", branch_body):
-                ladder_power_on_count = 2
-            self.assertLessEqual(
-                ladder_power_on_count,
-                2,
-                f"Branch '{branch_name}' has ladder power-on count > 2",
+            branch_numbers = parse_ladder_power_on_numbers(branch_body)
+            self.assertTrue(
+                branch_numbers.issubset({1, 2}),
+                f"Branch '{branch_name}' references ladder power-on numbers outside {{1, 2}}: {branch_numbers}",
             )
 
         # (b) Every branch ends either at report or at card-removed recovery
@@ -241,6 +271,172 @@ class TestPort24SessionPlan(unittest.TestCase):
                 match,
                 f"Document must not contain phrase '{phrase}' claiming recovery counts toward power-ons or using old budget exemption wording",
             )
+
+    def test_power_on_budget_negative_test(self):
+        """Negative test per feedback (4): verify validate_ladder_power_on_budget rejects doc text with Power-On 3 or 4."""
+        # Baseline document passes
+        base_numbers = validate_ladder_power_on_budget(self.content)
+        self.assertTrue(base_numbers.issubset({1, 2}))
+
+        # Variant appending 'Perform Power-On 3 with the locked ladder card inserted'
+        text_with_p3 = self.content + "\nPerform Power-On 3 with the locked ladder card inserted\n"
+        with self.assertRaises(ValueError) as ctx3:
+            validate_ladder_power_on_budget(text_with_p3)
+        self.assertIn("3", str(ctx3.exception))
+
+        # Variant appending 'Perform Power-On 4 with the locked ladder card inserted'
+        text_with_p4 = self.content + "\nPerform Power-On 4 with the locked ladder card inserted\n"
+        with self.assertRaises(ValueError) as ctx4:
+            validate_ladder_power_on_budget(text_with_p4)
+        self.assertIn("4", str(ctx4.exception))
+
+    def test_led_off_lcd_dark_state_handling(self):
+        """Verify per feedback (1) and (4) that 'LED off, LCD dark' state is not marked as permitting Power-On 2 unless labelled UNKNOWN and routed to recovery."""
+        # 1. State must be labelled UNKNOWN (powered hang vs shutdown)
+        self.assertTrue(
+            re.search(
+                r"LED off.*LCD dark.*(?:labelled|state is)\s+UNKNOWN\s*\(\s*powered hang vs shutdown\s*\)",
+                self.content,
+                re.IGNORECASE,
+            ),
+            "'LED off, LCD dark' state must be explicitly labelled UNKNOWN (powered hang vs shutdown)",
+        )
+
+        # 2. State must be routed straight to recovery
+        self.assertTrue(
+            re.search(
+                r"LED off.*LCD dark.*(?:send|proceed|go|route).*straight to.*recovery",
+                self.content,
+                re.IGNORECASE,
+            ),
+            "'LED off, LCD dark' state must be routed straight to recovery",
+        )
+
+        # 3. In Section 2 triage and Section 3 decode table, verify no line marks 'LED off, LCD dark' as permitting Power-On 2
+        sec2_match = re.search(
+            r"## 2\..*?Step-by-Step Execution Plan.*?\n(.*?)(?=\n## 3\.|\Z)",
+            self.content,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(sec2_match)
+        sec2_text = sec2_match.group(1)
+
+        sec3_match = re.search(
+            r"## 3\..*?Decode Table.*?\n(.*?)(?=\n## 4\.|\Z)",
+            self.content,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(sec3_match)
+        sec3_text = sec3_match.group(1)
+
+        for text, sec_name in [(sec2_text, "Section 2"), (sec3_text, "Section 3")]:
+            for line in text.splitlines():
+                if "LED off" in line and "LCD dark" in line:
+                    self.assertNotIn(
+                        "proceed optionally to **Power-On 2**",
+                        line,
+                        f"In {sec_name}, line must not permit Power-On 2 for 'LED off, LCD dark': {line}",
+                    )
+                    self.assertNotIn(
+                        "optionally execute Power-On 2",
+                        line,
+                        f"In {sec_name}, line must not permit Power-On 2 for 'LED off, LCD dark': {line}",
+                    )
+                    if "Power-On 2" in line:
+                        self.assertTrue(
+                            re.search(
+                                r"Power-On\s*2\s+is\s+NOT\s+permitted|Power-On\s*2\s+is\s+not\s+run|skip\s+Power-On\s*2|permitted ONLY after an independently established off state|NOT run if final state was LED off",
+                                line,
+                                re.IGNORECASE,
+                            ),
+                            f"In {sec_name}, reference to Power-On 2 for 'LED off, LCD dark' must indicate NOT permitted: {line}",
+                        )
+
+    def test_hold_guidance_and_evidence_level(self):
+        """Verify hold guidance conforms to feedback (2):
+        - '~1-2 s' duration removed everywhere
+        - Claim that holding 'reliably' reaches stock UI removed
+        - Verified fact: owner held button until LCD came on (PORT-19 default build)
+        - Repeated or long presses only sometimes succeeded
+        - Hold-until-LCD instruction kept and applicability to ladder candidate labelled INFERRED everywhere
+        """
+        # Duration ~1-2 s removed
+        self.assertNotIn("~1-2 s", self.content, "Duration ~1-2 s must be removed")
+        self.assertNotIn("~1–2 s", self.content, "Duration ~1–2 s (en-dash) must be removed")
+
+        # Claim of 'reliably' reaching stock UI removed
+        self.assertNotIn("reliably", self.content.lower(), "Claim that holding 'reliably' reaches stock UI must be removed")
+
+        # Verified fact: owner held power button until LCD came on with PORT-19 default build
+        self.assertTrue(
+            re.search(
+                r"owner held the power button until the LCD came on.*PORT-19 default build",
+                self.content,
+                re.IGNORECASE,
+            ),
+            "Doc must cite that owner held power button until LCD came on with PORT-19 default build",
+        )
+        self.assertIn("docs/PORT24_POWERON_FIX.md:16-18", self.content)
+
+        # Repeated or long presses only sometimes succeeded
+        self.assertTrue(
+            re.search(
+                r"repeated or long presses only sometimes succeeded",
+                self.content,
+                re.IGNORECASE,
+            ),
+            "Doc must state that repeated or long presses only sometimes succeeded per docs/PORT23_POWER_SUPERVISION.md:22",
+        )
+        self.assertIn("docs/PORT23_POWER_SUPERVISION.md:22", self.content)
+
+        # Applicability of hold guidance to ladder candidate labelled INFERRED everywhere
+        self.assertTrue(
+            re.search(
+                r"applicability.*(?:hold guidance|hold instruction).*INFERRED",
+                self.content,
+                re.IGNORECASE,
+            ),
+            "Applicability of hold guidance to ladder candidate must be labelled INFERRED",
+        )
+
+    def test_decode_table_t1_rankings_integrity(self):
+        """Verify T1 rankings in decode table conform to feedback (3):
+        - No attribution of 'Loader Phase I: Low' to T1 (lines 725-731 assign no ranking)
+        - No attribution of 'Phase VII display driver' to T1 (lines 788-789 cover Step 23 early driver stubs)
+        - Checkpoints unranked by T1 are marked 'unranked by T1'
+        - Likelihood judgments in separate column labelled INFERRED with reasoning
+        """
+        # Forbidden spurious attributions
+        self.assertNotIn("Loader Phase I: Low", self.content, "Must not attribute 'Loader Phase I: Low' to T1")
+        self.assertNotIn("Phase VII display driver", self.content, "Must not attribute 'Phase VII display driver' to T1")
+
+        table_sec_match = re.search(
+            r"## 3\..*?Decode Table.*?\n(.*?)(?=\n## 4\.|\Z)",
+            self.content,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(table_sec_match, "Section 3 Decode Table must exist")
+        table_text = table_sec_match.group(1)
+
+        # Flashes 1 to 6 must be marked unranked by T1
+        for count in range(1, 7):
+            row_match = re.search(rf"\|\s*\*\*?{count}\*\*?\s*\|(.*?)\n", table_text)
+            self.assertIsNotNone(row_match, f"Row {count} must exist in decode table")
+            row_text = row_match.group(1)
+            self.assertTrue(
+                re.search(r"unranked by T1", row_text, re.IGNORECASE),
+                f"Row {count} must mark loader checkpoint as unranked by T1: {row_text}",
+            )
+
+        # Table header must include separate columns for T1 Ranked Failure Mechanism and Likelihood Assessment
+        self.assertTrue(
+            re.search(r"T1 Ranked Failure Mechanism", table_text),
+            "Decode table must have 'T1 Ranked Failure Mechanism' column",
+        )
+        self.assertTrue(
+            re.search(r"Likelihood Assessment", table_text),
+            "Decode table must have 'Likelihood Assessment' column",
+        )
 
     def test_no_first_second_only_observation_instruction(self):
         """Verify the plan does NOT restrict observation to the first second and requires continuous observation."""
