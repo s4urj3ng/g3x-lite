@@ -4,17 +4,16 @@
 Validates that:
 1. docs/agentbridge/PORT23_EVIDENCE_MANIFEST.json:
    - Validates using tools/port11c_evidence_validator.py with 0 errors.
-   - Contains all 9 approved ranges, each <= 4 KiB, and total bytes <= 64 KiB.
+   - Contains all 10 approved ranges, each <= 4 KiB, and total bytes <= 64 KiB.
    - Contains no overlapping evidence slices.
    - If PRIMARY.BIN is present, slice SHA-256 digests match actual ROM dump on disk.
 2. docs/PORT23_POWER_SUPERVISION.md:
    - File exists and contains all required core sections.
-   - Explains both owner observation (a) and observation (b).
+   - Explains owner observations (a), (b), (c), and (d).
    - Identifies watchdog and sub-CPU supervision mechanisms, timeout, and expiry action,
      each stated with evidence or explicitly marked UNKNOWN.
-   - Ranks candidate hypotheses H1-H4 by evidence.
-   - Section 'Implications for breadcrumbs' gives maximum safe stall per checkpoint
-     or conservative recommendation.
+   - Ranks candidate hypotheses H1-H4 by evidence across all four observations.
+   - Section 'Implications for breadcrumbs' gives safe stall analysis and recommendations.
    - Every claim bullet, numbered list item, and table row carries an epistemic label
      ([VERIFIED], [STATIC_VERIFIED], [INFERRED], [UNKNOWN], or [OWNER-REPORTED]).
    - Every ROM address (0xFC......) cited in the doc appears in a manifest range.
@@ -46,7 +45,7 @@ ROM_PATH = Path(
 VALIDATOR_TOOL = REPO_ROOT / "tools" / "port11c_evidence_validator.py"
 ROM_BASE = 0xFC000000
 
-# Canonical PORT-23 evidence entries (9 approved ranges)
+# Canonical PORT-23 evidence entries (10 approved ranges)
 APPROVED_ENTRIES = {
     "PORT23-ROM-BOOT-EARLY": (
         0xFC020000,
@@ -65,6 +64,12 @@ APPROVED_ENTRIES = {
         0xFC05BDE9,
         512,
         "a2ea19dfed6f386b32074c65ec682a557a24cf3ddcdeb73f29108ae16854acfc",
+    ),
+    "PORT23-ROM-NORMAL-MODE": (
+        0xFC079400,
+        0xFC0794FF,
+        256,
+        "222eb4225d2e5d34742f5ed11b306b21c44a1eb2e18e48936cc6643d08a9560c",
     ),
     "PORT23-ROM-TURNOFF-E1": (
         0xFC0D0120,
@@ -228,15 +233,20 @@ class TestPort23PowerSupervisionDoc(unittest.TestCase):
             self.assertIn(heading, self.content, f"Missing section heading: {heading}")
 
     def test_explains_observations_a_and_b(self):
-        """Doc explains owner observations (a) and (b) with proper citations."""
+        """Doc explains owner observations (a), (b), (c), and (d) with proper citations."""
         self.assertIn("Observation (a)", self.content)
         self.assertIn("Observation (b)", self.content)
+        self.assertIn("Observation (c)", self.content)
+        self.assertIn("Observation (d)", self.content)
         self.assertIn("WITNESS_INVALID", self.content)
         self.assertIn("0x0035F7A0", self.content)
         self.assertIn("0x06000000", self.content)
+        self.assertIn("0x00600000", self.content)
+        self.assertIn("3922ddbe", self.content)
+        self.assertIn("Playback", self.content)
         self.assertIn("OWNER-REPORTED", self.content)
 
-        # Explains LED illumination in (b) as proof of loader execution
+        # Explains LED illumination in (b) and (c) as proof of loader execution
         self.assertRegex(self.content, r"(?i)green LED.*physically illuminated")
         self.assertRegex(self.content, r"(?i)hypothesis H1.*refuted")
 
@@ -273,12 +283,12 @@ class TestPort23PowerSupervisionDoc(unittest.TestCase):
         self.assertIn("sub_fc1284ac", self.content)
 
     def test_implications_for_breadcrumbs_gives_stall_limits(self):
-        """Section 'Implications for breadcrumbs' gives max safe stall or conservative recommendation."""
+        """Section 'Implications for breadcrumbs' gives safe stall analysis and recommendations."""
         section = self.content.split("## 6. Implications for Breadcrumbs", 1)[1].split("## 7.", 1)[0]
-        self.assertIn("Maximum Safe Stall per Checkpoint", section)
-        self.assertRegex(section, r"20[–-]50\s*ms")
-        self.assertRegex(section, r"200\s*ms")
-        self.assertIn("Conservative Recommendation for Breadcrumbs", section)
+        self.assertIn("Exact Maximum Safe Stall is Unknown", section)
+        self.assertIn("Conservative Recommendation for Breadcrumb Pulses", section)
+        self.assertIn("Recommended Diagnostic Checkpoint Placement", section)
+        self.assertIn("Bypassing `sub_fc1284ac` in Stage 5", section)
 
     def test_all_claim_bullets_and_rows_carry_epistemic_labels(self):
         """Every claim bullet, numbered item, and table row carries an epistemic label."""
@@ -402,12 +412,11 @@ class TestPort23ScopeIntegrity(unittest.TestCase):
     def test_only_allowed_paths_modified(self):
         res = subprocess.run(["git", "status", "--porcelain"], stdout=subprocess.PIPE, text=True)
         modified_files = set()
-        for line in res.stdout.splitlines():
-            line = line.strip()
-            if not line:
+        for raw_line in res.stdout.splitlines():
+            if not raw_line.strip():
                 continue
-            # Strip status prefix (e.g., '?? ', 'M  ', ' M ')
-            fpath = line[3:].strip()
+            # In porcelain format, column 0-1 is XY, column 2 is space, path starts at index 3
+            fpath = raw_line[3:].strip()
             if " -> " in fpath:
                 fpath = fpath.split(" -> ")[1].strip()
             modified_files.add(fpath)
