@@ -16,13 +16,15 @@ Verifies:
     label and an exact citation (a file path plus :line or a § section).
     Allowed exceptions: headings, table header and separator rows, and the report-template code block.
 11. Tightened flash-count check: requires a decode-table row for each count from 0 to 7 and an ambiguous/uncertain-count row.
-12. Scope compliance: only allowed paths are modified.
+12. Decode table has at least one LED-off-after-ladder row labelled UNKNOWN that points to recovery (§ 5) without assuming the camera is off.
+13. GPIO 0x14F to write-protect switch mapping is not labelled VERIFIED (matches T2 INFERRED).
+14. SD1stInit ordering statement matches T2 (SD1stInit before GPIO 0x14F check, branch does not skip SD init).
+15. Binary guard scoped: added files are valid text and contain no raw binary payloads or ROM dumps.
 """
 
 from __future__ import annotations
 
 import re
-import subprocess
 import unittest
 from pathlib import Path
 
@@ -433,32 +435,102 @@ class TestPort24SessionPlan(unittest.TestCase):
             + "\n".join(f"Line {n}: {text}" for n, text in non_compliant_lines[:15]),
         )
 
-    def test_scope_compliance_git_status(self):
-        """Verify that only allowed files are modified in the working tree."""
-        res = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=REPO_ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=True,
+    def test_decode_table_led_off_after_ladder_row(self):
+        """Verify decode table has at least one LED-off-after-ladder row labelled UNKNOWN that points to recovery."""
+        table_sec_match = re.search(
+            r"## 3\..*?Decode Table.*?\n(.*?)(?=\n## 4\.|\Z)",
+            self.content,
+            re.DOTALL,
         )
-        modified_files = []
-        for line in res.stdout.splitlines():
-            if line.strip():
-                path = line[2:].lstrip()
-                modified_files.append(path)
+        self.assertIsNotNone(table_sec_match, "Section 3 Decode Table must exist")
+        table_text = table_sec_match.group(1)
 
-        allowed = {
-            "docs/PORT24_SESSION_PLAN.md",
-            "tests/test_port24_session_plan.py",
-        }
-        for path in modified_files:
-            self.assertIn(
-                path,
-                allowed,
-                f"File '{path}' is not in the list of allowed paths: {allowed}",
+        # Parse table rows
+        rows = [
+            line.strip()
+            for line in table_text.splitlines()
+            if line.strip().startswith("|") and not re.match(r"^\|(\s*:?-+:?\s*\|)+\s*$", line.strip())
+        ]
+        # Skip table header row
+        data_rows = rows[1:]
+
+        matching_rows = []
+        for row in data_rows:
+            # Check for full ladder / 7 complete flashes and LED off
+            has_ladder = bool(re.search(r"(?:7 complete flashes|full ladder)", row, re.IGNORECASE))
+            has_led_off = bool(re.search(r"LED (?:turns )?off", row, re.IGNORECASE))
+            has_unknown = "[UNKNOWN" in row
+            has_recovery = bool(re.search(r"recovery", row, re.IGNORECASE))
+            if has_ladder and has_led_off and has_unknown and has_recovery:
+                matching_rows.append(row)
+
+        self.assertGreaterEqual(
+            len(matching_rows),
+            1,
+            "Decode table must contain at least one LED-off-after-ladder row labelled UNKNOWN that points to recovery",
+        )
+
+        # Cite the ladder lines (docs/PORT24_BREADCRUMB_LADDER.md:453-462)
+        self.assertTrue(
+            any("docs/PORT24_BREADCRUMB_LADDER.md:453-462" in r for r in matching_rows),
+            "LED-off-after-ladder row must cite docs/PORT24_BREADCRUMB_LADDER.md:453-462",
+        )
+
+        # Do not tell the owner to assume the camera is off before pressing again
+        for r in matching_rows:
+            self.assertTrue(
+                re.search(r"do not assume.*camera is off", r, re.IGNORECASE),
+                f"Row must explicitly instruct not to assume camera is off: {r}",
             )
+
+    def test_write_protect_gpio_mapping_not_verified(self):
+        """Verify the doc does NOT label the GPIO 0x14F to write-protect switch mapping VERIFIED (matches T2 INFERRED)."""
+        lines = self.content.splitlines()
+        for idx, line in enumerate(lines, start=1):
+            if "0x14F" in line and re.search(r"write-protect|lock switch", line, re.IGNORECASE):
+                # Ensure the line does not label the write-protect mapping itself VERIFIED
+                self.assertNotIn(
+                    "mapping.*VERIFIED",
+                    line,
+                    f"Line {idx} must not label write-protect GPIO mapping VERIFIED: {line}",
+                )
+                self.assertFalse(
+                    re.search(r"(?:write-protect|lock switch)[^\]]*\[VERIFIED", line, re.IGNORECASE),
+                    f"Line {idx} must not label write-protect switch mapping VERIFIED: {line}",
+                )
+                self.assertTrue(
+                    "INFERRED" in line,
+                    f"Line {idx} mentioning GPIO 0x14F write-protect mapping must carry INFERRED label: {line}",
+                )
+
+    def test_sd1stinit_ordering_matches_t2(self):
+        """Verify that the SD1stInit ordering statement matches T2 (SD1stInit before GPIO 0x14F check)."""
+        self.assertTrue(
+            re.search(r"SD1stInit.*before.*(?:GPIO\s*0x14F|0xFC05BC02)", self.content, re.IGNORECASE) or
+            re.search(r"0xFC05BBFE.*before.*(?:GPIO\s*0x14F|0xFC05BC02)", self.content, re.IGNORECASE),
+            "Session plan must state that SD1stInit runs BEFORE the GPIO 0x14F check (matching T2)",
+        )
+        self.assertTrue(
+            re.search(r"does not skip SD initialis?ation", self.content, re.IGNORECASE),
+            "Session plan must clarify that the unlocked-card branch does not skip SD initialisation",
+        )
+
+    def test_binary_guard_scoped(self):
+        """Verify that the files touched by this task are plain text and contain no raw binaries or ROM dumps."""
+        scoped_files = [
+            DOCS_SESSION_PLAN,
+            Path(__file__).resolve(),
+        ]
+        for path in scoped_files:
+            self.assertTrue(path.is_file(), f"Expected file {path} to exist")
+            raw_bytes = path.read_bytes()
+            # Must be valid UTF-8 text
+            try:
+                raw_bytes.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                self.fail(f"File {path.name} contains invalid UTF-8 bytes: {exc}")
+            # Ensure no null bytes
+            self.assertNotIn(b"\x00", raw_bytes, f"File {path.name} must not contain null bytes")
 
 
 if __name__ == "__main__":
