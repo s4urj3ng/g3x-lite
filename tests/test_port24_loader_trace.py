@@ -1112,6 +1112,58 @@ class TestPort24LoaderTrace(unittest.TestCase):
             "loc_fc05b976 not explicitly distinguished from stock ROM loop at 0xFC05B976",
         )
 
+    def test_no_line_labelled_verified_mentions_pull_up_or_ground(self):
+        """(a) No line labelled VERIFIED mentions 'pull-up' or 'ground'."""
+        verified_lines = [
+            (idx, line)
+            for idx, line in enumerate(self.content.splitlines(), 1)
+            if "VERIFIED" in line
+        ]
+        self.assertGreater(len(verified_lines), 20, "Too few VERIFIED lines found in document")
+        for idx, line in verified_lines:
+            self.assertNotIn(
+                "pull-up",
+                line.lower(),
+                f"Line {idx} labelled VERIFIED mentions 'pull-up': {line}",
+            )
+            # Ensure standalone word 'ground' is not used (excluding 'background')
+            self.assertFalse(
+                bool(re.search(r"\bground\b", line, re.IGNORECASE)),
+                f"Line {idx} labelled VERIFIED mentions 'ground': {line}",
+            )
+
+    def test_bic_instruction_addresses_cited_correctly(self):
+        """(b) Document cites 0xFC1284CE and 0xFC1284E0 for BIC instructions and does not cite 0xFC1284D0 / 0xFC1284E2 as BIC addresses."""
+        # 1. Document must cite 0xFC1284CE and 0xFC1284E0
+        self.assertIn("0xFC1284CE", self.content, "Document missing citation of BIC address 0xFC1284CE")
+        self.assertIn("0xFC1284E0", self.content, "Document missing citation of BIC address 0xFC1284E0")
+
+        # Must cite them in context of the BIC instructions
+        sec = self.content.split("## Restart path", 1)[1]
+        self.assertTrue(
+            bool(re.search(r"bic.*0xFC1284CE", sec, re.DOTALL | re.IGNORECASE))
+            or "0xFC1284CE" in sec,
+            "0xFC1284CE not cited in Restart path",
+        )
+        self.assertTrue(
+            bool(re.search(r"bic.*0xFC1284E0", sec, re.DOTALL | re.IGNORECASE))
+            or "0xFC1284E0" in sec,
+            "0xFC1284E0 not cited in Restart path",
+        )
+
+        # 2. Document must not cite 0xFC1284D0 / 0xFC1284E2 as BIC addresses (or anywhere in document)
+        self.assertNotIn("0xFC1284D0", self.content, "Document still cites 0xFC1284D0")
+        self.assertNotIn("0xFC1284E2", self.content, "Document still cites 0xFC1284E2")
+
+        # 3. Both 0xFC1284CE and 0xFC1284E0 fall inside approved manifest range PORT24-ROM-POWERON-CHECK
+        entries = self.manifest.get("evidence_entries", [])
+        ranges = [(int(e["start_address"], 16), int(e["end_address"], 16), e["evidence_id"]) for e in entries]
+        for addr in (0xFC1284CE, 0xFC1284E0):
+            self.assertTrue(
+                any(s <= addr <= e for s, e, _ in ranges),
+                f"Address {hex(addr)} not covered by evidence manifest",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
