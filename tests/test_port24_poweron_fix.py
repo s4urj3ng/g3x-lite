@@ -88,6 +88,15 @@ class TestPort24PoweronFix(unittest.TestCase):
         cls.assertTrue(OBJDUMP.is_file(), f"arm-none-eabi-objdump missing: {OBJDUMP}")
         cls.assertTrue(NM.is_file(), f"arm-none-eabi-nm missing: {NM}")
 
+        # Ensure bootstrap has populated ignored platform headers if missing
+        platform_cam_h = REPO_ROOT / "chdk-port" / "platform" / "g3x" / "platform_camera.h"
+        if not platform_cam_h.is_file():
+            subprocess.run(
+                ["python3", "-B", str(REPO_ROOT / "tools" / "bootstrap_chdk_platform.py")],
+                cwd=REPO_ROOT,
+                check=True,
+            )
+
         # Create temporary build directories for test execution
         cls.tmp_dir = tempfile.mkdtemp(prefix="port24_test_")
         cls.default_dir = Path(cls.tmp_dir) / "default"
@@ -285,6 +294,7 @@ class TestPort24PoweronFix(unittest.TestCase):
         self.assertIn("platform/sx60hs/sub/100b/boot.c", doc_content)
         self.assertIn("loader/g7x/main.c", doc_content)
         self.assertIn("g3x_110e.patch", doc_content)
+        self.assertIn("docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md", doc_content)
 
         # ROM addresses
         self.assertIn("0xFC05B962", doc_content)
