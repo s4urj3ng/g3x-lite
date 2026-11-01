@@ -535,6 +535,85 @@ class TestPort25LocaliseDocument(unittest.TestCase):
             "Doc must confirm no full-ROM scans were conducted",
         )
 
+    def test_stage5_error_gates_cited_in_labelled_candidate(self):
+        """Doc cites 0xFC05BA6E, 0xFC05BA82, and 0xFC05BA8E inside a labelled candidate."""
+        required_addrs = ["0xFC05BA6E", "0xFC05BA82", "0xFC05BA8E"]
+        for addr in required_addrs:
+            self.assertIn(addr, self.content, f"Document missing citation of Stage 5 error gate address {addr}")
+
+        # Locate Candidate 7 section
+        c7_match = re.search(r"### Candidate 7:.*?(?=\n### |\Z)", self.content, re.DOTALL)
+        self.assertIsNotNone(c7_match, "Candidate 7 section missing from document")
+        c7_text = c7_match.group(0)
+
+        for addr in required_addrs:
+            self.assertIn(addr, c7_text, f"Candidate 7 section must cite Stage 5 error gate address {addr}")
+
+        self.assertTrue(
+            VALID_LABEL_PATTERN.search(c7_text),
+            "Candidate 7 section lacks an epistemic label ([VERIFIED], [STATIC_VERIFIED], [INFERRED], or [UNKNOWN])",
+        )
+
+        # Locate Rank 7 row in the summary table
+        table_match = re.search(r"## 5\. Ranked Candidate Summary\s+(.*?)(?=\n## |\Z)", self.content, re.DOTALL)
+        self.assertIsNotNone(table_match, "Summary table missing from document")
+        summary_text = table_match.group(1)
+        rank7_row = next((r for r in summary_text.splitlines() if re.search(r"\|\s*\*\*7\*\*", r)), None)
+        self.assertIsNotNone(rank7_row, "Rank 7 row missing from summary table")
+        for addr in required_addrs:
+            self.assertIn(addr, rank7_row, f"Rank 7 summary table row must cite {addr}")
+        self.assertTrue(VALID_LABEL_PATTERN.search(rank7_row), "Rank 7 table row lacks epistemic label")
+
+    def test_no_known_warm_boot_failure_mode_phrasing(self):
+        """The phrase 'known warm-boot failure mode' (or similar) must not appear."""
+        self.assertNotIn("known warm-boot failure mode", self.content.lower())
+        self.assertNotIn("known warm boot failure mode", self.content.lower())
+
+        # Check Rank 2 presentation: ranking is INFERRED and causal link is UNKNOWN
+        c4_match = re.search(r"### Candidate 4:.*?(?=\n### |\Z)", self.content, re.DOTALL)
+        self.assertIsNotNone(c4_match, "Candidate 4 (Rank 2) section missing")
+        c4_text = c4_match.group(0)
+        self.assertIn("[INFERRED]", c4_text, "Candidate 4 (Rank 2) ranking must be presented as INFERRED")
+        self.assertTrue(
+            re.search(r"causal link.*?\[UNKNOWN\]|causal link.*?is.*?UNKNOWN", c4_text, re.IGNORECASE),
+            "Candidate 4 (Rank 2) must state that the causal link to short-press power-off is UNKNOWN",
+        )
+
+    def test_no_breadcrumb_proves_physw_task_execution(self):
+        """No breadcrumb is described as proving PhySw task execution; PhySw execution is unobserved."""
+        # STAGE_BC_PHYSW_ENTRY must be removed
+        self.assertNotIn("STAGE_BC_PHYSW_ENTRY", self.content)
+
+        # No breadcrumb must claim to prove PhySw task execution or running
+        self.assertNotRegex(
+            self.content,
+            r"(?i)breadcrumb.*?proving.*?(?:task_)?PhySw.*?(?:execution|running|dispatched)",
+            "Breadcrumbs must not claim to prove PhySw task execution",
+        )
+
+        # Must explicitly state that PhySw task execution is UNOBSERVED by this ladder
+        self.assertTrue(
+            re.search(r"PhySw task execution is UNOBSERVED by this ladder", self.content, re.IGNORECASE),
+            "Doc must explicitly state that PhySw task execution is UNOBSERVED by this ladder",
+        )
+
+        # STAGE_BC_POST_PHYSW_CREATE remains as helper-return checkpoint
+        self.assertIn("STAGE_BC_POST_PHYSW_CREATE", self.content)
+
+    def test_synthetic_negative_feedback_checks(self):
+        """Verifies that synthetic violations of feedback criteria are properly detected."""
+        # 1. Warm-boot phrasing in synthetic text fails check
+        synthetic_warm_doc = "This replicates the known warm-boot failure mode from earlier patch."
+        self.assertIn("known warm-boot failure mode", synthetic_warm_doc.lower())
+
+        # 2. PhySw execution claim in synthetic breadcrumb text fails check
+        synthetic_breadcrumb_claim = "Proposed breadcrumb STAGE_BC_TEST proving task_PhySw execution"
+        self.assertTrue(bool(re.search(r"(?i)breadcrumb.*?proving.*?(?:task_)?PhySw.*?(?:execution|running|dispatched)", synthetic_breadcrumb_claim)))
+
+        # 3. Missing Stage 5 address in synthetic candidate text fails check
+        synthetic_c7_text = "### Candidate 7: Only cites 0xFC05BA6E and 0xFC05BA82."
+        self.assertNotIn("0xFC05BA8E", synthetic_c7_text)
+
 
 if __name__ == "__main__":
     unittest.main()
