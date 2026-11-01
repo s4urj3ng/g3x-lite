@@ -56,9 +56,10 @@ ARM_CC = os.path.join(TOOLCHAIN_BIN, "arm-none-eabi-gcc")
 ARM_AR = os.path.join(TOOLCHAIN_BIN, "arm-none-eabi-ar")
 ARM_NM = os.path.join(TOOLCHAIN_BIN, "arm-none-eabi-nm")
 
-# boot_prototype.c pinned SHA-256 with guarded call sites added by p17-trace-integration-r4;
-# tracing-off byte identity is verified in test_boot_prototype_unchanged.
-BOOT_PROTO_SHA256 = "c3bcbbd3b0891b34d05a64cbae559d0487aeda1ec88e961fddd6cece64479b61"
+# boot_prototype.c pinned SHA-256 with opt-in short-press power-on fix added by PORT-24;
+# default DISKBOOT SHA-256 is still 9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136
+# and preprocessed baseline matches 595cd2e7b118e5c65adaf95c7041237b87d9ec5a4252428e251063b38dcd0479.
+BOOT_PROTO_SHA256 = "3a34a2dd28fca8db1955e2f9d26dd2a176ad7a9c189ece52b8829a7f6fabfed0"
 
 # Candidate core CFLAGS, copied from tools/build_candidate_port2a.py
 # build_candidate_core() step 1 (includes -DLOW_LEVEL). Run with cwd=chdk-port.
@@ -622,14 +623,15 @@ class TestPort17TraceCore(unittest.TestCase):
 
         # (c) Build the tracing-off view: drop the directive lines and the #if-branch lines,
         # and keep the #else-branch lines. Assert that the SHA-256 of that view, as bytes,
-        # EXACTLY equals the parent commit's boot_prototype.c digest
-        # f7884eb2078e93a0098299e2665c1069ecbc65c7759d8993fa31e38fbb232e68.
+        # equals the baseline boot_prototype.c digest (updated by PORT-24 for opt-in short-press
+        # power-on fix while default DISKBOOT SHA-256 remains 9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136
+        # and preprocessed baseline matches 595cd2e7b118e5c65adaf95c7041237b87d9ec5a4252428e251063b38dcd0479).
         tracing_off_view = "".join(tracing_off_lines)
         view_digest = hashlib.sha256(tracing_off_view.encode("utf-8")).hexdigest()
         self.assertEqual(
             view_digest,
-            "f7884eb2078e93a0098299e2665c1069ecbc65c7759d8993fa31e38fbb232e68",
-            "Tracing-off view SHA-256 must exactly equal parent commit boot_prototype.c digest",
+            "5ec33edf921bc499239e58e0badd309fbe77918fed319f96d77dcbdf701c8979",
+            "Tracing-off view SHA-256 must match baseline boot_prototype.c digest",
         )
 
         # (d) Keep assertNotIn("g3x_trace", tracing_off_view), and assert that the view contains

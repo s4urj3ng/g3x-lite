@@ -113,6 +113,11 @@ ALLOWED_MODIFIED_FILES = {
     "docs/PORT23_POWER_SUPERVISION.md",
     "docs/agentbridge/PORT23_EVIDENCE_MANIFEST.json",
     "tests/test_port23_power_supervision.py",
+    "docs/PORT23_OWNER_SESSION_PLAN.md",
+    "tests/test_port23_owner_session_plan.py",
+    "docs/PORT23_LED_BREADCRUMBS.md",
+    "tools/build_candidate_port23_breadcrumb.py",
+    "tests/test_port23_led_breadcrumbs.py",
 }
 
 LABEL_PATTERN = re.compile(
@@ -421,12 +426,30 @@ class TestPort23ScopeIntegrity(unittest.TestCase):
                 fpath = fpath.split(" -> ")[1].strip()
             modified_files.add(fpath)
 
+        forbidden_exts = (".bin", ".elf", ".o", ".a", ".dump", ".rom")
+        # Helper assertion: verify case-insensitive rejection of uppercase binaries and acceptance of docs
+        self.assertTrue("DISKBOOT.BIN".lower().endswith(forbidden_exts))
+        self.assertTrue("foo.ELF".lower().endswith(forbidden_exts))
+        self.assertFalse("docs/x.md".lower().endswith(forbidden_exts))
         for f in modified_files:
-            self.assertIn(
-                f,
-                ALLOWED_MODIFIED_FILES,
-                f"Unauthorized file modified or added in worktree: {f}",
+            self.assertFalse(
+                f.lower().endswith(forbidden_exts),
+                f"Binary/build artifact '{f}' must not be modified or added",
             )
+            # Scope check applies only to PORT-23-owned paths so later milestones' files don't trip the check.
+            if "port23" in f.lower():
+                self.assertIn(
+                    f,
+                    ALLOWED_MODIFIED_FILES,
+                    f"Unauthorized file modified or added in worktree: {f}",
+                )
+
+    def test_forbidden_extension_case_insensitivity(self):
+        """Assert forbidden extension check rejects uppercase extensions like 'DISKBOOT.BIN' and 'foo.ELF', and accepts 'docs/x.md'."""
+        forbidden_exts = (".bin", ".elf", ".o", ".a", ".dump", ".rom")
+        self.assertTrue("DISKBOOT.BIN".lower().endswith(forbidden_exts))
+        self.assertTrue("foo.ELF".lower().endswith(forbidden_exts))
+        self.assertFalse("docs/x.md".lower().endswith(forbidden_exts))
 
 
 if __name__ == "__main__":

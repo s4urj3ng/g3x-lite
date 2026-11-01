@@ -1,0 +1,180 @@
+{
+  "manifest_version": "1.0.0",
+  "authorization_scopes": [
+    {
+      "scope_id": "SCOPE-PORT24-POWERON-FIX",
+      "firmware_revision": "GM1.10C",
+      "approved_ranges": [
+        {
+          "start_address": "0xFC05B960",
+          "end_address": "0xFC05B9BF",
+          "label": "PORT24-ROM-CALLER-STARTUP"
+        },
+        {
+          "start_address": "0xFC05BA50",
+          "end_address": "0xFC05BA6F",
+          "label": "PORT24-ROM-POWERCUT"
+        },
+        {
+          "start_address": "0xFC079400",
+          "end_address": "0xFC0794BF",
+          "label": "PORT24-ROM-NORMAL-MODE"
+        },
+        {
+          "start_address": "0xFDF20380",
+          "end_address": "0xFDF2038F",
+          "label": "PORT24-ROM-NORMAL-FLAG"
+        },
+        {
+          "start_address": "0xFC08ECB0",
+          "end_address": "0xFC08ECFF",
+          "label": "PORT24-ROM-STARTCAUSE-SAVE"
+        },
+        {
+          "start_address": "0xFC08EEE0",
+          "end_address": "0xFC08EEFF",
+          "label": "PORT24-ROM-STARTCAUSE-PTR"
+        },
+        {
+          "start_address": "0xFC0D73C0",
+          "end_address": "0xFC0D73FF",
+          "label": "PORT24-ROM-GPIO-PRIMITIVES"
+        },
+        {
+          "start_address": "0xFC1284A0",
+          "end_address": "0xFC12851F",
+          "label": "PORT24-ROM-POWERON-CHECK"
+        }
+      ],
+      "max_bytes_total": 65536,
+      "allowed_classifications": [
+        "STATIC_VERIFIED",
+        "INFERRED",
+        "UNKNOWN"
+      ],
+      "description": "PORT-24 GM1.10C short-press power-on check sub_fc1284ac, caller sub_fc05b962, power-cut sub_fc05ba56, start-cause sub_fc08ecbc, and mode check sub_fc079404 evidence scope (budget: at most 4 KiB per read, 64 KiB total)"
+    }
+  ],
+  "evidence_entries": [
+    {
+      "evidence_id": "PORT24-ROM-CALLER-STARTUP",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC05B960",
+      "end_address": "0xFC05B9BF",
+      "expected_byte_count": 96,
+      "sha256": "3403a6bdb72b4895d8a28cba2339318c32536439cd7ee35e06488000ccd8383d",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT24-POWERON-FIX",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Stock startup creator sub_fc05b962 (0xFC05B962..0xFC05B996) and literals (0xFC05B998..0xFC05B9BF): calls sub_fc05ba68, IsNormalCameraMode_FW (0xFC079404), and power-on check sub_fc1284ac (0xFC1284AC); on zero return, calls sub_fc05ba56 (power cut) and hangs at 0xFC05B976; on non-zero return, calls sub_fc31b460, initializes ARAM heap 0x006CE000 via sub_fc382c8c, and creates task 'Startup' (priority 25) via DryOS CreateTask veneer sub_fc31bbc4"
+    },
+    {
+      "evidence_id": "PORT24-ROM-POWERCUT",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC05BA50",
+      "end_address": "0xFC05BA6F",
+      "expected_byte_count": 32,
+      "sha256": "c7b43082682963f5df642e3d16af5971072984845a3bc0a88f31a5f54e76049c",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT24-POWERON-FIX",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Power-cut function sub_fc05ba56 (0xFC05BA56..0xFC05BA5C) and literal 0xFC05BA64: loads r1 = [0xFC05BA64] = 0x004C0003, loads r0 = 103 (0x67, power-hold GPIO pin), and jumps to GPIO_Write at 0xFC0D73C4, de-asserting the power-hold latch and cutting DC-DC power to the SoC"
+    },
+    {
+      "evidence_id": "PORT24-ROM-NORMAL-MODE",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC079400",
+      "end_address": "0xFC0794BF",
+      "expected_byte_count": 192,
+      "sha256": "cc71c4d4d3014205a860babbed28baa316d475bf1932d2368b5b4cad983a8214",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT24-POWERON-FIX",
+      "classification": "STATIC_VERIFIED",
+      "notes": "IsNormalCameraMode_FW (0xFC079404..0xFC079410) and literal pool at 0xFC0794B0 (0xFDF20380): loads byte from ROM address 0xFDF20380; if byte is 0 returns 1 (normal camera mode), otherwise returns 0; return value is passed in r0 to sub_fc1284ac to govern button-hold supervision check"
+    },
+    {
+      "evidence_id": "PORT24-ROM-NORMAL-FLAG",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFDF20380",
+      "end_address": "0xFDF2038F",
+      "expected_byte_count": 16,
+      "sha256": "7998b107f5214f071a101c994a4c8081a9c4abcd72e3970049a923c4bc137f64",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT24-POWERON-FIX",
+      "classification": "STATIC_VERIFIED",
+      "notes": "ROM flag byte at 0xFDF20380 read by IsNormalCameraMode_FW: first byte is 0x00, confirming that IsNormalCameraMode_FW returns 1 in default firmware state"
+    },
+    {
+      "evidence_id": "PORT24-ROM-STARTCAUSE-SAVE",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC08ECB0",
+      "end_address": "0xFC08ECFF",
+      "expected_byte_count": 80,
+      "sha256": "039ca184b58d48f853b02fd60a4ad72f45f389790e6da71c6488d99162f8277d",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT24-POWERON-FIX",
+      "classification": "STATIC_VERIFIED",
+      "notes": "sub_fc08ecbc start-cause recorder (0xFC08ECBC..0xFC08ECEC) called by sub_fc1284ac at 0xFC128510: loads base pointer from literal at 0xFC08EEF0 (0x00009BC4); writes startup reason word at offset +12: 0x80000 for Power button, 0x100000 for Playback button, 0x40000 for WiFi button, 0x20000 for GPIO 2"
+    },
+    {
+      "evidence_id": "PORT24-ROM-STARTCAUSE-PTR",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC08EEE0",
+      "end_address": "0xFC08EEFF",
+      "expected_byte_count": 32,
+      "sha256": "0ceabc1be63a68d5c37a240c220c5e3e4448271ffa11c6d28c4a3d20e72506c6",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT24-POWERON-FIX",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Literal pool for sub_fc08ecbc: word at 0xFC08EEF0 contains 0x00009BC4, proving that RAM address 0x9BC4 is the startup-cause structure base on GM1.10C, matching historical sister-port G3 X 1.10E"
+    },
+    {
+      "evidence_id": "PORT24-ROM-GPIO-PRIMITIVES",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC0D73C0",
+      "end_address": "0xFC0D73FF",
+      "expected_byte_count": 64,
+      "sha256": "00cb15ba364370a85edf8e4c4002f260078fe4e888ab7344d985757c5416c23d",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT24-POWERON-FIX",
+      "classification": "STATIC_VERIFIED",
+      "notes": "GPIO_Write at 0xFC0D73C4 (computes MMIO 0xD20B0800 + pin*4, so pin 0x67 writes to 0xD20B099C) and GPIO_Read at 0xFC0D73D0 (reads MMIO 0xD20B0800 + pin*4)"
+    },
+    {
+      "evidence_id": "PORT24-ROM-POWERON-CHECK",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC1284A0",
+      "end_address": "0xFC12851F",
+      "expected_byte_count": 128,
+      "sha256": "f683e2af7e75023d5e311752ab674c1a965933457698a33bf49e78f6a90e4eb0",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT24-POWERON-FIX",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Stock power-on button check sub_fc1284ac (0xFC1284AC..0xFC12851A): takes IsNormalCameraMode_FW in r0; samples GPIO 0x97 (Power button, 0xFC1284BC), GPIO 0x98 (Playback button, 0xFC1284C8), GPIO 0x88 (WiFi button, 0xFC1284DA), and GPIO 0x02 (0xFC1284EC); if in normal mode (sl != 0) and all button states are unasserted (0), branches to 0xFC12851A returning 0, triggering shutdown via sub_fc05ba56; if any button is pressed or mode is non-normal, calls sub_fc08ecbc and returns 1 at 0xFC128518"
+    }
+  ]
+}
