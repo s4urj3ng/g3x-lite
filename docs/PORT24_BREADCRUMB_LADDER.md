@@ -11,10 +11,10 @@ The breadcrumb ladder is an opt-in diagnostic bootloader candidate (`DISKBOOT.BI
 - `[VERIFIED: hardware trial 2026-11-01]`: Loader entry prologue at `0x00008000` executes on camera power-on with an encoded boot disk.
 - `[VERIFIED: host build & test]`: Scope compliance: No new files are created under `chdk-port/platform/g3x/sub/110c/`. Only already-tracked files (`led_breadcrumb.h` and `loader_main_breadcrumb.c`) are edited, and all ladder additions sit strictly inside `#if defined(LED_LADDER)` guards.
 - `[VERIFIED: host build & test]`: Default build invariance: When building without `--ladder` (or with `--no-ladder` / `--flag-off`), the DISKBOOT.BIN output is byte-identical to the locked baseline SHA-256 `9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136` (118,001 bytes).
-- `[VERIFIED: host build & test]`: Ladder candidate build output is deterministic across multiple independent builds (DISKBOOT.BIN SHA-256 `67b04962421e601c291145f118ec1e022c93127fed29a960e3bf5ea8f61a541e`, 118,257 bytes; candidate_loader.bin SHA-256 `8c198ab62823a7ccee151054728b1a9bb3a2b74c8a4f2192392bba7796208d5b`, 118,256 bytes).
+- `[VERIFIED: host build & test]`: Ladder candidate build output is deterministic across multiple independent builds (DISKBOOT.BIN SHA-256 `6634d8b31e2aa9262193bf301c1dfb701fe63e80f40d423a71c64519388bb921`, 118,257 bytes; candidate_loader.bin SHA-256 `7a177e89f8a673a727dd6f35fc2ba61d55780086e73aa029784f63291a14f842`, 118,256 bytes).
 - `[VERIFIED: host build & test]`: The ladder candidate passes all 7 validation checks of `tools/validate_candidate_port2a.py`.
-- `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:245; docs/PORT24_LOADER_TRACE.md:761]`: Timing calibration is derived from the PORT-23 `0x00600000` short-delay build using the exact same loop body (`subs r2, r2, #1; bne`). Total step duration at the slowest bound (300 ms) is ~193.75 ms (with a 6.25 ms non-loop overhead margin strictly meeting the 200 ms cap).
-- `[INFERRED: human visual physiology; Bloch's law]`: Single pulse per step with maximized dark gap (~43.75 ms fastest bound, ~54.69 ms nominal, ~131.25 ms slowest bound) prevents flicker-fusion blurring and enables clear human counting of separate flashes.
+- `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:245; docs/PORT24_LOADER_TRACE.md:761]`: Timing calibration is derived from the PORT-23 `0x00600000` short-delay build using the exact same loop body (`subs r2, r2, #1; bne`). Total step duration at the slowest bound (300 ms) is 193.75 ms loop + 1.00 ms non-loop overhead = 194.75 ms (strictly < 200 ms cap).
+- `[INFERRED: timing models]`: Single pulse per step with maximized dark gap (~44.53 ms fastest bound, ~55.66 ms nominal, ~133.59 ms slowest bound). Human visual countability of the chosen ON/OFF durations on physical camera hardware is `[UNKNOWN]` (no optical trials or photodiode measurements exist in repo evidence).
 - `[UNKNOWN: codebase analysis]`: The CHDK core entry point `_start` (`0x003489B4`) is defined in `chdk-port/core/entry.S:1-11`, which resides outside `chdk-port/platform/g3x/sub/110c/`. Per the task brief and repository scope rules, files outside the allowed paths are not edited. The final loader breadcrumb is therefore accurately designated `before_bx`, and core entry itself is NOT instrumented.
 - `[UNKNOWN: hardware trial 2026-11-01]`: Root cause of the shutdown after loader handoff (whether power supervision hold timeout, MMU/cache exception, or unhandled interrupt). The ladder candidate is designed to resolve this question.
 
@@ -27,7 +27,7 @@ Task 117 configured an ON delay of $0x00240000$ and an OFF delay of $0x00140000$
 - ON duration: ~46.9 ms
 - OFF duration: ~26.0 ms (dropping to as low as ~17–20 ms at faster loop execution speeds)
 
-Under human visual physiology, retinal persistence lasts approximately 30–50 ms. When an intense light source (such as the camera rear green LED) is extinguished for only ~17–26 ms between pulses, the eye does not perceive the LED going dark; retinal after-images bridge the short gap, causing adjacent flashes to blend together into a single blurred pulse (flicker fusion). To be clearly counted by eye as separate flashes, the dark gap (OFF duration) must be substantially lengthened.
+Under human visual physiology, retinal persistence lasts approximately 30–50 ms. When an intense light source (such as the camera rear green LED) is extinguished for only ~17–26 ms between pulses, the eye does not perceive the LED going dark; retinal after-images bridge the short gap, causing adjacent flashes to blend together into a single blurred pulse (flicker fusion). To be counted by eye as separate flashes, the dark gap (OFF duration) must be substantially lengthened.
 
 ### 2.2 Mathematical Impossibility Analysis of Simultaneous Fast-Bound Goals
 The task requirements state:
@@ -37,38 +37,37 @@ Let us analyze the mathematical envelope of the calibration sources:
 - Reference loop count: $N_{ref} = 0x00600000 = 6,291,456$ iterations.
 - Fastest calibration bound: $T_{fast}(N_{ref}) = 100$ ms (`docs/PORT23_POWER_SUPERVISION.md:245` range min).
 - Slowest calibration bound: $T_{slow}(N_{ref}) = 300$ ms (`docs/PORT24_LOADER_TRACE.md:761` upper bound).
+- Slow/fast duration ratio: $300\text{ ms} / 100\text{ ms} = 3.0$.
 
-#### Step 1: Constraint at the Slowest Bound
-To keep the step total strictly under 200 ms at the slowest bound ($T_{slow} = 300$ ms per $N_{ref}$):
-$$T_{step, slow} < 200\text{ ms} \implies \frac{N_{step}}{N_{ref}} \times 300\text{ ms} < 200\text{ ms} \implies \frac{N_{step}}{N_{ref}} < \frac{2}{3} \approx 0.6667$$
-$$N_{step} < \frac{2}{3} \times 0x00600000 = 0x00400000 = 4,194,304\text{ iterations}$$
-
-#### Step 2: Maximum Available Duration at the Fastest Bound
-For any iteration count $N_{step} < 0x00400000$, the maximum possible step duration at the fastest bound ($T_{fast} = 100$ ms per $N_{ref}$) is:
-$$T_{step, fast} = \frac{N_{step}}{N_{ref}} \times 100\text{ ms} < \frac{2}{3} \times 100\text{ ms} \approx 66.67\text{ ms}$$
-
-#### Step 3: Impossibility Proof
-The step duration at the fastest bound is the sum of the ON duration and the OFF duration:
-$$T_{step, fast} = T_{ON, fast} + T_{OFF, fast} < 66.67\text{ ms}$$
-However, the simultaneous requirement of $T_{ON, fast} \ge 40$ ms and $T_{OFF, fast} \ge 60$ ms requires:
-$$T_{step, fast} = T_{ON, fast} + T_{OFF, fast} \ge 40\text{ ms} + 60\text{ ms} = 100\text{ ms}$$
-Because $100\text{ ms} > 66.67\text{ ms}$, **it is mathematically impossible to simultaneously achieve $T_{ON} \ge 40$ ms and $T_{OFF} \ge 60$ ms at the fastest calibration bound while keeping the total step duration under 200 ms at the slowest calibration bound**.
+#### Constraint Analysis & Impossibility
+1. Achieving $T_{ON} \ge 40$ ms and $T_{OFF} \ge 60$ ms at the fastest bound requires:
+   $$T_{step, fast} = T_{ON, fast} + T_{OFF, fast} \ge 40\text{ ms} + 60\text{ ms} = 100\text{ ms}$$
+2. Because the slow/fast calibration ratio is $3.0$, a loop executing for $100$ ms at the fast bound necessarily executes for:
+   $$T_{step, slow} = 100\text{ ms} \times 3.0 = 300\text{ ms}$$
+   at the slowest bound.
+3. Because $300\text{ ms} > 200\text{ ms}$, **it is mathematically impossible to simultaneously achieve $T_{ON} \ge 40$ ms and $T_{OFF} \ge 60$ ms at the fastest calibration bound while keeping the total step duration under 200 ms at the slowest calibration bound**.
 
 ### 2.3 Justified Compromise: Maximizing the OFF Gap Under the 200 ms Cap
-Per the task brief's instruction for this scenario ("choose the counts that maximise the OFF gap under the 200 ms cap"):
-1. **Explicit Minimum ON Duration at Fast Bound**: We choose an ON iteration count of $N_{ON} = 0x00140000$ (1,310,720 iterations, ratio $1.25 / 6 \approx 0.20833$), yielding $T_{ON, fast} = 20.83$ ms at the fastest 100 ms bound.
-   *Justification*: Under human visual temporal integration (Bloch's law: $I \times t = k$ for durations below the critical summation threshold of ~20–30 ms), a high-contrast optical source (such as the camera rear green LED on a dark chassis) saturates human retinal photoreceptors within 20 ms. Maintaining $T_{ON, fast} \ge 20.0$ ms ensures full subjective brightness and perceptual noticeability even at the fastest hardware execution speed, without wasting budget that must be dedicated to dark separation.
-2. **Explicit Overhead Margin for Non-Loop Instructions**: Each breadcrumb pulse executes non-loop instructions (`ldr r0`, `ldr r1`, `str r1`, `dsb sy`, `mov.w r2` for ON; then `ldr r1`, `str r1`, `dsb sy`, `mov.w r2` for OFF). These total approximately 10 instructions plus 2 memory barriers. At Cortex-A9/R4 core clock rates (hundreds of MHz), these instructions execute in under $0.05$ ms (< 100 cycles). We allocate a conservative overhead margin of **$6.25$ ms** below the 200 ms cap.
-3. **Maximized OFF Gap Under Slow-Bound Budget**: Under the 200 ms slow-bound limit with a 6.25 ms overhead margin, the available loop execution budget at the slowest bound is $200.0 - 6.25 = 193.75$ ms.
-   - Total loop iterations: $N_{step} = \frac{193.75\text{ ms}}{300.0\text{ ms}} \times 0x00600000 = \frac{31}{48} \times 0x00600000 = 0x003E0000$ (4,063,232 iterations).
-   - Subtracting $N_{ON} = 0x00140000$ leaves $N_{OFF} = 0x002A0000$ (2,752,512 iterations, ratio $2.625 / 6 = 7/16 = 0.43750$).
-4. **Thumb-2 Encoding of New Immediate**:
-   The immediate constant $0x002A0000$ consists of the 8-bit pattern `0x2A` (`00101010` in binary) rotated/shifted left by 16 bits. In ARMv7-A/R Thumb-2, this is a valid modified immediate encodable by a single 32-bit `mov.w` instruction (`mov.w r2, #2752512`, opcode `f44f 1228`).
-5. **Resulting Timing Envelope**:
-   - At the nominal bound (125 ms): OFF is **54.69 ms**, providing a distinct dark gap well above the retinal persistence threshold.
-   - At the range max bound (150 ms): OFF is **65.63 ms** (satisfying $\ge 60$ ms).
-   - At the slowest bound (300 ms): OFF is **131.25 ms** (satisfying $\ge 60$ ms), ON is **62.50 ms** (satisfying $\ge 40$ ms), and step total loop time is **193.75 ms** (with 6.25 ms overhead margin strictly meeting 200.0 ms).
-   - At the fastest bound (100 ms): OFF is **43.75 ms** and ON is **20.83 ms**, providing more than double the dark separation of Task 117.
+Under the explicit constraints:
+(a) Simultaneous targets are impossible due to the 3x slow/fast ratio.
+(b) **Minimum-ON assumption**: We choose an ON iteration count of $N_{ON} = 0x00134000$ (1,261,568 iterations, ratio $77 / 384 \approx 0.20052$), yielding $T_{ON, fast} \approx 20.05$ ms at the fastest 100 ms bound. Whether this duration and the resulting dark gap are reliably countable by a human observer on physical camera hardware without instrumentation is `[UNKNOWN]` (no optical trial or photodiode evidence exists in the repository).
+(c) **Overhead bound**: Non-loop instructions in each pulse (3 literal pool loads, 2 MMIO stores, 2 DSB barriers, 2 MOVs) total 9 instructions and execute in < 200 cycles (< 0.01 ms at 100 MHz). A conservative overhead bound of **1.0 ms** is allocated.
+(d) **Full-step requirement**: Full modelled step duration (loop time + overhead bound) must be strictly < 200 ms at the slowest bound.
+
+#### Maximizing OFF Gap Under the Constraints
+- Available loop time budget at slowest bound: $200.0\text{ ms} - 1.0\text{ ms} = 199.0\text{ ms}$.
+- We retain the safe slow-bound loop budget of $193.75$ ms ($4,063,232$ iterations, $0x003E0000$), ensuring full modelled step time is $193.75 + 1.00 = 194.75\text{ ms} < 200.0\text{ ms}$ (strict inequality).
+- Subtracting the minimum ON count $N_{ON} = 0x00134000$ leaves:
+  $$N_{OFF} = 0x003E0000 - 0x00134000 = 0x002AC000\text{ iterations (2,801,664 iterations, ratio } 171 / 384 \approx 0.44531)$$
+- **Thumb-2 Modified Immediate Encoding**:
+  Both immediate constants are valid ARMv7 Thumb-2 modified immediates encodable directly in 4-byte `mov.w` instructions without literal pool loads:
+  - $0x00134000$: 8-bit pattern `0x9A` (`10011010` binary) shifted left by 13 bits (opcode `f44f 129a` in `mov.w r2, #0x00134000`).
+  - $0x002AC000$: 8-bit pattern `0xAB` (`10101011` binary) shifted left by 14 bits (opcode `f44f 122b` in `mov.w r2, #0x002AC000`).
+- **Resulting Timing Envelope** `[INFERRED]`:
+  - Fastest bound (100 ms): ON is **~20.05 ms**, OFF is **~44.53 ms** (maximized OFF gap under the budget), loop total is **~64.58 ms**, full step is **~65.58 ms** (< 200 ms).
+  - Nominal bound (125 ms): ON is **~25.07 ms**, OFF is **~55.66 ms**, loop total is **~80.73 ms**, full step is **~81.73 ms** (< 200 ms).
+  - Range max bound (150 ms): ON is **~30.08 ms**, OFF is **~66.80 ms** ($\ge 60$ ms), loop total is **~96.88 ms**, full step is **~97.88 ms** (< 200 ms).
+  - Slowest bound (300 ms): ON is **~60.16 ms** ($\ge 40$ ms), OFF is **~133.59 ms** ($\ge 60$ ms), loop total is **193.75 ms**, full step is **194.75 ms (< 200.0 ms strictly, PASS)**.
 
 ---
 
@@ -109,16 +108,16 @@ Both loops execute exactly **2 Thumb instructions per iteration** (`subs` and `b
 ### 3.4 Timing Arithmetic Across All Envelope Bounds `[INFERRED]`
 
 Iteration parameter ratios:
-$$\text{Ratio}_{ON} = \frac{0x00140000}{0x00600000} = \frac{1,310,720}{6,291,456} = \frac{1.25}{6} \approx 0.20833$$
-$$\text{Ratio}_{OFF} = \frac{0x002A0000}{0x00600000} = \frac{2,752,512}{6,291,456} = \frac{2.625}{6} = \frac{7}{16} = 0.43750$$
-$$\text{Ratio}_{step} = \frac{0x003E0000}{0x00600000} = \frac{4,063,232}{6,291,456} = \frac{3.875}{6} = \frac{31}{48} \approx 0.64583$$
+$$\text{Ratio}_{ON} = \frac{0x00134000}{0x00600000} = \frac{1,261,568}{6,291,456} = \frac{77}{384} \approx 0.20052$$
+$$\text{Ratio}_{OFF} = \frac{0x002AC000}{0x00600000} = \frac{2,801,664}{6,291,456} = \frac{171}{384} \approx 0.44531$$
+$$\text{Ratio}_{step} = \frac{0x003E0000}{0x00600000} = \frac{4,063,232}{6,291,456} = \frac{31}{48} \approx 0.64583$$
 
 | Calibration Model | Reference Duration (0x00600000) | ON Duration ($N_{ON}$) | OFF Duration ($N_{OFF}$) | Total Step Loop ($N_{step}$) | Overhead Margin | Total with Margin (< 200 ms) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Fastest Bound** (`PORT23_POWER_SUPERVISION.md:245`) | 100.0 ms | 20.83 ms | 43.75 ms | 64.58 ms | 2.08 ms | **66.67 ms (PASS)** |
-| **Nominal Model** (`PORT23_POWER_SUPERVISION.md:245`) | 125.0 ms | 26.04 ms | 54.69 ms | 80.73 ms | 2.60 ms | **83.33 ms (PASS)** |
-| **Range Max** (`PORT23_POWER_SUPERVISION.md:245`) | 150.0 ms | 31.25 ms | 65.63 ms | 96.88 ms | 3.13 ms | **100.00 ms (PASS)** |
-| **Slowest Bound** (`PORT24_LOADER_TRACE.md:761`) | 300.0 ms | 62.50 ms | 131.25 ms | 193.75 ms | 6.25 ms | **200.00 ms (PASS)** |
+| **Fastest Bound** (`PORT23_POWER_SUPERVISION.md:245`) | 100.0 ms | 20.05 ms | 44.53 ms | 64.58 ms | 1.00 ms | **65.58 ms (PASS)** |
+| **Nominal Model** (`PORT23_POWER_SUPERVISION.md:245`) | 125.0 ms | 25.07 ms | 55.66 ms | 80.73 ms | 1.00 ms | **81.73 ms (PASS)** |
+| **Range Max** (`PORT23_POWER_SUPERVISION.md:245`) | 150.0 ms | 30.08 ms | 66.80 ms | 96.88 ms | 1.00 ms | **97.88 ms (PASS)** |
+| **Slowest Bound** (`PORT24_LOADER_TRACE.md:761`) | 300.0 ms | 60.16 ms | 133.59 ms | 193.75 ms | 1.00 ms | **194.75 ms (< 200 ms, PASS)** |
 
 ---
 
@@ -127,13 +126,14 @@ $$\text{Ratio}_{step} = \frac{0x003E0000}{0x00600000} = \frac{4,063,232}{6,291,4
 ### 4.1 Evidence Citations from the Repository
 The 4-byte padding object `static const uint32_t _ladder_align_pad = 0;` is maintained in `loader_main_breadcrumb.c` behind `#if defined(LED_LADDER)`. The repository evidence requiring 8-byte alignment for the loader image is:
 
-1. **`chdk-port/tools/dancingbits.c:60-68`**:
+1. **`chdk-port/tools/dancingbits.c:53-64`**:
    ```c
    	int phox = fread(ewavr, 1, GHOST, jeff666);
    	while (phox > 0) {
    		for (grand=0; grand<phox; grand+=8) {
    			unsigned char fe50[8];
    			for (hacki=0; hacki<8; hacki++) {
+   				// fe50[hacki] = dance(ewavr[grand + _chr_[hacki]], grand+hacki);
    				fe50[_chr_[oldgit][hacki]] = dance(ewavr[grand + hacki], grand+hacki);
    			}
    			fwrite(fe50, 1, 8, jucifer);
@@ -143,7 +143,30 @@ The 4-byte padding object `static const uint32_t _ladder_align_pad = 0;` is main
    ```
    The dancingbits encoder reads and permutes data in 8-byte blocks (`grand += 8; fwrite(fe50, 1, 8, jucifer)`). If the input loader binary is not an exact multiple of 8 bytes, `dancingbits.c` reads past the end of the input buffer and pads the output binary to an 8-byte boundary.
 
-2. **`tools/validate_candidate_port2a.py:86-93` and `:458-462`**:
+2. **`tools/validate_candidate_port2a.py:85-93` and `:457-463`**:
+   ```python
+   def decode_dancingbits_row13(encoded_bytes):
+       assert encoded_bytes[0] == 0, "Byte 0 of encoded DISKBOOT.BIN must be 0x00"
+       payload = bytearray(encoded_bytes[1:])
+       out = bytearray(len(payload))
+       for grand in range(0, len(payload), 8):
+           block = payload[grand:grand+8]
+           if len(block) < 8:
+               break
+           fudge_base = grand % 1024
+           for hacki in range(8):
+               fudgey = fudge_base + hacki
+               out[grand + hacki] = dance(block[ROW13[hacki]], fudgey)
+       return bytes(out)
+   ```
+   ```python
+   assert diskboot_bytes[0] == 0, f"Byte 0 of DISKBOOT.BIN must be 0x00, got {diskboot_bytes[0]}"
+   assert len(diskboot_bytes) == len(loader_bytes) + 1, "DISKBOOT.BIN length mismatch"
+
+   # Decode and compare bit-for-bit
+   decoded_loader = decode_dancingbits_row13(diskboot_bytes)
+   assert decoded_loader == loader_bytes, "Decoded DISKBOOT.BIN does not match candidate_loader.bin bit-for-bit!"
+   ```
    ```python
    def decode_dancingbits_row13(encoded_bytes):
        ...
@@ -241,13 +264,13 @@ Positioned immediately after `check_compat()` returns (`0x81da: bl 8178`) and be
     81e0:	495b      	ldr	r1, [pc, #364]	; (8350: 0x004D0002)
     81e2:	6001      	str	r1, [r0, #0]
     81e4:	f3bf 8f4f 	dsb	sy
-    81e8:	f44f 12a0 	mov.w	r2, #1310720	; 0x140000 (ON loop)
+    81e8:	f44f 129a 	mov.w	r2, #1261568	; 0x134000 (ON loop)
     81ec:	3a01      	subs	r2, #1
     81ee:	d1fd      	bne.n	81ec <my_restart+0x14>
     81f0:	4958      	ldr	r1, [pc, #352]	; (8354: 0x004C0003)
     81f2:	6001      	str	r1, [r0, #0]
     81f4:	f3bf 8f4f 	dsb	sy
-    81f8:	f44f 1228 	mov.w	r2, #2752512	; 0x2a0000 (OFF loop)
+    81f8:	f44f 122b 	mov.w	r2, #2801664	; 0x2ac000 (OFF loop)
     81fc:	3a01      	subs	r2, #1
     81fe:	d1fd      	bne.n	81fc <my_restart+0x24>
     ; --- SETUP FOR core_copy ---
@@ -273,13 +296,13 @@ Positioned immediately after Boot Witness Stage 1 checksum calculation and store
     8244:	4942      	ldr	r1, [pc, #264]	; (8350: 0x004D0002)
     8246:	6001      	str	r1, [r0, #0]
     8248:	f3bf 8f4f 	dsb	sy
-    824c:	f44f 12a0 	mov.w	r2, #1310720	; 0x140000 (ON loop)
+    824c:	f44f 129a 	mov.w	r2, #1261568	; 0x134000 (ON loop)
     8250:	3a01      	subs	r2, #1
     8252:	d1fd      	bne.n	8250 <my_restart+0x78>
     8254:	493f      	ldr	r1, [pc, #252]	; (8354: 0x004C0003)
     8256:	6001      	str	r1, [r0, #0]
     8258:	f3bf 8f4f 	dsb	sy
-    825c:	f44f 1228 	mov.w	r2, #2752512	; 0x2a0000 (OFF loop)
+    825c:	f44f 122b 	mov.w	r2, #2801664	; 0x2ac000 (OFF loop)
     8260:	3a01      	subs	r2, #1
     8262:	d1fd      	bne.n	8260 <my_restart+0x88>
 ```
@@ -292,13 +315,13 @@ Positioned inside the cache synchronization assembly block immediately before lo
     8266:	493a      	ldr	r1, [pc, #232]	; (8350: 0x004D0002)
     8268:	6001      	str	r1, [r0, #0]
     826a:	f3bf 8f4f 	dsb	sy
-    826e:	f44f 12a0 	mov.w	r2, #1310720	; 0x140000 (ON loop)
+    826e:	f44f 129a 	mov.w	r2, #1261568	; 0x134000 (ON loop)
     8272:	3a01      	subs	r2, #1
     8274:	d1fd      	bne.n	8272 <my_restart+0x9a>
     8276:	4937      	ldr	r1, [pc, #220]	; (8354: 0x004C0003)
     8278:	6001      	str	r1, [r0, #0]
     827a:	f3bf 8f4f 	dsb	sy
-    827e:	f44f 1228 	mov.w	r2, #2752512	; 0x2a0000 (OFF loop)
+    827e:	f44f 122b 	mov.w	r2, #2801664	; 0x2ac000 (OFF loop)
     8282:	3a01      	subs	r2, #1
     8284:	d1fd      	bne.n	8282 <my_restart+0xaa>
     ; --- INVOKE ROM_DCACHE_CLEAN_INV ---
@@ -318,13 +341,13 @@ Positioned immediately after D-cache clean completion and `dsb sy` (`0x828e`), b
     8294:	492e      	ldr	r1, [pc, #184]	; (8350: 0x004D0002)
     8296:	6001      	str	r1, [r0, #0]
     8298:	f3bf 8f4f 	dsb	sy
-    829c:	f44f 12a0 	mov.w	r2, #1310720	; 0x140000 (ON loop)
+    829c:	f44f 129a 	mov.w	r2, #1261568	; 0x134000 (ON loop)
     82a0:	3a01      	subs	r2, #1
     82a2:	d1fd      	bne.n	82a0 <my_restart+0xc8>
     82a4:	492b      	ldr	r1, [pc, #172]	; (8354: 0x004C0003)
     82a6:	6001      	str	r1, [r0, #0]
     82a8:	f3bf 8f4f 	dsb	sy
-    82ac:	f44f 1228 	mov.w	r2, #2752512	; 0x2a0000 (OFF loop)
+    82ac:	f44f 122b 	mov.w	r2, #2801664	; 0x2ac000 (OFF loop)
     82b0:	3a01      	subs	r2, #1
     82b2:	d1fd      	bne.n	82b0 <my_restart+0xd8>
 ```
@@ -337,13 +360,13 @@ Positioned immediately before loading parameters for `ROM_ICACHE_INV_BP` (`0x82d
     82b6:	4926      	ldr	r1, [pc, #152]	; (8350: 0x004D0002)
     82b8:	6001      	str	r1, [r0, #0]
     82ba:	f3bf 8f4f 	dsb	sy
-    82be:	f44f 12a0 	mov.w	r2, #1310720	; 0x140000 (ON loop)
+    82be:	f44f 129a 	mov.w	r2, #1261568	; 0x134000 (ON loop)
     82c2:	3a01      	subs	r2, #1
     82c4:	d1fd      	bne.n	82c2 <my_restart+0xea>
     82c6:	4923      	ldr	r1, [pc, #140]	; (8354: 0x004C0003)
     82c8:	6001      	str	r1, [r0, #0]
     82ca:	f3bf 8f4f 	dsb	sy
-    82ce:	f44f 1228 	mov.w	r2, #2752512	; 0x2a0000 (OFF loop)
+    82ce:	f44f 122b 	mov.w	r2, #2801664	; 0x2ac000 (OFF loop)
     82d2:	3a01      	subs	r2, #1
     82d4:	d1fd      	bne.n	82d2 <my_restart+0xfa>
     ; --- INVOKE ROM_ICACHE_INV_BP ---
@@ -364,13 +387,13 @@ Positioned immediately after `isb sy` (`0x82e2`), before interrupt masking (`0x8
     82e8:	4919      	ldr	r1, [pc, #100]	; (8350: 0x004D0002)
     82ea:	6001      	str	r1, [r0, #0]
     82ec:	f3bf 8f4f 	dsb	sy
-    82f0:	f44f 12a0 	mov.w	r2, #1310720	; 0x140000 (ON loop)
+    82f0:	f44f 129a 	mov.w	r2, #1261568	; 0x134000 (ON loop)
     82f4:	3a01      	subs	r2, #1
     82f6:	d1fd      	bne.n	82f4 <my_restart+0x11c>
     82f8:	4916      	ldr	r1, [pc, #88]	; (8354: 0x004C0003)
     82fa:	6001      	str	r1, [r0, #0]
     82fc:	f3bf 8f4f 	dsb	sy
-    8300:	f44f 1228 	mov.w	r2, #2752512	; 0x2a0000 (OFF loop)
+    8300:	f44f 122b 	mov.w	r2, #2801664	; 0x2ac000 (OFF loop)
     8304:	3a01      	subs	r2, #1
     8306:	d1fd      	bne.n	8304 <my_restart+0x12c>
     ; --- DISABLE INTERRUPTS ---
@@ -386,13 +409,13 @@ Positioned after `cpsid if` (`0x8308`) and immediately before handoff address se
     830c:	4910      	ldr	r1, [pc, #64]	; (8350: 0x004D0002)
     830e:	6001      	str	r1, [r0, #0]
     8310:	f3bf 8f4f 	dsb	sy
-    8314:	f44f 12a0 	mov.w	r2, #1310720	; 0x140000 (ON loop)
+    8314:	f44f 129a 	mov.w	r2, #1261568	; 0x134000 (ON loop)
     8318:	3a01      	subs	r2, #1
     831a:	d1fd      	bne.n	8318 <my_restart+0x140>
     831c:	490d      	ldr	r1, [pc, #52]	; (8354: 0x004C0003)
     831e:	6001      	str	r1, [r0, #0]
     8320:	f3bf 8f4f 	dsb	sy
-    8324:	f44f 1228 	mov.w	r2, #2752512	; 0x2a0000 (OFF loop)
+    8324:	f44f 122b 	mov.w	r2, #2801664	; 0x2ac000 (OFF loop)
     8328:	3a01      	subs	r2, #1
     832a:	d1fd      	bne.n	8328 <my_restart+0x150>
     ; --- TERMINAL HANDOFF TO CHDK CORE ---
@@ -451,8 +474,8 @@ When built with `--ladder`, the deterministic candidate artifacts are:
 
 | Artifact | Size (bytes) | SHA-256 Digest | Status |
 | :--- | :---: | :--- | :---: |
-| **`DISKBOOT.BIN`** | `118,257` | `67b04962421e601c291145f118ec1e022c93127fed29a960e3bf5ea8f61a541e` | `[VERIFIED: deterministic host build]` |
-| **`candidate_loader.bin`** | `118,256` | `8c198ab62823a7ccee151054728b1a9bb3a2b74c8a4f2192392bba7796208d5b` | `[VERIFIED: deterministic host build]` |
+| **`DISKBOOT.BIN`** | `118,257` | `6634d8b31e2aa9262193bf301c1dfb701fe63e80f40d423a71c64519388bb921` | `[VERIFIED: deterministic host build]` |
+| **`candidate_loader.bin`** | `118,256` | `7a177e89f8a673a727dd6f35fc2ba61d55780086e73aa029784f63291a14f842` | `[VERIFIED: deterministic host build]` |
 | **`candidate_loader.elf`** | `120,296` | (ELF symbols at `0x8000`) | `[VERIFIED]` |
 | **`candidate_main.bin`** | `116,816` | `420b3842ed56b59dc7cd24d0fb5e311fad1aec36ed38825b435d5030a314a56e` | `[VERIFIED: bit-for-bit identical to default]` |
 | **`candidate_main.elf`** | `211,620` | `8685c90b5e3cf2da33d062828b86e0fc2521cf9c98bc01d1c313a48e718ba7c2` | `[VERIFIED]` |

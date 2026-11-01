@@ -100,11 +100,11 @@ EXPECTED_DEFAULT_CORE_SHA256 = (
 EXPECTED_DEFAULT_CORE_SIZE = 116816
 
 EXPECTED_LADDER_DISKBOOT_SHA256 = (
-    "67b04962421e601c291145f118ec1e022c93127fed29a960e3bf5ea8f61a541e"
+    "6634d8b31e2aa9262193bf301c1dfb701fe63e80f40d423a71c64519388bb921"
 )
 EXPECTED_LADDER_DISKBOOT_SIZE = 118257
 EXPECTED_LADDER_LOADER_SHA256 = (
-    "8c198ab62823a7ccee151054728b1a9bb3a2b74c8a4f2192392bba7796208d5b"
+    "7a177e89f8a673a727dd6f35fc2ba61d55780086e73aa029784f63291a14f842"
 )
 EXPECTED_LADDER_LOADER_SIZE = 118256
 
@@ -355,8 +355,8 @@ class TestPort24BreadcrumbLadder(unittest.TestCase):
         timing = calculate_timing()
 
         # Check iteration counts
-        self.assertEqual(PULSE_ON_ITERATIONS, 0x00140000)
-        self.assertEqual(PULSE_OFF_ITERATIONS, 0x002A0000)
+        self.assertEqual(PULSE_ON_ITERATIONS, 0x00134000)
+        self.assertEqual(PULSE_OFF_ITERATIONS, 0x002AC000)
         self.assertEqual(SINGLE_STEP_ITERATIONS, 0x003E0000)
 
         # Under documented calibration: slow-bound total < 200 ms cap
@@ -373,20 +373,23 @@ class TestPort24BreadcrumbLadder(unittest.TestCase):
         self.assertTrue(timing["under_safety_limit"])
 
         # Check fast-bound compromise:
-        # (a) fast-bound ON >= stated minimum of 20.0 ms (~20.83 ms for retinal cone saturation per Bloch's law)
+        # (a) fast-bound ON >= stated minimum of 20.0 ms (~20.05 ms at 100 ms bound)
         self.assertGreaterEqual(
             timing["on_ms_fastest"],
             20.0,
             f"Fastest ON {timing['on_ms_fastest']} ms below stated minimum of 20.0 ms!",
         )
-        # (b) fast-bound OFF at its maximum within the budget (43.75 ms)
+        # (b) fast-bound OFF maximized within the budget (~44.53 ms)
         self.assertGreaterEqual(
             timing["off_ms_fastest"],
-            40.0,
-            f"Fastest OFF {timing['off_ms_fastest']} ms below 40.0 ms!",
+            44.0,
+            f"Fastest OFF {timing['off_ms_fastest']} ms below 44.0 ms!",
         )
-        # (c) slow-bound loop total (193.75 ms) + explicit 6.25 ms overhead margin strictly meets 200 ms cap
-        self.assertEqual(round(timing["total_ms_slowest"] + timing["overhead_margin_ms"], 2), 200.0)
+        # (c) slow-bound loop total (193.75 ms) + explicit 1.0 ms overhead margin strictly < 200 ms cap
+        full_step_slowest = timing["total_ms_slowest"] + timing["overhead_margin_ms"]
+        self.assertEqual(timing["overhead_margin_ms"], 1.0)
+        self.assertEqual(round(full_step_slowest, 2), 194.75)
+        self.assertLess(full_step_slowest, 200.0, f"Full step {full_step_slowest} ms not strictly < 200 ms!")
         self.assertLess(timing["total_ms_slowest"], 200.0)
 
         # Visibility checks across nominal and slowest bounds
@@ -455,9 +458,9 @@ class TestPort24BreadcrumbLadder(unittest.TestCase):
             bx_idx = restart_dump.find("bx\tr0", cpsid_idx)
             self.assertGreater(bx_idx, cpsid_idx, "Missing terminal bx r0")
 
-            # Each step has an ON delay loop with mov.w r2, #1310720 (0x00140000)
-            on_loop_marker = "mov.w\tr2, #1310720"
-            off_loop_marker = "mov.w\tr2, #2752512"
+            # Each step has an ON delay loop with mov.w r2, #1261568 (0x00134000)
+            on_loop_marker = "mov.w\tr2, #1261568"
+            off_loop_marker = "mov.w\tr2, #2801664"
 
             # 1. Step 1 (after_prologue): after bl check_compat, before core_copy
             step1_count = restart_dump[compat_idx:copy_idx].count(on_loop_marker)
@@ -739,6 +742,74 @@ class TestPort24BreadcrumbLadder(unittest.TestCase):
         self.assertEqual(len(data), 7)
         self.assertEqual(data[0]["name"], "after_prologue")
         self.assertEqual(data[6]["name"], "before_bx")
+
+    def test_ladder_table_store_validation_regressions(self):
+        """tools/port24_ladder_table.py validates 14 stores, base MMIO 0xD20B0884, and ON/OFF values; rejects anomalies."""
+        from port24_ladder_table import parse_and_validate_ladder_stores
+
+        # 1. Construct valid synthetic disassembly of my_restart with 14 stores (7 complete pairs)
+        valid_mock = """
+000081d8 <my_restart>:
+    81d8:\tb508      \tpush\t{r3, lr}
+    81da:\tf7ff ffcd \tbl\t8178 <check_compat>
+"""
+        on_addrs = ["81e2", "8246", "8268", "8296", "82b8", "82ea", "830e"]
+        off_addrs = ["81f2", "8256", "8278", "82a6", "82c8", "82fa", "831e"]
+        for on_a, off_a in zip(on_addrs, off_addrs):
+            valid_mock += f"""
+    {int(on_a, 16)-4:x}:\t485b      \tldr\tr0, [pc, #364]\t; (834c)
+    {int(on_a, 16)-2:x}:\t495b      \tldr\tr1, [pc, #364]\t; (8350)
+    {on_a}:\t6001      \tstr\tr1, [r0, #0]
+    {int(off_a, 16)-2:x}:\t4958      \tldr\tr1, [pc, #352]\t; (8354)
+    {off_a}:\t6001      \tstr\tr1, [r0, #0]
+"""
+        valid_mock += """
+    8332:\t4700      \tbx\tr0
+    834c:\td20b0884 \t.word\t0xd20b0884
+    8350:\t004d0002 \t.word\t0x004d0002
+    8354:\t004c0003 \t.word\t0x004c0003
+"""
+
+        # Baseline: Valid 14 stores pass and return 7 ON store addresses
+        parsed = parse_and_validate_ladder_stores(valid_mock, exit_on_error=False)
+        self.assertEqual(len(parsed), 7)
+        self.assertEqual(parsed[0], "0x000081E2")
+        self.assertEqual(parsed[6], "0x0000830E")
+
+        # Regression (a): Incomplete final pulse (13 stores) -> raises ValueError & exits non-zero
+        mock_13 = valid_mock.replace("831e:\t6001      \tstr\tr1, [r0, #0]", "")
+        with self.assertRaises(ValueError) as ctx_13:
+            parse_and_validate_ladder_stores(mock_13, exit_on_error=False)
+        self.assertIn("13", str(ctx_13.exception))
+        self.assertIn("14", str(ctx_13.exception))
+        with self.assertRaises(SystemExit) as exit_13:
+            parse_and_validate_ladder_stores(mock_13, exit_on_error=True)
+        self.assertEqual(exit_13.exception.code, 1)
+
+        # Regression (b): Swapped ON/OFF value (first store gets OFF value instead of ON) -> raises ValueError & exits non-zero
+        mock_swapped = valid_mock.replace(
+            "81e0:\t495b      \tldr\tr1, [pc, #364]\t; (8350)",
+            "81e0:\t495b      \tldr\tr1, [pc, #364]\t; (8354)",
+        )
+        with self.assertRaises(ValueError) as ctx_swap:
+            parse_and_validate_ladder_stores(mock_swapped, exit_on_error=False)
+        self.assertIn("0x004D0002", str(ctx_swap.exception))
+        with self.assertRaises(SystemExit) as exit_swap:
+            parse_and_validate_ladder_stores(mock_swapped, exit_on_error=True)
+        self.assertEqual(exit_swap.exception.code, 1)
+
+        # Regression (c): Wrong MMIO address (0xD20B0880 instead of 0xD20B0884) -> raises ValueError & exits non-zero
+        mock_wrong_mmio = valid_mock.replace(
+            "834c:\td20b0884 \t.word\t0xd20b0884",
+            "834c:\td20b0880 \t.word\t0xd20b0880",
+        )
+        with self.assertRaises(ValueError) as ctx_mmio:
+            parse_and_validate_ladder_stores(mock_wrong_mmio, exit_on_error=False)
+        self.assertIn("0xD20B0884", str(ctx_mmio.exception))
+        self.assertIn("0xD20B0880", str(ctx_mmio.exception))
+        with self.assertRaises(SystemExit) as exit_mmio:
+            parse_and_validate_ladder_stores(mock_wrong_mmio, exit_on_error=True)
+        self.assertEqual(exit_mmio.exception.code, 1)
 
 
 if __name__ == "__main__":

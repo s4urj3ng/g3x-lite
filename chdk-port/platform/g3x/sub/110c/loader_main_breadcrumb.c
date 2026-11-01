@@ -24,7 +24,7 @@ extern long blob_chdk_core_size;
 
 #if defined(LED_LADDER)
 // Ensure 8-byte alignment of loader image for dancingbits 64-bit permutation
-// Repo evidence: chdk-port/tools/dancingbits.c:60-68 and tools/validate_candidate_port2a.py:86-93, 458-462
+// Repo evidence: chdk-port/tools/dancingbits.c:53-64 and tools/validate_candidate_port2a.py:86-93, 458-462
 static const uint32_t _ladder_align_pad __attribute__((used, section(".data"))) = 0;
 #endif
 

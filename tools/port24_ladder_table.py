@@ -21,10 +21,11 @@ Timing Calibration (derived from PORT-23 short-delay build 0x00600000):
   and ~300 ms conservative upper bound [INFERRED: docs/PORT24_LOADER_TRACE.md:761].
 - Same loop body: 'subs r2, r2, #1; bne' (2 instructions per iteration).
 - Per step:
-    N_on  = 0x00140000 (1,310,720 iterations) -> ~20.8 ms (fast 100ms) / ~26.0 ms (nom 125ms) / ~62.5 ms (slow 300ms)
-    N_off = 0x002A0000 (2,752,512 iterations) -> ~43.8 ms (fast 100ms) / ~54.7 ms (nom 125ms) / ~131.3 ms (slow 300ms)
-    Total per step = 0x003E0000 (4,063,232 iterations) -> ~64.6 ms (fast) / ~80.7 ms (nom) / ~193.8 ms (slow < 200ms)
-- Overhead margin: 6.25 ms reserved below 200 ms cap (193.75 ms + 6.25 ms = 200.0 ms).
+    N_on  = 0x00134000 (1,261,568 iterations) -> ~20.05 ms (fast 100ms) / ~25.07 ms (nom 125ms) / ~60.16 ms (slow 300ms) [INFERRED]
+    N_off = 0x002AC000 (2,801,664 iterations) -> ~44.53 ms (fast 100ms) / ~55.66 ms (nom 125ms) / ~133.59 ms (slow 300ms) [INFERRED]
+    Total loop = 0x003E0000 (4,063,232 iterations) -> ~64.58 ms (fast) / ~80.73 ms (nom) / 193.75 ms (slow) [INFERRED]
+- Non-loop overhead: conservative 1.0 ms allocated for ~9 instructions + 2 barriers (< 200 cycles).
+- Full step (loops + overhead): 193.75 ms + 1.0 ms = 194.75 ms strictly < 200.0 ms cap [INFERRED].
 """
 
 from __future__ import annotations
@@ -52,11 +53,11 @@ PORT23_SHORT_DELAY_MS_NOMINAL = 125.0       # 125 ms nominal (PORT-23 power supe
 PORT23_SHORT_DELAY_MS_RANGE_MAX = 150.0     # 150 ms range upper bound
 PORT23_SHORT_DELAY_MS_SLOWEST = 300.0       # 300 ms slowest bound (PORT-24 trace)
 
-PULSE_ON_ITERATIONS = 0x00140000            # 1,310,720 iterations
-PULSE_OFF_ITERATIONS = 0x002A0000           # 2,752,512 iterations
+PULSE_ON_ITERATIONS = 0x00134000            # 1,261,568 iterations
+PULSE_OFF_ITERATIONS = 0x002AC000           # 2,801,664 iterations
 SINGLE_STEP_ITERATIONS = PULSE_ON_ITERATIONS + PULSE_OFF_ITERATIONS  # 4,063,232 (0x003E0000)
 
-NON_LOOP_OVERHEAD_MARGIN_MS = 6.25
+NON_LOOP_OVERHEAD_MARGIN_MS = 1.0           # 1.0 ms justified non-loop instruction overhead bound
 MAX_SAFETY_LIMIT_MS = 200.0
 
 STATIC_REFERENCE_ADDRS = [
@@ -194,6 +195,7 @@ def calculate_timing() -> dict:
     on_ms_max = (PULSE_ON_ITERATIONS / PORT23_SHORT_DELAY_ITERATIONS) * PORT23_SHORT_DELAY_MS_SLOWEST
     off_ms_max = (PULSE_OFF_ITERATIONS / PORT23_SHORT_DELAY_ITERATIONS) * PORT23_SHORT_DELAY_MS_SLOWEST
     total_ms_max = (SINGLE_STEP_ITERATIONS / PORT23_SHORT_DELAY_ITERATIONS) * PORT23_SHORT_DELAY_MS_SLOWEST
+    full_step_ms_slowest = total_ms_max + NON_LOOP_OVERHEAD_MARGIN_MS
 
     return {
         "iterations_on": PULSE_ON_ITERATIONS,
@@ -209,23 +211,150 @@ def calculate_timing() -> dict:
         "on_ms_slowest": round(on_ms_max, 2),
         "off_ms_slowest": round(off_ms_max, 2),
         "total_ms_slowest": round(total_ms_max, 2),
-        "under_safety_limit": total_ms_max < MAX_SAFETY_LIMIT_MS,
+        "full_step_ms_slowest": round(full_step_ms_slowest, 2),
+        "under_safety_limit": full_step_ms_slowest < MAX_SAFETY_LIMIT_MS,
     }
 
 
-def extract_disasm_addresses(loader_elf: str | Path) -> list[str]:
+def parse_and_validate_ladder_stores(disasm_text: str, exit_on_error: bool = True) -> list[str]:
+    """Parse and validate ladder stores from objdump disassembly.
+
+    Validates:
+    - Exactly 14 stores forming 7 complete ON->OFF pairs in order.
+    - Base register was loaded with 0xD20B0884 for every store.
+    - Value register was loaded with 0x004D0002 (ON) for even stores (0, 2, 4...)
+      and 0x004C0003 (OFF) for odd stores (1, 3, 5...).
+    - Exits non-zero (or raises ValueError if exit_on_error is False) otherwise.
+    - Returns the list of 7 ON store disassembly addresses.
+    """
+    lines = disasm_text.splitlines()
+
+    # Pass 1: Parse 32-bit literal words across disassembly
+    literal_pool: dict[int, int] = {}
+    for line in lines:
+        m = re.match(r"^\s*([0-9a-fA-F]+):\s+([0-9a-fA-F]{8})\s+(?:\.word\s+(?:0x)?([0-9a-fA-F]+))?", line)
+        if m:
+            addr = int(m.group(1), 16)
+            val = int(m.group(3), 16) if m.group(3) else int(m.group(2), 16)
+            literal_pool[addr] = val
+
+    # Pass 2: Instruction tracing inside my_restart
+    in_restart = False
+    regs: dict[str, int | None] = {}
+    stores: list[tuple[str, str, int | None, str, int | None]] = []
+
+    for line in lines:
+        if "<my_restart>:" in line:
+            in_restart = True
+            regs = {}
+            continue
+        if in_restart and line.startswith("0000") and "<" in line:
+            break
+        if not in_restart:
+            continue
+
+        # Subroutine call clobbers caller-saved scratch registers
+        if re.search(r"\bblx?\s+", line):
+            for r in ("r0", "r1", "r2", "r3", "r12", "lr"):
+                regs.pop(r, None)
+            continue
+
+        # ldr rX, [pc, #offset] ; (target_addr ...)
+        m_ldr_pc = re.search(r"ldr\s+(r\d+),\s*\[pc,\s*#\d+\]\s*;\s*\(([0-9a-fA-F]+)", line)
+        if m_ldr_pc:
+            reg = m_ldr_pc.group(1)
+            target = int(m_ldr_pc.group(2), 16)
+            regs[reg] = literal_pool.get(target)
+            continue
+
+        # ldr rX, =const
+        m_ldr_const = re.search(r"ldr\s+(r\d+),\s*=(0x[0-9a-fA-F]+|\d+)", line)
+        if m_ldr_const:
+            reg = m_ldr_const.group(1)
+            regs[reg] = int(m_ldr_const.group(2), 0)
+            continue
+
+        # movw rX, #imm16
+        m_movw = re.search(r"movw\s+(r\d+),\s*#(0x[0-9a-fA-F]+|\d+)", line)
+        if m_movw:
+            reg = m_movw.group(1)
+            regs[reg] = int(m_movw.group(2), 0) & 0xFFFF
+            continue
+
+        # movt rX, #imm16
+        m_movt = re.search(r"movt\s+(r\d+),\s*#(0x[0-9a-fA-F]+|\d+)", line)
+        if m_movt:
+            reg = m_movt.group(1)
+            old = regs.get(reg, 0) or 0
+            regs[reg] = (old & 0xFFFF) | ((int(m_movt.group(2), 0) & 0xFFFF) << 16)
+            continue
+
+        # mov / mov.w / movs rX, #imm
+        m_mov_imm = re.search(r"mov(?:\.w|s)?\s+(r\d+),\s*#(0x[0-9a-fA-F]+|\d+)", line)
+        if m_mov_imm:
+            reg = m_mov_imm.group(1)
+            regs[reg] = int(m_mov_imm.group(2), 0)
+            continue
+
+        # str rVal, [rBase...]
+        m_str = re.search(r"^\s*([0-9a-fA-F]+):\s+[0-9a-fA-F]+\s+str(?:\.w)?\s+(r\d+),\s*\[(r\d+)", line)
+        if m_str:
+            addr = int(m_str.group(1), 16)
+            vreg = m_str.group(2)
+            breg = m_str.group(3)
+            # Exclude Boot Witness struct stores (which all use base r1)
+            if breg == "r1":
+                continue
+            stores.append((f"0x{addr:08X}", breg, regs.get(breg), vreg, regs.get(vreg)))
+
+    def fail(msg: str):
+        if exit_on_error:
+            sys.stderr.write(msg + "\n")
+            sys.exit(1)
+        raise ValueError(msg)
+
+    # 1. Validate exactly 14 stores
+    if len(stores) != 14:
+        fail(f"Error: ELF does not contain exactly 14 ladder stores (found {len(stores)}). Expected 7 complete ON->OFF pairs.")
+
+    # 2. Validate each store in order (forming 7 complete ON->OFF pairs)
+    for i, (addr, breg, bval, vreg, vval) in enumerate(stores):
+        # Base register check
+        if bval != G3X_LED_MMIO:
+            bval_str = f"0x{bval:08X}" if bval is not None else "unknown/None"
+            fail(f"Error: Store {i} at {addr}: base register {breg} loaded with {bval_str}, expected 0x{G3X_LED_MMIO:08X}.")
+
+        # Value register check
+        is_on = (i % 2 == 0)
+        expected_val = G3X_LED_ON if is_on else G3X_LED_OFF
+        kind_str = f"ON (0x{G3X_LED_ON:08X})" if is_on else f"OFF (0x{G3X_LED_OFF:08X})"
+        if vval != expected_val:
+            vval_str = f"0x{vval:08X}" if vval is not None else "unknown/None"
+            fail(f"Error: Store {i} at {addr}: value register {vreg} loaded with {vval_str}, expected {kind_str}.")
+
+    # Return ON store addresses (first store of each of the 7 pairs)
+    return [s[0] for s in stores[0::2]]
+
+
+def extract_disasm_addresses(loader_elf: str | Path, exit_on_error: bool = True) -> list[str]:
     """Extract str addresses for 7 ladder pulses from candidate_loader.elf objdump.
     
-    Exits with non-zero status if file missing, objdump fails, or ELF does not contain exactly 7 pulses.
+    Exits with non-zero status if file missing, objdump fails, or validation fails.
     """
     elf_path = Path(loader_elf)
     if not elf_path.is_file():
-        sys.stderr.write(f"Error: Specified loader ELF does not exist: {elf_path}\n")
-        sys.exit(1)
+        msg = f"Error: Specified loader ELF does not exist: {elf_path}"
+        if exit_on_error:
+            sys.stderr.write(msg + "\n")
+            sys.exit(1)
+        raise FileNotFoundError(msg)
 
     if not OBJDUMP.is_file():
-        sys.stderr.write(f"Error: objdump tool not found at {OBJDUMP}\n")
-        sys.exit(1)
+        msg = f"Error: objdump tool not found at {OBJDUMP}"
+        if exit_on_error:
+            sys.stderr.write(msg + "\n")
+            sys.exit(1)
+        raise FileNotFoundError(msg)
 
     res = subprocess.run(
         [str(OBJDUMP), "-d", str(elf_path)],
@@ -234,37 +363,13 @@ def extract_disasm_addresses(loader_elf: str | Path) -> list[str]:
         check=False,
     )
     if res.returncode != 0:
-        sys.stderr.write(f"Error: objdump failed on {elf_path} (returncode {res.returncode}):\n{res.stderr}\n")
-        sys.exit(1)
+        msg = f"Error: objdump failed on {elf_path} (returncode {res.returncode}):\n{res.stderr}"
+        if exit_on_error:
+            sys.stderr.write(msg + "\n")
+            sys.exit(1)
+        raise RuntimeError(msg)
 
-    # Find str r1, [r0, #0] instructions inside my_restart
-    lines = res.stdout.splitlines()
-    str_addrs = []
-    in_restart = False
-    for line in lines:
-        if "<my_restart>:" in line:
-            in_restart = True
-            continue
-        if in_restart and line.startswith("0000") and "<" in line:
-            break
-        if in_restart:
-            # Match: '81e2: 6001 str r1, [r0, #0]'
-            m = re.match(r"^\s*([0-9a-fA-F]+):\s+[0-9a-fA-F]+\s+str\s+r1,\s+\[r0", line)
-            if m:
-                addr = int(m.group(1), 16)
-                str_addrs.append(f"0x{addr:08X}")
-
-    # Every pulse does two stores: ON (0x004D0002) and OFF (0x004C0003)
-    # The first store in each pulse is the ON trigger
-    on_stores = str_addrs[0::2]
-    if len(on_stores) != 7:
-        sys.stderr.write(
-            f"Error: ELF does not contain exactly 7 ladder pulses (found {len(on_stores)}). "
-            f"Is this a non-ladder build?\n"
-        )
-        sys.exit(1)
-
-    return on_stores
+    return parse_and_validate_ladder_stores(res.stdout, exit_on_error=exit_on_error)
 
 
 def generate_ladder_table(loader_elf: str | Path | None = None, is_reference: bool = False) -> list[dict]:
