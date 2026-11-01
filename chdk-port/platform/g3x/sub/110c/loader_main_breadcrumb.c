@@ -14,8 +14,10 @@
 #include "../../platform/g3x/sub/110c/boot_witness.h"
 #include "../../platform/g3x/sub/110c/led_breadcrumb.h"
 
+#ifndef _STR
 #define __STR(x) #x
 #define _STR(x) __STR(x)
+#endif
 
 extern long *blob_chdk_core;
 extern long blob_chdk_core_size;
