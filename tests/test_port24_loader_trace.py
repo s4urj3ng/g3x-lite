@@ -802,6 +802,11 @@ class TestPort24LoaderTrace(unittest.TestCase):
         self.assertIn("0xFC05BBFC", sec)
         self.assertIn("0xFC05BC1C", sec)
         self.assertIn("0xFC05BC34", sec)
+        self.assertIn("0xFC05BC38", sec)
+        self.assertIn("0xFC05C4DE", sec)
+        self.assertIn("0xFC05BBF2", sec)
+        self.assertNotIn("pop.w {r4, pc}", sec)
+        self.assertIn("ldmia.w sp!, {r4, lr}", sec)
 
         # GPIO & register meaning citations per feedback item 4
         self.assertIn("0x14E", sec)
@@ -1031,6 +1036,17 @@ class TestPort24LoaderTrace(unittest.TestCase):
             [],
             f"Uncovered ROM addresses found in Restart path: {uncovered}",
         )
+
+    def test_startdiskboot_return_sequence_instructions(self):
+        """StartDiskboot return sequence cites 0xFC05BC34, 0xFC05BC38, 0xFC05C4DE, 0xFC05BBF2 and no pop.w {r4, pc}."""
+        sec = self.content.split("## Restart path", 1)[1]
+        self.assertIn("0xFC05BC34", sec)
+        self.assertIn("0xFC05BC38", sec)
+        self.assertIn("0xFC05C4DE", sec)
+        self.assertIn("0xFC05BBF2", sec)
+        self.assertNotIn("pop.w {r4, pc}", sec)
+        self.assertIn("ldmia.w sp!, {r4, lr}", sec)
+        self.assertNotIn("0xFC05BBF0 to 0xFC05BC34", sec)
 
     def test_t2_manifest_quota_and_slice_bounds(self):
         """T2 manifest entries meet quota (total <= 32 KiB) and max slice (<= 4 KiB)."""
