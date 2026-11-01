@@ -6,13 +6,17 @@ Verifies:
 2. The cited candidate SHA-256 matches the one parsed from docs/PORT24_BREADCRUMB_LADDER.md (no hardcoding).
 3. Every ladder code parsed from docs/PORT24_BREADCRUMB_LADDER.md appears in the decode table.
 4. The exact card setup values (LOCKED, FAT32, BOOTDISK 0x1E0, SCRIPT 0x1F0) are present.
-5. The plan specifies at most two power-ons (Power-On 1 and Power-On 2).
+5. The plan specifies at most two power-ons (Power-On 1 and Power-On 2, no Power-On 3).
 6. Power button handling (hold vs short press) explicitly accounts for the O1 result and boot_prototype.c:350.
 7. StartDiskboot-skip cues from T2 are documented.
-8. Recovery procedures (card unlock/removal, long-press/repeated press, battery pull) are present.
+8. Recovery procedures (card unlock/removal, long-press/repeated press, capacitor discharge / PMIC reset) are present.
 9. Machine-readable report template for the owner is present.
-10. All claims are labelled with evidence levels (VERIFIED, INFERRED, UNKNOWN) with exact citations.
-11. Scope compliance: only allowed paths are modified.
+10. Strict line-by-line / row-by-row evidence label and citation validation:
+    every claim line and every decode-table row must carry a VERIFIED, INFERRED, or UNKNOWN
+    label and an exact citation (a file path plus :line or a § section).
+    Allowed exceptions: headings, table header and separator rows, and the report-template code block.
+11. Tightened flash-count check: requires a decode-table row for each count from 0 to 7 and an ambiguous/uncertain-count row.
+12. Scope compliance: only allowed paths are modified.
 """
 
 from __future__ import annotations
@@ -58,7 +62,7 @@ def parse_ladder_codes(ladder_doc_path: Path) -> list[str]:
 
 
 class TestPort24SessionPlan(unittest.TestCase):
-    """Test suite validating docs/PORT24_SESSION_PLAN.md against all acceptance criteria."""
+    """Test suite validating docs/PORT24_SESSION_PLAN.md against all acceptance criteria and reviewer feedback."""
 
     @classmethod
     def setUpClass(cls):
@@ -136,7 +140,6 @@ class TestPort24SessionPlan(unittest.TestCase):
         """Verify that every ladder code parsed from docs/PORT24_BREADCRUMB_LADDER.md appears in the decode table."""
         self.assertGreaterEqual(len(self.ladder_codes), 7, "Ladder doc must define at least 7 ladder codes")
 
-        # Find the decode table section
         table_sec_match = re.search(
             r"## 3\..*?Decode Table.*?\n(.*?)(?=\n## 4\.|\Z)",
             self.content,
@@ -152,36 +155,40 @@ class TestPort24SessionPlan(unittest.TestCase):
                 f"Ladder code '{code}' parsed from docs/PORT24_BREADCRUMB_LADDER.md must appear in the decode table",
             )
 
-    def test_decode_table_contains_t1_rankings_and_flashes(self):
-        """Verify that the decode table maps flash counts (0 to 7) and includes T1 rankings."""
+    def test_decode_table_flash_counts_and_ambiguous(self):
+        """Tightened check: verify that decode table has a dedicated row for each count 0-7 and an ambiguous row."""
         table_sec_match = re.search(
             r"## 3\..*?Decode Table.*?\n(.*?)(?=\n## 4\.|\Z)",
             self.content,
             re.DOTALL,
         )
-        self.assertIsNotNone(table_sec_match)
+        self.assertIsNotNone(table_sec_match, "Section 3 Decode Table must exist")
         table_text = table_sec_match.group(1)
 
-        # Check flash counts 0 through 7
-        for flash_num in range(8):
+        # Check explicit decode table row for each count from 0 to 7
+        for count in range(8):
+            row_pattern = rf"\|\s*\*\*?{count}\*\*?\s*\|"
             self.assertTrue(
-                re.search(rf"\b{flash_num}\b.*flash", table_text, re.IGNORECASE) or
-                re.search(rf"\bFlash {flash_num}\b", table_text, re.IGNORECASE) or
-                re.search(rf"\b{flash_num}\b", table_text),
-                f"Flash count {flash_num} must be represented in the decode table",
+                re.search(row_pattern, table_text),
+                f"Decode table must contain a dedicated row for flash count {count}",
             )
+
+        # Check explicit ambiguous or uncertain count row
+        ambiguous_pattern = r"\|\s*\*\*?(?:Truncated|Merged|Uncertain|Ambiguous)"
+        self.assertTrue(
+            re.search(ambiguous_pattern, table_text, re.IGNORECASE),
+            "Decode table must contain a row for truncated, merged, or ambiguous/uncertain counts",
+        )
 
         # Check T1 ranking mention (Rank 1, Rank 2, etc.)
         self.assertTrue(re.search(r"T1.*Rank\s*1", table_text, re.IGNORECASE))
 
     def test_startdiskboot_skip_cues_from_t2(self):
         """Verify explanation of physical cues from T2 indicating whether StartDiskboot was skipped."""
-        # Check Section 4 exists
         self.assertTrue(
             re.search(r"## 4\..*?StartDiskboot", self.content, re.IGNORECASE),
             "Section 4 StartDiskboot-skip cues must exist",
         )
-        # Check LED cues
         self.assertIn("0xFC05BC34", self.content, "Clean return address 0xFC05BC34 must be cited")
         self.assertIn("task_Startup", self.content)
         self.assertTrue("stale" in self.content.lower() or "freshness" in self.content.lower())
@@ -203,12 +210,75 @@ class TestPort24SessionPlan(unittest.TestCase):
         )
         self.assertIn("Power-On 1", self.content)
         self.assertIn("Flashes Observed", self.content)
+        # Template should include fields for truncated, merged, or ambiguous sequence
+        self.assertTrue(re.search(r"Truncated|Merged|Uncertain|Ambiguous", self.content))
 
-    def test_claims_labelled_with_evidence_levels(self):
-        """Verify that claims in the document are consistently labelled VERIFIED / INFERRED / UNKNOWN."""
-        self.assertIn("[VERIFIED", self.content)
-        self.assertIn("[INFERRED", self.content)
-        self.assertIn("[UNKNOWN", self.content)
+    def test_claims_and_rows_labelled_and_cited(self):
+        """Verify that every claim line and decode-table row carries an evidence label and exact citation.
+
+        Allowed exceptions: headings, table header and separator rows, and the report-template code block.
+        Each non-excepted line must contain:
+        - A label: VERIFIED, INFERRED, or UNKNOWN
+        - An exact citation: a file path plus :line or a § section.
+        """
+        lines = self.content.splitlines()
+        in_report_template = False
+        non_compliant_lines: list[tuple[int, str]] = []
+
+        label_regex = re.compile(r"\[(VERIFIED|INFERRED|UNKNOWN)")
+        citation_regex = re.compile(r"(?:[\w\.\-/]+\.[a-zA-Z0-9]+:(?:\d+|0x[0-9a-fA-F]+)|§\s*\d+)")
+
+        for idx, line in enumerate(lines, start=1):
+            stripped = line.strip()
+
+            # Skip empty lines and markdown horizontal rules
+            if not stripped or stripped == "---":
+                continue
+
+            # Track fenced code blocks (report template)
+            if stripped.startswith("```"):
+                if not in_report_template and "markdown" in stripped:
+                    in_report_template = True
+                    continue
+                elif in_report_template:
+                    in_report_template = False
+                    continue
+
+            # Allowed exception: inside report-template code block
+            if in_report_template:
+                continue
+
+            # Allowed exception: Headings
+            if stripped.startswith("#"):
+                continue
+
+            # Allowed exception: Table separator rows (e.g. | :---: | :--- | ...)
+            if re.match(r"^\|(\s*:?-+:?\s*\|)+\s*$", stripped):
+                continue
+
+            # Allowed exception: Table header rows (detected when next non-empty line is a separator row)
+            next_non_empty = ""
+            for next_idx in range(idx, len(lines)):
+                candidate = lines[next_idx].strip()
+                if candidate:
+                    next_non_empty = candidate
+                    break
+            if stripped.startswith("|") and re.match(r"^\|(\s*:?-+:?\s*\|)+\s*$", next_non_empty):
+                continue
+
+            # Every remaining line must be a claim line or table data row
+            has_label = bool(label_regex.search(stripped))
+            has_citation = bool(citation_regex.search(stripped))
+
+            if not (has_label and has_citation):
+                non_compliant_lines.append((idx, stripped))
+
+        self.assertEqual(
+            len(non_compliant_lines),
+            0,
+            f"Found {len(non_compliant_lines)} lines missing evidence label or exact citation:\n"
+            + "\n".join(f"Line {n}: {text}" for n, text in non_compliant_lines[:15]),
+        )
 
     def test_scope_compliance_git_status(self):
         """Verify that only allowed files are modified in the working tree."""
@@ -221,9 +291,9 @@ class TestPort24SessionPlan(unittest.TestCase):
             check=True,
         )
         modified_files = []
-        for line in res.stdout.strip().splitlines():
-            if line:
-                status, path = line[:2], line[3:].strip()
+        for line in res.stdout.splitlines():
+            if line.strip():
+                path = line[2:].lstrip()
                 modified_files.append(path)
 
         allowed = {
