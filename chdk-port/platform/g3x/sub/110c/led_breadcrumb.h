@@ -70,4 +70,50 @@ static inline __attribute__((always_inline)) void g3x_breadcrumb_led_off(void)
 
 #endif /* LED_BREADCRUMB */
 
+#if defined(LED_LADDER)
+
+#define G3X_LADDER_MMIO_ADDR   0xD20B0884
+#define G3X_LADDER_ON_VAL      0x004D0002
+#define G3X_LADDER_OFF_VAL     0x004C0003
+
+// Timing calibration derived from PORT-23 0x00600000 short-delay loop:
+// Reference: 0x00600000 (6,291,456 iterations) ~ 100-150 ms (nominal 125 ms) [PORT23_POWER_SUPERVISION.md:245]
+//            and ~300 ms conservative upper bound [PORT24_LOADER_TRACE.md:761].
+// Loop body: 'subs r2, r2, #1; bne' (identical to PORT-23 stall loop).
+// Iteration parameters (justified compromise maximizing OFF gap under 200 ms slow-bound cap):
+// ON delay:  0x00140000 (1,310,720 iterations) -> ~20.8 ms (fast 100ms) / ~26.0 ms (nom 125ms) / ~62.5 ms (slow 300ms) [INFERRED]
+// OFF delay: 0x00280000 (2,621,440 iterations) -> ~41.7 ms (fast 100ms) / ~52.1 ms (nom 125ms) / ~125.0 ms (slow 300ms) [INFERRED]
+// Total per step: 0x003C0000 (3,932,160 iterations) -> ~62.5 ms (fast) / ~78.1 ms (nom) / ~187.5 ms (slow < 200ms) [INFERRED]
+#define G3X_LADDER_ON_DELAY    0x00140000
+#define G3X_LADDER_OFF_DELAY   0x00280000
+
+#define LADDER_ASM_PULSE \
+    "    ldr     r0, =0xD20B0884\n" \
+    "    ldr     r1, =0x004D0002\n" \
+    "    str     r1, [r0]\n" \
+    "    dsb     sy\n" \
+    "    mov.w   r2, #0x00140000\n" \
+    "1:\n" \
+    "    subs    r2, r2, #1\n" \
+    "    bne     1b\n" \
+    "    ldr     r1, =0x004C0003\n" \
+    "    str     r1, [r0]\n" \
+    "    dsb     sy\n" \
+    "    mov.w   r2, #0x00280000\n" \
+    "2:\n" \
+    "    subs    r2, r2, #1\n" \
+    "    bne     2b\n"
+
+static inline __attribute__((always_inline)) void g3x_ladder_pulse_c(void)
+{
+    asm volatile (
+        LADDER_ASM_PULSE
+        :
+        :
+        : "r0", "r1", "r2", "r3", "cc", "memory"
+    );
+}
+
+#endif /* LED_LADDER */
+
 #endif /* LED_BREADCRUMB_H */

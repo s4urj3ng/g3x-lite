@@ -22,6 +22,12 @@
 extern long *blob_chdk_core;
 extern long blob_chdk_core_size;
 
+#if defined(LED_LADDER)
+// Ensure 8-byte alignment of loader image for dancingbits 64-bit permutation
+// Repo evidence: chdk-port/tools/dancingbits.c:60-68 and tools/validate_candidate_port2a.py:86-93, 458-462
+static const uint32_t _ladder_align_pad __attribute__((used, section(".data"))) = 0;
+#endif
+
 // Decoupled native cache maintenance routines in GM1.10C ROM:
 // Inverted order in 0xFC418722 remediated per PORT-1D.1:
 // 1. 0xFC127AB1: D-cache clean & invalidate (DCCISW all sets/ways) + DSB
@@ -33,6 +39,11 @@ void __attribute__((noreturn, noinline)) my_restart()
 {
     // 1. Validate platform compatibility
     check_compat();
+
+#if defined(LED_LADDER)
+    // Step 1: after_prologue
+    g3x_ladder_pulse_c();
+#endif
 
 #if defined(LED_BREADCRUMB_BEFORE_COPY)
     g3x_breadcrumb_led_on();
@@ -83,6 +94,11 @@ void __attribute__((noreturn, noinline)) my_restart()
 #endif
 #endif
 
+#if defined(LED_LADDER)
+    // Step 2: after_copy
+    g3x_ladder_pulse_c();
+#endif
+
     // 4. Execute decoupled cache synchronization in canonical ARMv7-A/R order (§B2.2.5.2):
     //    Step 1: Clean and invalidate D-cache to PoC (DCCISW all sets/ways)
     //    Step 2: Invalidate I-cache and branch predictors (ICIALLU/BPIALL) + ISB
@@ -95,6 +111,10 @@ void __attribute__((noreturn, noinline)) my_restart()
     // - Operand registers %0 and %1 are held in callee-saved registers (r4-r11).
     // - Full AAPCS scratch register clobber list declared: r0-r3, r12, lr, cc, memory.
     asm volatile (
+#if defined(LED_LADDER)
+        // Step 3: before_dcache
+        LADDER_ASM_PULSE
+#endif
         // Step 1: Clean and invalidate Data Cache to PoC (DCCISW all sets/ways)
         "    mov     r0, %0\n"                      // r0 = start address (0x003489B4)
         "    mov     r1, %1\n"                      // r1 = size in bytes
@@ -102,6 +122,15 @@ void __attribute__((noreturn, noinline)) my_restart()
         "    blx     r2\n"                          // Calls ROM_DCACHE_CLEAN_INV (0xFC127AB1)
         "    dsb     sy\n"                          // Ensure data writebacks complete
 
+#if defined(LED_LADDER)
+        // Step 4: after_dcache
+        LADDER_ASM_PULSE
+#endif
+
+#if defined(LED_LADDER)
+        // Step 5: before_icache
+        LADDER_ASM_PULSE
+#endif
         // Step 2: Invalidate Instruction Cache (ICIALLU) and Branch Predictor (BPIALL)
         "    mov     r0, %0\n"                      // r0 = start address
         "    mov     r1, %1\n"                      // r1 = size in bytes
@@ -110,8 +139,18 @@ void __attribute__((noreturn, noinline)) my_restart()
         "    dsb     sy\n"                          // Ensure invalidation completion
         "    isb     sy\n"                          // Flush instruction pipeline
 
+#if defined(LED_LADDER)
+        // Step 6: after_icache
+        LADDER_ASM_PULSE
+#endif
+
         // Step 3: Enforce disabled interrupt state prior to handoff
         "    cpsid   if\n"                          // Guarantee IRQ & FIQ disabled
+
+#if defined(LED_LADDER)
+        // Step 7: before_bx
+        LADDER_ASM_PULSE
+#endif
 
         // Step 4: One-way terminal handoff to relocated core entry (0x003489B4)
 #if defined(LED_BREADCRUMB_PRE_JUMP)
