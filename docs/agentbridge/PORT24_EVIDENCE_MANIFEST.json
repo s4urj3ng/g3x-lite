@@ -372,7 +372,7 @@
       "status": "out_of_scope",
       "out_of_scope": true,
       "relied_upon": false,
-      "notes": "OUT-OF-SCOPE: Disclosed out-of-scope read from earlier attempts per task instructions; contents are not relied upon as evidence and actual ROM contents remain unverified [UNKNOWN]."
+      "notes": "OUT-OF-SCOPE: Disclosed out-of-scope read from earlier attempts per task instructions; contents are not relied upon as evidence and actual ROM contents remain unverified [UNKNOWN]. tools/port11c_evidence_validator.py accepts only ProvenanceType categories (PORT-23 manifest exclusively uses ROM_VERIFIED for PRIMARY.BIN reads); for slices referencing PRIMARY.BIN, ROM_VERIFIED is the sole category accepted by the validator schema (custom types trigger RULE_SCHEMA_SYNTAX). Out-of-scope and non-relied-upon status is enforced via classification UNKNOWN, status out_of_scope, out_of_scope: true, and relied_upon: false."
     },
     {
       "evidence_id": "PORT24-ROM-OUT-OF-SCOPE-PID",
@@ -390,7 +390,7 @@
       "status": "out_of_scope",
       "out_of_scope": true,
       "relied_upon": false,
-      "notes": "OUT-OF-SCOPE: Disclosed out-of-scope read from earlier attempts per task instructions; contents are not relied upon as evidence and actual ROM contents remain unverified [UNKNOWN]."
+      "notes": "OUT-OF-SCOPE: Disclosed out-of-scope read from earlier attempts per task instructions; contents are not relied upon as evidence and actual ROM contents remain unverified [UNKNOWN]. tools/port11c_evidence_validator.py accepts only ProvenanceType categories (PORT-23 manifest exclusively uses ROM_VERIFIED for PRIMARY.BIN reads); for slices referencing PRIMARY.BIN, ROM_VERIFIED is the sole category accepted by the validator schema (custom types trigger RULE_SCHEMA_SYNTAX). Out-of-scope and non-relied-upon status is enforced via classification UNKNOWN, status out_of_scope, out_of_scope: true, and relied_upon: false."
     },
     {
       "evidence_id": "PORT24-ROM-CARD-SWITCHES",
