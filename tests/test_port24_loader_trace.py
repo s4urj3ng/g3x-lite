@@ -1164,6 +1164,47 @@ class TestPort24LoaderTrace(unittest.TestCase):
                 f"Address {hex(addr)} not covered by evidence manifest",
             )
 
+    def test_restart_path_unpowered_cue_does_not_mention_0x14e(self):
+        """(a) Test that the 'completely unpowered' cue does not mention 0x14E."""
+        sec = self.content.split("## Restart path", 1)[1]
+        cues_sec = sec.split("### 3. Observable Cues for Hand Inspection", 1)[1]
+        m = re.search(
+            r"If the owner sees zero green LED flash and the camera remains completely unpowered.*?(?=If the owner sees|\n\s*\d+\.|\Z)",
+            cues_sec,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(m, "'completely unpowered' cue not found in cues section")
+        cue_text = m.group(0)
+        self.assertNotIn("0x14E", cue_text, f"'completely unpowered' cue mentions 0x14E: {cue_text}")
+        self.assertNotIn("0x14e", cue_text.lower(), f"'completely unpowered' cue mentions 0x14e: {cue_text}")
+
+    def test_restart_path_no_verified_line_contains_after_loader_execution(self):
+        """(b) Test that no VERIFIED-labelled line in the Restart path section contains 'after loader execution'."""
+        sec = self.content.split("## Restart path", 1)[1]
+        for idx, line in enumerate(sec.splitlines(), start=1):
+            if "VERIFIED" in line:
+                self.assertNotIn(
+                    "after loader execution",
+                    line,
+                    f"Line {idx} in Restart path is labelled VERIFIED and contains 'after loader execution': {line}",
+                )
+
+    def test_restart_path_repeated_presses_with_inferred_or_unknown_in_same_paragraph(self):
+        """(c) Test that the section contains the word 'repeated' together with an INFERRED or UNKNOWN label in the same paragraph."""
+        sec = self.content.split("## Restart path", 1)[1]
+        paragraphs = [p.strip() for p in sec.split("\n\n") if p.strip()]
+        matching_paragraphs = []
+        for p in paragraphs:
+            if "repeated" in p.lower():
+                labels = re.findall(r"\[(VERIFIED|INFERRED|UNKNOWN)(?::[^\]]*)?\]", p)
+                if any(l in {"INFERRED", "UNKNOWN"} for l in labels):
+                    matching_paragraphs.append(p)
+        self.assertGreater(
+            len(matching_paragraphs),
+            0,
+            "Restart path section does not contain 'repeated' together with an INFERRED or UNKNOWN label in the same paragraph",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
