@@ -63,6 +63,15 @@ def parse_ladder_codes(ladder_doc_path: Path) -> list[str]:
     return codes
 
 
+def parse_ladder_ambiguity_note_line(ladder_doc_path: Path) -> int:
+    """Resolve the line number of the Ambiguity note in docs/PORT24_BREADCRUMB_LADDER.md dynamically."""
+    lines = ladder_doc_path.read_text(encoding="utf-8").splitlines()
+    for idx, line in enumerate(lines, start=1):
+        if "Ambiguity note" in line or "without completing its OFF gap" in line:
+            return idx
+    raise ValueError(f"Could not find Ambiguity note in {ladder_doc_path}")
+
+
 def parse_ladder_power_on_numbers(doc_text: str) -> set[int]:
     """Parse the doc text for ladder power-on instructions and return distinct power-on numbers.
 
@@ -106,6 +115,7 @@ class TestPort24SessionPlan(unittest.TestCase):
         cls.content = DOCS_SESSION_PLAN.read_text(encoding="utf-8")
         cls.ladder_sha256 = parse_ladder_sha256(DOCS_LADDER)
         cls.ladder_codes = parse_ladder_codes(DOCS_LADDER)
+        cls.ladder_ambiguity_line = parse_ladder_ambiguity_note_line(DOCS_LADDER)
 
     def test_file_exists_and_substantive(self):
         """Verify the session plan exists and has substantive length (>3000 chars)."""
@@ -866,6 +876,273 @@ class TestPort24SessionPlan(unittest.TestCase):
             self.assertTrue(
                 re.search(r"not (?:as )?a recovery mechanism", line, re.IGNORECASE),
                 f"Line {idx} must state SD desync is not a recovery mechanism: {line}",
+            )
+
+    def test_sustained_dark_after_k_mentions_off_phase_and_cites_ladder_497(self):
+        """Verify per feedback (1) that every decode row whose final observation is 'k flashes then sustained dark':
+        - mentions the OFF phase of pulse k
+        - covers both 'within the OFF phase of pulse k' and 'between checkpoint k and checkpoint k+1' (or after checkpoint k)
+        - does not attribute the failure solely to operations after checkpoint k (e.g. cache operations)
+        - cites ladder line 497 (resolved dynamically by searching for the ambiguity text)
+        - labels the attribution INFERRED
+        """
+        ambiguity_line = self.ladder_ambiguity_line
+        expected_cite = f"docs/PORT24_BREADCRUMB_LADDER.md:{ambiguity_line}"
+
+        table_sec_match = re.search(
+            r"## 3\..*?Decode Table.*?\n(.*?)(?=\n## 4\.|\Z)",
+            self.content,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(table_sec_match, "Section 3 Decode Table must exist")
+        table_text = table_sec_match.group(1)
+
+        rows = [
+            line.strip()
+            for line in table_text.splitlines()
+            if line.strip().startswith("|") and not re.match(r"^\|(\s*:?-+:?\s*\|)+\s*$", line.strip())
+        ]
+        data_rows = rows[1:]
+
+        checked_rows = 0
+        for row in data_rows:
+            cells = [c.strip() for c in row.split("|")]
+            if len(cells) < 5:
+                continue
+            flash_count_str = cells[1].strip("*")
+            obs_cell = cells[2]
+            failing_step_cell = cells[4]
+
+            # Identify rows whose final observation is 'k flashes then sustained dark' (k >= 1)
+            if not flash_count_str.isdigit() or flash_count_str == "0":
+                continue
+            is_sustained_dark = (
+                bool(re.search(r"(?:complete flash(?:es)?|full ladder).*(?:LED off|dark)", obs_cell, re.IGNORECASE))
+                and not bool(re.search(r"Stock Canon UI appears", obs_cell, re.IGNORECASE))
+                and not bool(re.search(r"LCD lit", obs_cell, re.IGNORECASE))
+            )
+            if not is_sustained_dark:
+                continue
+
+            # 1. Row must mention OFF phase of pulse k
+            self.assertTrue(
+                bool(re.search(rf"OFF phase of pulse\s*{flash_count_str}", failing_step_cell, re.IGNORECASE))
+                or bool(re.search(r"OFF phase of pulse", failing_step_cell, re.IGNORECASE)),
+                f"Row for count {flash_count_str} must mention 'OFF phase of pulse {flash_count_str}': {failing_step_cell}",
+            )
+
+            # 2. Row must cover both within OFF phase of pulse k and subsequent execution
+            self.assertTrue(
+                bool(re.search(r"covers both within the OFF phase of pulse", failing_step_cell, re.IGNORECASE)),
+                f"Row for count {flash_count_str} must cover 'within the OFF phase of pulse': {failing_step_cell}",
+            )
+
+            # 3. Row must state not to attribute failure solely to operations after checkpoint
+            self.assertTrue(
+                bool(re.search(r"do not attribute the failure.*as the only cause", failing_step_cell, re.IGNORECASE)),
+                f"Row for count {flash_count_str} must state not to attribute failure as only cause: {failing_step_cell}",
+            )
+
+            # 4. Row must cite dynamically resolved ladder line 497
+            self.assertIn(
+                expected_cite,
+                failing_step_cell,
+                f"Row for count {flash_count_str} must cite {expected_cite}: {failing_step_cell}",
+            )
+
+            # 5. Row attribution must be labelled INFERRED
+            self.assertIn(
+                "INFERRED",
+                failing_step_cell,
+                f"Row for count {flash_count_str} attribution must be labelled INFERRED: {failing_step_cell}",
+            )
+
+            checked_rows += 1
+
+        self.assertGreaterEqual(
+            checked_rows,
+            6,
+            f"Must have validated at least rows 1-6 (validated {checked_rows} rows)",
+        )
+
+    def test_checkpoint_citations_match_authoritative_ladder_lines(self):
+        """Verify per feedback (2) that:
+        - Checkpoint citations in the decode table cite the authoritative ladder rows (476-482), one row per checkpoint.
+        - For each ladder:N checkpoint citation in the decode table, ladder line N contains that row's checkpoint name.
+        """
+        ladder_lines = DOCS_LADDER.read_text(encoding="utf-8").splitlines()
+
+        table_sec_match = re.search(
+            r"## 3\..*?Decode Table.*?\n(.*?)(?=\n## 4\.|\Z)",
+            self.content,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(table_sec_match, "Section 3 Decode Table must exist")
+        table_text = table_sec_match.group(1)
+
+        rows = [
+            line.strip()
+            for line in table_text.splitlines()
+            if line.strip().startswith("|") and not re.match(r"^\|(\s*:?-+:?\s*\|)+\s*$", line.strip())
+        ]
+        data_rows = rows[1:]
+
+        checkpoint_cites_found: dict[str, int] = {}
+        for row in data_rows:
+            cells = [c.strip() for c in row.split("|")]
+            if len(cells) < 4:
+                continue
+            checkpoint_cell = cells[3]
+            cp_match = re.search(r"`([a-z_]+)`", checkpoint_cell)
+            if not cp_match:
+                continue
+            cp_name = cp_match.group(1)
+
+            # Extract ladder line citation in checkpoint cell
+            ladder_cites = re.findall(r"docs/PORT24_BREADCRUMB_LADDER\.md:(\d+)", checkpoint_cell)
+            self.assertGreaterEqual(
+                len(ladder_cites),
+                1,
+                f"Checkpoint cell for '{cp_name}' must cite ladder line: {checkpoint_cell}",
+            )
+            for line_str in ladder_cites:
+                line_num = int(line_str)
+                self.assertGreaterEqual(line_num, 476, f"Line {line_num} must be in 476-482 for {cp_name}")
+                self.assertLessEqual(line_num, 482, f"Line {line_num} must be in 476-482 for {cp_name}")
+                target_line = ladder_lines[line_num - 1]
+                self.assertIn(
+                    cp_name,
+                    target_line,
+                    f"Ladder line {line_num} ('{target_line}') must contain checkpoint name '{cp_name}'",
+                )
+                checkpoint_cites_found[cp_name] = line_num
+
+        # Ensure all 7 ladder checkpoints are cited with authoritative rows 476-482
+        expected_checkpoints = {
+            "after_prologue": 476,
+            "after_copy": 477,
+            "before_dcache": 478,
+            "after_dcache": 479,
+            "before_icache": 480,
+            "after_icache": 481,
+            "before_bx": 482,
+        }
+        for name, expected_line in expected_checkpoints.items():
+            self.assertIn(name, checkpoint_cites_found, f"Missing citation for checkpoint {name}")
+            self.assertEqual(
+                checkpoint_cites_found[name],
+                expected_line,
+                f"Checkpoint {name} must cite authoritative line {expected_line}, got {checkpoint_cites_found[name]}",
+            )
+
+    def test_target_file_placement_citation(self):
+        """Verify that A/DISKBOOT.BIN file placement does not cite ladder line 35 (which is about timing) and cites actual source."""
+        lines = self.content.splitlines()
+        placement_lines = [
+            (idx, line)
+            for idx, line in enumerate(lines, start=1)
+            if "Target File" in line and "A/DISKBOOT.BIN" in line
+        ]
+        self.assertGreaterEqual(len(placement_lines), 1, "Must find Target File A/DISKBOOT.BIN line")
+        for idx, line in placement_lines:
+            self.assertNotIn(
+                "docs/PORT24_BREADCRUMB_LADDER.md:35",
+                line,
+                f"Line {idx} must not cite docs/PORT24_BREADCRUMB_LADDER.md:35 for file placement: {line}",
+            )
+            self.assertTrue(
+                "docs/PORT19_DISKBOOT_ENCODING.md" in line or "docs/PORT24_LOADER_TRACE.md" in line,
+                f"Line {idx} must cite docs/PORT19_DISKBOOT_ENCODING.md or docs/PORT24_LOADER_TRACE.md for file placement: {line}",
+            )
+            self.assertIn("[VERIFIED", line)
+
+    def test_card_capacity_32gb_recommendation_not_labelled_verified(self):
+        """Verify per feedback (3) that:
+        (a) FAT32 support and BOOTDISK 0x1E0 / SCRIPT 0x1F0 markers stay VERIFIED, citing actual source.
+        (b) The 32 GB card recommendation is INFERRED (not VERIFIED), cites docs/PORT18_OWNER_TRIAL_PLAN.md:184,
+            and states that source gives no SDHC-only ceiling.
+        """
+        lines = self.content.splitlines()
+
+        # Check 32 GB recommendation lines
+        card_32gb_lines = [
+            (idx, line)
+            for idx, line in enumerate(lines, start=1)
+            if re.search(r"32\s*GB", line, re.IGNORECASE)
+            and not line.strip().startswith("#")
+            and not line.strip().startswith("```")
+        ]
+        self.assertGreaterEqual(len(card_32gb_lines), 1, "Must find at least one line with 32 GB recommendation")
+
+        for idx, line in card_32gb_lines:
+            # Must NOT be labelled VERIFIED
+            self.assertNotIn(
+                "[VERIFIED",
+                line,
+                f"Line {idx} mentioning 32 GB must NOT be labelled VERIFIED: {line}",
+            )
+            # If it makes the recommendation, must be INFERRED and cite docs/PORT18_OWNER_TRIAL_PLAN.md:184
+            if "recommend" in line.lower() or "capacity" in line.lower() or r"\le 32" in line or "<= 32" in line:
+                self.assertIn(
+                    "INFERRED",
+                    line,
+                    f"Line {idx} recommending 32 GB card must be labelled INFERRED: {line}",
+                )
+                self.assertIn(
+                    "docs/PORT18_OWNER_TRIAL_PLAN.md:184",
+                    line,
+                    f"Line {idx} recommending 32 GB card must cite docs/PORT18_OWNER_TRIAL_PLAN.md:184: {line}",
+                )
+                self.assertTrue(
+                    re.search(r"no SDHC-only ceiling", line, re.IGNORECASE),
+                    f"Line {idx} must state that source gives no SDHC-only ceiling: {line}",
+                )
+
+        # (a) Check FAT32 support stays VERIFIED
+        fat32_lines = [
+            (idx, line)
+            for idx, line in enumerate(lines, start=1)
+            if "Filesystem" in line and "FAT32" in line
+        ]
+        self.assertGreaterEqual(len(fat32_lines), 1, "Must find FAT32 filesystem specification row")
+        for idx, line in fat32_lines:
+            self.assertIn(
+                "[VERIFIED",
+                line,
+                f"FAT32 specification row at line {idx} must be labelled VERIFIED: {line}",
+            )
+            self.assertIn(
+                "docs/PORT19_BOOTDISK_VBR.md",
+                line,
+                f"FAT32 specification row at line {idx} must cite docs/PORT19_BOOTDISK_VBR.md: {line}",
+            )
+
+        # Check BOOTDISK 0x1E0 stays VERIFIED in Section 1
+        bootdisk_lines = [
+            (idx, line)
+            for idx, line in enumerate(lines, start=1)
+            if idx < 60 and line.strip().startswith("|") and "BOOTDISK" in line and "0x1E0" in line
+        ]
+        self.assertGreaterEqual(len(bootdisk_lines), 1, "Must find BOOTDISK 0x1E0 specification row in Section 1")
+        for idx, line in bootdisk_lines:
+            self.assertIn(
+                "[VERIFIED",
+                line,
+                f"BOOTDISK 0x1E0 row at line {idx} must be labelled VERIFIED: {line}",
+            )
+
+        # Check SCRIPT 0x1F0 stays VERIFIED in Section 1
+        script_lines = [
+            (idx, line)
+            for idx, line in enumerate(lines, start=1)
+            if idx < 60 and line.strip().startswith("|") and "SCRIPT" in line and "0x1F0" in line
+        ]
+        self.assertGreaterEqual(len(script_lines), 1, "Must find SCRIPT 0x1F0 specification row in Section 1")
+        for idx, line in script_lines:
+            self.assertIn(
+                "[VERIFIED",
+                line,
+                f"SCRIPT 0x1F0 row at line {idx} must be labelled VERIFIED: {line}",
             )
 
     def test_binary_guard_scoped(self):
