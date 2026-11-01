@@ -76,6 +76,11 @@
           "label": "PORT24-ROM-WATCHDOG-START"
         },
         {
+          "start_address": "0xFC05B47C",
+          "end_address": "0xFC05B4B3",
+          "label": "PORT24-ROM-VECTOR-TABLE"
+        },
+        {
           "start_address": "0xFC05C4D0",
           "end_address": "0xFC05C51F",
           "label": "PORT24-ROM-CARD-SWITCHES"
@@ -294,7 +299,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
       "classification": "STATIC_VERIFIED",
-      "notes": "ARM-mode interrupt disable and task dispatch veneers 0xFC31BEE0..0xFC31BF3F: sub_fc31befc at 0xFC31BEFC executes ldr pc, [pc, #-4] loading 0xBFE14FE7 (ATCM interrupt disable routine in Instruction TCM), disabling IRQ/FIQ"
+      "notes": "ARM-mode interrupt disable and task dispatch veneers 0xFC31BEE0..0xFC31BF3F: sub_fc31befc at 0xFC31BEFC executes ldr pc, [pc, #-4] loading 0xBFE14FE7 (ATCM interrupt disable routine in Instruction TCM, branching to sub_fc127b3c); the path sets only CPSR.I (IRQ masked), while FIQ state (CPSR.F) is inherited from the caller (UNKNOWN)."
     },
     {
       "evidence_id": "PORT24-ROM-CACHE-HELPERS",
@@ -327,6 +332,21 @@
       "notes": "Watchdog startup function sub_fc418f2a (0xFC418F2A..0xFC418F7F) called by task_Startup at 0xFC05B922 (AFTER StartDiskboot): sets r0=2, r1=4, calls sub_fc135ccc at 0xFC418F34 to configure hardware watchdog *(0xD20A0000)=0xC0000420, and calls StartWDT_FW at 0xFC418F38 to activate watchdog bit 0"
     },
     {
+      "evidence_id": "PORT24-ROM-VECTOR-TABLE",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC05B47C",
+      "end_address": "0xFC05B4B3",
+      "expected_byte_count": 56,
+      "sha256": "23345164d5691b49674466f26c6eb46384c7247d2aa4c270e90dd2f934ea5a91",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Stock exception vector table ROM 0xFC05B47C..0xFC05B4B3 (56 bytes, 14 words copied to 0x00000000..0x00000037 by sub_fc02007e): contains 14 stock exception vector words"
+    },
+    {
       "evidence_id": "PORT24-ROM-CARD-SWITCHES",
       "firmware_revision": "GM1.10C",
       "start_address": "0xFC05C4D0",
@@ -339,7 +359,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
       "classification": "STATIC_VERIFIED",
-      "notes": "sub_fc05c4e0: SD card detect switch (GPIO 0x14E / 334) and SD card write-protect lock switch (GPIO 0x14F / 335) query handler"
+      "notes": "sub_fc05c4e0: GPIO 0x14E (pin 334; queries bit 16 of MMIO 0xD20B0538; physical meaning UNKNOWN) and GPIO 0x14F (pin 335, SD card write-protect lock switch, MMIO 0xD20B053C) query handler"
     },
     {
       "evidence_id": "PORT24-ROM-STARTCAUSE-SAVE",

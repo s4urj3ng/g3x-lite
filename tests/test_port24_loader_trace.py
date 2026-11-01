@@ -57,7 +57,7 @@ ROM_BASE = 0xFC000000
 ROM_SIZE = 0x02000000
 ROM_END = ROM_BASE + ROM_SIZE
 
-# Canonical PORT-24 T1 evidence entries (14 approved ranges)
+# Canonical PORT-24 T1 evidence entries (15 approved ranges)
 APPROVED_ENTRIES_T1 = {
     "PORT24-ROM-BOOT-EARLY": (
         0xFC020000,
@@ -143,9 +143,15 @@ APPROVED_ENTRIES_T1 = {
         96,
         "46e8e2149df855d0f1414699a1fdea355b9370c83e552a749314a32283da7da5",
     ),
+    "PORT24-ROM-VECTOR-TABLE": (
+        0xFC05B47C,
+        0xFC05B4B3,
+        56,
+        "23345164d5691b49674466f26c6eb46384c7247d2aa4c270e90dd2f934ea5a91",
+    ),
 }
 
-# Canonical PORT-24 T2 evidence entries (5 appended ranges)
+# Canonical PORT-24 T2 evidence entries (6 appended ranges)
 APPROVED_ENTRIES_T2 = {
     "PORT24-ROM-CARD-SWITCHES": (
         0xFC05C4D0,
@@ -245,6 +251,7 @@ class TestPort24LoaderTrace(unittest.TestCase):
     def test_all_approved_ranges_present_and_match(self):
         """All approved evidence ranges (T1 and T2) are declared with exact bounds and SHA-256."""
         entries = {e["evidence_id"]: e for e in self.manifest.get("evidence_entries", [])}
+        self.assertEqual(len(APPROVED_ENTRIES_T1), 15, "Expected exactly 15 T1 approved ranges")
         self.assertEqual(len(entries), len(APPROVED_ENTRIES))
 
         for eid, (start, end, count, sha) in APPROVED_ENTRIES_T1.items():
@@ -257,6 +264,12 @@ class TestPort24LoaderTrace(unittest.TestCase):
             self.assertEqual(entry["classification"], "STATIC_VERIFIED")
             self.assertEqual(entry["firmware_revision"], "GM1.10C")
             self.assertEqual(entry["provenance_source"]["reference"], "firmware/dumps/GM1.10C/PRIMARY.BIN")
+
+        # Check IRQ-only wording per reviewer feedback #2
+        irq_entry = entries["PORT24-ROM-IRQ-DISABLE"]
+        self.assertIn("sets only CPSR.I", irq_entry["notes"])
+        self.assertIn("FIQ state (CPSR.F) is inherited", irq_entry["notes"])
+        self.assertNotIn("disabling IRQ/FIQ", irq_entry["notes"])
 
         for eid, (start, end, count, sha) in APPROVED_ENTRIES_T2.items():
             self.assertIn(eid, entries, f"T2 evidence entry '{eid}' missing from manifest")
@@ -866,6 +879,61 @@ class TestPort24LoaderTrace(unittest.TestCase):
 
         # Diagnostic flash supports loader entry only, not later stages
         self.assertIn("Diagnostic flash supports loader entry only", cues_sec)
+
+    def test_restart_path_cues_builds_and_epistemic_bounds(self):
+        """Owner cues must each name an identified build by DISKBOOT / artifact SHA-256,
+        list alternative explanations, and never state payload skipping or failure locations as VERIFIED.
+        """
+        sec = self.content.split("## Restart path", 1)[1]
+        cues_sec = sec.split("### 3. Observable Cues for Hand Inspection", 1)[1]
+
+        cue_patterns = [
+            r"1\.\s*\*\*Rear Green Status LED Activity",
+            r"2\.\s*\*\*Power Button Hold Duration",
+            r"3\.\s*\*\*Playback Button Power-On",
+            r"4\.\s*\*\*SD Card Lock Switch Position",
+            r"5\.\s*\*\*Canon Basic Witness Inspector Display",
+        ]
+
+        cue_blocks = []
+        for i, pat in enumerate(cue_patterns):
+            self.assertTrue(re.search(pat, cues_sec), f"Cue {i+1} header missing: {pat}")
+            start_m = re.search(pat, cues_sec)
+            start_pos = start_m.start()
+            if i + 1 < len(cue_patterns):
+                next_m = re.search(cue_patterns[i+1], cues_sec)
+                end_pos = next_m.start()
+                cue_blocks.append((i + 1, cues_sec[start_pos:end_pos]))
+            else:
+                cue_blocks.append((i + 1, cues_sec[start_pos:]))
+
+        sha_re = re.compile(r"\b[0-9a-f]{64}\b")
+        for cue_idx, block in cue_blocks:
+            # 1. Assert each cue names an identified build and cites its 64-char SHA-256
+            shas = sha_re.findall(block)
+            self.assertGreater(
+                len(shas), 0, f"Cue {cue_idx} does not cite any 64-character SHA-256 digest for its build"
+            )
+            self.assertTrue(
+                any(b in block for b in ["Build", "build", "payload"]),
+                f"Cue {cue_idx} does not name an identified build",
+            )
+
+            # 2. Assert no cue states payload skipping as VERIFIED
+            for line in block.splitlines():
+                if "skip" in line.lower() and "[VERIFIED" in line:
+                    self.fail(f"Cue {cue_idx} states payload skipping as VERIFIED: {line}")
+
+            # 3. Assert no cue states a failure location / boundary as VERIFIED
+            for line in block.splitlines():
+                if any(w in line.lower() for w in ["failure point", "failure location", "failure boundary", "terminal failure"]):
+                    self.assertNotIn("[VERIFIED", line, f"Cue {cue_idx} states failure location as VERIFIED: {line}")
+
+            # 4. Assert alternative explanations are listed
+            self.assertTrue(
+                "alternative explanation" in block.lower(),
+                f"Cue {cue_idx} missing alternative explanations: {block[:100]}",
+            )
 
     def test_restart_path_cont_attempted_has_stale_ram_caveat(self):
         """CONT_ATTEMPTED discussion carries UNKNOWN or INFERRED label with a stale-RAM caveat."""
