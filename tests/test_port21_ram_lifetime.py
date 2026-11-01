@@ -597,8 +597,8 @@ class TestPort21EvidenceManifest(unittest.TestCase):
         self.assertLessEqual(total_bytes, 65536, f"Total bytes exceed 64 KiB: {total_bytes}")
 
     def test_manifest_matches_approved_reads(self):
-        """The manifest lists exactly the six approved ranges with their approved SHA-256 values."""
-        # Unmodified test fails on base tree (AssertionError: Items in the first set but not the second: 'PORT21-ROM-DANCINGBITS-MAIN', 'PORT21-ROM-EXEC-VALIDATE', 'PORT21-ROM-STARTDISKBOOT', 'PORT21-ROM-PREPARE-EXEC', 'PORT21-ROM-DANCINGBITS-DANCE', 'PORT21-ROM-PAYLOAD-HANDOFF', 'PORT21-ROM-ROW13-TABLE') because PORT21_EVIDENCE_MANIFEST.json contains merged entries from SCOPE-PORT21-DISKBOOT-TIMING. Filter to SCOPE-PORT21-RAM-LIFETIME without relaxing any per-entry check.
+        """The manifest lists exactly the six approved ranges with approved SHA-256 values."""
+        # Filter entries to SCOPE-PORT21-RAM-LIFETIME because PORT21 manifest merges DISKBOOT-TIMING entries.
         entries = {
             e["evidence_id"]: e
             for e in self.manifest.get("evidence_entries", [])
@@ -614,7 +614,7 @@ class TestPort21EvidenceManifest(unittest.TestCase):
 
     def test_manifest_read_start_notes(self):
         """Each manifest note states its read-start status in the approved wording."""
-        # Unmodified test fails on base tree (KeyError: 'PORT21-ROM-STARTDISKBOOT') because PORT21_EVIDENCE_MANIFEST.json contains merged entries from SCOPE-PORT21-DISKBOOT-TIMING. Filter to SCOPE-PORT21-RAM-LIFETIME without relaxing any per-entry check.
+        # Filter entries to SCOPE-PORT21-RAM-LIFETIME because PORT21 manifest merges DISKBOOT-TIMING entries.
         for entry in self.manifest.get("evidence_entries", []):
             if entry.get("authorization_scope_id") != "SCOPE-PORT21-RAM-LIFETIME":
                 continue

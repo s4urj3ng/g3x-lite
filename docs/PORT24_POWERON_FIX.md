@@ -246,8 +246,9 @@ As demonstrated by the ROM disassembly above:
 3. In `boot_prototype.c:133-153`, `boot()` copies ROM data from `0xFCE91058` into `0x00008000`..`0x0003F4F4` (Copy Loop 3, lines 133–143) and zeroes BSS only at `0x0003F4F4`..`0x003489B4` (lines 144–153). Address `0x9BD0` (`0x9BC4 + 12`) lies within the copied data region (`0x00008000`..`0x0003F4F4`). Because reading new ROM ranges is not permitted in this revision and the ROM source bytes copied to `0x9BD0` are not cited in the evidence manifest, the start-cause word's initial value after `boot()` is **UNKNOWN** (rather than known zero). Without execution of `sub_fc08ecbc`, `0x9BD0` is not updated with `0x00080000` (Power) or `0x00100000` (Play).
 
 #### Comparison with Reference Ports
-- **G3 X GM1.10E (ranma)**: Ranma recognized that `sub_fc1284ac` failed on short-press restart, and bypassed both `IsNormalCameraMode_FW` and `sub_fc1284ac`. To ensure a valid start cause, ranma's patch manually wrote `*(int*)(0x9bc4 + 12) = 0x80000` (Power) or `0x100000` (Play) based on momentary button states.
-- **G5 X 100C / G7 X Mark II 101A**: Both ports take the simpler approach: they call the stock check, force `r0 = 1`, and bypass the shutdown branch without synthesizing custom start-cause words. Both cameras boot successfully into CHDK and stock UI.
+- **G3 X GM1.10E (ranma)**: Ranma recognized that `sub_fc1284ac` failed on short-press restart, and bypassed both `IsNormalCameraMode_FW` and `sub_fc1284ac`. To ensure a valid start cause, ranma's patch manually wrote `*(int*)(0x9bc4 + 12) = 0x80000` (Power) or `0x100000` (Play) based on momentary button states (`UNKNOWN` - historical forum report only).
+- **G5 X 100C / G7 X Mark II 101A**: As documented in Section 2.2, neither port calls the stock button check directly. Instead, both ports replace the callee (`sub_fc0ecf20_my` in `platform/g5x/sub/100c/boot.c:L411, L418–420`; `sub_e005b418_my` in `platform/g7x2/sub/101a/boot.c:L522, L529–531`), comment out the shutdown failure branch, comment out the start-cause recorder calls, and force `movs r0, #1` before returning, without synthesizing custom start-cause words.
+- **Absence of Direct Reference Precedent (**INFERRED**)**: No reference port directly shows the behaviour of keeping the stock G3 X callee `sub_fc1284ac` and forcing `r0 = 1` on the caller side. Instead, reference ports replace the callee entirely (G5 X, G7 X Mark II, SX60 HS), simulate a button press inside the callee (SX710 HS), use a loader reboot flag (G7 X), or retain unmodified firmware checks where stock firmware already returns 1 (M10). The caller-side override in G3 X (`bl sub_fc1284ac; movs r0, #1; b loc_fc05b978; nop`) calls the stock check, which (on short press) skips the start-cause recorder `sub_fc08ecbc`, then overrides `r0 = 1` and skips the power-down branch.
 - **Downstream Start-Cause Behaviour**: The downstream start-cause behaviour (the effect of skipping `sub_fc08ecbc`, the initial value copied into `0x9BD0` during `boot()`, and anything else in DryOS that reads the power-on reason `*(0x9BC4 + 12)` later) is **UNKNOWN** (not yet evaluated on physical hardware or via full DryOS decompilation). On physical hardware, the only observed successful boot to the stock user interface (`O1`) was on the unchanged PORT-19 default build (`9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136`) with the physical power button held until the LCD illuminated (which allowed the unmodified second `sub_fc1284ac` call to detect the button). The opt-in candidate (`faad4d8242fbf6f79a44b10a9956f7eb04de9b65f42221f82a3b69eb024cf056`) with `movs r0, #1` has **never been run on the camera**. Whether forcing `r0 = 1` and skipping `sub_fc08ecbc` produces any unintended side effects in downstream DryOS tasks remains **UNKNOWN**, while the expectation that it will allow short-press boot without holding the button is **INFERRED** from reference ports and the held-button trial.
 
 ---
@@ -309,9 +310,13 @@ Both builds were executed with the pinned `arm-none-eabi-gcc` toolchain (`gcc-ar
 
 ---
 
-## Base inconsistency
+## 8. Base Inconsistency in `tests/test_port21_ram_lifetime.py`
 
-When running `python3 -B -m unittest tests.test_port21_ram_lifetime` on the unmodified test from `origin/main`, the test fails on the base tree with:
+When running `python3 -B -m unittest tests.test_port21_ram_lifetime` on the unmodified test from `origin/main`, the test fails on the base tree because `docs/agentbridge/PORT21_EVIDENCE_MANIFEST.json` merges entries from two distinct authorization scopes:
+1. `SCOPE-PORT21-RAM-LIFETIME` (6 RAM lifetime ROM ranges approved in PORT-21)
+2. `SCOPE-PORT21-DISKBOOT-TIMING` (7 dancing-bits / DISKBOOT timing ranges)
+
+Because the manifest combines more than one authorization scope, the unmodified test (which expects only the 6 entries for `SCOPE-PORT21-RAM-LIFETIME`) raises an `AssertionError` and `KeyError` on the base tree:
 
 ```text
 ======================================================================
@@ -361,3 +366,5 @@ Ran 28 tests in 0.236s
 
 FAILED (failures=2, errors=1)
 ```
+
+Per Tech Lead authorization (branch b), `tests/test_port21_ram_lifetime.py` filters manifest entries to `authorization_scope_id == 'SCOPE-PORT21-RAM-LIFETIME'` with a one-line comment and no relaxation of per-entry checks.

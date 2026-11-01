@@ -373,8 +373,58 @@ class TestPort24PoweronFix(unittest.TestCase):
                 f"Line {line_no} of {tracked} does not contain '{expected_text}'. Actual: {actual_line!r}",
             )
 
+    def test_listing_addresses_inside_cached_ranges(self):
+        """Fails if any documented listing address falls outside the cached manifest ranges."""
+        with open(DOC_FILE, "r", encoding="utf-8") as f:
+            doc_content = f.read()
+
+        row_re = re.compile(
+            r"^\s*([0-9a-fA-F]{8}):\s+([0-9a-fA-F]{4}(?:\s+[0-9a-fA-F]{4})?)\s+(.*)$",
+            re.MULTILINE,
+        )
+        listing_rows = row_re.findall(doc_content)
+        self.assertGreaterEqual(
+            len(listing_rows), 50, f"Expected at least 50 listing rows, found {len(listing_rows)}"
+        )
+
+        with open(MANIFEST_FILE, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+
+        cached_ranges = {
+            (int(e["start_address"], 16), int(e["end_address"], 16)): e["evidence_id"]
+            for e in manifest.get("evidence_entries", [])
+        }
+
+        # Assert every documented address and instruction span falls within a cached range
+        for addr_str, hex_str, asm in listing_rows:
+            addr = int(addr_str, 16)
+            hex_parts = hex_str.split()
+            instr_len = len(hex_parts) * 2
+            matched = any(
+                s <= addr and (addr + instr_len - 1) <= e
+                for s, e in cached_ranges
+            )
+            self.assertTrue(
+                matched,
+                f"Listing address 0x{addr:08X} ({asm}) falls outside cached manifest ranges",
+            )
+
+        # Assert failure when an address falls outside the cached ranges
+        outside_addr = 0xFC000000
+        matched_outside = any(
+            s <= outside_addr and (outside_addr + 1) <= e
+            for s, e in cached_ranges
+        )
+        self.assertFalse(
+            matched_outside,
+            f"Out-of-range address 0x{outside_addr:08X} must not fall inside cached ranges",
+        )
+
     def test_rom_disassembly_bytes_against_primary_bin(self):
-        """Every documented disassembly row matches PRIMARY.BIN bytes and lies inside a manifest range."""
+        """Every documented disassembly row matches bounded PRIMARY.BIN slice bytes and lies inside cached ranges."""
+        if not ROM_PATH.is_file():
+            self.skipTest(f"PRIMARY.BIN not present at {ROM_PATH}")
+
         with open(DOC_FILE, "r", encoding="utf-8") as f:
             doc_content = f.read()
 
@@ -396,41 +446,47 @@ class TestPort24PoweronFix(unittest.TestCase):
             e = int(entry["end_address"], 16)
             approved_ranges.append((s, e, entry["sha256"], entry["evidence_id"]))
 
-        # 1. Assert every documented address lies inside an approved manifest range
-        for addr_str, hex_str, asm in listing_rows:
-            addr = int(addr_str, 16)
-            in_range = any(s <= addr <= e for s, e, _, _ in approved_ranges)
-            self.assertTrue(
-                in_range,
-                f"Address 0x{addr:08X} in doc ({asm}) does not lie inside any manifest range",
-            )
-
-        # 2. Check against PRIMARY.BIN if present
-        if not ROM_PATH.is_file():
-            self.skipTest(f"PRIMARY.BIN not present at {ROM_PATH}")
-
+        # Bounded ROM reads: open file, seek to (start - ROM base), read exactly the declared length
+        cached_slices = {}
         with open(ROM_PATH, "rb") as f:
-            rom_bytes = f.read()
+            for s, e, expected_sha, eid in approved_ranges:
+                offset = s - ROM_BASE
+                length = e - s + 1
+                f.seek(offset)
+                slice_data = f.read(length)
+                self.assertEqual(
+                    len(slice_data),
+                    length,
+                    f"Slice read length mismatch for range {eid}: got {len(slice_data)}, expected {length}",
+                )
+                actual_sha = hashlib.sha256(slice_data).hexdigest()
+                self.assertEqual(
+                    actual_sha,
+                    expected_sha,
+                    f"Manifest SHA-256 mismatch for range {eid}: actual={actual_sha} != manifest={expected_sha}",
+                )
+                cached_slices[(s, e)] = slice_data
 
-        # Assert manifest range SHA-256 matches actual ROM dump
-        for s, e, expected_sha, eid in approved_ranges:
-            offset = s - ROM_BASE
-            length = e - s + 1
-            slice_data = rom_bytes[offset : offset + length]
-            actual_sha = hashlib.sha256(slice_data).hexdigest()
-            self.assertEqual(
-                actual_sha,
-                expected_sha,
-                f"Manifest SHA-256 mismatch for range {eid}: actual={actual_sha} != manifest={expected_sha}",
-            )
-
-        # Assert every instruction row matches byte-for-byte
+        # Assert every instruction row matches byte-for-byte against the cached slices only
         for addr_str, hex_str, asm in listing_rows:
             addr = int(addr_str, 16)
             hex_parts = hex_str.split()
             expected_bytes = b"".join(struct.pack("<H", int(p, 16)) for p in hex_parts)
-            offset = addr - ROM_BASE
-            actual_bytes = rom_bytes[offset : offset + len(expected_bytes)]
+            instr_len = len(expected_bytes)
+
+            matched_slice = None
+            slice_offset = None
+            for (s, e), slice_data in cached_slices.items():
+                if s <= addr and (addr + instr_len - 1) <= e:
+                    matched_slice = slice_data
+                    slice_offset = addr - s
+                    break
+
+            self.assertIsNotNone(
+                matched_slice,
+                f"Listing address 0x{addr:08X} ({asm}) falls outside cached ROM ranges",
+            )
+            actual_bytes = matched_slice[slice_offset : slice_offset + instr_len]
             self.assertEqual(
                 actual_bytes,
                 expected_bytes,
