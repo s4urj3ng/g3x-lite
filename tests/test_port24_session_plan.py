@@ -119,11 +119,90 @@ class TestPort24SessionPlan(unittest.TestCase):
         )
 
     def test_at_most_two_power_ons_in_plan(self):
-        """Verify the execution plan specifies at most two power-ons."""
+        """Verify the execution plan specifies at most two power-ons inside the diagnostic budget."""
         self.assertIn("Power-On 1", self.content)
         self.assertIn("Power-On 2", self.content)
         # Ensure there is no Power-On 3
         self.assertNotIn("Power-On 3", self.content)
+
+        # Parse distinct Power-On actions in the plan (outside report template)
+        # Check that the number of distinct power-on actions inside the diagnostic budget is at most 2
+        diagnostic_matches = re.findall(r"Power-On\s*(\d+)", self.content)
+        distinct_diagnostic_nums = set(diagnostic_matches)
+        self.assertTrue(
+            distinct_diagnostic_nums.issubset({"1", "2"}),
+            f"Only Power-On 1 and Power-On 2 are permitted; found: {distinct_diagnostic_nums}",
+        )
+        self.assertLessEqual(len(distinct_diagnostic_nums), 2)
+
+        # In recovery section: assert any recovery power-on is either counted inside budget or carries explicit marker
+        sec5_match = re.search(
+            r"## 5\..*?Recovery Procedures.*?\n(.*?)(?=\n## 6\.|\Z)",
+            self.content,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(sec5_match, "Section 5 Recovery Procedures must exist")
+        sec5_text = sec5_match.group(1)
+
+        # Check reconciliation sentence reconciling recovery power-ons with the limit
+        self.assertIn(
+            "outside the diagnostic budget",
+            sec5_text,
+            "Recovery section must explicitly mark extra recovery power-ons as outside the diagnostic budget",
+        )
+        self.assertTrue(
+            re.search(
+                r"Any additional power-on beyond Power-On 2 is strictly outside the diagnostic budget,\s*serving exclusively as owner recovery to return the camera to stock service,\s*and is not part of the diagnosis",
+                sec5_text,
+            ),
+            "Reconciliation sentence reconciling recovery power-ons with the two-power-on limit must be present",
+        )
+
+        # Every power-on instruction in Section 5 must specify either 'Power-On 2' or 'outside the diagnostic budget'
+        for line in sec5_text.splitlines():
+            if re.search(r"recovery power-on", line, re.IGNORECASE):
+                self.assertTrue(
+                    "Power-On 2" in line or "outside the diagnostic budget" in line,
+                    f"Line mentioning recovery power-on must either count as Power-On 2 or mark outside budget: {line}",
+                )
+
+    def test_no_first_second_only_observation_instruction(self):
+        """Verify the plan does NOT restrict observation to the first second and requires continuous observation."""
+        forbidden_patterns = [
+            r"during the first second",
+            r"for the first second",
+            r"first ~?1(?:\.0)?\s*s\b",
+            r"first second of the hold",
+        ]
+        for pat in forbidden_patterns:
+            match = re.search(pat, self.content, re.IGNORECASE)
+            self.assertIsNone(
+                match,
+                f"Document must not instruct observation only during the first second (found match for '{pat}')",
+            )
+
+        # Must instruct watching continuously
+        self.assertTrue(
+            re.search(r"watch continuously", self.content, re.IGNORECASE),
+            "Document must instruct watching continuously",
+        )
+
+        # Must base observation window on 1389.08 ms slowest loop timing
+        self.assertIn(
+            "1389.08 ms",
+            self.content,
+            "Document must cite the 1389.08 ms loop timing envelope",
+        )
+
+        # Must specify minimum window of at least 10 s, with extra margin labelled INFERRED
+        self.assertTrue(
+            re.search(r"at least 10\s*s", self.content, re.IGNORECASE),
+            "Document must require observation for at least 10 s",
+        )
+        self.assertTrue(
+            re.search(r"extra margin.*INFERRED", self.content, re.IGNORECASE),
+            "Extra margin beyond the loop envelope must be labelled INFERRED",
+        )
 
     def test_power_button_handling_and_o1_result(self):
         """Verify explicit guidance on hold vs short press accounting for the O1 result and boot_prototype.c:350."""
@@ -173,6 +252,28 @@ class TestPort24SessionPlan(unittest.TestCase):
                 f"Decode table must contain a dedicated row for flash count {count}",
             )
 
+        # Check that row 0 labels current-boot execution UNKNOWN
+        row_0_match = re.search(r"\|\s*\*\*?0\*\*?\s*\|(.*?)\n", table_text)
+        self.assertIsNotNone(row_0_match, "Row 0 must exist in decode table")
+        row_0_text = row_0_match.group(1)
+        self.assertIn("UNKNOWN", row_0_text, "Row 0 must label current-boot execution UNKNOWN")
+        self.assertTrue(
+            re.search(r"missed flash", row_0_text, re.IGNORECASE),
+            "Row 0 must list missed flash alternative",
+        )
+        self.assertTrue(
+            re.search(r"LED.*failure", row_0_text, re.IGNORECASE),
+            "Row 0 must list LED failure alternative",
+        )
+        self.assertTrue(
+            re.search(r"battery collapse", row_0_text, re.IGNORECASE),
+            "Row 0 must list battery collapse alternative",
+        )
+        self.assertTrue(
+            re.search(r"early loader failure", row_0_text, re.IGNORECASE),
+            "Row 0 must list early loader failure alternative",
+        )
+
         # Check explicit ambiguous or uncertain count row
         ambiguous_pattern = r"\|\s*\*\*?(?:Truncated|Merged|Uncertain|Ambiguous)"
         self.assertTrue(
@@ -193,11 +294,63 @@ class TestPort24SessionPlan(unittest.TestCase):
         self.assertIn("task_Startup", self.content)
         self.assertTrue("stale" in self.content.lower() or "freshness" in self.content.lower())
 
+        # Dark camera / zero flash cue must NOT conclude StartDiskboot was never called
+        self.assertNotIn(
+            "StartDiskboot was never even called",
+            self.content,
+            "Section 4 cue must not conclude that StartDiskboot was never called",
+        )
+        self.assertNotIn(
+            "StartDiskboot was never called",
+            self.content,
+            "Section 4 cue must not conclude that StartDiskboot was never called",
+        )
+
+        # Cue must label current-boot execution UNKNOWN and list all T2 alternatives
+        cue_match = re.search(
+            r"-\s+\*\*Camera Stays Dark with ZERO Flashes Seen\*\*:(.*?)(?=\n###|\Z)",
+            self.content,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(cue_match, "Cue for Camera Stays Dark with ZERO Flashes Seen must exist")
+        cue_text = cue_match.group(1)
+        self.assertIn("UNKNOWN", cue_text, "Zero-flash cue must label current-boot execution UNKNOWN")
+        self.assertTrue(
+            re.search(r"docs/PORT24_LOADER_TRACE\.md:985", cue_text),
+            "Cue must cite docs/PORT24_LOADER_TRACE.md:985 for missed flash / LED failure",
+        )
+        self.assertTrue(
+            re.search(r"docs/PORT24_LOADER_TRACE\.md:984", cue_text),
+            "Cue must cite docs/PORT24_LOADER_TRACE.md:984 for battery collapse / early loader failure",
+        )
+        self.assertTrue(re.search(r"missed", cue_text, re.IGNORECASE))
+        self.assertTrue(re.search(r"LED.*fail", cue_text, re.IGNORECASE))
+        self.assertTrue(re.search(r"battery.*collaps", cue_text, re.IGNORECASE))
+        self.assertTrue(re.search(r"early loader failure", cue_text, re.IGNORECASE))
+
     def test_recovery_procedure_present_and_labelled(self):
         """Verify recovery procedures for restoring stock UI are documented with evidence labels."""
+        sec5_match = re.search(
+            r"## 5\..*?Recovery Procedures.*?\n(.*?)(?=\n## 6\.|\Z)",
+            self.content,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(sec5_match, "Section 5 Recovery procedures must exist")
+        sec5_text = sec5_match.group(1)
+
+        self.assertTrue(re.search(r"UNLOCKED|remove", sec5_text, re.IGNORECASE))
+        self.assertTrue(re.search(r"battery.*pull|capacitor discharge", sec5_text, re.IGNORECASE))
+
+        # Recovery comes first: remove card or swap in card without DISKBOOT, then long press to reach stock UI
         self.assertTrue(
-            re.search(r"## 5\..*?Recovery", self.content, re.IGNORECASE),
-            "Section 5 Recovery procedures must exist",
+            re.search(r"Recovery comes first:.*remove the card.*long press", sec5_text, re.IGNORECASE),
+            "Recovery procedure must state that recovery comes first with card removal then long press",
+        )
+
+        # Long-press behavior must be labelled VERIFIED or INFERRED with citation to O1 result
+        self.assertTrue(
+            re.search(r"docs/PORT24_POWERON_FIX\.md:16-18", sec5_text),
+            "Recovery section must cite O1 result (docs/PORT24_POWERON_FIX.md:16-18)",
         )
         self.assertTrue(re.search(r"UNLOCKED|remove", self.content, re.IGNORECASE))
         self.assertTrue(re.search(r"battery.*pull|capacitor discharge", self.content, re.IGNORECASE))
