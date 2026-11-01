@@ -345,20 +345,21 @@ void __attribute__((naked,noinline)) sub_fc05b962_my(void)
         "    push    {r3, lr}\n"
         "    bl      sub_fc05ba68\n"
         "    bl      sub_fc079404\n"
-
+#if defined(G3X_POWERON_FIX) && G3X_POWERON_FIX /* PORT-24 opt-in short-press power-on fix */
+        "    bl      sub_fc1284ac\n" "    movs    r0, #1\n" "    b       loc_fc05b978\n" "    nop\n"
+#else
         // Native Canon power-on button check (unmodified stock ROM handler)
         "    bl      sub_fc1284ac\n"
         "    cbnz    r0, loc_fc05b978\n"
         "    bl      sub_fc05ba56\n"
+#endif
         "loc_fc05b976:\n"
         "    b       loc_fc05b976\n"          // Safe halt if shutdown requested
-
         "loc_fc05b978:\n"
         "    blx     sub_fc31b460\n"
         "    ldr     r1, =0x006ce000\n"
         "    movs    r0, #0\n"
         "    bl      sub_fc382c8c\n"
-
         // Spawn hooked task_Startup_my
         "    movs    r3, #0\n"
         "    str     r3, [sp]\n"
@@ -367,7 +368,6 @@ void __attribute__((naked,noinline)) sub_fc05b962_my(void)
         "    movs    r1, #0x19\n"              // Task priority 25
         "    ldr     r0, =0xfc05b9a0\n"        // ROM literal string "Startup"
         "    blx     sub_fc31bbc4\n"           // DryOS CreateTask
-
         "    movs    r0, #0\n"
         "    pop     {r3, pc}\n"
     );

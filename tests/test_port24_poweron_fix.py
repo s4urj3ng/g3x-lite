@@ -1,0 +1,301 @@
+#!/usr/bin/env python3
+"""Unit tests for PORT-24: Opt-in short-press boot fix for second power-on check.
+
+Verifies:
+1. Default build invariance:
+   - Without opt-in flag, build output is byte-identical to PORT-19 baseline.
+   - DISKBOOT.BIN SHA-256 == 9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136
+   - DISKBOOT.BIN size == 118001 bytes.
+   - Core symbols boot_witness (0x0035F7A0) and _end (0x00366CB0) remain locked.
+2. Opt-in candidate build:
+   - DISKBOOT.BIN SHA-256 == faad4d8242fbf6f79a44b10a9956f7eb04de9b65f42221f82a3b69eb024cf056
+   - DISKBOOT.BIN size == 118001 bytes.
+   - Core binary SHA-256 == b9c5b718cd90f7a791c216f07f92758cbdfcd56e4e34702235cffdcc204e6580
+   - Core symbols boot_witness (0x0035F7A0) and _end (0x00366CB0) remain locked.
+3. Confinement:
+   - The disassembly diff between default and opt-in candidate_main.elf is strictly
+     confined to sub_fc05b962_my; all other functions across the binary are identical.
+4. Evidence manifest:
+   - docs/agentbridge/PORT24_POWERON_EVIDENCE_MANIFEST.json validates cleanly via
+     tools/port11c_evidence_validator.py.
+5. Documentation & Citations:
+   - docs/PORT24_POWERON_FIX.md records reference port citations (file:line), ROM addresses,
+     claims with VERIFIED / INFERRED / UNKNOWN labels, and both DISKBOOT SHA-256 values.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+BUILD_SCRIPT = REPO_ROOT / "tools" / "build_candidate_port24_poweron_fix.py"
+MANIFEST_FILE = REPO_ROOT / "docs" / "agentbridge" / "PORT24_POWERON_EVIDENCE_MANIFEST.json"
+DOC_FILE = REPO_ROOT / "docs" / "PORT24_POWERON_FIX.md"
+VALIDATOR_SCRIPT = REPO_ROOT / "tools" / "port11c_evidence_validator.py"
+
+TOOLCHAIN_BIN = REPO_ROOT / "toolchains" / "gcc-arm-none-eabi-5_4-2016q3" / "bin"
+OBJDUMP = TOOLCHAIN_BIN / "arm-none-eabi-objdump"
+NM = TOOLCHAIN_BIN / "arm-none-eabi-nm"
+
+EXPECTED_DEFAULT_DISKBOOT_SHA256 = (
+    "9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136"
+)
+EXPECTED_DEFAULT_DISKBOOT_SIZE = 118001
+
+EXPECTED_OPTIN_DISKBOOT_SHA256 = (
+    "faad4d8242fbf6f79a44b10a9956f7eb04de9b65f42221f82a3b69eb024cf056"
+)
+EXPECTED_OPTIN_CORE_BIN_SHA256 = (
+    "b9c5b718cd90f7a791c216f07f92758cbdfcd56e4e34702235cffdcc204e6580"
+)
+
+EXPECTED_BOOT_WITNESS_ADDR = 0x0035F7A0
+EXPECTED_CORE_END_ADDR = 0x00366CB0
+
+
+def sha256_file(path: Path | str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(65536):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+class TestPort24PoweronFix(unittest.TestCase):
+    """Test suite covering PORT-24 power-on fix candidate, invariance, confinement, and docs."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.assertTrue(BUILD_SCRIPT.is_file(), f"Build script missing: {BUILD_SCRIPT}")
+        cls.assertTrue(MANIFEST_FILE.is_file(), f"Manifest file missing: {MANIFEST_FILE}")
+        cls.assertTrue(DOC_FILE.is_file(), f"Documentation missing: {DOC_FILE}")
+        cls.assertTrue(OBJDUMP.is_file(), f"arm-none-eabi-objdump missing: {OBJDUMP}")
+        cls.assertTrue(NM.is_file(), f"arm-none-eabi-nm missing: {NM}")
+
+        # Create temporary build directories for test execution
+        cls.tmp_dir = tempfile.mkdtemp(prefix="port24_test_")
+        cls.default_dir = Path(cls.tmp_dir) / "default"
+        cls.optin_dir = Path(cls.tmp_dir) / "optin"
+
+        # Build default candidate into cls.default_dir
+        cmd_default = [
+            "python3",
+            "-B",
+            str(BUILD_SCRIPT),
+            "--default",
+            "--out-dir",
+            str(cls.default_dir),
+        ]
+        res_default = subprocess.run(
+            cmd_default, cwd=REPO_ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        assert res_default.returncode == 0, f"Default build failed: {res_default.stderr}"
+
+        # Build opt-in candidate into cls.optin_dir
+        cmd_optin = [
+            "python3",
+            "-B",
+            str(BUILD_SCRIPT),
+            "--poweron-fix",
+            "--out-dir",
+            str(cls.optin_dir),
+        ]
+        res_optin = subprocess.run(
+            cmd_optin, cwd=REPO_ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        assert res_optin.returncode == 0, f"Opt-in build failed: {res_optin.stderr}"
+
+    @classmethod
+    def tearDownClass(cls):
+        if os.path.exists(cls.tmp_dir):
+            shutil.rmtree(cls.tmp_dir)
+
+    def _get_symbols(self, elf_path: Path) -> dict[str, int]:
+        res = subprocess.run(
+            [str(NM), str(elf_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+        syms = {}
+        for line in res.stdout.splitlines():
+            parts = line.strip().split()
+            if len(parts) >= 3:
+                addr_str, _, name = parts[0], parts[1], parts[2]
+                try:
+                    syms[name] = int(addr_str, 16)
+                except ValueError:
+                    pass
+        return syms
+
+    def test_default_build_invariance(self):
+        """Default candidate output is byte-identical to PORT-19/20/21/23 baseline."""
+        diskboot = self.default_dir / "DISKBOOT.BIN"
+        self.assertTrue(diskboot.is_file(), "Default DISKBOOT.BIN not found")
+        self.assertEqual(diskboot.stat().st_size, EXPECTED_DEFAULT_DISKBOOT_SIZE)
+        self.assertEqual(sha256_file(diskboot), EXPECTED_DEFAULT_DISKBOOT_SHA256)
+
+        # Check symbol positions
+        core_elf = self.default_dir / "candidate_main.elf"
+        syms = self._get_symbols(core_elf)
+        self.assertIn("boot_witness", syms)
+        self.assertEqual(syms["boot_witness"], EXPECTED_BOOT_WITNESS_ADDR)
+        self.assertIn("_end", syms)
+        self.assertEqual(syms["_end"], EXPECTED_CORE_END_ADDR)
+
+    def test_optin_build_hash_and_size(self):
+        """Opt-in candidate produces exact expected hashes and sizes."""
+        diskboot = self.optin_dir / "DISKBOOT.BIN"
+        self.assertTrue(diskboot.is_file(), "Opt-in DISKBOOT.BIN not found")
+        self.assertEqual(diskboot.stat().st_size, EXPECTED_DEFAULT_DISKBOOT_SIZE)
+        self.assertEqual(sha256_file(diskboot), EXPECTED_OPTIN_DISKBOOT_SHA256)
+
+        core_bin = self.optin_dir / "candidate_main.bin"
+        self.assertTrue(core_bin.is_file(), "Opt-in candidate_main.bin not found")
+        self.assertEqual(sha256_file(core_bin), EXPECTED_OPTIN_CORE_BIN_SHA256)
+
+        # Symbol addresses must be preserved
+        core_elf = self.optin_dir / "candidate_main.elf"
+        syms = self._get_symbols(core_elf)
+        self.assertIn("boot_witness", syms)
+        self.assertEqual(syms["boot_witness"], EXPECTED_BOOT_WITNESS_ADDR)
+        self.assertIn("_end", syms)
+        self.assertEqual(syms["_end"], EXPECTED_CORE_END_ADDR)
+
+    def test_diff_confined_to_intended_function(self):
+        """Disassembly diff between default and opt-in candidate_main.elf is strictly in sub_fc05b962_my."""
+        default_elf = self.default_dir / "candidate_main.elf"
+        optin_elf = self.optin_dir / "candidate_main.elf"
+
+        # Disassemble both
+        res_default = subprocess.run(
+            [str(OBJDUMP), "-d", str(default_elf)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+        res_optin = subprocess.run(
+            [str(OBJDUMP), "-d", str(optin_elf)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+
+        def split_functions(disasm_text: str) -> dict[str, list[str]]:
+            funcs = {}
+            current_func = None
+            current_lines = []
+            func_header_re = re.compile(r"^[0-9a-fA-F]{8}\s+<([^>]+)>:")
+            for line in disasm_text.splitlines():
+                m = func_header_re.match(line)
+                if m:
+                    if current_func:
+                        funcs[current_func] = current_lines
+                    current_func = m.group(1)
+                    current_lines = [line]
+                elif current_func:
+                    current_lines.append(line)
+            if current_func:
+                funcs[current_func] = current_lines
+            return funcs
+
+        funcs_default = split_functions(res_default.stdout)
+        funcs_optin = split_functions(res_optin.stdout)
+
+        # Both must have the identical set of function names
+        self.assertEqual(set(funcs_default.keys()), set(funcs_optin.keys()))
+
+        differing_funcs = []
+        for name in funcs_default:
+            lines_def = funcs_default[name]
+            lines_opt = funcs_optin[name]
+            if lines_def != lines_opt:
+                differing_funcs.append(name)
+
+        # ONLY sub_fc05b962_my may differ
+        self.assertEqual(
+            differing_funcs,
+            ["sub_fc05b962_my"],
+            f"Diff escaped intended function! Differing functions: {differing_funcs}",
+        )
+
+        # Check the instructions inside sub_fc05b962_my
+        optin_func_disasm = "\n".join(funcs_optin["sub_fc05b962_my"])
+        # Must contain movs r0, #1
+        self.assertIn("movs\tr0, #1", optin_func_disasm)
+        # Must NOT contain call to power-cut sub_fc05ba56
+        self.assertNotIn("fc05ba56", optin_func_disasm)
+
+    def test_evidence_manifest_validates(self):
+        """PORT24_POWERON_EVIDENCE_MANIFEST.json passes tools/port11c_evidence_validator.py."""
+        cmd = ["python3", "-B", str(VALIDATOR_SCRIPT), "--manifest", str(MANIFEST_FILE)]
+        res = subprocess.run(
+            cmd, cwd=REPO_ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        self.assertEqual(
+            res.returncode,
+            0,
+            f"Manifest validation failed with returncode {res.returncode}:\n{res.stdout}\n{res.stderr}",
+        )
+        self.assertIn("Result: VALID", res.stdout)
+        self.assertIn("0 errors", res.stdout)
+
+        # Verify required slice IDs are declared
+        with open(MANIFEST_FILE, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+        slice_ids = {entry["evidence_id"] for entry in manifest.get("evidence_entries", [])}
+        required_slices = {
+            "PORT24-ROM-CALLER-STARTUP",
+            "PORT24-ROM-POWERCUT",
+            "PORT24-ROM-NORMAL-MODE",
+            "PORT24-ROM-NORMAL-FLAG",
+            "PORT24-ROM-STARTCAUSE-SAVE",
+            "PORT24-ROM-STARTCAUSE-PTR",
+            "PORT24-ROM-GPIO-PRIMITIVES",
+            "PORT24-ROM-POWERON-CHECK",
+        }
+        self.assertTrue(required_slices.issubset(slice_ids))
+
+    def test_documentation_and_citations(self):
+        """docs/PORT24_POWERON_FIX.md contains DIGIC 6 references, ROM addresses, labels, and hashes."""
+        with open(DOC_FILE, "r", encoding="utf-8") as f:
+            doc_content = f.read()
+
+        # DIGIC 6 reference port citations
+        self.assertIn("platform/g5x/sub/100c/boot.c", doc_content)
+        self.assertIn("platform/sx60hs/sub/100b/boot.c", doc_content)
+        self.assertIn("loader/g7x/main.c", doc_content)
+        self.assertIn("g3x_110e.patch", doc_content)
+
+        # ROM addresses
+        self.assertIn("0xFC05B962", doc_content)
+        self.assertIn("0xFC05BA56", doc_content)
+        self.assertIn("0xFC079404", doc_content)
+        self.assertIn("0xFC1284AC", doc_content)
+        self.assertIn("0x00009BC4", doc_content)
+        self.assertIn("0xFDF20380", doc_content)
+        self.assertIn("0xD20B099C", doc_content)
+
+        # Confidence labels
+        self.assertIn("VERIFIED", doc_content)
+        self.assertIn("INFERRED", doc_content)
+        self.assertIn("UNKNOWN", doc_content)
+
+        # Expected hashes
+        self.assertIn(EXPECTED_DEFAULT_DISKBOOT_SHA256, doc_content)
+        self.assertIn(EXPECTED_OPTIN_DISKBOOT_SHA256, doc_content)
+
+
+if __name__ == "__main__":
+    unittest.main()
