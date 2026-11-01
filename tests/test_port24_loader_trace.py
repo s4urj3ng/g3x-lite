@@ -1284,7 +1284,8 @@ class TestPort24LoaderTrace(unittest.TestCase):
 
     def test_stubs_table_thumb_emitted_targets_odd_and_equal_operand_or_1(self):
         """Regression test 3(a): every STUB row in lines ~658-695 whose text claims Thumb / low bit = 1
-        must show an odd emitted target equal to its source operand | 1. Fail if any such row shows an even emitted target.
+        must show an odd emitted target equal to its source operand | 1 or state the covered even operand
+        with the Thumb bit indicated symbolically. Fail if any such row shows a bare even emitted target without symbolic notation.
         """
         stubs_section = self.content.split("#### Stubs LDR PC Branch Table (stubs_asm.h:60-74)", 1)[1]
         stubs_section = stubs_section.split("####", 1)[0]
@@ -1366,16 +1367,45 @@ class TestPort24LoaderTrace(unittest.TestCase):
         """Regression test: a synthetic doc with a Thumb-marked stub row whose emitted (odd) target
         is not in the manifest and not allowlisted, even though the even operand IS covered, must FAIL coverage.
         """
-        thumb_stub_line = (
+        # Case 1: Even operand is covered by source operand allowlist (0xFC05C5BC), but emitted target
+        # 0xFC05C5BD is not in manifest and not allowlisted.
+        thumb_stub_line_allowlist = (
             "| `stub_fc05c5bc` (`stubs_prototype.S:11`) | `STUB` | `0x00349894: ldr.w pc, [pc]` | "
             "`0x00349898` | `0xFC05C5BD` | `1` | `Thumb` | "
             "[VERIFIED (source/build): candidate_main.elf:0x00349898; stubs_prototype.S:11; stubs_asm.h:60] "
             "[UNKNOWN: callee target unread from ROM] |"
         )
-        uncovered, _ = self.check_rom_addresses_coverage(thumb_stub_line)
+        uncovered_1, _ = self.check_rom_addresses_coverage(thumb_stub_line_allowlist)
         self.assertTrue(
-            any("FC05C5BD" in u for u in uncovered),
-            f"Synthetic Thumb stub-table row with uncovered emitted target 0xFC05C5BD must fail coverage: {uncovered}",
+            any("FC05C5BD" in u for u in uncovered_1),
+            f"Synthetic Thumb stub-table row with uncovered emitted target 0xFC05C5BD must fail coverage: {uncovered_1}",
+        )
+
+        # Case 2: Even operand is covered by a manifest range (0xFC990000..0xFC990000), but emitted target
+        # 0xFC990001 (operand | 1) is not in the manifest and not allowlisted.
+        synth_manifest = {
+            "evidence_entries": [
+                {
+                    "evidence_id": "PORT24-ROM-SYNTH-EVEN-ONLY",
+                    "start_address": "0xFC990000",
+                    "end_address": "0xFC990000",
+                    "expected_byte_count": 1,
+                    "sha256": "0" * 64,
+                    "out_of_scope": False,
+                    "relied_upon": True,
+                }
+            ]
+        }
+        thumb_stub_line_manifest = (
+            "| `stub_fc990000` (`stubs_prototype.S:99`) | `STUB` | `0x00349894: ldr.w pc, [pc]` | "
+            "`0x00349898` | `0xFC990001` | `1` | `Thumb` | "
+            "[VERIFIED (source/build): candidate_main.elf:0x00349898; stubs_prototype.S:99; stubs_asm.h:60] "
+            "[VERIFIED: ROM 0xFC990000; PORT24-ROM-SYNTH-EVEN-ONLY] |"
+        )
+        uncovered_2, _ = self.check_rom_addresses_coverage(thumb_stub_line_manifest, manifest=synth_manifest)
+        self.assertTrue(
+            any("FC990001" in u for u in uncovered_2),
+            f"Synthetic Thumb stub-table row with manifest-covered even operand and uncovered emitted target 0xFC990001 must fail coverage: {uncovered_2}",
         )
 
     def test_regression_synthetic_stub_row_marked_arm_with_odd_emitted_target_fails(self):
