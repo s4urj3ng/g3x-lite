@@ -100,11 +100,11 @@ EXPECTED_DEFAULT_CORE_SHA256 = (
 EXPECTED_DEFAULT_CORE_SIZE = 116816
 
 EXPECTED_LADDER_DISKBOOT_SHA256 = (
-    "6634d8b31e2aa9262193bf301c1dfb701fe63e80f40d423a71c64519388bb921"
+    "aa7963de9b6c04c8c5a3077efab12f8383a26db114d5d9b92e320780630abd3c"
 )
 EXPECTED_LADDER_DISKBOOT_SIZE = 118257
 EXPECTED_LADDER_LOADER_SHA256 = (
-    "7a177e89f8a673a727dd6f35fc2ba61d55780086e73aa029784f63291a14f842"
+    "f3239e0b928dbe30022ce04f1e6d2a13b70409fe10f66ff121feb2efdde86289"
 )
 EXPECTED_LADDER_LOADER_SIZE = 118256
 
@@ -356,8 +356,8 @@ class TestPort24BreadcrumbLadder(unittest.TestCase):
 
         # Check iteration counts
         self.assertEqual(PULSE_ON_ITERATIONS, 0x00134000)
-        self.assertEqual(PULSE_OFF_ITERATIONS, 0x002AC000)
-        self.assertEqual(SINGLE_STEP_ITERATIONS, 0x003E0000)
+        self.assertEqual(PULSE_OFF_ITERATIONS, 0x002C4000)
+        self.assertEqual(SINGLE_STEP_ITERATIONS, 0x003F8000)
 
         # Under documented calibration: slow-bound total < 200 ms cap
         self.assertLess(
@@ -379,18 +379,32 @@ class TestPort24BreadcrumbLadder(unittest.TestCase):
             20.0,
             f"Fastest ON {timing['on_ms_fastest']} ms below stated minimum of 20.0 ms!",
         )
-        # (b) fast-bound OFF maximized within the budget (~44.53 ms)
+        # (b) fast-bound OFF maximized within the budget (~46.09 ms)
         self.assertGreaterEqual(
             timing["off_ms_fastest"],
-            44.0,
-            f"Fastest OFF {timing['off_ms_fastest']} ms below 44.0 ms!",
+            46.0,
+            f"Fastest OFF {timing['off_ms_fastest']} ms below 46.0 ms!",
         )
-        # (c) slow-bound loop total (193.75 ms) + explicit 1.0 ms overhead margin strictly < 200 ms cap
+        # (c) slow-bound loop total (198.44 ms) + explicit 1.0 ms overhead margin strictly < 200 ms cap
         full_step_slowest = timing["total_ms_slowest"] + timing["overhead_margin_ms"]
         self.assertEqual(timing["overhead_margin_ms"], 1.0)
-        self.assertEqual(round(full_step_slowest, 2), 194.75)
+        self.assertEqual(round(full_step_slowest, 2), 199.44)
         self.assertLess(full_step_slowest, 200.0, f"Full step {full_step_slowest} ms not strictly < 200 ms!")
         self.assertLess(timing["total_ms_slowest"], 200.0)
+
+        # Immediate encoding assertions:
+        # 0x002C4000 is 0xB1 << 14, an encodable Thumb-2 modified immediate
+        self.assertEqual(0x002C4000, 0xB1 << 14)
+        # Next larger encodable modified immediate is 0x002C8000 (0xB2 << 14)
+        next_imm = 0xB2 << 14
+        self.assertEqual(next_imm, 0x002C8000)
+        # Verify next immediate breaks the 200 ms cap at slowest bound (300 ms for 0x00600000):
+        next_step_slow_ms = ((PULSE_ON_ITERATIONS + next_imm) / 0x00600000) * 300.0 + 1.0
+        self.assertGreater(
+            next_step_slow_ms,
+            200.0,
+            f"Next immediate {hex(next_imm)} expected to break 200 ms cap, got {next_step_slow_ms} ms",
+        )
 
         # Visibility checks across nominal and slowest bounds
         self.assertGreaterEqual(
@@ -459,8 +473,9 @@ class TestPort24BreadcrumbLadder(unittest.TestCase):
             self.assertGreater(bx_idx, cpsid_idx, "Missing terminal bx r0")
 
             # Each step has an ON delay loop with mov.w r2, #1261568 (0x00134000)
+            # and an OFF delay loop with mov.w r2, #2899968 (0x002C4000)
             on_loop_marker = "mov.w\tr2, #1261568"
-            off_loop_marker = "mov.w\tr2, #2801664"
+            off_loop_marker = "mov.w\tr2, #2899968"
 
             # 1. Step 1 (after_prologue): after bl check_compat, before core_copy
             step1_count = restart_dump[compat_idx:copy_idx].count(on_loop_marker)
@@ -503,7 +518,7 @@ class TestPort24BreadcrumbLadder(unittest.TestCase):
             self.assertNotIn("push\t{r0", restart_dump)
             self.assertNotIn("pop\t{r0", restart_dump)
 
-            # 2. Operand registers r4 (%0) and r5 (%1) are never written in any breadcrumb
+            # 2. Operand registers r5 (%0, dest 0x003489B4) and r4 (%1, size) are never written in any breadcrumb
             cpsid_idx = restart_dump.find("cpsid\tif")
             bx_idx = restart_dump.find("bx\tr0", cpsid_idx)
             handoff_code = restart_dump[cpsid_idx:bx_idx]
@@ -700,8 +715,75 @@ class TestPort24BreadcrumbLadder(unittest.TestCase):
         flash5_text = rules_dict["5 flashes"]
         self.assertIn("ROM_ICACHE_INV_BP", flash5_text)
 
+        # Check flash 4 suspects: only adjacent breadcrumb code, no cache operations
+        flash4_text = rules_dict["4 flashes"]
+        self.assertIn("after_dcache", flash4_text)
+        self.assertIn("before_icache", flash4_text)
+        self.assertIn("no cache", flash4_text.lower())
+
+        # Check flash 3 suspects: D-cache maintenance
+        flash3_text = rules_dict["3 flashes"]
+        self.assertIn("ROM_DCACHE_CLEAN_INV", flash3_text)
+
+        # Check flash 2 suspects: transition into cache block, no cache operations
+        flash2_text = rules_dict["2 flashes"]
+        self.assertIn("no cache", flash2_text.lower())
+
         # Ambiguity note explains mid-pulse dark / failure
         self.assertIn("ambiguous by one", AMBIGUITY_NOTE)
+
+    def test_operand_register_mapping_and_flag_independence(self):
+        """Disassembly proves r5 holds %0 (dest 0x003489B4), r4 holds %1 (size), terminal hand-off branches via r5,
+        and no subsequent code depends on condition flags (NZCV)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                ["python3", str(BUILD_LADDER), "--ladder", "--out-dir", tmpdir],
+                cwd=REPO_ROOT,
+                check=True,
+                capture_output=True,
+            )
+            loader_elf = Path(tmpdir) / "candidate_loader.elf"
+            dump = subprocess.check_output([str(OBJDUMP), "-d", str(loader_elf)]).decode()
+            restart_dump = dump[dump.find("<my_restart>:") :]
+
+            # 1. r5 allocation: destination address MEMISOSTART (0x003489B4, %0)
+            self.assertRegex(restart_dump, r"ldr\tr5,\s+\[pc,.*833c <my_restart\+0x164>")
+            self.assertIn("833c:\t003489b4", restart_dump)
+
+            # 2. r4 allocation: size in bytes (blob_chdk_core_size rounded up to 4, %1)
+            self.assertIn("ldr\tr4, [r3, #0]", restart_dump)
+            self.assertIn("adds\tr4, #3", restart_dump)
+            self.assertIn("bic.w\tr4, r4, #3", restart_dump)
+
+            # 3. Argument setup for D-cache: r0 from r5 (%0), r1 from r4 (%1)
+            self.assertIn("8286:\t4628      \tmov\tr0, r5", restart_dump)
+            self.assertIn("8288:\t4621      \tmov\tr1, r4", restart_dump)
+            self.assertIn("828c:\t4790      \tblx\tr2", restart_dump)
+            self.assertIn("8358:\tfc127ab1", restart_dump)
+
+            # 4. Argument setup for I-cache: r0 from r5 (%0), r1 from r4 (%1)
+            self.assertIn("82d6:\t4628      \tmov\tr0, r5", restart_dump)
+            self.assertIn("82d8:\t4621      \tmov\tr1, r4", restart_dump)
+            self.assertIn("82dc:\t4790      \tblx\tr2", restart_dump)
+            self.assertIn("835c:\tfc127b09", restart_dump)
+
+            # 5. Terminal hand-off branches through r5:
+            self.assertIn("832c:\t4628      \tmov\tr0, r5", restart_dump)
+            self.assertIn("832e:\tf100 0001 \tadd.w\tr0, r0, #1", restart_dump)
+            self.assertIn("8332:\t4700      \tbx\tr0", restart_dump)
+
+            # 6. Condition flags (NZCV) independence:
+            # Check instructions after Step 7 subs loop to terminal bx r0:
+            # Only mov r0, r5; add.w r0, r0, #1; bx r0 execute. None depend on NZCV flags.
+            bne_pos = restart_dump.find("832a:\td1fd")
+            eol = restart_dump.find("\n", bne_pos) + 1
+            terminal_slice = restart_dump[eol : restart_dump.find("8332:\t4700")]
+            self.assertIn("mov\tr0, r5", terminal_slice)
+            self.assertIn("add.w\tr0, r0, #1", terminal_slice)
+            self.assertNotIn("bne", terminal_slice)
+            self.assertNotIn("beq", terminal_slice)
+            self.assertNotIn("bgt", terminal_slice)
+            self.assertNotIn("blt", terminal_slice)
 
     def test_port24_ladder_table_cli(self):
         """CLI tool port24_ladder_table.py executes and emits table across all formats."""

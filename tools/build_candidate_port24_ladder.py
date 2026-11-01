@@ -12,12 +12,12 @@ Step 7: before_bx      - before handoff branch bx r0 (after cpsid if)
 
 Pulse scheme: One visible pulse per step.
 Iteration parameters:
-  ON:  0x00140000 (1,310,720 iterations) -> ~20.8 ms (fast 100ms) / ~26.0 ms (nom 125ms) / ~62.5 ms (slow 300ms)
-  OFF: 0x002A0000 (2,752,512 iterations) -> ~43.8 ms (fast 100ms) / ~54.7 ms (nom 125ms) / ~131.3 ms (slow 300ms)
-  Total step: 0x003E0000 (4,063,232 iterations) -> ~64.6 ms (fast) / ~80.7 ms (nom) / ~193.8 ms (slow < 200ms)
+  ON:  0x00134000 (1,261,568 iterations) -> ~20.05 ms (fast 100ms) / ~25.07 ms (nom 125ms) / ~60.16 ms (slow 300ms) [INFERRED]
+  OFF: 0x002C4000 (2,899,968 iterations) -> ~46.09 ms (fast 100ms) / ~57.62 ms (nom 125ms) / ~138.28 ms (slow 300ms) [INFERRED]
+  Total loop: 0x003F8000 (4,161,536 iterations) -> ~66.15 ms (fast) / ~82.68 ms (nom) / 198.44 ms (slow) [INFERRED]
 
 Total flashes observed before shutdown indicates the last step reached.
-All steps have duration strictly under 200 ms (193.75 ms + 6.25 ms overhead margin = 200.0 ms).
+Full step (loops + 1.0 ms overhead) duration at slowest bound is 199.44 ms strictly under 200.0 ms.
 
 When --no-ladder / --flag-off is specified (or when flags are omitted by default), output is byte-identical
 to the locked PORT-19 default control:

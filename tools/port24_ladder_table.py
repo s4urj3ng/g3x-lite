@@ -22,10 +22,10 @@ Timing Calibration (derived from PORT-23 short-delay build 0x00600000):
 - Same loop body: 'subs r2, r2, #1; bne' (2 instructions per iteration).
 - Per step:
     N_on  = 0x00134000 (1,261,568 iterations) -> ~20.05 ms (fast 100ms) / ~25.07 ms (nom 125ms) / ~60.16 ms (slow 300ms) [INFERRED]
-    N_off = 0x002AC000 (2,801,664 iterations) -> ~44.53 ms (fast 100ms) / ~55.66 ms (nom 125ms) / ~133.59 ms (slow 300ms) [INFERRED]
-    Total loop = 0x003E0000 (4,063,232 iterations) -> ~64.58 ms (fast) / ~80.73 ms (nom) / 193.75 ms (slow) [INFERRED]
+    N_off = 0x002C4000 (2,899,968 iterations) -> ~46.09 ms (fast 100ms) / ~57.62 ms (nom 125ms) / ~138.28 ms (slow 300ms) [INFERRED]
+    Total loop = 0x003F8000 (4,161,536 iterations) -> ~66.15 ms (fast) / ~82.68 ms (nom) / 198.44 ms (slow) [INFERRED]
 - Non-loop overhead: conservative 1.0 ms allocated for ~9 instructions + 2 barriers (< 200 cycles).
-- Full step (loops + overhead): 193.75 ms + 1.0 ms = 194.75 ms strictly < 200.0 ms cap [INFERRED].
+- Full step (loops + overhead): 198.44 ms + 1.0 ms = 199.44 ms strictly < 200.0 ms cap [INFERRED].
 """
 
 from __future__ import annotations
@@ -54,8 +54,8 @@ PORT23_SHORT_DELAY_MS_RANGE_MAX = 150.0     # 150 ms range upper bound
 PORT23_SHORT_DELAY_MS_SLOWEST = 300.0       # 300 ms slowest bound (PORT-24 trace)
 
 PULSE_ON_ITERATIONS = 0x00134000            # 1,261,568 iterations
-PULSE_OFF_ITERATIONS = 0x002AC000           # 2,801,664 iterations
-SINGLE_STEP_ITERATIONS = PULSE_ON_ITERATIONS + PULSE_OFF_ITERATIONS  # 4,063,232 (0x003E0000)
+PULSE_OFF_ITERATIONS = 0x002C4000           # 2,899,968 iterations
+SINGLE_STEP_ITERATIONS = PULSE_ON_ITERATIONS + PULSE_OFF_ITERATIONS  # 4,161,536 (0x003F8000)
 
 NON_LOOP_OVERHEAD_MARGIN_MS = 1.0           # 1.0 ms justified non-loop instruction overhead bound
 MAX_SAFETY_LIMIT_MS = 200.0
@@ -80,7 +80,7 @@ LADDER_STEPS_DEFINITION = [
         "t1_source_anchor": "loader_main_breadcrumb.c: after check_compat()",
         "pulse_seq": "Flash 1",
         "cumulative_flashes": 1,
-        "registers_preserved": "r0-r3 clobbered per AAPCS; r4-r11, sp (0x7FF8), CPSR preserved",
+        "registers_preserved": "r0-r3 clobbered per AAPCS; r4-r11, sp (0x7FF8), CPSR.I/F mask and Thumb state preserved (NZCV flags changed by subs loop)",
         "cpu_mode": "Thumb-2",
         "final_state": "LED OFF (0x004C0003)",
     },
@@ -93,7 +93,7 @@ LADDER_STEPS_DEFINITION = [
         "t1_source_anchor": "loader_main_breadcrumb.c: after core_copy() & witness write",
         "pulse_seq": "Flash 2",
         "cumulative_flashes": 2,
-        "registers_preserved": "r0-r3 clobbered per AAPCS; r4 (%0), r5 (%1), sp (0x7FF8), CPSR preserved",
+        "registers_preserved": "r0-r3 clobbered per AAPCS; r5 (%0, dest 0x003489B4), r4 (%1, size), sp (0x7FF8), CPSR.I/F mask and Thumb state preserved (NZCV flags changed by subs loop)",
         "cpu_mode": "Thumb-2",
         "final_state": "LED OFF (0x004C0003)",
     },
@@ -106,7 +106,7 @@ LADDER_STEPS_DEFINITION = [
         "t1_source_anchor": "loader_main_breadcrumb.c: immediately before ROM_DCACHE_CLEAN_INV blx",
         "pulse_seq": "Flash 3",
         "cumulative_flashes": 3,
-        "registers_preserved": "r0-r3 clobbered; r4 (%0), r5 (%1), sp (0x7FF8), CPSR preserved",
+        "registers_preserved": "r0-r3 clobbered; r5 (%0, dest 0x003489B4), r4 (%1, size), sp (0x7FF8), CPSR.I/F mask and Thumb state preserved (NZCV flags changed by subs loop)",
         "cpu_mode": "Thumb-2",
         "final_state": "LED OFF (0x004C0003)",
     },
@@ -119,7 +119,7 @@ LADDER_STEPS_DEFINITION = [
         "t1_source_anchor": "loader_main_breadcrumb.c: immediately after ROM_DCACHE_CLEAN_INV blx & dsb sy",
         "pulse_seq": "Flash 4",
         "cumulative_flashes": 4,
-        "registers_preserved": "r0-r3 clobbered; r4 (%0), r5 (%1), sp (0x7FF8), CPSR preserved",
+        "registers_preserved": "r0-r3 clobbered; r5 (%0, dest 0x003489B4), r4 (%1, size), sp (0x7FF8), CPSR.I/F mask and Thumb state preserved (NZCV flags changed by subs loop)",
         "cpu_mode": "Thumb-2",
         "final_state": "LED OFF (0x004C0003)",
     },
@@ -132,7 +132,7 @@ LADDER_STEPS_DEFINITION = [
         "t1_source_anchor": "loader_main_breadcrumb.c: immediately before ROM_ICACHE_INV_BP blx",
         "pulse_seq": "Flash 5",
         "cumulative_flashes": 5,
-        "registers_preserved": "r0-r3 clobbered; r4 (%0), r5 (%1), sp (0x7FF8), CPSR preserved",
+        "registers_preserved": "r0-r3 clobbered; r5 (%0, dest 0x003489B4), r4 (%1, size), sp (0x7FF8), CPSR.I/F mask and Thumb state preserved (NZCV flags changed by subs loop)",
         "cpu_mode": "Thumb-2",
         "final_state": "LED OFF (0x004C0003)",
     },
@@ -145,7 +145,7 @@ LADDER_STEPS_DEFINITION = [
         "t1_source_anchor": "loader_main_breadcrumb.c: immediately after ROM_ICACHE_INV_BP blx & dsb sy + isb sy",
         "pulse_seq": "Flash 6",
         "cumulative_flashes": 6,
-        "registers_preserved": "r0-r3 clobbered; r4 (%0), r5 (%1), sp (0x7FF8), CPSR preserved",
+        "registers_preserved": "r0-r3 clobbered; r5 (%0, dest 0x003489B4), r4 (%1, size), sp (0x7FF8), CPSR.I/F mask and Thumb state preserved (NZCV flags changed by subs loop)",
         "cpu_mode": "Thumb-2",
         "final_state": "LED OFF (0x004C0003)",
     },
@@ -158,21 +158,21 @@ LADDER_STEPS_DEFINITION = [
         "t1_source_anchor": "loader_main_breadcrumb.c: after cpsid if, immediately before bx r0",
         "pulse_seq": "Flash 7",
         "cumulative_flashes": 7,
-        "registers_preserved": "r4 (%0), sp (0x7FF8), CPSR.I/F=1 (disabled), Thumb mode (0x003489B5)",
+        "registers_preserved": "r5 (%0, dest 0x003489B4), sp (0x7FF8), CPSR.I/F=1 (disabled), Thumb mode (0x003489B5); NZCV flags changed by subs loop",
         "cpu_mode": "Thumb-2",
         "final_state": "LED OFF (0x004C0003)",
     },
 ]
 
 TRIAGE_RULES = [
-    ("0 flashes", "Failed before or during Step 1 pulse (MBR, dancingbits row 13, PID mismatch in check_compat, or early power loss)."),
-    ("1 flash",   "Failed between Step 1 and Step 2 (payload relocation in core_copy, or Boot Witness Stage 1 write/checksum)."),
-    ("2 flashes", "Failed between Step 2 and Step 3 (preparation for D-cache maintenance, or entry into cache asm block)."),
-    ("3 flashes", "Failed during D-cache clean & invalidate (ROM_DCACHE_CLEAN_INV 0xFC127AB1 subroutine call or dsb sy)."),
-    ("4 flashes", "Failed between Step 4 and Step 5 (instructions between D-cache and I-cache maintenance)."),
-    ("5 flashes", "Failed during I-cache & branch predictor invalidation (ROM_ICACHE_INV_BP 0xFC127B09 subroutine call, dsb sy, or isb sy)."),
-    ("6 flashes", "Failed between Step 6 and Step 7 (interrupt mask cpsid if)."),
-    ("7 flashes", "Step 7 pulse completed. Core entry address setup, terminal bx hand-off, and core execution are UNKNOWN (uninstrumented); fault occurred during terminal hand-off or inside CHDK core."),
+    ("0 flashes", "Failed before or during Step 1 pulse (MBR load, dancingbits row 13 decrypt, loader entry prologue at 0x8000, PID mismatch in check_compat, or early power loss)."),
+    ("1 flash",   "Step 1 pulse completed. Failed between Step 1 and Step 2: setup of relocation parameters, DRAM payload relocation in core_copy, or Boot Witness Stage 1 write/checksum."),
+    ("2 flashes", "Step 2 pulse completed. Failed between Step 2 and Step 3: transition into the inline cache maintenance block (only adjacent breadcrumb pulse code runs here, no cache operations)."),
+    ("3 flashes", "Step 3 pulse completed. Failed during D-cache clean & invalidate: argument setup (mov r0, r5; mov r1, r4; ldr r2, =ROM_DCACHE_CLEAN_INV), execution of ROM_DCACHE_CLEAN_INV (0xFC127AB1 DCCISW subroutine), or bus lockup on dsb sy."),
+    ("4 flashes", "Step 4 pulse completed. Failed between Step 4 and Step 5: transition from after_dcache into before_icache (only adjacent breadcrumb pulse code runs here, no cache operations)."),
+    ("5 flashes", "Step 5 pulse completed. Failed during I-cache & branch predictor invalidation: argument setup (mov r0, r5; mov r1, r4; ldr r2, =ROM_ICACHE_INV_BP), execution of ROM_ICACHE_INV_BP (0xFC127B09 ICIALLU/BPIALL subroutine), dsb sy, or pipeline sync (isb sy)."),
+    ("6 flashes", "Step 6 pulse completed. Failed between Step 6 and Step 7: interrupt disable instruction (cpsid if) prior to hand-off."),
+    ("7 flashes", "Step 7 pulse completed. Core entry address setup (mov r0, r5; add.w r0, r0, #1), terminal bx hand-off, and core execution are UNKNOWN (uninstrumented); fault occurred during terminal hand-off or inside CHDK core."),
 ]
 
 AMBIGUITY_NOTE = (

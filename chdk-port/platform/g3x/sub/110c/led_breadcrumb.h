@@ -88,13 +88,13 @@ static inline __attribute__((always_inline)) void g3x_breadcrumb_led_off(void)
 // (c) Non-loop overhead bound: ~9 instructions + 2 memory barriers (ldr, str, dsb, mov) execute in < 200 cycles (< 0.01 ms).
 //     A conservative overhead bound of 1.0 ms is allocated.
 // (d) Full-step requirement: Full modelled step (loops + overhead) must be strictly < 200 ms at slow bound.
-// Maximized OFF gap: OFF = 0x002AC000 (2,801,664 iterations, Thumb-2 modified immediate encodable by mov.w r2, #0x002AC000):
+// Maximized OFF gap: OFF = 0x002C4000 (2,899,968 iterations, Thumb-2 modified immediate encodable by mov.w r2, #0x002C4000):
 // ON delay:  0x00134000 (1,261,568 iterations) -> ~20.05 ms (fast 100ms) / ~25.07 ms (nom 125ms) / ~60.16 ms (slow 300ms) [INFERRED]
-// OFF delay: 0x002AC000 (2,801,664 iterations) -> ~44.53 ms (fast 100ms) / ~55.66 ms (nom 125ms) / ~133.59 ms (slow 300ms) [INFERRED]
-// Total loop: 0x003E0000 (4,063,232 iterations) -> ~64.58 ms (fast) / ~80.73 ms (nom) / 193.75 ms (slow) [INFERRED]
-// Full step (loops + 1.0 ms overhead): 193.75 ms + 1.0 ms = 194.75 ms (< 200.0 ms strictly) [INFERRED]
+// OFF delay: 0x002C4000 (2,899,968 iterations) -> ~46.09 ms (fast 100ms) / ~57.62 ms (nom 125ms) / ~138.28 ms (slow 300ms) [INFERRED]
+// Total loop: 0x003F8000 (4,161,536 iterations) -> ~66.15 ms (fast) / ~82.68 ms (nom) / 198.44 ms (slow) [INFERRED]
+// Full step (loops + 1.0 ms overhead): 198.44 ms + 1.0 ms = 199.44 ms (< 200.0 ms strictly) [INFERRED]
 #define G3X_LADDER_ON_DELAY    0x00134000
-#define G3X_LADDER_OFF_DELAY   0x002AC000
+#define G3X_LADDER_OFF_DELAY   0x002C4000
 
 #define LADDER_ASM_PULSE \
     "    ldr     r0, =0xD20B0884\n" \
@@ -108,7 +108,7 @@ static inline __attribute__((always_inline)) void g3x_breadcrumb_led_off(void)
     "    ldr     r1, =0x004C0003\n" \
     "    str     r1, [r0]\n" \
     "    dsb     sy\n" \
-    "    mov.w   r2, #0x002AC000\n" \
+    "    mov.w   r2, #0x002C4000\n" \
     "2:\n" \
     "    subs    r2, r2, #1\n" \
     "    bne     2b\n"
