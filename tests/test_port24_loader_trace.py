@@ -60,7 +60,7 @@ ROM_DUMP_END = ROM_BASE + ROM_SIZE
 ROM_COVERAGE_START = 0xFC000000
 ROM_COVERAGE_END = 0xFFFFFFFF
 
-# Canonical PORT-24 T1 evidence entries (15 approved ranges)
+# Canonical PORT-24 T1 evidence entries (15 approved ranges; with 2 out-of-scope ranges, 17 in total)
 APPROVED_ENTRIES_T1 = {
     "PORT24-ROM-BOOT-EARLY": (
         0xFC020000,
@@ -583,11 +583,22 @@ class TestPort24LoaderTrace(unittest.TestCase):
 
     def test_no_allowlist_address_in_out_of_scope_ranges(self):
         """No ROM_SOURCE_OPERAND_ALLOWLIST address falls inside any out_of_scope manifest range."""
+        manifest_out_of_scope = [
+            (e["evidence_id"], int(e["start_address"], 16), int(e["end_address"], 16))
+            for e in self.manifest.get("evidence_entries", [])
+            if e.get("out_of_scope") or e.get("status") == "out_of_scope"
+        ]
+        self.assertGreater(len(manifest_out_of_scope), 0, "No out-of-scope entries found in manifest")
         for addr, (justification, file_line) in ROM_SOURCE_OPERAND_ALLOWLIST.items():
             for eid, (start, end, count, sha) in OUT_OF_SCOPE_ENTRIES.items():
                 self.assertFalse(
                     start <= addr <= end,
                     f"Allowlist address 0x{addr:08X} ({file_line}) lies inside out-of-scope range {eid} (0x{start:08X}..0x{end:08X})",
+                )
+            for eid, start, end in manifest_out_of_scope:
+                self.assertFalse(
+                    start <= addr <= end,
+                    f"Allowlist address 0x{addr:08X} ({file_line}) lies inside out-of-scope manifest range {eid} (0x{start:08X}..0x{end:08X})",
                 )
     def test_range_and_budget_limits(self):
         """Each slice is <= 4 KiB and total budget is <= 32 KiB (both overall and T2 specific), matching doc byte total."""
@@ -1212,9 +1223,13 @@ class TestPort24LoaderTrace(unittest.TestCase):
         ok, msg = verify_source_operand_allowlist_entry(0xFC05B4B4, "chdk-port/platform/g3x/sub/110c/boot_prototype.c:93")
         self.assertTrue(ok, f"Legitimate entry failed: {msg}")
 
-        # Legitimate header (.h) entry must pass
+        # Legitimate assembly (.S) entry must pass
+        ok_s, msg_s = verify_source_operand_allowlist_entry(0xFC05C5BC, "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:11")
+        self.assertTrue(ok_s, f"Legitimate .S entry failed: {msg_s}")
+
+        # Header (.h) file source occurrence check
         ok_h, msg_h = verify_source_operand_allowlist_entry(0xFC54E08D, "chdk-port/platform/g3x/sub/110c/bin_compat.h:4")
-        self.assertTrue(ok_h, f"Legitimate .h entry failed: {msg_h}")
+        self.assertTrue(ok_h, f"Header (.h) verification failed: {msg_h}")
 
         # Wrong line must fail
         ok_wrong, _ = verify_source_operand_allowlist_entry(0xFC05B4B4, "chdk-port/platform/g3x/sub/110c/boot_prototype.c:100")
