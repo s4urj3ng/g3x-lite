@@ -55,7 +55,10 @@ VALIDATOR_TOOL = REPO_ROOT / "tools" / "port11c_evidence_validator.py"
 # ROM_SIZE: firmware/tools/extend.m:4 and docs/FIRMWARE_ACQUISITION_PLAN.md:51 (romsize = 0x2000000 / 32 MiB)
 ROM_BASE = 0xFC000000
 ROM_SIZE = 0x02000000
-ROM_END = ROM_BASE + ROM_SIZE
+ROM_DUMP_END = ROM_BASE + ROM_SIZE
+# Required ROM coverage interval: 0xFC000000..0xFFFFFFFF inclusive
+ROM_COVERAGE_START = 0xFC000000
+ROM_COVERAGE_END = 0xFFFFFFFF
 
 # Canonical PORT-24 evidence entries (17 approved ranges)
 APPROVED_ENTRIES = {
@@ -387,7 +390,7 @@ ALLOWED_EVIDENCE_ENTRY_KEYS = {
 
 P_ROM_HEX = re.compile(r"\b0x([fF][c-fC-F0-9][0-9a-fA-F]{5,6})\b")
 P_ROM_DISASM = re.compile(r"\b([fF][c-fC-F0-9][0-9a-fA-F]{6}):")
-P_ROM_SYM = re.compile(r"\b(?:sub|loc|stub)_([fF][cC0-9][0-9a-fA-F]{6})\b", re.IGNORECASE)
+P_ROM_SYM = re.compile(r"\b(?:sub|loc|stub)_([fF][c-fC-F0-9][0-9a-fA-F]{6})\b", re.IGNORECASE)
 
 
 class TestPort24LoaderTrace(unittest.TestCase):
@@ -753,56 +756,47 @@ class TestPort24LoaderTrace(unittest.TestCase):
             if not all_addr_strs:
                 continue
 
+            # Line-wide disqualification flags for allowlisted addresses:
+            # (a) Any ROM disassembly line (pattern like `fcXXXXXX: <mnemonic>`)
+            has_disasm_line = (
+                bool(disasm_matches)
+                or bool(re.search(r"\b(?:0x)?[fF][c-fC-F0-9][0-9a-fA-F]{6}\s*:\s*[a-zA-Z]", line, re.IGNORECASE))
+            )
+
+            # (b) Any `ROM 0x...` citation claiming ROM content/address directly as evidence,
+            # in any form including Markdown-wrapped `ROM \`0x...\`` or `ROM **0x...**`
+            has_rom_citation = bool(re.search(r"\bROM\s+[`*_]*0x[0-9a-fA-F]+", line, re.IGNORECASE))
+
+            # (c) Any claim about ROM contents at an address
+            has_rom_content_claim = (
+                bool(re.search(r"\bROM\s+contents?\s+(?:at\s+)?(?:source\s+address\s+)?`?0x[0-9a-fA-F]+`?\s+(?:is|are|contains?)\b", line, re.IGNORECASE))
+                or bool(re.search(r"\bROM\s+(?:at\s+)?`?0x[0-9a-fA-F]+`?\s+contains?\b", line, re.IGNORECASE))
+                or bool(re.search(r"\bimage\s+in\s+ROM\s+at\s+`?0x[0-9a-fA-F]+`?\b", line, re.IGNORECASE))
+            )
+
+            # (d) Allowlisted addresses may be exempt ONLY when they appear as explicit
+            # source-code operands or constants cited by file:line
+            has_source_citation = bool(source_file_line_pattern.search(line))
+
             for addr_str in all_addr_strs:
                 val = int(addr_str, 16)
-                if not (ROM_BASE <= val < ROM_END):
+                if not (ROM_COVERAGE_START <= val <= ROM_COVERAGE_END):
                     continue
 
                 if is_in_evidence_entries(val):
                     verified_rom_addrs.add(f"0x{val:08X}")
                 elif is_in_source_operand_allowlist(val):
-                    val_hex = f"{val:08X}"
-                    base_val_hex = f"{(val & ~1):08X}"
-
-                    # Disqualify allowlist exemption if any of the following apply:
-                    # (a) Any ROM disassembly line (pattern like `fcXXXXXX: <mnemonic>`)
-                    is_disasm_line = (
-                        addr_str in disasm_matches
-                        or bool(re.search(rf"\b0?x?{val_hex}\s*:\s*[a-zA-Z]", line, re.IGNORECASE))
-                        or bool(re.search(rf"\b0?x?{base_val_hex}\s*:\s*[a-zA-Z]", line, re.IGNORECASE))
-                    )
-
-                    # (b) Any `ROM 0x...` citation claiming ROM content/address directly as evidence
-                    is_rom_citation = (
-                        bool(re.search(rf"\bROM\s+0x{val_hex}\b", line, re.IGNORECASE))
-                        or bool(re.search(rf"\bROM\s+0x{base_val_hex}\b", line, re.IGNORECASE))
-                    )
-
-                    # (c) Any claim about ROM contents at an address
-                    is_rom_content_claim = (
-                        bool(re.search(rf"\bROM\s+contents?\s+(?:at\s+)?(?:source\s+address\s+)?`?0x{val_hex}`?\s+(?:is|are|contains?)\b", line, re.IGNORECASE))
-                        or bool(re.search(rf"\bROM\s+(?:at\s+)?`?0x{val_hex}`?\s+contains?\b", line, re.IGNORECASE))
-                        or bool(re.search(rf"\bimage\s+in\s+ROM\s+at\s+`?0x{val_hex}`?\b", line, re.IGNORECASE))
-                        or bool(re.search(rf"\bROM\s+contents?\s+(?:at\s+)?(?:source\s+address\s+)?`?0x{base_val_hex}`?\s+(?:is|are|contains?)\b", line, re.IGNORECASE))
-                        or bool(re.search(rf"\bROM\s+(?:at\s+)?`?0x{base_val_hex}`?\s+contains?\b", line, re.IGNORECASE))
-                        or bool(re.search(rf"\bimage\s+in\s+ROM\s+at\s+`?0x{base_val_hex}`?\b", line, re.IGNORECASE))
-                    )
-
-                    # (d) Allowlisted addresses may be exempt ONLY when they appear as explicit
-                    # source-code operands or constants cited by file:line
-                    has_source_citation = bool(source_file_line_pattern.search(line))
-
-                    if is_disasm_line:
+                    if has_disasm_line:
                         uncovered_addrs.append(
-                            f"Line {line_no}: 0x{val:08X} appears on a ROM disassembly line and must fall inside manifest evidence: {line.strip()}"
+                            f"Line {line_no}: 0x{val:08X} is allowlisted but appears on a ROM disassembly line: {line.strip()}"
                         )
-                    elif is_rom_citation:
+                    elif has_rom_citation:
                         uncovered_addrs.append(
-                            f"Line {line_no}: 0x{val:08X} contains a 'ROM 0x...' citation and must fall inside manifest evidence: {line.strip()}"
+                            f"Line {line_no}: 0x{val:08X} is allowlisted but appears on a line with a ROM citation: {line.strip()}"
                         )
-                    elif is_rom_content_claim:
+                    elif has_rom_content_claim:
                         uncovered_addrs.append(
-                            f"Line {line_no}: 0x{val:08X} asserts a ROM content claim and must fall inside manifest evidence: {line.strip()}"
+                            f"Line {line_no}: 0x{val:08X} is allowlisted but appears on a line with a ROM content claim: {line.strip()}"
                         )
                     elif not has_source_citation:
                         uncovered_addrs.append(
@@ -812,7 +806,7 @@ class TestPort24LoaderTrace(unittest.TestCase):
                         allowed_source_operands.add(f"0x{val:08X}")
                 else:
                     uncovered_addrs.append(
-                        f"Line {line_no}: 0x{val:08X} lies in ROM mapping [0x{ROM_BASE:08X}, 0x{ROM_END:08X}) but is outside manifest evidence entries and source allowlist: {line.strip()}"
+                        f"Line {line_no}: 0x{val:08X} lies in ROM region [0x{ROM_COVERAGE_START:08X}, 0x{ROM_COVERAGE_END:08X}] but is outside manifest evidence entries and source allowlist: {line.strip()}"
                     )
 
         return uncovered_addrs, verified_rom_addrs
@@ -913,7 +907,7 @@ class TestPort24LoaderTrace(unittest.TestCase):
     def test_source_operand_allowlist_entries_are_justified(self):
         """Every entry in ROM_SOURCE_OPERAND_ALLOWLIST is justified and literally occurs at its cited source line."""
         for addr, (justification, file_line) in ROM_SOURCE_OPERAND_ALLOWLIST.items():
-            self.assertTrue(ROM_BASE <= addr < ROM_END, f"Invalid allowlist address: 0x{addr:08X}")
+            self.assertTrue(ROM_COVERAGE_START <= addr <= ROM_COVERAGE_END, f"Invalid allowlist address: 0x{addr:08X}")
             self.assertTrue(justification and len(justification) > 10, f"Missing justification for 0x{addr:08X}")
             self.assertIn(":", file_line, f"Invalid file:line citation '{file_line}' for 0x{addr:08X}")
             rel_file, line_num_str = file_line.split(":", 1)
@@ -968,6 +962,49 @@ class TestPort24LoaderTrace(unittest.TestCase):
         self.assertFalse(verify_allowlist_entry(0xFC05B4B4, "chdk-port/platform/g3x/sub/110c/boot_prototype.c:100"))
         # Non-occurring address on line 93 must fail
         self.assertFalse(verify_allowlist_entry(0xFC999999, "chdk-port/platform/g3x/sub/110c/boot_prototype.c:93"))
+
+    def test_regression_rom_coverage_interval_fe_and_ff_fail(self):
+        """Regression test for coverage upper bound: interval is 0xFC000000..0xFFFFFFFF inclusive.
+        Synthetic docs citing 0xFE123456, and separately 0xFFFFFFFF, with no manifest range must FAIL coverage.
+        """
+        uncovered_fe, _ = self.check_rom_addresses_coverage("Candidate cites address 0xFE123456 [UNKNOWN].")
+        self.assertTrue(
+            any("FE123456" in u for u in uncovered_fe),
+            f"Synthetic citation of 0xFE123456 outside manifest should have failed coverage: {uncovered_fe}",
+        )
+
+        uncovered_fe_sym, _ = self.check_rom_addresses_coverage("Candidate calls symbol sub_fe123456 [UNKNOWN].")
+        self.assertTrue(
+            any("FE123456" in u for u in uncovered_fe_sym),
+            f"Synthetic symbol sub_fe123456 outside manifest should have failed coverage: {uncovered_fe_sym}",
+        )
+
+        uncovered_ff, _ = self.check_rom_addresses_coverage("Candidate cites address 0xFFFFFFFF [UNKNOWN].")
+        self.assertTrue(
+            any("FFFFFFFF" in u for u in uncovered_ff),
+            f"Synthetic citation of 0xFFFFFFFF outside manifest should have failed coverage: {uncovered_ff}",
+        )
+
+    def test_regression_allowlisted_address_with_rom_citation_fails(self):
+        """Regression tests for line-wide ROM citation exclusion:
+        (a) An allowlisted address plus a ROM citation of a different address on the same line must FAIL.
+        (b) 'ROM `0xFCEC854C`' in backticks must FAIL.
+        """
+        # (a) Allowlisted address 0xFCEC854C paired with a ROM citation of a different address (0xFC127A62)
+        line_a = "0xFCEC854C is defined in chdk-port/platform/g3x/sub/110c/boot_prototype.c:107 [VERIFIED: ROM 0xFC127A62]"
+        uncovered_a, _ = self.check_rom_addresses_coverage(line_a)
+        self.assertTrue(
+            any("FCEC854C" in u for u in uncovered_a),
+            f"Allowlisted address paired with ROM citation on same line must fail coverage: {uncovered_a}",
+        )
+
+        # (b) 'ROM `0xFCEC854C`' in backticks
+        line_b = "ROM `0xFCEC854C` [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:107]"
+        uncovered_b, _ = self.check_rom_addresses_coverage(line_b)
+        self.assertTrue(
+            any("FCEC854C" in u for u in uncovered_b),
+            f"'ROM `0xFCEC854C`' in backticks must fail coverage: {uncovered_b}",
+        )
 
 
     def test_offline_manifest_table_matches_json(self):
