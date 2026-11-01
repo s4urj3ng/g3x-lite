@@ -21,19 +21,64 @@
           "label": "PORT24-ROM-STARTDISKBOOT"
         },
         {
-          "start_address": "0xFC05C4D0",
-          "end_address": "0xFC05C51F",
-          "label": "PORT24-ROM-CARD-SWITCHES"
-        },
-        {
           "start_address": "0xFC079400",
-          "end_address": "0xFC0794BF",
+          "end_address": "0xFC0794FF",
           "label": "PORT24-ROM-NORMAL-MODE"
         },
         {
-          "start_address": "0xFDF20380",
-          "end_address": "0xFDF2038F",
-          "label": "PORT24-ROM-NORMAL-FLAG"
+          "start_address": "0xFC0D0080",
+          "end_address": "0xFC0D023F",
+          "label": "PORT24-ROM-FIRMWARE-CONT"
+        },
+        {
+          "start_address": "0xFC0D73C0",
+          "end_address": "0xFC0D74BF",
+          "label": "PORT24-ROM-GPIO-WRITE-MMIO"
+        },
+        {
+          "start_address": "0xFC0D9C00",
+          "end_address": "0xFC0D9DFF",
+          "label": "PORT24-ROM-HANDOFF-PREPARE"
+        },
+        {
+          "start_address": "0xFC127A00",
+          "end_address": "0xFC127B7F",
+          "label": "PORT24-ROM-CACHE-MAINT"
+        },
+        {
+          "start_address": "0xFC1284A0",
+          "end_address": "0xFC1285DF",
+          "label": "PORT24-ROM-POWERON-CHECK"
+        },
+        {
+          "start_address": "0xFC135280",
+          "end_address": "0xFC1352FF",
+          "label": "PORT24-ROM-MPU-CONFIG"
+        },
+        {
+          "start_address": "0xFC135C00",
+          "end_address": "0xFC135E3F",
+          "label": "PORT24-ROM-WATCHDOG-MODULE"
+        },
+        {
+          "start_address": "0xFC31BEE0",
+          "end_address": "0xFC31BF3F",
+          "label": "PORT24-ROM-IRQ-DISABLE"
+        },
+        {
+          "start_address": "0xFC418700",
+          "end_address": "0xFC41875F",
+          "label": "PORT24-ROM-CACHE-HELPERS"
+        },
+        {
+          "start_address": "0xFC418F20",
+          "end_address": "0xFC418F7F",
+          "label": "PORT24-ROM-WATCHDOG-START"
+        },
+        {
+          "start_address": "0xFC05C4D0",
+          "end_address": "0xFC05C51F",
+          "label": "PORT24-ROM-CARD-SWITCHES"
         },
         {
           "start_address": "0xFC08ECB0",
@@ -46,41 +91,23 @@
           "label": "PORT24-ROM-STARTCAUSE-PTR"
         },
         {
-          "start_address": "0xFC0D0120",
-          "end_address": "0xFC0D023F",
-          "label": "PORT24-ROM-TURNOFF-E1"
-        },
-        {
-          "start_address": "0xFC0D73C0",
-          "end_address": "0xFC0D74BF",
-          "label": "PORT24-ROM-GPIO-PRIMITIVES"
-        },
-        {
-          "start_address": "0xFC0D9C00",
-          "end_address": "0xFC0D9DFF",
-          "label": "PORT24-ROM-PREPARE-EXEC"
-        },
-        {
-          "start_address": "0xFC1284A0",
-          "end_address": "0xFC1285DF",
-          "label": "PORT24-ROM-POWERON-CHECK"
-        },
-        {
-          "start_address": "0xFC135C00",
-          "end_address": "0xFC135E3F",
-          "label": "PORT24-ROM-WATCHDOG-MODULE"
-        },
-        {
           "start_address": "0xFC37AE60",
           "end_address": "0xFC37AEFF",
           "label": "PORT24-ROM-VBR-CHECK"
         },
         {
-          "start_address": "0xFC418F20",
-          "end_address": "0xFC418F7F",
-          "label": "PORT24-ROM-WATCHDOG-START"
+          "start_address": "0xFDF20380",
+          "end_address": "0xFDF2038F",
+          "label": "PORT24-ROM-NORMAL-FLAG"
         }
-      ]
+      ],
+      "max_bytes_total": 32768,
+      "allowed_classifications": [
+        "STATIC_VERIFIED",
+        "INFERRED",
+        "UNKNOWN"
+      ],
+      "description": "PORT-24 T1 GM1.10C Loader post-prologue trace evidence scope: 0x8000 to CHDK core and firmware handoff (budget: at most 4 KiB per read, 32 KiB total)"
     }
   ],
   "evidence_entries": [
@@ -97,7 +124,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
       "classification": "STATIC_VERIFIED",
-      "notes": "Stock early boot 0xFC020000..0xFC0201FF: reset entry 0xFC02000C, vector copy, Low/High RAM setup"
+      "notes": "Stock early boot 0xFC020000..0xFC0201FF: reset entry 0xFC02000C, initial sp=0x4000 at 0xFC020014, vector table copy helper sub_fc02007e at 0xFC02007E, peripheral bus clock gate enable 0xC0242010 |= 1 at 0xFC02001A..0xFC020022, High RAM copy 0xFC020024..36, D-cache clean 0xFC02003C via sub_fc127a62, ATCM copy 0xFC020040..52, Low RAM copy 0xFC020054..66, Canon BSS zero loop 0xFC020068..78, branch to DryOS heap setup 0xFC02007A, and literal pool 0xFC0200B0..DF"
     },
     {
       "evidence_id": "PORT24-ROM-STARTUP-TASKS",
@@ -112,7 +139,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
       "classification": "STATIC_VERIFIED",
-      "notes": "task_Startup (0xFC05B8FC), StartDiskboot caller (0xFC05B90E), startup creator sub_fc05b962 (0xFC05B962), power-cut sub_fc05ba56 (0xFC05BA56)"
+      "notes": "Stock task_Startup (0xFC05B8FC) and startup task creator sub_fc05b962 (0xFC05B962): sub_fc05b962 calls sub_fc05ba68 (0xFC05B964), IsNormalCameraMode_FW (0xFC05B968), and power-on check sub_fc1284ac (0xFC05B96C); on zero return, calls sub_fc05ba56 (0xFC05BA56; writes GPIO 0x67=0x004C0003, cutting power) and hangs at 0xFC05B976. task_Startup calls sub_fc0d0150 (0xFC05B8FE), sub_fc05ba34 (0xFC05B902), sub_fc05bb94 (0xFC05B906), sub_fc418eec (0xFC05B90A), StartDiskboot (0xFC05B90E), sub_fc0bba02 (0xFC05B912), sub_fc0d046c (0xFC05B916), sub_fc05bcdc (0xFC05B91A), sub_fc05bb24 (0xFC05B91E), sub_fc418f2a (0xFC05B922), sub_fc090674 (0xFC05B926), sub_fc0d0472 (0xFC05B92A), sub_fc1283d2 (0xFC05B92E), sub_fc2a75f6 (0xFC05B932), sub_fc0d0488 (0xFC05B936), sub_fc127f24 (0xFC05B93A), sub_fc0bb76e (0xFC05B93E), sub_fc0d02de (0xFC05B942), sub_fc0bb9cc (0xFC05B946), sub_fc0bb72a (0xFC05B94A), sub_fc05bce0 (0xFC05B94E), sub_fc33319a (0xFC05B952), sub_fc0bb6fe (0xFC05B956), and branches to sub_fc0d0126 (0xFC05B95E)"
     },
     {
       "evidence_id": "PORT24-ROM-STARTDISKBOOT",
@@ -127,7 +154,172 @@
       },
       "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
       "classification": "STATIC_VERIFIED",
-      "notes": "StartDiskboot function body (0xFC05BBEA..0xFC05BDE9), PC check, SD1stInit call, card lock query, BOOTDISK check, DISKBOOT.BIN file search, handoff call (0xFC05BC7A)"
+      "notes": "StartDiskboot main sequence 0xFC05BBEA..0xFC05BDE9: SD write-protect GPIO check 0xFC05BC04; VBR BOOTDISK check 0xFC05BC18; sub_fc05bc3c at 0xFC05BC3C loading A/DISKBOOT.BIN; sub_fc54de38 validation 0xFC05BC62; reject path prints 'not executable' at 0xFC05BC68 and frees buffer; accept path invokes sub_fc0d9c9c at 0xFC05BC7A; literal pool strings '\\nStartDiskboot\\n', 'A/DISKBOOT.BIN', 'not executable\\n'"
+    },
+    {
+      "evidence_id": "PORT24-ROM-NORMAL-MODE",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC079400",
+      "end_address": "0xFC0794FF",
+      "expected_byte_count": 256,
+      "sha256": "222eb4225d2e5d34742f5ed11b306b21c44a1eb2e18e48936cc6643d08a9560c",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
+      "classification": "STATIC_VERIFIED",
+      "notes": "IsNormalCameraMode_FW (0xFC079404..0xFC079410) called by sub_fc05b962 at 0xFC05B968: loads byte from ROM pointer 0xFDF20380; if byte is 0 returns 1 (normal camera mode), otherwise returns 0; return value is passed in r0 to sub_fc1284ac to govern button-hold supervision check"
+    },
+    {
+      "evidence_id": "PORT24-ROM-FIRMWARE-CONT",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC0D0080",
+      "end_address": "0xFC0D023F",
+      "expected_byte_count": 448,
+      "sha256": "33d2fae4ed8c9c228ea6cc8f3304a26b96f8a4fb6d9d3bdc37cd056e7833456e",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
+      "classification": "STATIC_VERIFIED",
+      "notes": "MPU Region 7 configuration helper sub_fc0d00b2 (0xFC0D00B2..0xFC0D00EA; configures CP15 RGNR=7, DRBAR=0, DRSR=9, DRACR=0x121, enables MPU bit 0 in SCTLR), stock firmware continuation entry sub_fc0d0126 at 0xFC0D0126, sub_fc0d0150 at 0xFC0D0150, and TurnOffE1_FW sequence 0xFC0D01EC..0xFC0D0206 (disables IRQ at 0xFC0D01F2, stops watchdog at 0xFC0D01F6, writes 0x004C0003 to GPIO 0x67 at 0xFC0D0202, and hangs at 0xFC0D0206)"
+    },
+    {
+      "evidence_id": "PORT24-ROM-GPIO-WRITE-MMIO",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC0D73C0",
+      "end_address": "0xFC0D74BF",
+      "expected_byte_count": 256,
+      "sha256": "0559f26c1c0a384b2cf3aec384430fb318cf68aefe88cafeb958e1b783476c3b",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
+      "classification": "STATIC_VERIFIED",
+      "notes": "GPIO write primitive sub_fc0d73c4 and read primitive sub_fc0d73d0: sub_fc0d73c4 maps pin index r0 to MMIO address 0xD20B0800 + (r0 * 4) and writes action value r1; pin 0x67 (103) maps to MMIO 0xD20B099C (power hold control); pin 33 maps to MMIO 0xD20B0884 (LED control). sub_fc0d73d0 reads GPIO pin state"
+    },
+    {
+      "evidence_id": "PORT24-ROM-HANDOFF-PREPARE",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC0D9C00",
+      "end_address": "0xFC0D9DFF",
+      "expected_byte_count": 512,
+      "sha256": "8c891f7dc8fc758510f36a69d95ff323cee00a7ac0e853128d1be27d8598d644",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Preparation for DISKBOOT payload handoff sub_fc0d9c9c (0xFC0D9C9C..0xFC0D9CCA): masks interrupts via blx 0xFC31BEFC (0xFC0D9CA2); invalidates D/I cache at 0x8000 via sub_fc41870c (0xFC0D9CAC); configures MPU region 7 via sub_fc135284 (0xFC0D9CB0); sets r0=0x40008000 (uncached destination), r1=src buffer, r2=size, r3=0x8001; loads copy trampoline pointer ip=*(0x4000) at 0xFC0D9CC4; restores callee-saved registers; jumps via bx ip (0xFC0D9CCA) into Low RAM trampoline which copies payload to 0x40008000 and branches to 0x8001"
+    },
+    {
+      "evidence_id": "PORT24-ROM-CACHE-MAINT",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC127A00",
+      "end_address": "0xFC127B7F",
+      "expected_byte_count": 384,
+      "sha256": "519594faaab42e66229096ef890f9161e2d1715e6044a911a74e2ebdf20415cb",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
+      "classification": "STATIC_VERIFIED",
+      "notes": "ARMv7-A cache and interrupt maintenance primitives: sub_fc127a00 (D-cache clean & invalidate all via set/way DCCISW + disable C bit in SCTLR), sub_fc127a46 (invalidate D-cache by MVA via DCIMVAC mcr p15,0,r0,c7,c6,1), sub_fc127a62 (clean D-cache via DCCMVAC or DCCSW), sub_fc127ab0 (clean & invalidate D-cache via DCCIMVAC if size < 16384 or DCCISW all sets/ways mcr p15,0,r2,c7,c14,2 if >= 16384), sub_fc127b08 (invalidate I-cache via ICIMVAU or ICIALLU mcr p15,0,r0,c7,c5,0 + branch predictor invalidate BPIALL mcr p15,0,r0,c7,c5,6 + isb sy), sub_fc127b3c (disable IRQ: mrs r1, CPSR; orr r1, #0x80; msr CPSR_fsxc, r1), sub_fc127b4e (restore IRQ), sub_fc127b6e (dsb sy), sub_fc127b74 (isb sy)"
+    },
+    {
+      "evidence_id": "PORT24-ROM-POWERON-CHECK",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC1284A0",
+      "end_address": "0xFC1285DF",
+      "expected_byte_count": 320,
+      "sha256": "634fd848e765cad5b01737956e6aea9ddd12dbb4413213ec2a9c3d2a421813d4",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Stock power-on button check sub_fc1284ac (0xFC1284AC..0xFC12851A): takes IsNormalCameraMode_FW in r0; samples GPIO 0x97 (Power button, 0xFC1284BC), GPIO 0x98 (Playback button, 0xFC1284C8), GPIO 0x88 (WiFi button, 0xFC1284DA), and GPIO 0x02 (0xFC1284EC); if in normal mode and all button states are unasserted (0), branches to 0xFC12851A returning 0, triggering shutdown via sub_fc05ba56; if any button is pressed, returns 1. 0xFC128524..0xFC1285AA diagnostic logger"
+    },
+    {
+      "evidence_id": "PORT24-ROM-MPU-CONFIG",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC135280",
+      "end_address": "0xFC1352FF",
+      "expected_byte_count": 128,
+      "sha256": "3327ae3b2b5508a96aeab70b4076fd83fa199ae9c77d550475bd4effef5f5a5c",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
+      "classification": "STATIC_VERIFIED",
+      "notes": "MPU configuration routines sub_fc135280 (branches to sub_fc0d0078) and sub_fc135284 (branches to sub_fc0d00b2 at 0xFC0D00B2; configures MPU region 7 for payload handoff), and MPU diagnostic queries sub_fc135288, sub_fc1352a2, sub_fc1352bc"
+    },
+    {
+      "evidence_id": "PORT24-ROM-WATCHDOG-MODULE",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC135C00",
+      "end_address": "0xFC135E3F",
+      "expected_byte_count": 576,
+      "sha256": "29a0c9a8b406aa86a8a971d6d0032273fbaa22510c224dfb9742284e643de9cb",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
+      "classification": "STATIC_VERIFIED",
+      "notes": "WatchDog.c module 0xFC135C00..0xFC135E3F: WdtInt logger 0xFC135C14 ('\\n\\n !!!WatchDog expired!!! \\n\\n'); task_WdtPrint 0xFC135C3E; WdtInt interrupt handler 0xFC135C92; task_WdtReset 0xFC135CB0 (loops every 2000 ms via SleepTask(2000) writing 0xAA55 to *(0xD20A0004)); watchdog initialization sub_fc135ccc at 0xFC135CCC (configures *(0xD20A0000) = 0xC0000000 | (r1<<8) | (r0<<4), creates event flag, registers WdtInt interrupt 395, and spawns task_WdtReset and task_WdtPrint); StartWDT_FW 0xFC135D2C (enables bit 0 of *(0xD20A0000)); StopWDT_FW 0xFC135D68 (clears bit 0); sub_fc135d9a (watchdog disable helper called by TurnOffE1_FW); literal pool with MMIO pointer 0xD20A0000, RAM struct 0x0000C780, strings 'WdtInt', 'WdtReset', 'WdtPrint', 'WatchDog.c'"
+    },
+    {
+      "evidence_id": "PORT24-ROM-IRQ-DISABLE",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC31BEE0",
+      "end_address": "0xFC31BF3F",
+      "expected_byte_count": 96,
+      "sha256": "a15cb37e666e3349c0453b294d1283d99ae116214f36fc69671cdc3131db7826",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
+      "classification": "STATIC_VERIFIED",
+      "notes": "ARM-mode interrupt disable and task dispatch veneers 0xFC31BEE0..0xFC31BF3F: sub_fc31befc at 0xFC31BEFC executes ldr pc, [pc, #-4] loading 0xBFE14FE7 (ATCM interrupt disable routine in Instruction TCM), disabling IRQ/FIQ"
+    },
+    {
+      "evidence_id": "PORT24-ROM-CACHE-HELPERS",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC418700",
+      "end_address": "0xFC41875F",
+      "expected_byte_count": 96,
+      "sha256": "7b087b15bbda1469b0809961e58fb50b83968ec36285733590b4bed66244dd4a",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Cache helper wrapper routines: sub_fc41870c at 0xFC41870C (called by handoff preparer sub_fc0d9c9c at 0xFC0D9CAC to invalidate range [0x8000, 0x8000+size]; calls sub_fc127a46 DCIMVAC and branches to sub_fc127b08 ICIALLU/BPIALL) and sub_fc418722 (inverted clean/invalidate wrapper in stock ROM)"
+    },
+    {
+      "evidence_id": "PORT24-ROM-WATCHDOG-START",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC418F20",
+      "end_address": "0xFC418F7F",
+      "expected_byte_count": 96,
+      "sha256": "46e8e2149df855d0f1414699a1fdea355b9370c83e552a749314a32283da7da5",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Watchdog startup function sub_fc418f2a (0xFC418F2A..0xFC418F7F) called by task_Startup at 0xFC05B922 (AFTER StartDiskboot): sets r0=2, r1=4, calls sub_fc135ccc at 0xFC418F34 to configure hardware watchdog *(0xD20A0000)=0xC0000420, and calls StartWDT_FW at 0xFC418F38 to activate watchdog bit 0"
     },
     {
       "evidence_id": "PORT24-ROM-CARD-SWITCHES",
@@ -143,36 +335,6 @@
       "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
       "classification": "STATIC_VERIFIED",
       "notes": "sub_fc05c4e0: SD card detect switch (GPIO 0x14E / 334) and SD card write-protect lock switch (GPIO 0x14F / 335) query handler"
-    },
-    {
-      "evidence_id": "PORT24-ROM-NORMAL-MODE",
-      "firmware_revision": "GM1.10C",
-      "start_address": "0xFC079400",
-      "end_address": "0xFC0794BF",
-      "expected_byte_count": 192,
-      "sha256": "cc71c4d4d3014205a860babbed28baa316d475bf1932d2368b5b4cad983a8214",
-      "provenance_source": {
-        "type": "ROM_VERIFIED",
-        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
-      },
-      "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
-      "classification": "STATIC_VERIFIED",
-      "notes": "sub_fc079404 (IsNormalCameraMode_FW) reads literal pointer at 0xFC0794B0 -> 0xFDF20380"
-    },
-    {
-      "evidence_id": "PORT24-ROM-NORMAL-FLAG",
-      "firmware_revision": "GM1.10C",
-      "start_address": "0xFDF20380",
-      "end_address": "0xFDF2038F",
-      "expected_byte_count": 16,
-      "sha256": "7998b107f5214f071a101c994a4c8081a9c4abcd72e3970049a923c4bc137f64",
-      "provenance_source": {
-        "type": "ROM_VERIFIED",
-        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
-      },
-      "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
-      "classification": "STATIC_VERIFIED",
-      "notes": "Target mode byte referenced by IsNormalCameraMode_FW (0xFDF20380 byte value 0x00 in stock ROM)"
     },
     {
       "evidence_id": "PORT24-ROM-STARTCAUSE-SAVE",
@@ -205,81 +367,6 @@
       "notes": "Literal pool word at 0xFC08EEF0 pointing to 0x00009BC4"
     },
     {
-      "evidence_id": "PORT24-ROM-TURNOFF-E1",
-      "firmware_revision": "GM1.10C",
-      "start_address": "0xFC0D0120",
-      "end_address": "0xFC0D023F",
-      "expected_byte_count": 288,
-      "sha256": "e29e71a6f1e1c1259c5025683344a592dd927716ffdf6fcd74928b7cfff9f694",
-      "provenance_source": {
-        "type": "ROM_VERIFIED",
-        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
-      },
-      "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
-      "classification": "STATIC_VERIFIED",
-      "notes": "sub_fc0d0126 (stock continuation entry) and TurnOffE1_FW (0xFC0D01EC)"
-    },
-    {
-      "evidence_id": "PORT24-ROM-GPIO-PRIMITIVES",
-      "firmware_revision": "GM1.10C",
-      "start_address": "0xFC0D73C0",
-      "end_address": "0xFC0D74BF",
-      "expected_byte_count": 256,
-      "sha256": "0559f26c1c0a384b2cf3aec384430fb318cf68aefe88cafeb958e1b783476c3b",
-      "provenance_source": {
-        "type": "ROM_VERIFIED",
-        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
-      },
-      "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
-      "classification": "STATIC_VERIFIED",
-      "notes": "GPIO primitives: GPIO_Write (0xFC0D73C4) and GPIO_Read (0xFC0D73D0)"
-    },
-    {
-      "evidence_id": "PORT24-ROM-PREPARE-EXEC",
-      "firmware_revision": "GM1.10C",
-      "start_address": "0xFC0D9C00",
-      "end_address": "0xFC0D9DFF",
-      "expected_byte_count": 512,
-      "sha256": "8c891f7dc8fc758510f36a69d95ff323cee00a7ac0e853128d1be27d8598d644",
-      "provenance_source": {
-        "type": "ROM_VERIFIED",
-        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
-      },
-      "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
-      "classification": "STATIC_VERIFIED",
-      "notes": "sub_fc0d9c9c: disables interrupts (0xFC0D9CA2), cleans cache (0xFC0D9CAC), copies/decrypts payload, jumps bx ip to 0x8001"
-    },
-    {
-      "evidence_id": "PORT24-ROM-POWERON-CHECK",
-      "firmware_revision": "GM1.10C",
-      "start_address": "0xFC1284A0",
-      "end_address": "0xFC1285DF",
-      "expected_byte_count": 320,
-      "sha256": "634fd848e765cad5b01737956e6aea9ddd12dbb4413213ec2a9c3d2a421813d4",
-      "provenance_source": {
-        "type": "ROM_VERIFIED",
-        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
-      },
-      "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
-      "classification": "STATIC_VERIFIED",
-      "notes": "sub_fc1284ac: power-on button check reading GPIO 0x97, 0x98, 0x88, 0x02"
-    },
-    {
-      "evidence_id": "PORT24-ROM-WATCHDOG-MODULE",
-      "firmware_revision": "GM1.10C",
-      "start_address": "0xFC135C00",
-      "end_address": "0xFC135E3F",
-      "expected_byte_count": 576,
-      "sha256": "29a0c9a8b406aa86a8a971d6d0032273fbaa22510c224dfb9742284e643de9cb",
-      "provenance_source": {
-        "type": "ROM_VERIFIED",
-        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
-      },
-      "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
-      "classification": "STATIC_VERIFIED",
-      "notes": "WatchDog.c: DIGIC 6 hardware watchdog controller registers 0xD20A0000, 0xD20A0004"
-    },
-    {
       "evidence_id": "PORT24-ROM-VBR-CHECK",
       "firmware_revision": "GM1.10C",
       "start_address": "0xFC37AE60",
@@ -295,19 +382,19 @@
       "notes": "sub_fc37ae78 and sub_fc37aea6: VBR and BOOTDISK volume marker validation"
     },
     {
-      "evidence_id": "PORT24-ROM-WATCHDOG-START",
+      "evidence_id": "PORT24-ROM-NORMAL-FLAG",
       "firmware_revision": "GM1.10C",
-      "start_address": "0xFC418F20",
-      "end_address": "0xFC418F7F",
-      "expected_byte_count": 96,
-      "sha256": "46e8e2149df855d0f1414699a1fdea355b9370c83e552a749314a32283da7da5",
+      "start_address": "0xFDF20380",
+      "end_address": "0xFDF2038F",
+      "expected_byte_count": 16,
+      "sha256": "7998b107f5214f071a101c994a4c8081a9c4abcd72e3970049a923c4bc137f64",
       "provenance_source": {
         "type": "ROM_VERIFIED",
         "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
       },
       "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
       "classification": "STATIC_VERIFIED",
-      "notes": "sub_fc418f2a: invokes sub_fc135ccc and StartWDT_FW after StartDiskboot"
+      "notes": "Target mode byte referenced by IsNormalCameraMode_FW (0xFDF20380 byte value 0x00 in stock ROM)"
     }
   ]
 }
