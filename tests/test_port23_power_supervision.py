@@ -427,9 +427,13 @@ class TestPort23ScopeIntegrity(unittest.TestCase):
             modified_files.add(fpath)
 
         forbidden_exts = (".bin", ".elf", ".o", ".a", ".dump", ".rom")
+        # Helper assertion: verify case-insensitive rejection of uppercase binaries and acceptance of docs
+        self.assertTrue("DISKBOOT.BIN".lower().endswith(forbidden_exts))
+        self.assertTrue("foo.ELF".lower().endswith(forbidden_exts))
+        self.assertFalse("docs/x.md".lower().endswith(forbidden_exts))
         for f in modified_files:
             self.assertFalse(
-                f.endswith(forbidden_exts),
+                f.lower().endswith(forbidden_exts),
                 f"Binary/build artifact '{f}' must not be modified or added",
             )
             # Scope check applies only to PORT-23-owned paths so later milestones' files don't trip the check.
@@ -439,6 +443,13 @@ class TestPort23ScopeIntegrity(unittest.TestCase):
                     ALLOWED_MODIFIED_FILES,
                     f"Unauthorized file modified or added in worktree: {f}",
                 )
+
+    def test_forbidden_extension_case_insensitivity(self):
+        """Assert forbidden extension check rejects uppercase extensions like 'DISKBOOT.BIN' and 'foo.ELF', and accepts 'docs/x.md'."""
+        forbidden_exts = (".bin", ".elf", ".o", ".a", ".dump", ".rom")
+        self.assertTrue("DISKBOOT.BIN".lower().endswith(forbidden_exts))
+        self.assertTrue("foo.ELF".lower().endswith(forbidden_exts))
+        self.assertFalse("docs/x.md".lower().endswith(forbidden_exts))
 
 
 if __name__ == "__main__":

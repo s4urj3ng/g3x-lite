@@ -296,6 +296,43 @@ class TestPort24PoweronFix(unittest.TestCase):
         self.assertIn(EXPECTED_DEFAULT_DISKBOOT_SHA256, doc_content)
         self.assertIn(EXPECTED_OPTIN_DISKBOOT_SHA256, doc_content)
 
+    def test_doc_evidence_hashes_match_manifest(self):
+        """Check every 64-hex hash next to an evidence ID in docs/PORT24_POWERON_FIX.md against manifest."""
+        with open(MANIFEST_FILE, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+        manifest_map = {e["evidence_id"]: e["sha256"] for e in manifest.get("evidence_entries", [])}
+
+        with open(DOC_FILE, "r", encoding="utf-8") as f:
+            doc_content = f.read()
+
+        # Find occurrences of evidence IDs and nearby 64-hex SHA-256 strings
+        pattern = re.compile(
+            r"(PORT24-ROM-[A-Z0-9-]+)(?:(?!(PORT24-ROM-[A-Z0-9-]+)).)*?([0-9a-fA-F]{64})",
+            re.DOTALL,
+        )
+        matches = list(pattern.finditer(doc_content))
+        self.assertGreater(len(matches), 0, "No evidence hashes found in documentation")
+
+        found_eids = set()
+        for m in matches:
+            eid = m.group(1)
+            sha = m.group(3).lower()
+            self.assertIn(eid, manifest_map, f"Evidence ID '{eid}' from doc not present in manifest")
+            expected_sha = manifest_map[eid]
+            self.assertEqual(
+                sha,
+                expected_sha,
+                f"SHA-256 mismatch for {eid} in docs/PORT24_POWERON_FIX.md: doc={sha} != manifest={expected_sha}",
+            )
+            found_eids.add(eid)
+
+        # Every manifest entry must be cited with hash at least once in the documentation
+        self.assertEqual(
+            found_eids,
+            set(manifest_map.keys()),
+            f"Some manifest entries were not cited with hash in docs: {set(manifest_map.keys()) - found_eids}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

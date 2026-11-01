@@ -403,12 +403,16 @@ class TestPort23OwnerSessionPlan(unittest.TestCase):
             check=True,
         )
         forbidden_exts = (".bin", ".elf", ".o", ".a", ".dump", ".rom")
+        # Helper assertion: verify case-insensitive rejection of uppercase binaries and acceptance of docs
+        self.assertTrue("DISKBOOT.BIN".lower().endswith(forbidden_exts))
+        self.assertTrue("foo.ELF".lower().endswith(forbidden_exts))
+        self.assertFalse("docs/x.md".lower().endswith(forbidden_exts))
         for line in res.stdout.splitlines():
             fpath = line[3:].strip()
             if " -> " in fpath:
                 fpath = fpath.split(" -> ")[1].strip()
             self.assertFalse(
-                fpath.endswith(forbidden_exts),
+                fpath.lower().endswith(forbidden_exts),
                 f"Binary/build artifact '{fpath}' must not be modified or added",
             )
             # Scope check applies only to PORT-23-owned paths so later milestones' files don't trip the check.
@@ -418,6 +422,13 @@ class TestPort23OwnerSessionPlan(unittest.TestCase):
                     allowed_modified,
                     f"File '{fpath}' is modified or untracked outside allowed scope",
                 )
+
+    def test_forbidden_extension_case_insensitivity(self):
+        """Assert forbidden extension check rejects uppercase extensions like 'DISKBOOT.BIN' and 'foo.ELF', and accepts 'docs/x.md'."""
+        forbidden_exts = (".bin", ".elf", ".o", ".a", ".dump", ".rom")
+        self.assertTrue("DISKBOOT.BIN".lower().endswith(forbidden_exts))
+        self.assertTrue("foo.ELF".lower().endswith(forbidden_exts))
+        self.assertFalse("docs/x.md".lower().endswith(forbidden_exts))
 
     def test_no_conclusively_and_no_unevidenced_timings(self):
         """Verify doc contains no 'conclusively' and no unevidenced timings outside UNKNOWN/OWNER-REPORTED."""
