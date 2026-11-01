@@ -364,15 +364,15 @@
       "expected_byte_count": 256,
       "sha256": "6828d1a977736227ecad15c6fee4b6b4bd358749a585c1b1ebcc55b7f7dec413",
       "provenance_source": {
-        "type": "ROM_VERIFIED",
-        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+        "type": "SOURCE_REPO",
+        "reference": "chdk-port/platform/g3x/sub/110c/bin_compat.h:4"
       },
       "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
       "classification": "UNKNOWN",
       "status": "out_of_scope",
       "out_of_scope": true,
       "relied_upon": false,
-      "notes": "OUT-OF-SCOPE: Disclosed out-of-scope read from earlier attempts per task instructions; contents are not relied upon as evidence and actual ROM contents remain unverified [UNKNOWN]."
+      "notes": "OUT-OF-SCOPE: Disclosed out-of-scope read from earlier attempts per task instructions; contents are not relied upon as evidence and actual ROM contents remain unverified [UNKNOWN]. Provenance category is set to SOURCE_REPO referencing the repository source header (chdk-port/platform/g3x/sub/110c/bin_compat.h:4) where the pointer constant is declared, rather than ROM_VERIFIED; SOURCE_REPO accurately describes a disclosed non-relied-upon read prompted by repository source declarations rather than an authorized firmware evidence claim. Out-of-scope and non-relied-upon status is enforced via classification UNKNOWN, status out_of_scope, out_of_scope: true, and relied_upon: false."
     },
     {
       "evidence_id": "PORT24-ROM-OUT-OF-SCOPE-PID",
@@ -382,15 +382,15 @@
       "expected_byte_count": 256,
       "sha256": "19a0057d572b8040e18349f9266768b6ece0bf8e60c41591a964cca8d9bb1733",
       "provenance_source": {
-        "type": "ROM_VERIFIED",
-        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+        "type": "SOURCE_REPO",
+        "reference": "chdk-port/platform/g3x/sub/110c/bin_compat.h:7"
       },
       "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
       "classification": "UNKNOWN",
       "status": "out_of_scope",
       "out_of_scope": true,
       "relied_upon": false,
-      "notes": "OUT-OF-SCOPE: Disclosed out-of-scope read from earlier attempts per task instructions; contents are not relied upon as evidence and actual ROM contents remain unverified [UNKNOWN]."
+      "notes": "OUT-OF-SCOPE: Disclosed out-of-scope read from earlier attempts per task instructions; contents are not relied upon as evidence and actual ROM contents remain unverified [UNKNOWN]. Provenance category is set to SOURCE_REPO referencing the repository source header (chdk-port/platform/g3x/sub/110c/bin_compat.h:7) where the pointer constant is declared, rather than ROM_VERIFIED; SOURCE_REPO accurately describes a disclosed non-relied-upon read prompted by repository source declarations rather than an authorized firmware evidence claim. Out-of-scope and non-relied-upon status is enforced via classification UNKNOWN, status out_of_scope, out_of_scope: true, and relied_upon: false."
     },
     {
       "evidence_id": "PORT24-ROM-CARD-SWITCHES",
