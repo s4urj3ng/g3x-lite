@@ -33,25 +33,37 @@
 
 static inline __attribute__((always_inline)) void g3x_breadcrumb_led_on(void)
 {
-    *(volatile unsigned int *)G3X_LED_MMIO_ADDR = G3X_LED_ON_VAL;
-    asm volatile("dsb sy" ::: "memory");
+    asm volatile (
+        "    ldr     r2, =0xD20B0884\n"
+        "    ldr     r3, =0x004D0002\n"
+        "    str     r3, [r2]\n"
+        "    dsb     sy\n"
 #if defined(LED_BREADCRUMB_DELAY) && (LED_BREADCRUMB_DELAY > 0)
-    register unsigned int count = LED_BREADCRUMB_DELAY;
-    asm volatile(
+        "    ldr     r2, =%0\n"
         "1:\n"
-        "    subs %0, %0, #1\n"
-        "    bne  1b\n"
-        : "+r"(count)
-        :
-        : "cc"
-    );
+        "    subs    r2, r2, #1\n"
+        "    bne     1b\n"
 #endif
+        :
+        :
+#if defined(LED_BREADCRUMB_DELAY) && (LED_BREADCRUMB_DELAY > 0)
+          "i"(LED_BREADCRUMB_DELAY)
+#endif
+        : "r2", "r3", "memory"
+    );
 }
 
 static inline __attribute__((always_inline)) void g3x_breadcrumb_led_off(void)
 {
-    *(volatile unsigned int *)G3X_LED_MMIO_ADDR = G3X_LED_OFF_VAL;
-    asm volatile("dsb sy" ::: "memory");
+    asm volatile (
+        "    ldr     r2, =0xD20B0884\n"
+        "    ldr     r3, =0x004C0003\n"
+        "    str     r3, [r2]\n"
+        "    dsb     sy\n"
+        :
+        :
+        : "r2", "r3", "memory"
+    );
 }
 
 #endif /* LED_BREADCRUMB */

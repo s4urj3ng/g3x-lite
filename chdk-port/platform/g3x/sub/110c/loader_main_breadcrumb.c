@@ -32,17 +32,17 @@ void __attribute__((noreturn, noinline)) my_restart()
     // 1. Validate platform compatibility
     check_compat();
 
-    // 2. Setup relocation parameters
-    long *dst = (long*)MEMISOSTART;                 // 0x003489B4
-    const long *src = blob_chdk_core;              // Loader-embedded core image
-    long byte_size = ((blob_chdk_core_size + 3) >> 2) << 2;
-    long word_len = byte_size >> 2;
-
 #if defined(LED_BREADCRUMB_BEFORE_COPY)
     g3x_breadcrumb_led_on();
 #elif defined(LED_BREADCRUMB_LOADER_ENTRY) && defined(LED_BREADCRUMB_OFF_NEXT)
     g3x_breadcrumb_led_off();
 #endif
+
+    // 2. Setup relocation parameters
+    long *dst = (long*)MEMISOSTART;                 // 0x003489B4
+    const long *src = blob_chdk_core;              // Loader-embedded core image
+    long byte_size = ((blob_chdk_core_size + 3) >> 2) << 2;
+    long word_len = byte_size >> 2;
 
     // 3. Relocate CHDK core from loader RAM to DRAM MEMISOSTART
     core_copy(src, dst, word_len);
