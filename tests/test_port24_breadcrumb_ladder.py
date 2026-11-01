@@ -18,15 +18,15 @@ Verifies:
    - Building the ladder candidate twice produces identical SHA-256 hashes.
    - Ladder DISKBOOT.BIN hash differs from default control build hash.
    - Ladder DISKBOOT.BIN matches recorded hash:
-     530aee849f69b0c8a02c2b51803ef2988e12eeb2e86e79d444f93877f2781abe (118,257 bytes).
+     67b04962421e601c291145f118ec1e022c93127fed29a960e3bf5ea8f61a541e (118,257 bytes).
    - Ladder candidate_loader.bin matches recorded hash:
-     649fdff6ce3469829aa827bfa6d91daecf890cf5c49dc756df64a13d7f0293bb (118,256 bytes).
+     8c198ab62823a7ccee151054728b1a9bb3a2b74c8a4f2192392bba7796208d5b (118,256 bytes).
    - Candidate core binary (candidate_main.bin) is bit-for-bit identical to default.
 4. Pulse timing and visibility under 200 ms:
-   - Single visible pulse per step (ON delay 0x00140000, OFF delay 0x00280000; total 0x003C0000).
+   - Single visible pulse per step (ON delay 0x00140000, OFF delay 0x002A0000; total 0x003E0000).
    - Calibrated against PORT-23 0x00600000 loop with same loop body ('subs r2, r2, #1; bne').
-   - Total step duration at slowest bound (300 ms) is ~187.5 ms (< 200 ms).
-   - OFF gap duration is maximized: ~52.1 ms nominal, ~125.0 ms slowest bound, ~41.7 ms fastest bound.
+   - Total step duration at slowest bound (300 ms) is ~193.75 ms (< 200 ms, with 6.25 ms margin).
+   - OFF gap duration is maximized: ~43.8 ms fast, ~54.7 ms nominal, ~131.3 ms slowest bound.
    - Uses verified MMIO register 0xD20B0884 with 0x004D0002 (ON) and 0x004C0003 (OFF).
 5. Breadcrumb insertion points match the T1 step list:
    - Verifies 7 breadcrumbs sit at every listed T1 checkpoint in candidate_loader.elf:
@@ -100,11 +100,11 @@ EXPECTED_DEFAULT_CORE_SHA256 = (
 EXPECTED_DEFAULT_CORE_SIZE = 116816
 
 EXPECTED_LADDER_DISKBOOT_SHA256 = (
-    "530aee849f69b0c8a02c2b51803ef2988e12eeb2e86e79d444f93877f2781abe"
+    "67b04962421e601c291145f118ec1e022c93127fed29a960e3bf5ea8f61a541e"
 )
 EXPECTED_LADDER_DISKBOOT_SIZE = 118257
 EXPECTED_LADDER_LOADER_SHA256 = (
-    "649fdff6ce3469824890a5e59d0461c993b08a28f21188b5bfdfbc0db8e0f03b"
+    "8c198ab62823a7ccee151054728b1a9bb3a2b74c8a4f2192392bba7796208d5b"
 )
 EXPECTED_LADDER_LOADER_SIZE = 118256
 
@@ -344,11 +344,22 @@ class TestPort24BreadcrumbLadder(unittest.TestCase):
 
     def test_pulse_timing_and_visibility_under_200ms(self):
         """Each step's code is under 200 ms and pulses have maximized visible OFF gap."""
-        from port24_ladder_table import generate_ladder_table, calculate_timing
+        from port24_ladder_table import (
+            generate_ladder_table,
+            calculate_timing,
+            PULSE_ON_ITERATIONS,
+            PULSE_OFF_ITERATIONS,
+            SINGLE_STEP_ITERATIONS,
+        )
 
         timing = calculate_timing()
 
-        # Under documented calibration
+        # Check iteration counts
+        self.assertEqual(PULSE_ON_ITERATIONS, 0x00140000)
+        self.assertEqual(PULSE_OFF_ITERATIONS, 0x002A0000)
+        self.assertEqual(SINGLE_STEP_ITERATIONS, 0x003E0000)
+
+        # Under documented calibration: slow-bound total < 200 ms cap
         self.assertLess(
             timing["total_ms_nominal"],
             200.0,
@@ -361,10 +372,27 @@ class TestPort24BreadcrumbLadder(unittest.TestCase):
         )
         self.assertTrue(timing["under_safety_limit"])
 
-        # Visibility by eye: OFF gap is maximized to prevent flicker fusion
+        # Check fast-bound compromise:
+        # (a) fast-bound ON >= stated minimum of 20.0 ms (~20.83 ms for retinal cone saturation per Bloch's law)
+        self.assertGreaterEqual(
+            timing["on_ms_fastest"],
+            20.0,
+            f"Fastest ON {timing['on_ms_fastest']} ms below stated minimum of 20.0 ms!",
+        )
+        # (b) fast-bound OFF at its maximum within the budget (43.75 ms)
+        self.assertGreaterEqual(
+            timing["off_ms_fastest"],
+            40.0,
+            f"Fastest OFF {timing['off_ms_fastest']} ms below 40.0 ms!",
+        )
+        # (c) slow-bound loop total (193.75 ms) + explicit 6.25 ms overhead margin strictly meets 200 ms cap
+        self.assertEqual(round(timing["total_ms_slowest"] + timing["overhead_margin_ms"], 2), 200.0)
+        self.assertLess(timing["total_ms_slowest"], 200.0)
+
+        # Visibility checks across nominal and slowest bounds
         self.assertGreaterEqual(
             timing["off_ms_nominal"],
-            40.0,
+            50.0,
             f"OFF gap {timing['off_ms_nominal']} ms too brief for visual flash separation!",
         )
         self.assertGreaterEqual(
@@ -378,7 +406,7 @@ class TestPort24BreadcrumbLadder(unittest.TestCase):
             f"ON duration at slowest bound {timing['on_ms_slowest']} ms should be >= 40 ms!",
         )
 
-        table = generate_ladder_table()
+        table = generate_ladder_table(is_reference=True)
         self.assertEqual(len(table), 7, f"Expected 7 ladder steps, got {len(table)}")
 
         for row in table:
@@ -429,7 +457,7 @@ class TestPort24BreadcrumbLadder(unittest.TestCase):
 
             # Each step has an ON delay loop with mov.w r2, #1310720 (0x00140000)
             on_loop_marker = "mov.w\tr2, #1310720"
-            off_loop_marker = "mov.w\tr2, #2621440"
+            off_loop_marker = "mov.w\tr2, #2752512"
 
             # 1. Step 1 (after_prologue): after bl check_compat, before core_copy
             step1_count = restart_dump[compat_idx:copy_idx].count(on_loop_marker)
@@ -554,10 +582,128 @@ class TestPort24BreadcrumbLadder(unittest.TestCase):
             finally:
                 validate_candidate_port2a.CANDIDATE_DIR = orig_cand
 
+    def test_default_build_cli_no_args(self):
+        """Running build_candidate_port24_ladder.py with no args builds default candidate (SHA-256 matches locked)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            res = subprocess.run(
+                ["python3", str(BUILD_LADDER), "--out-dir", tmpdir],
+                cwd=REPO_ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.assertEqual(res.returncode, 0, f"Default build without args failed: {res.stderr}")
+            diskboot = Path(tmpdir) / "DISKBOOT.BIN"
+            self.assertTrue(diskboot.is_file())
+            self.assertEqual(
+                compute_sha256(diskboot), EXPECTED_DEFAULT_DISKBOOT_SHA256
+            )
+
+    def test_port24_ladder_table_error_handling(self):
+        """tools/port24_ladder_table.py exits non-zero on missing ELF or non-ladder ELF, and prints reference table with --reference."""
+        # 1. Nonexistent ELF -> non-zero exit code, no addresses printed
+        res_nonexistent = subprocess.run(
+            ["python3", str(LADDER_TABLE), "--loader-elf", "/nonexistent/test.elf"],
+            cwd=REPO_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.assertNotEqual(res_nonexistent.returncode, 0)
+        self.assertNotIn("0x000081E2", res_nonexistent.stdout)
+        self.assertIn("Error:", res_nonexistent.stderr)
+
+        # 2. Default (non-ladder) ELF -> non-zero exit code
+        with tempfile.TemporaryDirectory() as tmpdir:
+            res_build_default = subprocess.run(
+                ["python3", str(BUILD_PORT2A), "--out-dir", tmpdir],
+                cwd=REPO_ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.assertEqual(res_build_default.returncode, 0)
+            default_elf = Path(tmpdir) / "candidate_loader.elf"
+            self.assertTrue(default_elf.is_file())
+
+            res_default_table = subprocess.run(
+                ["python3", str(LADDER_TABLE), "--loader-elf", str(default_elf)],
+                cwd=REPO_ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.assertNotEqual(res_default_table.returncode, 0)
+            self.assertNotIn("0x000081E2", res_default_table.stdout)
+            self.assertIn("Error:", res_default_table.stderr)
+
+        # 3. Ladder ELF -> exit 0 with 7 extracted addresses
+        with tempfile.TemporaryDirectory() as tmpdir:
+            res_build_ladder = subprocess.run(
+                ["python3", str(BUILD_LADDER), "--ladder", "--out-dir", tmpdir],
+                cwd=REPO_ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.assertEqual(res_build_ladder.returncode, 0)
+            ladder_elf = Path(tmpdir) / "candidate_loader.elf"
+            self.assertTrue(ladder_elf.is_file())
+
+            res_ladder_table = subprocess.run(
+                ["python3", str(LADDER_TABLE), "--loader-elf", str(ladder_elf)],
+                cwd=REPO_ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.assertEqual(res_ladder_table.returncode, 0)
+            self.assertIn("0x000081E2", res_ladder_table.stdout)
+            self.assertIn("0x0000830E", res_ladder_table.stdout)
+
+        # 4. Static reference table behind --reference flag
+        res_ref = subprocess.run(
+            ["python3", str(LADDER_TABLE), "--reference"],
+            cwd=REPO_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.assertEqual(res_ref.returncode, 0)
+        self.assertIn("STATIC REFERENCE, not extracted from a build", res_ref.stdout)
+        self.assertIn("0x000081E2", res_ref.stdout)
+        self.assertIn("0x0000830E", res_ref.stdout)
+
+    def test_triage_claims_and_suspect_isolation(self):
+        """Triage table asserts UNKNOWN on flash 7 and isolates suspects to immediate step intervals."""
+        from port24_ladder_table import TRIAGE_RULES, AMBIGUITY_NOTE
+
+        rules_dict = dict(TRIAGE_RULES)
+
+        # Check flash 7 row contains UNKNOWN and no improper exoneration/confirmation
+        flash7_text = rules_dict["7 flashes"]
+        self.assertIn("UNKNOWN", flash7_text)
+        self.assertNotIn("core entry confirmed", flash7_text.lower())
+        self.assertNotIn("core entry proved", flash7_text.lower())
+        self.assertNotIn("loader exonerated", flash7_text.lower())
+        self.assertNotIn("100% exonerated", flash7_text.lower())
+
+        # Check flash 6 suspects: must NOT list isb sy (isb runs before flash 6)
+        flash6_text = rules_dict["6 flashes"]
+        self.assertNotIn("isb", flash6_text)
+        self.assertIn("cpsid if", flash6_text)
+
+        # Check flash 5 suspects: lists I-cache / isb sy
+        flash5_text = rules_dict["5 flashes"]
+        self.assertIn("ROM_ICACHE_INV_BP", flash5_text)
+
+        # Ambiguity note explains mid-pulse dark / failure
+        self.assertIn("ambiguous by one", AMBIGUITY_NOTE)
+
     def test_port24_ladder_table_cli(self):
         """CLI tool port24_ladder_table.py executes and emits table across all formats."""
         res_text = subprocess.run(
-            ["python3", str(LADDER_TABLE)],
+            ["python3", str(LADDER_TABLE), "--reference"],
             cwd=REPO_ROOT,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -565,22 +711,24 @@ class TestPort24BreadcrumbLadder(unittest.TestCase):
         )
         self.assertEqual(res_text.returncode, 0)
         self.assertIn("PORT-24 T3: CANON POWERSHOT G3 X BREADCRUMB LADDER", res_text.stdout)
+        self.assertIn("STATIC REFERENCE", res_text.stdout)
         self.assertIn("after_prologue", res_text.stdout)
         self.assertIn("before_bx", res_text.stdout)
 
         res_md = subprocess.run(
-            ["python3", str(LADDER_TABLE), "--markdown"],
+            ["python3", str(LADDER_TABLE), "--reference", "--markdown"],
             cwd=REPO_ROOT,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
         )
         self.assertEqual(res_md.returncode, 0)
+        self.assertIn("STATIC REFERENCE", res_md.stdout)
         self.assertIn("| `after_prologue` |", res_md.stdout)
         self.assertIn("| `before_bx` |", res_md.stdout)
 
         res_json = subprocess.run(
-            ["python3", str(LADDER_TABLE), "--json"],
+            ["python3", str(LADDER_TABLE), "--reference", "--json"],
             cwd=REPO_ROOT,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

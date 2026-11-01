@@ -13,14 +13,14 @@ Step 7: before_bx      - before handoff branch bx r0 (after cpsid if)
 Pulse scheme: One visible pulse per step.
 Iteration parameters:
   ON:  0x00140000 (1,310,720 iterations) -> ~20.8 ms (fast 100ms) / ~26.0 ms (nom 125ms) / ~62.5 ms (slow 300ms)
-  OFF: 0x00280000 (2,621,440 iterations) -> ~41.7 ms (fast 100ms) / ~52.1 ms (nom 125ms) / ~125.0 ms (slow 300ms)
-  Total step: 0x003C0000 (3,932,160 iterations) -> ~62.5 ms (fast) / ~78.1 ms (nom) / ~187.5 ms (slow < 200ms)
+  OFF: 0x002A0000 (2,752,512 iterations) -> ~43.8 ms (fast 100ms) / ~54.7 ms (nom 125ms) / ~131.3 ms (slow 300ms)
+  Total step: 0x003E0000 (4,063,232 iterations) -> ~64.6 ms (fast) / ~80.7 ms (nom) / ~193.8 ms (slow < 200ms)
 
 Total flashes observed before shutdown indicates the last step reached.
-All steps have duration strictly under 200 ms.
+All steps have duration strictly under 200 ms (193.75 ms + 6.25 ms overhead margin = 200.0 ms).
 
-When --flag-off is specified (or --ladder is omitted), output is byte-identical to the
-locked PORT-19 default control:
+When --no-ladder / --flag-off is specified (or when flags are omitted by default), output is byte-identical
+to the locked PORT-19 default control:
   DISKBOOT.BIN SHA-256: 9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136
   Size: 118,001 bytes.
 """
@@ -329,17 +329,20 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="Build opt-in PORT-24 breadcrumb ladder candidate or verify default invariance."
     )
-    parser.add_argument(
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
         "--ladder",
+        dest="ladder",
         action="store_true",
-        default=True,
-        help="Build opt-in breadcrumb ladder candidate (default: True).",
+        default=False,
+        help="Build opt-in breadcrumb ladder candidate.",
     )
-    parser.add_argument(
+    group.add_argument(
+        "--no-ladder",
         "--flag-off",
         dest="ladder",
         action="store_false",
-        help="Build default control without ladder (asserts byte-identity to locked SHA-256).",
+        help="Build default control without ladder (default behavior; asserts byte-identity to locked SHA-256).",
     )
     parser.add_argument(
         "--out-dir",

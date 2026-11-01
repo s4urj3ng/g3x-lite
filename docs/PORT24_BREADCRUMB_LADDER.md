@@ -10,11 +10,11 @@ The breadcrumb ladder is an opt-in diagnostic bootloader candidate (`DISKBOOT.BI
 - `[VERIFIED: hardware trial 2026-11-01]`: Green LED MMIO address `0xD20B0884` controls the rear green LED on Canon PowerShot G3 X GM1.10C. Writing `0x004D0002` turns the LED ON; writing `0x004C0003` turns the LED OFF.
 - `[VERIFIED: hardware trial 2026-11-01]`: Loader entry prologue at `0x00008000` executes on camera power-on with an encoded boot disk.
 - `[VERIFIED: host build & test]`: Scope compliance: No new files are created under `chdk-port/platform/g3x/sub/110c/`. Only already-tracked files (`led_breadcrumb.h` and `loader_main_breadcrumb.c`) are edited, and all ladder additions sit strictly inside `#if defined(LED_LADDER)` guards.
-- `[VERIFIED: host build & test]`: Default build invariance: When building without `--ladder` (or with `--flag-off`), the DISKBOOT.BIN output is byte-identical to the locked baseline SHA-256 `9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136` (118,001 bytes).
-- `[VERIFIED: host build & test]`: Ladder candidate build output is deterministic across multiple independent builds (DISKBOOT.BIN SHA-256 `530aee849f69b0c8a02c2b51803ef2988e12eeb2e86e79d444f93877f2781abe`, 118,257 bytes; candidate_loader.bin SHA-256 `649fdff6ce3469824890a5e59d0461c993b08a28f21188b5bfdfbc0db8e0f03b`, 118,256 bytes).
+- `[VERIFIED: host build & test]`: Default build invariance: When building without `--ladder` (or with `--no-ladder` / `--flag-off`), the DISKBOOT.BIN output is byte-identical to the locked baseline SHA-256 `9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136` (118,001 bytes).
+- `[VERIFIED: host build & test]`: Ladder candidate build output is deterministic across multiple independent builds (DISKBOOT.BIN SHA-256 `67b04962421e601c291145f118ec1e022c93127fed29a960e3bf5ea8f61a541e`, 118,257 bytes; candidate_loader.bin SHA-256 `8c198ab62823a7ccee151054728b1a9bb3a2b74c8a4f2192392bba7796208d5b`, 118,256 bytes).
 - `[VERIFIED: host build & test]`: The ladder candidate passes all 7 validation checks of `tools/validate_candidate_port2a.py`.
-- `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:245; docs/PORT24_LOADER_TRACE.md:761]`: Timing calibration is derived from the PORT-23 `0x00600000` short-delay build using the exact same loop body (`subs r2, r2, #1; bne`). Total step duration at the slowest bound (300 ms) is ~187.5 ms, strictly below the 200 ms upper bound.
-- `[INFERRED: human visual physiology; Bloch's law]`: Single pulse per step with maximized dark gap (~52.1 ms nominal, ~125.0 ms slowest bound, ~41.7 ms fastest bound) prevents flicker-fusion blurring and enables clear human counting of separate flashes.
+- `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:245; docs/PORT24_LOADER_TRACE.md:761]`: Timing calibration is derived from the PORT-23 `0x00600000` short-delay build using the exact same loop body (`subs r2, r2, #1; bne`). Total step duration at the slowest bound (300 ms) is ~193.75 ms (with a 6.25 ms non-loop overhead margin strictly meeting the 200 ms cap).
+- `[INFERRED: human visual physiology; Bloch's law]`: Single pulse per step with maximized dark gap (~43.75 ms fastest bound, ~54.69 ms nominal, ~131.25 ms slowest bound) prevents flicker-fusion blurring and enables clear human counting of separate flashes.
 - `[UNKNOWN: codebase analysis]`: The CHDK core entry point `_start` (`0x003489B4`) is defined in `chdk-port/core/entry.S:1-11`, which resides outside `chdk-port/platform/g3x/sub/110c/`. Per the task brief and repository scope rules, files outside the allowed paths are not edited. The final loader breadcrumb is therefore accurately designated `before_bx`, and core entry itself is NOT instrumented.
 - `[UNKNOWN: hardware trial 2026-11-01]`: Root cause of the shutdown after loader handoff (whether power supervision hold timeout, MMU/cache exception, or unhandled interrupt). The ladder candidate is designed to resolve this question.
 
@@ -56,16 +56,19 @@ Because $100\text{ ms} > 66.67\text{ ms}$, **it is mathematically impossible to 
 
 ### 2.3 Justified Compromise: Maximizing the OFF Gap Under the 200 ms Cap
 Per the task brief's instruction for this scenario ("choose the counts that maximise the OFF gap under the 200 ms cap"):
-1. The 200 ms cap at the slowest bound (300 ms) limits $N_{step} < 0x00400000$. We select $N_{step} = 0x003C0000$ (3,932,160 iterations, ratio $0.625$), which ensures $T_{step, slow} = 187.5$ ms, safely leaving a 12.5 ms margin below the 200 ms limit.
-2. In optical signaling, high-intensity LEDs (such as the G3 X rear green LED) deliver saturation brightness to human retinal cones in ~20–25 ms (Bloch's law of visual temporal summation). Conversely, human temporal resolution requires a large dark interval to register distinct flash boundaries.
-3. Therefore, under the $N_{step} = 0x003C0000$ budget, we configure a **1:2 ON:OFF duty cycle** by inverting and expanding the iteration split:
-   - $N_{ON} = 0x00140000$ (1,310,720 iterations, ratio $1.25 / 6 \approx 0.2083$)
-   - $N_{OFF} = 0x00280000$ (2,621,440 iterations, ratio $2.5 / 6 \approx 0.4167$)
-4. This doubles the OFF gap compared to Task 117 ($0x00280000$ vs $0x00140000$):
-   - At the nominal bound (125 ms): OFF is **52.08 ms** (vs 26.0 ms in Task 117), providing a distinct dark gap.
-   - At the range max bound (150 ms): OFF is **62.50 ms** (satisfying $\ge 60$ ms).
-   - At the slowest bound (300 ms): OFF is **125.00 ms** (satisfying $\ge 60$ ms), ON is **62.50 ms** (satisfying $\ge 40$ ms), and step total is **187.50 ms** (satisfying $< 200$ ms).
-   - At the fastest bound (100 ms): OFF is **41.67 ms** and ON is **20.83 ms**, which provides twice the dark separation of Task 117.
+1. **Explicit Minimum ON Duration at Fast Bound**: We choose an ON iteration count of $N_{ON} = 0x00140000$ (1,310,720 iterations, ratio $1.25 / 6 \approx 0.20833$), yielding $T_{ON, fast} = 20.83$ ms at the fastest 100 ms bound.
+   *Justification*: Under human visual temporal integration (Bloch's law: $I \times t = k$ for durations below the critical summation threshold of ~20–30 ms), a high-contrast optical source (such as the camera rear green LED on a dark chassis) saturates human retinal photoreceptors within 20 ms. Maintaining $T_{ON, fast} \ge 20.0$ ms ensures full subjective brightness and perceptual noticeability even at the fastest hardware execution speed, without wasting budget that must be dedicated to dark separation.
+2. **Explicit Overhead Margin for Non-Loop Instructions**: Each breadcrumb pulse executes non-loop instructions (`ldr r0`, `ldr r1`, `str r1`, `dsb sy`, `mov.w r2` for ON; then `ldr r1`, `str r1`, `dsb sy`, `mov.w r2` for OFF). These total approximately 10 instructions plus 2 memory barriers. At Cortex-A9/R4 core clock rates (hundreds of MHz), these instructions execute in under $0.05$ ms (< 100 cycles). We allocate a conservative overhead margin of **$6.25$ ms** below the 200 ms cap.
+3. **Maximized OFF Gap Under Slow-Bound Budget**: Under the 200 ms slow-bound limit with a 6.25 ms overhead margin, the available loop execution budget at the slowest bound is $200.0 - 6.25 = 193.75$ ms.
+   - Total loop iterations: $N_{step} = \frac{193.75\text{ ms}}{300.0\text{ ms}} \times 0x00600000 = \frac{31}{48} \times 0x00600000 = 0x003E0000$ (4,063,232 iterations).
+   - Subtracting $N_{ON} = 0x00140000$ leaves $N_{OFF} = 0x002A0000$ (2,752,512 iterations, ratio $2.625 / 6 = 7/16 = 0.43750$).
+4. **Thumb-2 Encoding of New Immediate**:
+   The immediate constant $0x002A0000$ consists of the 8-bit pattern `0x2A` (`00101010` in binary) rotated/shifted left by 16 bits. In ARMv7-A/R Thumb-2, this is a valid modified immediate encodable by a single 32-bit `mov.w` instruction (`mov.w r2, #2752512`, opcode `f44f 1228`).
+5. **Resulting Timing Envelope**:
+   - At the nominal bound (125 ms): OFF is **54.69 ms**, providing a distinct dark gap well above the retinal persistence threshold.
+   - At the range max bound (150 ms): OFF is **65.63 ms** (satisfying $\ge 60$ ms).
+   - At the slowest bound (300 ms): OFF is **131.25 ms** (satisfying $\ge 60$ ms), ON is **62.50 ms** (satisfying $\ge 40$ ms), and step total loop time is **193.75 ms** (with 6.25 ms overhead margin strictly meeting 200.0 ms).
+   - At the fastest bound (100 ms): OFF is **43.75 ms** and ON is **20.83 ms**, providing more than double the dark separation of Task 117.
 
 ---
 
@@ -107,15 +110,15 @@ Both loops execute exactly **2 Thumb instructions per iteration** (`subs` and `b
 
 Iteration parameter ratios:
 $$\text{Ratio}_{ON} = \frac{0x00140000}{0x00600000} = \frac{1,310,720}{6,291,456} = \frac{1.25}{6} \approx 0.20833$$
-$$\text{Ratio}_{OFF} = \frac{0x00280000}{0x00600000} = \frac{2,621,440}{6,291,456} = \frac{2.50}{6} \approx 0.41667$$
-$$\text{Ratio}_{step} = \frac{0x003C0000}{0x00600000} = \frac{3,932,160}{6,291,456} = \frac{3.75}{6} = 0.62500$$
+$$\text{Ratio}_{OFF} = \frac{0x002A0000}{0x00600000} = \frac{2,752,512}{6,291,456} = \frac{2.625}{6} = \frac{7}{16} = 0.43750$$
+$$\text{Ratio}_{step} = \frac{0x003E0000}{0x00600000} = \frac{4,063,232}{6,291,456} = \frac{3.875}{6} = \frac{31}{48} \approx 0.64583$$
 
-| Calibration Model | Reference Duration (0x00600000) | ON Duration ($N_{ON}$) | OFF Duration ($N_{OFF}$) | Total Step Duration ($N_{step}$) | Safety Cap (< 200 ms) |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **Fastest Bound** (`PORT23_POWER_SUPERVISION.md:245`) | 100.0 ms | 20.83 ms | 41.67 ms | 62.50 ms | **PASS** (< 200 ms) |
-| **Nominal Model** (`PORT23_POWER_SUPERVISION.md:245`) | 125.0 ms | 26.04 ms | 52.08 ms | 78.13 ms | **PASS** (< 200 ms) |
-| **Range Max** (`PORT23_POWER_SUPERVISION.md:245`) | 150.0 ms | 31.25 ms | 62.50 ms | 93.75 ms | **PASS** (< 200 ms) |
-| **Slowest Bound** (`PORT24_LOADER_TRACE.md:761`) | 300.0 ms | 62.50 ms | 125.00 ms | 187.50 ms | **PASS** (< 200 ms) |
+| Calibration Model | Reference Duration (0x00600000) | ON Duration ($N_{ON}$) | OFF Duration ($N_{OFF}$) | Total Step Loop ($N_{step}$) | Overhead Margin | Total with Margin (< 200 ms) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Fastest Bound** (`PORT23_POWER_SUPERVISION.md:245`) | 100.0 ms | 20.83 ms | 43.75 ms | 64.58 ms | 2.08 ms | **66.67 ms (PASS)** |
+| **Nominal Model** (`PORT23_POWER_SUPERVISION.md:245`) | 125.0 ms | 26.04 ms | 54.69 ms | 80.73 ms | 2.60 ms | **83.33 ms (PASS)** |
+| **Range Max** (`PORT23_POWER_SUPERVISION.md:245`) | 150.0 ms | 31.25 ms | 65.63 ms | 96.88 ms | 3.13 ms | **100.00 ms (PASS)** |
+| **Slowest Bound** (`PORT24_LOADER_TRACE.md:761`) | 300.0 ms | 62.50 ms | 131.25 ms | 193.75 ms | 6.25 ms | **200.00 ms (PASS)** |
 
 ---
 
@@ -244,7 +247,7 @@ Positioned immediately after `check_compat()` returns (`0x81da: bl 8178`) and be
     81f0:	4958      	ldr	r1, [pc, #352]	; (8354: 0x004C0003)
     81f2:	6001      	str	r1, [r0, #0]
     81f4:	f3bf 8f4f 	dsb	sy
-    81f8:	f44f 1220 	mov.w	r2, #2621440	; 0x280000 (OFF loop)
+    81f8:	f44f 1228 	mov.w	r2, #2752512	; 0x2a0000 (OFF loop)
     81fc:	3a01      	subs	r2, #1
     81fe:	d1fd      	bne.n	81fc <my_restart+0x24>
     ; --- SETUP FOR core_copy ---
@@ -276,7 +279,7 @@ Positioned immediately after Boot Witness Stage 1 checksum calculation and store
     8254:	493f      	ldr	r1, [pc, #252]	; (8354: 0x004C0003)
     8256:	6001      	str	r1, [r0, #0]
     8258:	f3bf 8f4f 	dsb	sy
-    825c:	f44f 1220 	mov.w	r2, #2621440	; 0x280000 (OFF loop)
+    825c:	f44f 1228 	mov.w	r2, #2752512	; 0x2a0000 (OFF loop)
     8260:	3a01      	subs	r2, #1
     8262:	d1fd      	bne.n	8260 <my_restart+0x88>
 ```
@@ -295,7 +298,7 @@ Positioned inside the cache synchronization assembly block immediately before lo
     8276:	4937      	ldr	r1, [pc, #220]	; (8354: 0x004C0003)
     8278:	6001      	str	r1, [r0, #0]
     827a:	f3bf 8f4f 	dsb	sy
-    827e:	f44f 1220 	mov.w	r2, #2621440	; 0x280000 (OFF loop)
+    827e:	f44f 1228 	mov.w	r2, #2752512	; 0x2a0000 (OFF loop)
     8282:	3a01      	subs	r2, #1
     8284:	d1fd      	bne.n	8282 <my_restart+0xaa>
     ; --- INVOKE ROM_DCACHE_CLEAN_INV ---
@@ -321,7 +324,7 @@ Positioned immediately after D-cache clean completion and `dsb sy` (`0x828e`), b
     82a4:	492b      	ldr	r1, [pc, #172]	; (8354: 0x004C0003)
     82a6:	6001      	str	r1, [r0, #0]
     82a8:	f3bf 8f4f 	dsb	sy
-    82ac:	f44f 1220 	mov.w	r2, #2621440	; 0x280000 (OFF loop)
+    82ac:	f44f 1228 	mov.w	r2, #2752512	; 0x2a0000 (OFF loop)
     82b0:	3a01      	subs	r2, #1
     82b2:	d1fd      	bne.n	82b0 <my_restart+0xd8>
 ```
@@ -340,7 +343,7 @@ Positioned immediately before loading parameters for `ROM_ICACHE_INV_BP` (`0x82d
     82c6:	4923      	ldr	r1, [pc, #140]	; (8354: 0x004C0003)
     82c8:	6001      	str	r1, [r0, #0]
     82ca:	f3bf 8f4f 	dsb	sy
-    82ce:	f44f 1220 	mov.w	r2, #2621440	; 0x280000 (OFF loop)
+    82ce:	f44f 1228 	mov.w	r2, #2752512	; 0x2a0000 (OFF loop)
     82d2:	3a01      	subs	r2, #1
     82d4:	d1fd      	bne.n	82d2 <my_restart+0xfa>
     ; --- INVOKE ROM_ICACHE_INV_BP ---
@@ -367,7 +370,7 @@ Positioned immediately after `isb sy` (`0x82e2`), before interrupt masking (`0x8
     82f8:	4916      	ldr	r1, [pc, #88]	; (8354: 0x004C0003)
     82fa:	6001      	str	r1, [r0, #0]
     82fc:	f3bf 8f4f 	dsb	sy
-    8300:	f44f 1220 	mov.w	r2, #2621440	; 0x280000 (OFF loop)
+    8300:	f44f 1228 	mov.w	r2, #2752512	; 0x2a0000 (OFF loop)
     8304:	3a01      	subs	r2, #1
     8306:	d1fd      	bne.n	8304 <my_restart+0x12c>
     ; --- DISABLE INTERRUPTS ---
@@ -389,7 +392,7 @@ Positioned after `cpsid if` (`0x8308`) and immediately before handoff address se
     831c:	490d      	ldr	r1, [pc, #52]	; (8354: 0x004C0003)
     831e:	6001      	str	r1, [r0, #0]
     8320:	f3bf 8f4f 	dsb	sy
-    8324:	f44f 1220 	mov.w	r2, #2621440	; 0x280000 (OFF loop)
+    8324:	f44f 1228 	mov.w	r2, #2752512	; 0x2a0000 (OFF loop)
     8328:	3a01      	subs	r2, #1
     832a:	d1fd      	bne.n	8328 <my_restart+0x150>
     ; --- TERMINAL HANDOFF TO CHDK CORE ---
@@ -407,26 +410,28 @@ Generated by `python3 tools/port24_ladder_table.py --markdown`:
 
 | Step # | Step ID | T1 Step | Signal | Cumulative Flashes | Step Iterations | Nominal ms | Max ms (<200ms) | Disassembly Addr | Preserved State |
 | :---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| 1 | `after_prologue` | Step 1/2 | **Flash 1** | 1 | 3,932,160 | 78.12 ms | 187.5 ms (YES) | `0x000081E2` | r0-r3 clobbered per AAPCS; r4-r11, sp (0x7FF8), CPSR preserved |
-| 2 | `after_copy` | Step 3/4 | **Flash 2** | 2 | 3,932,160 | 78.12 ms | 187.5 ms (YES) | `0x00008246` | r0-r3 clobbered per AAPCS; r4 (%0), r5 (%1), sp (0x7FF8), CPSR preserved |
-| 3 | `before_dcache` | Step 5 | **Flash 3** | 3 | 3,932,160 | 78.12 ms | 187.5 ms (YES) | `0x00008268` | r0-r3 clobbered; r4 (%0), r5 (%1), sp (0x7FF8), CPSR preserved |
-| 4 | `after_dcache` | Step 5 | **Flash 4** | 4 | 3,932,160 | 78.12 ms | 187.5 ms (YES) | `0x00008296` | r0-r3 clobbered; r4 (%0), r5 (%1), sp (0x7FF8), CPSR preserved |
-| 5 | `before_icache` | Step 6 | **Flash 5** | 5 | 3,932,160 | 78.12 ms | 187.5 ms (YES) | `0x000082B8` | r0-r3 clobbered; r4 (%0), r5 (%1), sp (0x7FF8), CPSR preserved |
-| 6 | `after_icache` | Step 6 | **Flash 6** | 6 | 3,932,160 | 78.12 ms | 187.5 ms (YES) | `0x000082EA` | r0-r3 clobbered; r4 (%0), r5 (%1), sp (0x7FF8), CPSR preserved |
-| 7 | `before_bx` | Step 7 | **Flash 7** | 7 | 3,932,160 | 78.12 ms | 187.5 ms (YES) | `0x0000830E` | r4 (%0), sp (0x7FF8), CPSR.I/F=1 (disabled), Thumb mode (0x003489B5) |
+| 1 | `after_prologue` | Step 1/2 | **Flash 1** | 1 | 4,063,232 | 80.73 ms | 193.75 ms (YES) | `0x000081E2` | r0-r3 clobbered per AAPCS; r4-r11, sp (0x7FF8), CPSR preserved |
+| 2 | `after_copy` | Step 3/4 | **Flash 2** | 2 | 4,063,232 | 80.73 ms | 193.75 ms (YES) | `0x00008246` | r0-r3 clobbered per AAPCS; r4 (%0), r5 (%1), sp (0x7FF8), CPSR preserved |
+| 3 | `before_dcache` | Step 5 | **Flash 3** | 3 | 4,063,232 | 80.73 ms | 193.75 ms (YES) | `0x00008268` | r0-r3 clobbered; r4 (%0), r5 (%1), sp (0x7FF8), CPSR preserved |
+| 4 | `after_dcache` | Step 5 | **Flash 4** | 4 | 4,063,232 | 80.73 ms | 193.75 ms (YES) | `0x00008296` | r0-r3 clobbered; r4 (%0), r5 (%1), sp (0x7FF8), CPSR preserved |
+| 5 | `before_icache` | Step 6 | **Flash 5** | 5 | 4,063,232 | 80.73 ms | 193.75 ms (YES) | `0x000082B8` | r0-r3 clobbered; r4 (%0), r5 (%1), sp (0x7FF8), CPSR preserved |
+| 6 | `after_icache` | Step 6 | **Flash 6** | 6 | 4,063,232 | 80.73 ms | 193.75 ms (YES) | `0x000082EA` | r0-r3 clobbered; r4 (%0), r5 (%1), sp (0x7FF8), CPSR preserved |
+| 7 | `before_bx` | Step 7 | **Flash 7** | 7 | 4,063,232 | 80.73 ms | 193.75 ms (YES) | `0x0000830E` | r4 (%0), sp (0x7FF8), CPSR.I/F=1 (disabled), Thumb mode (0x003489B5) |
 
 ### 7.2 Failure Point Triage Matrix for Camera Owner Observation
 
 | Observed Signal | Total Flashes | Failure Checkpoint | Subsystem / Mechanism Implicated | Next Action / Triage |
 | :--- | :---: | :--- | :--- | :--- |
-| **No light (camera stays dark)** | **0** | Before Step 1 (`check_compat` or entry `0x8000`) | Card MBR, dancingbits decryption, or PID/version mismatch | Verify SD card format, dancingbits encoding row 13, or `check_compat` PID `0x32A8` |
-| **1 flash**, then dark | **1** | Between Step 1 and Step 2 (`core_copy` or Boot Witness Stage 1 store) | DRAM write fault during payload relocation to `0x003489B4`, or alignment fault during witness store at `0x0035F7A0` | Inspect memory region permissions at `0x003489B4`; check witness struct alignment |
-| **2 flashes**, then dark | **2** | Between Step 2 and Step 3 (preparation for D-cache clean) | Register setup or argument loading prior to `ROM_DCACHE_CLEAN_INV` | Inspect register allocation `%0` and `%1` |
-| **3 flashes**, then dark | **3** | Inside `ROM_DCACHE_CLEAN_INV` (`0xFC127AB1`) | D-cache DCCISW subroutine fault, invalid address/size argument, or cache lockup | Check parameters `r0 = 0x003489B4`, `r1 = 116816`; inspect ROM `0xFC127AB0` disassembly |
-| **4 flashes**, then dark | **4** | Between Step 4 and Step 5 (between D-cache clean and I-cache invalidation) | Bus hang on `dsb sy` or argument setup for I-cache | Verify bus quiescence after cache clean |
-| **5 flashes**, then dark | **5** | Inside `ROM_ICACHE_INV_BP` (`0xFC127B09`) | I-cache ICIALLU / BPIALL subroutine fault or invalid parameter | Check parameters `r0 = 0x003489B4`, `r1 = 116816`; inspect ROM `0xFC127B08` disassembly |
-| **6 flashes**, then dark | **6** | Between Step 6 and Step 7 (pipeline flush `isb sy` or interrupt mask `cpsid if`) | Pipeline sync exception or mode trap on `cpsid if` | Inspect CPU mode at handoff (must be privileged) |
-| **7 flashes**, then dark | **7** | After Step 7 (`before_bx`) **inside CHDK core execution** | **LOADER EXONERATED 100%**. Handoff to core `_start` (`0x003489B5`) succeeded. Crash occurs inside CHDK core (`startup`, BSS init, or `boot()`) | Localize fault to CHDK core startup or early DryOS reinit |
+| **No light (camera stays dark)** | **0** | Failed before or during Step 1 pulse (MBR, dancingbits row 13, PID mismatch in check_compat, or early power loss). | Card MBR, dancingbits decryption, or PID/version mismatch | Verify SD card format, dancingbits encoding row 13, or `check_compat` PID `0x32A8` |
+| **1 flash**, then dark | **1** | Failed between Step 1 and Step 2 (payload relocation in core_copy, or Boot Witness Stage 1 write/checksum). | DRAM write fault during payload relocation to `0x003489B4`, or alignment fault during witness store at `0x0035F7A0` | Inspect memory region permissions at `0x003489B4`; check witness struct alignment |
+| **2 flashes**, then dark | **2** | Failed between Step 2 and Step 3 (preparation for D-cache maintenance, or entry into cache asm block). | Register setup or argument loading prior to `ROM_DCACHE_CLEAN_INV` | Inspect register allocation `%0` and `%1` |
+| **3 flashes**, then dark | **3** | Failed during D-cache clean & invalidate (ROM_DCACHE_CLEAN_INV 0xFC127AB1 subroutine call or dsb sy). | D-cache DCCISW subroutine fault, invalid address/size argument, or cache lockup | Check parameters `r0 = 0x003489B4`, `r1 = 116816`; inspect ROM `0xFC127AB0` disassembly |
+| **4 flashes**, then dark | **4** | Failed between Step 4 and Step 5 (instructions between D-cache and I-cache maintenance). | Bus hang on `dsb sy` or argument setup for I-cache | Verify bus quiescence after cache clean |
+| **5 flashes**, then dark | **5** | Failed during I-cache & branch predictor invalidation (ROM_ICACHE_INV_BP 0xFC127B09 subroutine call, dsb sy, or isb sy). | I-cache ICIALLU / BPIALL subroutine fault or pipeline sync (`isb sy`) | Check parameters `r0 = 0x003489B4`, `r1 = 116816`; inspect ROM `0xFC127B08` disassembly |
+| **6 flashes**, then dark | **6** | Failed between Step 6 and Step 7 (interrupt mask cpsid if). | Mode trap or privilege fault on `cpsid if` | Inspect CPU mode at handoff (must be privileged) |
+| **7 flashes**, then dark | **7** | Step 7 pulse completed. Core entry address setup, terminal bx hand-off, and core execution are UNKNOWN (uninstrumented); fault occurred during terminal hand-off or inside CHDK core. | Terminal hand-off branch `bx r0` (`0x003489B5`) or execution inside CHDK core (`startup`, BSS init, or `boot()`) | Fault occurred during terminal hand-off or inside CHDK core; localize fault using core-level diagnostics or register dump |
+
+> **Ambiguity note**: A failure during a pulse (camera goes dark while LED is ON or OFF) can make the count ambiguous by one. If a pulse cuts off abruptly without completing its OFF gap, the fault occurred during that pulse.
 
 ---
 
@@ -446,9 +451,9 @@ When built with `--ladder`, the deterministic candidate artifacts are:
 
 | Artifact | Size (bytes) | SHA-256 Digest | Status |
 | :--- | :---: | :--- | :---: |
-| **`DISKBOOT.BIN`** | `118,257` | `530aee849f69b0c8a02c2b51803ef2988e12eeb2e86e79d444f93877f2781abe` | `[VERIFIED: deterministic host build]` |
-| **`candidate_loader.bin`** | `118,256` | `649fdff6ce3469824890a5e59d0461c993b08a28f21188b5bfdfbc0db8e0f03b` | `[VERIFIED: deterministic host build]` |
-| **`candidate_loader.elf`** | `120,488` | (ELF symbols at `0x8000`) | `[VERIFIED]` |
+| **`DISKBOOT.BIN`** | `118,257` | `67b04962421e601c291145f118ec1e022c93127fed29a960e3bf5ea8f61a541e` | `[VERIFIED: deterministic host build]` |
+| **`candidate_loader.bin`** | `118,256` | `8c198ab62823a7ccee151054728b1a9bb3a2b74c8a4f2192392bba7796208d5b` | `[VERIFIED: deterministic host build]` |
+| **`candidate_loader.elf`** | `120,296` | (ELF symbols at `0x8000`) | `[VERIFIED]` |
 | **`candidate_main.bin`** | `116,816` | `420b3842ed56b59dc7cd24d0fb5e311fad1aec36ed38825b435d5030a314a56e` | `[VERIFIED: bit-for-bit identical to default]` |
 | **`candidate_main.elf`** | `211,620` | `8685c90b5e3cf2da33d062828b86e0fc2521cf9c98bc01d1c313a48e718ba7c2` | `[VERIFIED]` |
 | **`witness_inspector_gm110c.m`** | `5,580` | `7a53835f7048b3c9e8be3c545efb9b14a85676a7b856de7899ae00dcd697c28f` | `[VERIFIED]` |

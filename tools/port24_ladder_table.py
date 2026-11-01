@@ -22,9 +22,9 @@ Timing Calibration (derived from PORT-23 short-delay build 0x00600000):
 - Same loop body: 'subs r2, r2, #1; bne' (2 instructions per iteration).
 - Per step:
     N_on  = 0x00140000 (1,310,720 iterations) -> ~20.8 ms (fast 100ms) / ~26.0 ms (nom 125ms) / ~62.5 ms (slow 300ms)
-    N_off = 0x00280000 (2,621,440 iterations) -> ~41.7 ms (fast 100ms) / ~52.1 ms (nom 125ms) / ~125.0 ms (slow 300ms)
-    Total per step = 0x003C0000 (3,932,160 iterations) -> ~62.5 ms (fast) / ~78.1 ms (nom) / ~187.5 ms (slow < 200ms)
-- Every step is strictly under 200 ms.
+    N_off = 0x002A0000 (2,752,512 iterations) -> ~43.8 ms (fast 100ms) / ~54.7 ms (nom 125ms) / ~131.3 ms (slow 300ms)
+    Total per step = 0x003E0000 (4,063,232 iterations) -> ~64.6 ms (fast) / ~80.7 ms (nom) / ~193.8 ms (slow < 200ms)
+- Overhead margin: 6.25 ms reserved below 200 ms cap (193.75 ms + 6.25 ms = 200.0 ms).
 """
 
 from __future__ import annotations
@@ -53,11 +53,21 @@ PORT23_SHORT_DELAY_MS_RANGE_MAX = 150.0     # 150 ms range upper bound
 PORT23_SHORT_DELAY_MS_SLOWEST = 300.0       # 300 ms slowest bound (PORT-24 trace)
 
 PULSE_ON_ITERATIONS = 0x00140000            # 1,310,720 iterations
-PULSE_OFF_ITERATIONS = 0x00280000           # 2,621,440 iterations
-SINGLE_STEP_ITERATIONS = PULSE_ON_ITERATIONS + PULSE_OFF_ITERATIONS  # 3,932,160 (0x003C0000)
+PULSE_OFF_ITERATIONS = 0x002A0000           # 2,752,512 iterations
+SINGLE_STEP_ITERATIONS = PULSE_ON_ITERATIONS + PULSE_OFF_ITERATIONS  # 4,063,232 (0x003E0000)
 
+NON_LOOP_OVERHEAD_MARGIN_MS = 6.25
 MAX_SAFETY_LIMIT_MS = 200.0
 
+STATIC_REFERENCE_ADDRS = [
+    "0x000081E2",
+    "0x00008246",
+    "0x00008268",
+    "0x00008296",
+    "0x000082B8",
+    "0x000082EA",
+    "0x0000830E",
+]
 
 LADDER_STEPS_DEFINITION = [
     {
@@ -153,6 +163,23 @@ LADDER_STEPS_DEFINITION = [
     },
 ]
 
+TRIAGE_RULES = [
+    ("0 flashes", "Failed before or during Step 1 pulse (MBR, dancingbits row 13, PID mismatch in check_compat, or early power loss)."),
+    ("1 flash",   "Failed between Step 1 and Step 2 (payload relocation in core_copy, or Boot Witness Stage 1 write/checksum)."),
+    ("2 flashes", "Failed between Step 2 and Step 3 (preparation for D-cache maintenance, or entry into cache asm block)."),
+    ("3 flashes", "Failed during D-cache clean & invalidate (ROM_DCACHE_CLEAN_INV 0xFC127AB1 subroutine call or dsb sy)."),
+    ("4 flashes", "Failed between Step 4 and Step 5 (instructions between D-cache and I-cache maintenance)."),
+    ("5 flashes", "Failed during I-cache & branch predictor invalidation (ROM_ICACHE_INV_BP 0xFC127B09 subroutine call, dsb sy, or isb sy)."),
+    ("6 flashes", "Failed between Step 6 and Step 7 (interrupt mask cpsid if)."),
+    ("7 flashes", "Step 7 pulse completed. Core entry address setup, terminal bx hand-off, and core execution are UNKNOWN (uninstrumented); fault occurred during terminal hand-off or inside CHDK core."),
+]
+
+AMBIGUITY_NOTE = (
+    "Ambiguity note: A failure during a pulse (camera goes dark while LED is ON or OFF) "
+    "can make the count ambiguous by one. If a pulse cuts off abruptly without completing "
+    "its OFF gap, the fault occurred during that pulse."
+)
+
 
 def calculate_timing() -> dict:
     """Calculate calibrated timing for single step pulse across calibration envelope."""
@@ -172,6 +199,7 @@ def calculate_timing() -> dict:
         "iterations_on": PULSE_ON_ITERATIONS,
         "iterations_off": PULSE_OFF_ITERATIONS,
         "total_iterations": SINGLE_STEP_ITERATIONS,
+        "overhead_margin_ms": NON_LOOP_OVERHEAD_MARGIN_MS,
         "on_ms_fastest": round(on_ms_fast, 2),
         "off_ms_fastest": round(off_ms_fast, 2),
         "total_ms_fastest": round(total_ms_fast, 2),
@@ -185,30 +213,31 @@ def calculate_timing() -> dict:
     }
 
 
-def extract_disasm_addresses(loader_elf: str | Path | None = None) -> list[str]:
-    """Extract str addresses for 7 ladder pulses from candidate_loader.elf objdump."""
-    default_addrs = [
-        "0x000081E2",
-        "0x00008246",
-        "0x00008268",
-        "0x00008296",
-        "0x000082B8",
-        "0x000082EA",
-        "0x0000830E",
-    ]
-    if not loader_elf or not os.path.isfile(str(loader_elf)) or not OBJDUMP.is_file():
-        return default_addrs
+def extract_disasm_addresses(loader_elf: str | Path) -> list[str]:
+    """Extract str addresses for 7 ladder pulses from candidate_loader.elf objdump.
+    
+    Exits with non-zero status if file missing, objdump fails, or ELF does not contain exactly 7 pulses.
+    """
+    elf_path = Path(loader_elf)
+    if not elf_path.is_file():
+        sys.stderr.write(f"Error: Specified loader ELF does not exist: {elf_path}\n")
+        sys.exit(1)
+
+    if not OBJDUMP.is_file():
+        sys.stderr.write(f"Error: objdump tool not found at {OBJDUMP}\n")
+        sys.exit(1)
 
     res = subprocess.run(
-        [str(OBJDUMP), "-d", str(loader_elf)],
+        [str(OBJDUMP), "-d", str(elf_path)],
         capture_output=True,
         text=True,
         check=False,
     )
     if res.returncode != 0:
-        return default_addrs
+        sys.stderr.write(f"Error: objdump failed on {elf_path} (returncode {res.returncode}):\n{res.stderr}\n")
+        sys.exit(1)
 
-    # Find str r1, [r0, #0] instructions after ldr r1, =0x004D0002
+    # Find str r1, [r0, #0] instructions inside my_restart
     lines = res.stdout.splitlines()
     str_addrs = []
     in_restart = False
@@ -228,15 +257,28 @@ def extract_disasm_addresses(loader_elf: str | Path | None = None) -> list[str]:
     # Every pulse does two stores: ON (0x004D0002) and OFF (0x004C0003)
     # The first store in each pulse is the ON trigger
     on_stores = str_addrs[0::2]
-    if len(on_stores) == 7:
-        return on_stores
-    return default_addrs
+    if len(on_stores) != 7:
+        sys.stderr.write(
+            f"Error: ELF does not contain exactly 7 ladder pulses (found {len(on_stores)}). "
+            f"Is this a non-ladder build?\n"
+        )
+        sys.exit(1)
+
+    return on_stores
 
 
-def generate_ladder_table(loader_elf: str | Path | None = None) -> list[dict]:
+def generate_ladder_table(loader_elf: str | Path | None = None, is_reference: bool = False) -> list[dict]:
     """Generate complete step-to-code ladder table."""
     timing = calculate_timing()
-    addrs = extract_disasm_addresses(loader_elf)
+    if is_reference:
+        addrs = list(STATIC_REFERENCE_ADDRS)
+    else:
+        if not loader_elf:
+            sys.stderr.write(
+                "Error: No candidate loader ELF provided. Specify --loader-elf <path> or use --reference.\n"
+            )
+            sys.exit(1)
+        addrs = extract_disasm_addresses(loader_elf)
 
     table = []
     for i, step in enumerate(LADDER_STEPS_DEFINITION):
@@ -247,10 +289,13 @@ def generate_ladder_table(loader_elf: str | Path | None = None) -> list[dict]:
     return table
 
 
-def print_table_text(table: list[dict]):
+def print_table_text(table: list[dict], is_reference: bool = False):
     """Print table in formatted human-readable ASCII text."""
     timing = table[0]["timing"]
     print("=" * 105)
+    if is_reference:
+        print("STATIC REFERENCE, not extracted from a build")
+        print("-" * 105)
     print("PORT-24 T3: CANON POWERSHOT G3 X BREADCRUMB LADDER STEP-TO-CODE TABLE")
     print("=" * 105)
     print(
@@ -276,20 +321,17 @@ def print_table_text(table: list[dict]):
     print("=" * 105)
     print("Owner triage rule:")
     print("  Count total flashes observed before camera goes dark.")
-    print("  0 flashes: Failed before check_compat / loader prologue (MBR, dancingbits row 13, PID mismatch).")
-    print("  1 flash:   Failed in core_copy or Boot Witness Stage 1 write.")
-    print("  2 flashes: Failed between witness write and D-cache clean.")
-    print("  3 flashes: Failed during D-cache clean & invalidate (ROM_DCACHE_CLEAN_INV 0xFC127AB1).")
-    print("  4 flashes: Failed between D-cache clean and I-cache invalidation.")
-    print("  5 flashes: Failed during I-cache & branch predictor invalidation (ROM_ICACHE_INV_BP 0xFC127B09).")
-    print("  6 flashes: Failed during pipeline sync (isb sy) or interrupt mask (cpsid if).")
-    print("  7 flashes: Loader 100% EXONERATED! Handoff into core entry 0x003489B5 succeeded; crash is in core.")
+    for signal, desc in TRIAGE_RULES:
+        print(f"  {signal:<10} {desc}")
+    print(f"  {AMBIGUITY_NOTE}")
     print("=" * 105)
 
 
-def print_table_markdown(table: list[dict]):
+def print_table_markdown(table: list[dict], is_reference: bool = False):
     """Print table formatted as GitHub Markdown."""
     timing = table[0]["timing"]
+    if is_reference:
+        print("> **STATIC REFERENCE, not extracted from a build**\n")
     print("| Step # | Step ID | T1 Step | Signal | Cumulative Flashes | Step Iterations | Nominal ms | Max ms (<200ms) | Disassembly Addr | Preserved State |")
     print("| :---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |")
     for row in table:
@@ -306,26 +348,35 @@ def main(argv=None):
     parser.add_argument("--json", action="store_true", help="Output JSON format.")
     parser.add_argument("--markdown", action="store_true", help="Output GitHub Markdown format.")
     parser.add_argument("--loader-elf", default=None, help="Path to candidate_loader.elf for disasm addresses.")
+    parser.add_argument(
+        "--reference",
+        action="store_true",
+        help="Print static reference table (not extracted from a build).",
+    )
     args = parser.parse_args(argv)
 
-    loader_elf = args.loader_elf
-    if not loader_elf:
-        default_candidate_elf = REPO_ROOT / "candidate_breadcrumb_ladder" / "candidate_loader.elf"
-        if default_candidate_elf.is_file():
-            loader_elf = default_candidate_elf
-        else:
-            port2a_elf = REPO_ROOT / "candidate_port2a" / "candidate_loader.elf"
-            if port2a_elf.is_file():
-                loader_elf = port2a_elf
-
-    table = generate_ladder_table(loader_elf)
+    if args.reference:
+        table = generate_ladder_table(is_reference=True)
+    else:
+        loader_elf = args.loader_elf
+        if not loader_elf:
+            default_candidate_elf = REPO_ROOT / "candidate_breadcrumb_ladder" / "candidate_loader.elf"
+            if default_candidate_elf.is_file():
+                loader_elf = default_candidate_elf
+            else:
+                sys.stderr.write(
+                    "Error: No candidate loader ELF found at candidate_breadcrumb_ladder/candidate_loader.elf. "
+                    "Specify --loader-elf <path> or use --reference.\n"
+                )
+                sys.exit(1)
+        table = generate_ladder_table(loader_elf=loader_elf, is_reference=False)
 
     if args.json:
         print(json.dumps(table, indent=2))
     elif args.markdown:
-        print_table_markdown(table)
+        print_table_markdown(table, is_reference=args.reference)
     else:
-        print_table_text(table)
+        print_table_text(table, is_reference=args.reference)
 
 
 if __name__ == "__main__":
