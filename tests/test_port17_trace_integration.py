@@ -67,10 +67,10 @@ ARM_OBJDUMP = os.path.join(TOOLCHAIN_BIN, "arm-none-eabi-objdump")
 ARM_OBJCOPY = os.path.join(TOOLCHAIN_BIN, "arm-none-eabi-objcopy")
 ARM_READELF = os.path.join(TOOLCHAIN_BIN, "arm-none-eabi-readelf")
 
-# Pinned SHA-256 for boot_prototype.c with the guarded PORT-17 call sites.
-# Justified by the tracing-off identity tests below (preprocessed source, object
-# sections, DISKBOOT.BIN and _start/boot_witness/_end equal the parent build).
-BOOT_PROTO_SHA256 = "c3bcbbd3b0891b34d05a64cbae559d0487aeda1ec88e961fddd6cece64479b61"
+# Pinned SHA-256 for boot_prototype.c with opt-in short-press power-on fix added by PORT-24.
+# Default DISKBOOT SHA-256 is still 9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136
+# and preprocessed baseline matches 595cd2e7b118e5c65adaf95c7041237b87d9ec5a4252428e251063b38dcd0479.
+BOOT_PROTO_SHA256 = "3a34a2dd28fca8db1955e2f9d26dd2a176ad7a9c189ece52b8829a7f6fabfed0"
 
 # Baseline parent commit (p17-trace-core-r2 integration commit)
 PARENT_COMMIT = "69f696710ddb298e11ab3b96f66935f9f0e6d70c"

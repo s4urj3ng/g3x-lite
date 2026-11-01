@@ -597,8 +597,13 @@ class TestPort21EvidenceManifest(unittest.TestCase):
         self.assertLessEqual(total_bytes, 65536, f"Total bytes exceed 64 KiB: {total_bytes}")
 
     def test_manifest_matches_approved_reads(self):
-        """The manifest lists exactly the six approved ranges with their approved SHA-256 values."""
-        entries = {e["evidence_id"]: e for e in self.manifest.get("evidence_entries", [])}
+        """The manifest lists exactly the six approved ranges with approved SHA-256 values."""
+        # Filter entries to SCOPE-PORT21-RAM-LIFETIME because PORT21 manifest merges DISKBOOT-TIMING entries.
+        entries = {
+            e["evidence_id"]: e
+            for e in self.manifest.get("evidence_entries", [])
+            if e.get("authorization_scope_id") == "SCOPE-PORT21-RAM-LIFETIME"
+        }
         self.assertEqual(set(entries), set(APPROVED_READS))
         for eid, (start, end, sha, _) in APPROVED_READS.items():
             entry = entries[eid]
@@ -609,7 +614,10 @@ class TestPort21EvidenceManifest(unittest.TestCase):
 
     def test_manifest_read_start_notes(self):
         """Each manifest note states its read-start status in the approved wording."""
+        # Filter entries to SCOPE-PORT21-RAM-LIFETIME because PORT21 manifest merges DISKBOOT-TIMING entries.
         for entry in self.manifest.get("evidence_entries", []):
+            if entry.get("authorization_scope_id") != "SCOPE-PORT21-RAM-LIFETIME":
+                continue
             eid = entry["evidence_id"]
             notes = entry.get("notes", "")
             self.assertNotIn("ratified", notes, eid)
