@@ -167,12 +167,21 @@ class TestPort23OwnerSessionPlan(unittest.TestCase):
         for row in table_lines[1:]:
             cells = [c.strip() for c in row.split("|")[1:-1]]
             if cells:
-                first_cell = cells[0].replace("*", "")
+                first_cell = cells[0].replace("*", "").strip()
                 self.assertNotEqual(
                     first_cell,
                     "before_copy",
                     "Table must not list 'before_copy' as a last breadcrumb seen (that build is never flashed)",
                 )
+                # Verify that if Power-On 1 observed an LED ("LED on"), the last breadcrumb is not None
+                po1_cell = cells[1]
+                if "led on" in po1_cell.lower():
+                    self.assertFalse(
+                        first_cell.lower().startswith("none"),
+                        f"Row with Power-On 1 observation '{po1_cell}' must not have 'None' as last breadcrumb: {row}",
+                    )
+        # Verify that Power-On 2A showing no LED is explicitly noted in the table
+        self.assertIn("Power-On 2A showed no LED", sec4)
 
     def test_recovery_plan_present(self):
         """Verify recovery plan covers card unlock/removal, battery pull, and normal start."""
@@ -196,18 +205,74 @@ class TestPort23OwnerSessionPlan(unittest.TestCase):
         self.assertIn("runs", parsed_json["session_report"])
         self.assertGreaterEqual(len(parsed_json["session_report"]["runs"]), 2)
 
-        # Verify key fields in template runs
-        run1 = parsed_json["session_report"]["runs"][0]
-        for field in (
-            "power_on_index",
-            "build_stage",
-            "diskboot_sha256",
-            "card_lock_state",
+        # 1. session_id placeholder verification
+        session_id = parsed_json["session_report"].get("session_id", "")
+        self.assertTrue(
+            session_id.startswith("YYYYMMDD"),
+            f"session_id must be an unfilled placeholder starting with 'YYYYMMDD', got '{session_id}'",
+        )
+        self.assertNotIn("20261101", session_id, "session_id must not contain fixed past date 20261101")
+
+        # 2. Verify all observation fields in all runs are null or empty
+        observation_fields = [
             "led_observed",
             "lcd_backlight_state",
             "outcome",
-        ):
-            self.assertIn(field, run1, f"Report template run must contain '{field}'")
+            "button_hold_duration_measured_ms",
+            "led_duration_measured_ms",
+            "time_to_dark_measured_ms",
+        ]
+        for run in parsed_json["session_report"]["runs"]:
+            for field in observation_fields:
+                self.assertIn(field, run, f"Run {run.get('power_on_index')} must contain field '{field}'")
+                val = run[field]
+                self.assertTrue(
+                    val is None or val == "",
+                    f"Run {run.get('power_on_index')} observation field '{field}' must be null or empty, got {val!r}",
+                )
+            notes_val = run.get("notes", "")
+            self.assertTrue(
+                notes_val is None or notes_val == "",
+                f"Run {run.get('power_on_index')} notes must be null or empty string, got {notes_val!r}",
+            )
+
+        # 3. Verify Run 2 build_stage and diskboot_sha256 are NOT fixed to pre_jump
+        run2 = parsed_json["session_report"]["runs"][1]
+        self.assertTrue(
+            run2.get("build_stage") is None or run2.get("build_stage") == "",
+            f"Run 2 build_stage must be null/empty for owner to choose, got {run2.get('build_stage')!r}",
+        )
+        self.assertTrue(
+            run2.get("diskboot_sha256") is None or run2.get("diskboot_sha256") == "",
+            f"Run 2 diskboot_sha256 must be null/empty for owner to choose, got {run2.get('diskboot_sha256')!r}",
+        )
+
+        # 4. Verify all allowed enum options are listed
+        self.assertIn("allowed_enums", parsed_json, "Template must contain 'allowed_enums' block")
+        enums = parsed_json["allowed_enums"]
+        expected_enums = {
+            "button_action": ["brief_tap", "continuous_hold"],
+            "card_lock_state": ["LOCKED", "UNLOCKED"],
+            "led_observed": ["flash_brief_then_dark", "led_lit_before_ui", "solid_on", "never_lit"],
+            "lcd_backlight_state": ["off_unpowered", "on_stock_ui", "on_blank_glow"],
+            "outcome": ["power_off", "stock_ui", "hang", "reset_loop"],
+        }
+        for enum_name, expected_options in expected_enums.items():
+            self.assertIn(enum_name, enums, f"allowed_enums must list '{enum_name}'")
+            actual_options = enums[enum_name]
+            for opt in expected_options:
+                self.assertIn(
+                    opt,
+                    actual_options,
+                    f"allowed_enums['{enum_name}'] must list option '{opt}'",
+                )
+
+        # Verify build_stage options in allowed_enums include both pre_jump and after_copy with T2 hashes
+        stage_options = {item["stage"]: item["diskboot_sha256"] for item in enums.get("build_stage", [])}
+        self.assertIn("pre_jump", stage_options)
+        self.assertIn("after_copy", stage_options)
+        self.assertEqual(stage_options["pre_jump"], self.t2_hashes["pre_jump"])
+        self.assertEqual(stage_options["after_copy"], self.t2_hashes["after_copy"])
 
     def test_epistemic_labels_present(self):
         """Verify epistemic labels are present throughout the document."""
@@ -311,6 +376,32 @@ class TestPort23OwnerSessionPlan(unittest.TestCase):
                     has_unknown or has_owner,
                     f"Line {line_no} contains timing {matches} without UNKNOWN or OWNER-REPORTED label: {line}",
                 )
+
+    def test_stop_conditions_no_invalid_citation_and_observable(self):
+        """Verify stop conditions do not cite SAFETY.md:1-8 and use observable conditions."""
+        sec5 = self.content.split("## 5. Stop Conditions & Recovery Plan", 1)[1].split("## 6. Machine-Readable", 1)[0]
+        # Must not cite SAFETY.md:1-8 for stop conditions
+        self.assertNotIn("[VERIFIED: docs/SAFETY.md:1-8]", sec5)
+        self.assertIn("[INFERRED (owner protocol)]", sec5)
+        # Must not mention measuring battery voltage threshold
+        self.assertNotIn("battery voltage drops below nominal threshold", sec5.lower())
+        self.assertIn("low-battery indicator", sec5.lower())
+
+    def test_no_overreaching_rom_citations(self):
+        """Verify no overreaching ROM citations for LED identity, early boot writes, or reset vector."""
+        # 0xFC0D73C0 must not be cited in document
+        self.assertNotIn("0xFC0D73C0", self.content)
+        # LED identity must cite T1 and owner result (d)
+        self.assertIn("docs/PORT23_POWER_SUPERVISION.md:33", self.content)
+        self.assertIn("owner result (d)", self.content)
+        # Never writes claim must be INFERRED
+        m_never = re.search(r"never writes.*?`0x004D0002`.*?(\[[^\]]+\])", self.content, re.IGNORECASE)
+        self.assertIsNotNone(m_never)
+        self.assertIn("INFERRED", m_never.group(1))
+        # Reset vector reboot must be INFERRED
+        m_reset = re.search(r"reset vector `0xFC02000C`\s*`?(\[[^\]]+\])`?", self.content)
+        self.assertIsNotNone(m_reset)
+        self.assertIn("INFERRED", m_reset.group(1))
 
 
 if __name__ == "__main__":

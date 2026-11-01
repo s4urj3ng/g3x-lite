@@ -35,7 +35,7 @@ During physical hardware trials conducted on 2026-11-01, the camera owner evalua
    - **`DISKBOOT.BIN` SHA-256**: `9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136` `[VERIFIED: docs/PORT16_CANDIDATE_BUILD.md:362; docs/PORT19_GO_NOGO.md:16; docs/PORT23_POWER_SUPERVISION.md:22]`.
    - **Observation**: Pressing the Playback button did not bring the camera up. Only repeated or long power-button presses sometimes brought up the stock UI `[OWNER-REPORTED: docs/PORT23_POWER_SUPERVISION.md:22]`.
 4. **Owner Result (d) — LED Polarity Confirmed on Hardware** `[VERIFIED: hardware trial 2026-11-01; docs/PORT23_LED_BREADCRUMBS.md:6-7; docs/PORT23_POWER_SUPERVISION.md:33]`:
-   - **GPIO MMIO Address**: `0xD20B0884` (pin 33, rear green status LED) `[STATIC_VERIFIED: ROM 0xFC0D73C0-0xFC0D74BF; PORT23-ROM-GPIO-WRITE-MMIO]`.
+   - **GPIO MMIO Address**: `0xD20B0884` (pin 33, rear green status LED) `[VERIFIED: docs/PORT23_POWER_SUPERVISION.md:33; owner result (d)]`.
    - **LED ON Action**: Writing `0x004D0002` to `0xD20B0884` turns the rear green LED **ON** `[VERIFIED: hardware trial 2026-11-01]`.
    - **LED OFF Action**: Writing `0x004C0003` to `0xD20B0884` turns the rear green LED **OFF** `[VERIFIED: hardware trial 2026-11-01]`.
 
@@ -48,7 +48,7 @@ During physical hardware trials conducted on 2026-11-01, the camera owner evalua
    - Therefore, the stall length is NOT the cause of shutdown `[VERIFIED by owner results a-c]`. The stall-length theory is superseded `[VERIFIED by owner results a-c; docs/PORT23_POWER_SUPERVISION.md:26-30]`.
 2. **DISKBOOT Execution is Physically Evidenced** `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:31-36]`:
    - In both Results (a) and (b), the rear green LED physically illuminated `[OWNER-REPORTED: docs/PORT23_POWER_SUPERVISION.md:32]`.
-   - Stock GM1.10C ROM never writes `0x004D0002` to `0xD20B0884` during early boot `[STATIC_VERIFIED: ROM 0xFC0D73C0-0xFC0D74BF; PORT23-ROM-GPIO-WRITE-MMIO]`.
+   - Stock GM1.10C ROM never writes `0x004D0002` to `0xD20B0884` during early boot `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:33-35]`.
    - Therefore, `StartDiskboot` successfully validated `BOOTDISK`, loaded `A/DISKBOOT.BIN` from the locked SD card into RAM, descrambled DancingBits, and jumped to loader entry `0x8001` `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:35]`.
    - Early boot rejection (Hypothesis H1) is refuted for initial entry `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:36]`.
 3. **Failure Occurs Post-Loader-Entry** `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:29-30]`:
@@ -190,7 +190,7 @@ If the LED never lit in Power-On 1, execution did not reach `pre_jump`. Power-On
 | :--- | :--- | :--- | :--- |
 | **LCD Backlight State** | Completely DARK and unpowered (no edge illumination or panel glow) `[OWNER-REPORTED: docs/PORT23_POWER_SUPERVISION.md:21]` | If hang is early: dark. If hang is after LCD init: backlight glows (black screen) `[INFERRED]` | Backlight flickers or remains uninitialized `[INFERRED]` |
 | **LED Behavior** | Green LED turns on when checkpoint is reached, then turns dark when power rails drop `[INFERRED: docs/PORT23_LED_BREADCRUMBS.md:13, 41]`. LED duration depends on rail collapse time (timing is UNKNOWN; owner measures and reports) `[UNKNOWN]` | If checkpoint passed: green LED remains **permanently illuminated** (solid green) `[INFERRED]` | Green LED cycles repeatedly on each reboot `[INFERRED]` |
-| **System Power Rails** | Main DC-DC converters shut down; GPIO 0x67 de-asserted via `0x004C0003` `[STATIC_VERIFIED: ROM 0xFC05BA56]` | Power rails remain energized; camera draws continuous battery current `[INFERRED]` | Rails toggle or CPU reboots into reset vector `0xFC02000C` `[STATIC_VERIFIED: ROM 0xFC02000C]` |
+| **System Power Rails** | Main DC-DC converters shut down; GPIO 0x67 de-asserted via `0x004C0003` `[STATIC_VERIFIED: ROM 0xFC05BA56]` | Power rails remain energized; camera draws continuous battery current `[INFERRED]` | Rails toggle or CPU reboots into reset vector `0xFC02000C` `[INFERRED: docs/PORT21_RAM_LIFETIME.md:307]` |
 | **Recovery Requirement** | Camera responds to subsequent physical Power button press `[OWNER-REPORTED]` | Requires **physical battery pull** to recover `[INFERRED]` | Continues boot cycling until battery is removed `[INFERRED]` |
 
 ---
@@ -204,7 +204,7 @@ All rows in this table represent mutually exclusive physical observation outcome
 | **`pre_jump`** | LED on, then dark | **2A (`pre_jump`, button held)**: LED on, then camera boots to stock UI | Power-On 1: dark/off; Power-On 2A: ON with stock UI | Stage 5 startup check: `sub_fc1284ac` returns 0 on brief tap, cutting power via GPIO 0x67 (`sub_fc05ba56`) (**Rank 1 / Mechanism A**) `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:43-50, 265, 277]` | PORT-24 Remediation: Patch `sub_fc05b962_my` in `boot_prototype.c` to bypass `sub_fc1284ac` (force `r0 = 1`), matching sister port G3 X 1.10E `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:344-348]` |
 | **`pre_jump`** | LED on, then dark | **2A (`pre_jump`, button held)**: LED on, then dark (power-off persists despite button hold) | Dark and completely unpowered across both runs | Sub-CPU PMIC hardware power supervision drops rails independently of button hold (**Rank 2**) `[INFERRED / UNKNOWN: docs/PORT23_POWER_SUPERVISION.md:278, 294-301]`, or button hold was too short (required hold duration is UNKNOWN) `[INFERRED / UNKNOWN: docs/PORT23_POWER_SUPERVISION.md:324-325]` | Investigate sub-CPU SIO/DCDC communication sequence prior to `task_Startup` or re-test with extended button hold |
 | **`pre_jump`** | LED remains solid ON indefinitely, camera hung | *(Not needed; single run diagnostic)* | Dark (uninitialized display controller) or dim uninitialized glow; power rails remain energized | Core entry execution fault or infinite loop in early `startup` (`0x003489B4`) vector copy or BSS zeroing `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:43-45]` | Audit relocated core startup code and memory map (`candidate_main.map`) between `0x003489B4` and initial task |
-| **`None`** | LED on, then dark | **2A (`pre_jump`, button held)**: Stock UI appears, but LED NEVER lit on Run 2 | Power-On 1: dark/off; Power-On 2A: ON with stock UI | Transient SD bus desynchronization caused `StartDiskboot` to fail SD check on retry, cleanly bypassing `DISKBOOT.BIN` and booting stock firmware (**Rank 3 / Mechanism B**) `[STATIC_VERIFIED / INFERRED: docs/PORT23_POWER_SUPERVISION.md:84-86, 266]` | Perform clean power cycle with battery pull to reset SD host controller, re-verify card contacts and filesystem |
+| **`pre_jump`** (Power-On 2A showed no LED) | LED on, then dark | **2A (`pre_jump`, button held)**: Stock UI appears, but Power-On 2A showed no LED (LED NEVER lit on Run 2) | Power-On 1: dark/off; Power-On 2A: ON with stock UI | Transient SD bus desynchronization caused `StartDiskboot` to fail SD check on retry, cleanly bypassing `DISKBOOT.BIN` and booting stock firmware (**Rank 3 / Mechanism B**) `[STATIC_VERIFIED / INFERRED: docs/PORT23_POWER_SUPERVISION.md:84-86, 266]` | Perform clean power cycle with battery pull to reset SD host controller, re-verify card contacts and filesystem |
 | **`after_copy`** | LED never lit (stays completely dark) | **2B (`after_copy`, brief tap)**: LED on, then dark (or solid ON) | Dark and completely unpowered | Loader execution fault between `after_copy` and `pre_jump`: decoupled cache routines (`0xFC127AB1` / `0xFC127B09`) or boot witness write at `0x0035F7A0` `[INFERRED: docs/PORT23_LED_BREADCRUMBS.md:50]` | Generate differential candidate with `--stage witness_write` (`1fcad53e...`) to isolate cache routine from witness store |
 | **`None`** | LED never lit (stays completely dark) | **2B (`after_copy`, brief tap)**: LED never lit (stays completely dark) | Dark and completely unpowered across both runs | Early loader failure before `after_copy` (`check_compat` model check or `core_copy`), or `StartDiskboot` failed to run candidate on both trials (card VBR marker or SD bus fault) `[INFERRED / UNKNOWN: docs/PORT23_POWER_SUPERVISION.md:266]` | Build `before_copy` candidate (`b2a2d55e...`) to test `check_compat`, and re-verify SD card VBR marker (`BOOTDISK`) on host |
 
@@ -214,11 +214,11 @@ All rows in this table represent mutually exclusive physical observation outcome
 
 ### 5.1 Immediate Stop Conditions
 
-The trial must be immediately aborted if any of the following occur `[VERIFIED: docs/SAFETY.md:1-8]`:
+The trial must be immediately aborted if any of the following occur `[INFERRED (owner protocol)]`:
 1. The camera emits any abnormal heat, odor, or audible high-frequency noise.
 2. The lens motor or shutter actuates unexpectedly or cycles erratically.
 3. The rear green LED flickers continuously in an unmanaged rapid loop (potential boot loop).
-4. Physical battery voltage drops below nominal threshold.
+4. The low-battery indicator appears or flashes during a normal start (depleted battery).
 
 ### 5.2 Verified Recovery Procedure
 
@@ -243,12 +243,83 @@ If the camera powers off, hangs, or fails to boot, execute the recovery sequence
 
 The owner completes this machine-readable report template for each power-on trial and returns the block for automated processing.
 
-### 6.1 JSON Format Template
+### 6.1 Allowed Enum Values & Schema Reference
+
+All observation fields must be filled by the owner based on physical observation. A blank template returned unedited must not read as real data (all observation fields default to `null` or empty).
+
+- **`build_stage`** and **`diskboot_sha256`** options:
+  - Run 1 is fixed to terminal loader checkpoint:
+    - `build_stage`: `pre_jump` (`build_flag`: `--stage pre_jump`, `diskboot_sha256`: `abe7432ea4f2a7df3778fb8023209639da675687e3eb0ab826de4a73cc767f75`) `[VERIFIED: docs/PORT23_LED_BREADCRUMBS.md:115]`
+  - Run 2: Owner chooses based on Power-On 1 result from `{pre_jump, after_copy}`:
+    - Option A (`pre_jump` for button hold trial 2A): `build_stage`: `pre_jump` (`build_flag`: `--stage pre_jump`, `diskboot_sha256`: `abe7432ea4f2a7df3778fb8023209639da675687e3eb0ab826de4a73cc767f75`) `[VERIFIED: docs/PORT23_LED_BREADCRUMBS.md:115]`
+    - Option B (`after_copy` for midpoint bisection 2B): `build_stage`: `after_copy` (`build_flag`: `--stage after_copy`, `diskboot_sha256`: `0b02b408b8f4c3f8ddfd2d0b0e6726355aa4440cb5a40c659f1d8515651c43df`) `[VERIFIED: docs/PORT23_LED_BREADCRUMBS.md:85]`
+- **`button_action`** options:
+  - `brief_tap`: Normal brief power button tap (used in Run 1 and Run 2B).
+  - `continuous_hold`: Maintained continuous hold on power button (used in Run 2A).
+- **`card_lock_state`** options:
+  - `LOCKED`: Physical write-protect switch down/locked (required for DISKBOOT execution).
+  - `UNLOCKED`: Physical write-protect switch up/unlocked (used during recovery).
+- **`led_observed`** options:
+  - `flash_brief_then_dark`: Green LED flashed or stayed on briefly, then powered off.
+  - `led_lit_before_ui`: Green LED illuminated before stock UI displayed.
+  - `solid_on`: Green LED turned on and stayed permanently on (system hang).
+  - `never_lit`: Green LED never illuminated at all.
+- **`lcd_backlight_state`** options:
+  - `off_unpowered`: LCD panel completely dark and unpowered (no glow, clean power-off).
+  - `on_stock_ui`: LCD backlight on with normal stock Canon UI displayed.
+  - `on_blank_glow`: LCD backlight on (dim panel glow) with no UI / blank screen (hang).
+- **`outcome`** options:
+  - `power_off`: Camera shut down and power rails dropped (unpowered).
+  - `stock_ui`: Camera booted successfully into stock Canon user interface.
+  - `hang`: Camera remained powered on but frozen/unresponsive.
+  - `reset_loop`: Camera continuously rebooted or cycled.
+
+### 6.2 JSON Format Template
 
 ```json
 {
+  "schema_version": "1.0",
+  "allowed_enums": {
+    "build_stage": [
+      {
+        "stage": "pre_jump",
+        "build_flag": "--stage pre_jump",
+        "diskboot_sha256": "abe7432ea4f2a7df3778fb8023209639da675687e3eb0ab826de4a73cc767f75"
+      },
+      {
+        "stage": "after_copy",
+        "build_flag": "--stage after_copy",
+        "diskboot_sha256": "0b02b408b8f4c3f8ddfd2d0b0e6726355aa4440cb5a40c659f1d8515651c43df"
+      }
+    ],
+    "button_action": [
+      "brief_tap",
+      "continuous_hold"
+    ],
+    "card_lock_state": [
+      "LOCKED",
+      "UNLOCKED"
+    ],
+    "led_observed": [
+      "flash_brief_then_dark",
+      "led_lit_before_ui",
+      "solid_on",
+      "never_lit"
+    ],
+    "lcd_backlight_state": [
+      "off_unpowered",
+      "on_stock_ui",
+      "on_blank_glow"
+    ],
+    "outcome": [
+      "power_off",
+      "stock_ui",
+      "hang",
+      "reset_loop"
+    ]
+  },
   "session_report": {
-    "session_id": "PORT23-SESSION-20261101",
+    "session_id": "YYYYMMDD-PORT23-OWNER-SESSION",
     "camera_model": "Canon PowerShot G3 X",
     "firmware_version": "GM1.10C",
     "platform_id": "0x32A8",
@@ -265,42 +336,53 @@ The owner completes this machine-readable report template for each power-on tria
         "button_pressed": "POWER",
         "button_action": "brief_tap",
         "button_hold_duration_measured_ms": null,
-        "led_observed": "flash_brief_then_dark",
+        "led_observed": null,
         "led_duration_measured_ms": null,
-        "lcd_backlight_state": "off_unpowered",
+        "lcd_backlight_state": null,
         "time_to_dark_measured_ms": null,
-        "outcome": "power_off",
-        "notes": "Green LED flashed once, then went dark. Backlight stayed completely unpowered."
+        "outcome": null,
+        "notes": ""
       },
       {
         "power_on_index": 2,
-        "build_stage": "pre_jump",
-        "build_flag": "--stage pre_jump",
-        "diskboot_sha256": "abe7432ea4f2a7df3778fb8023209639da675687e3eb0ab826de4a73cc767f75",
+        "build_stage": null,
+        "build_flag": null,
+        "diskboot_sha256": null,
         "card_filesystem": "FAT32",
         "card_lock_state": "LOCKED",
         "bootdisk_vbr_present": true,
         "script_vbr_present": true,
         "button_pressed": "POWER",
-        "button_action": "continuous_hold",
+        "button_action": null,
         "button_hold_duration_measured_ms": null,
-        "led_observed": "led_lit_before_ui",
+        "led_observed": null,
         "led_duration_measured_ms": null,
-        "lcd_backlight_state": "on_stock_ui",
+        "lcd_backlight_state": null,
         "time_to_dark_measured_ms": null,
-        "outcome": "stock_ui",
-        "notes": "Maintained continuous hold on Power button. Green LED illuminated before stock UI appeared."
+        "outcome": null,
+        "notes": ""
       }
     ]
   }
 }
 ```
 
-### 6.2 YAML Format Template
+### 6.3 YAML Format Template
 
 ```yaml
+schema_version: "1.0"
+# Allowed Enum Reference:
+# build_stage:
+#   pre_jump:   diskboot_sha256: abe7432ea4f2a7df3778fb8023209639da675687e3eb0ab826de4a73cc767f75 (build_flag: --stage pre_jump)
+#   after_copy: diskboot_sha256: 0b02b408b8f4c3f8ddfd2d0b0e6726355aa4440cb5a40c659f1d8515651c43df (build_flag: --stage after_copy)
+# button_action: [brief_tap, continuous_hold]
+# card_lock_state: [LOCKED, UNLOCKED]
+# led_observed: [flash_brief_then_dark, led_lit_before_ui, solid_on, never_lit]
+# lcd_backlight_state: [off_unpowered, on_stock_ui, on_blank_glow]
+# outcome: [power_off, stock_ui, hang, reset_loop]
+
 session_report:
-  session_id: "PORT23-SESSION-20261101"
+  session_id: "YYYYMMDD-PORT23-OWNER-SESSION"
   camera_model: "Canon PowerShot G3 X"
   firmware_version: "GM1.10C"
   platform_id: "0x32A8"
@@ -316,28 +398,32 @@ session_report:
       button_pressed: "POWER"
       button_action: "brief_tap"
       button_hold_duration_measured_ms: null
-      led_observed: "flash_brief_then_dark"
+      led_observed: null
       led_duration_measured_ms: null
-      lcd_backlight_state: "off_unpowered"
+      lcd_backlight_state: null
       time_to_dark_measured_ms: null
-      outcome: "power_off"
-      notes: "Green LED flashed once, then went dark. Backlight stayed completely unpowered."
+      outcome: null
+      notes: ""
 
     - power_on_index: 2
-      build_stage: "pre_jump"
-      build_flag: "--stage pre_jump"
-      diskboot_sha256: "abe7432ea4f2a7df3778fb8023209639da675687e3eb0ab826de4a73cc767f75"
+      # Choose build_stage from {pre_jump, after_copy}:
+      #   pre_jump:   diskboot_sha256: abe7432ea4f2a7df3778fb8023209639da675687e3eb0ab826de4a73cc767f75 (build_flag: --stage pre_jump)
+      #   after_copy: diskboot_sha256: 0b02b408b8f4c3f8ddfd2d0b0e6726355aa4440cb5a40c659f1d8515651c43df (build_flag: --stage after_copy)
+      build_stage: null
+      build_flag: null
+      diskboot_sha256: null
       card_filesystem: "FAT32"
       card_lock_state: "LOCKED"
       bootdisk_vbr_present: true
       script_vbr_present: true
       button_pressed: "POWER"
-      button_action: "continuous_hold"
+      # Choose button_action: continuous_hold (Run 2A) | brief_tap (Run 2B)
+      button_action: null
       button_hold_duration_measured_ms: null
-      led_observed: "led_lit_before_ui"
+      led_observed: null
       led_duration_measured_ms: null
-      lcd_backlight_state: "on_stock_ui"
+      lcd_backlight_state: null
       time_to_dark_measured_ms: null
-      outcome: "stock_ui"
-      notes: "Maintained continuous hold on Power button. Green LED illuminated before stock UI appeared."
+      outcome: null
+      notes: ""
 ```
