@@ -152,7 +152,71 @@ class TestPort23OwnerSessionPlan(unittest.TestCase):
         self.assertIn("Mechanism B", self.content)
         self.assertIn("StartDiskboot", self.content)
 
-    def test_decision_table_structure_and_mutual_exclusion(self):
+    def _decision_rows(self) -> list[list[str]]:
+        sec4 = self.content.split("## 4. Decision Table", 1)[1].split("## 5. Stop Conditions", 1)[0]
+        rows = [line for line in sec4.splitlines() if line.startswith("|") and not line.startswith("| :---")]
+        return [[c.strip() for c in row.split("|")[1:-1]] for row in rows[1:]]
+
+    def _rows_starting_with(self, name: str) -> list[str]:
+        return [
+            " | ".join(cells)
+            for cells in self._decision_rows()
+            if cells and cells[0].replace("*", "").replace("`", "").strip().lower().startswith(name.lower())
+        ]
+
+    @staticmethod
+    def _has_missed_flash_caveat(text: str) -> bool:
+        lower = text.lower()
+        return "UNKNOWN" in text and "flash" in lower and ("too short" in lower or "not visible" in lower)
+
+    def test_missed_flash_caveat_in_section3(self):
+        """Verify §3 carries the UNKNOWN false-negative caveat, including in §3.2 and Branch B."""
+        sec3 = self.content.split("## 3. Session Protocol & Steps", 1)[1].split("## 4. Decision Table", 1)[0]
+        sec32 = sec3.split("### 3.2", 1)[1].split("### 3.3", 1)[0]
+        branch_b = sec3.split("#### Branch B", 1)[1].split("### 3.4", 1)[0]
+        self.assertTrue(self._has_missed_flash_caveat(sec32), "§3.2 must carry the missed-flash caveat")
+        self.assertTrue(self._has_missed_flash_caveat(branch_b), "Branch B must carry the missed-flash caveat")
+        self.assertIn("justified only if a missed flash has been ruled out", branch_b)
+
+    def test_missed_flash_caveat_in_after_copy_and_none_rows(self):
+        """Verify the after_copy and None rows give the missed-flash alternative, labelled UNKNOWN."""
+        for name in ("after_copy", "none"):
+            rows = self._rows_starting_with(name)
+            self.assertTrue(rows, f"Decision table must have a '{name}' row")
+            for row in rows:
+                self.assertTrue(
+                    self._has_missed_flash_caveat(row),
+                    f"Row '{name}' must give the UNKNOWN missed-flash alternative: {row}",
+                )
+                self.assertIn("Covers both", row, f"Row '{name}' next step must cover both explanations")
+
+    def test_decision_table_catch_all_and_combinations(self):
+        """Verify the catch-all row and the added observation combinations exist."""
+        catch_all = self._rows_starting_with("other / unclear")
+        self.assertEqual(len(catch_all), 1, "Decision table must have exactly one catch-all row")
+        self.assertIn("report template", catch_all[0].lower())
+        rows = [" | ".join(cells) for cells in self._decision_rows()]
+        self.assertTrue(
+            any("LED on, then dark" in r and "LED solid on" in r and "backlight glowing" in r for r in rows),
+            "Must cover Power-On 1 'LED on, then dark' followed by 2A solid on with backlight glowing",
+        )
+        self.assertTrue(
+            any("LED remains solid ON, backlight ON" in r for r in rows),
+            "Must cover Power-On 1 LED solid on with backlight on",
+        )
+        self.assertNotIn("mutually exclusive", self.content.lower())
+
+    def test_no_wrong_t1_flowchart_citation(self):
+        """Verify the wrong T1 citation is gone and Mechanism B cites T1:266 plus the ROM evidence ID."""
+        self.assertNotIn("PORT23_POWER_SUPERVISION.md:84-86", self.content)
+        rows = [" | ".join(cells) for cells in self._decision_rows() if "Mechanism B" in " | ".join(cells)]
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertIn("docs/PORT23_POWER_SUPERVISION.md:266", row)
+            self.assertIn("PORT23-ROM-STARTDISKBOOT", row)
+            self.assertIn("0xFC05BC34-0xFC05BC38", row)
+
+    def test_decision_table_structure(self):
         """Verify decision table maps last breadcrumb seen to failing stage and next host-side step."""
         sec4 = self.content.split("## 4. Decision Table", 1)[1].split("## 5. Stop Conditions", 1)[0]
         self.assertIn("Last Breadcrumb Seen", sec4)
