@@ -2,7 +2,7 @@
 
 - **Target Camera**: Canon PowerShot G3 X (Firmware **GM1.10C**, Platform ID `0x32A8` = 12968) `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:7; docs/PORT21_RAM_LIFETIME.md:3]`
 - **Purpose**: Diagnostic execution plan for the next camera owner session to localise the post-loader shutdown in at most two physical power-ons `[INFERRED]`
-- **Evaluation Mode & Safety**: Phase 0 Read-Only regarding firmware and hardware (`docs/SAFETY.md:1-8`). STRICT NO-GO on firmware flashing, camera connection, unreviewed scripts, or execution without owner protocol `[VERIFIED: docs/SAFETY.md:1-8; AGENTS.md:19-25]`
+- **Evaluation Mode & Safety**: Phase 0 Read-Only regarding firmware and camera hardware (`docs/SAFETY.md:1-8`). STRICT NO-GO on firmware flashing, camera connection, unreviewed scripts, or execution without owner protocol `[VERIFIED: docs/SAFETY.md:1-8; AGENTS.md:19-25]`
 - **Inputs & Citations**:
   - T1 Output: `docs/PORT23_POWER_SUPERVISION.md` and `docs/agentbridge/PORT23_EVIDENCE_MANIFEST.json` (Commit `183dc7eaa9183889a6817f18eedd97e2a192d9e0`) `[VERIFIED: git commit 183dc7e]`
   - T2 Output: `docs/PORT23_LED_BREADCRUMBS.md`, `tools/build_candidate_port23_breadcrumb.py`, and breadcrumb platform files (Commit `59ca5f51226566c10607dbf0776980cdaebef25c`) `[VERIFIED: git commit 59ca5f5]`
@@ -18,7 +18,7 @@
 
 ## 1. Current Reading & Hardware Evidence
 
-During the physical hardware trials conducted on 2026-11-01, the camera owner evaluated candidate builds on an SD card formatted as FAT32 with `BOOTDISK` at offset `0x1E0` and `SCRIPT` at offset `0x1F0`, with the SD card write-protect switch set to **LOCKED** `[OWNER-REPORTED: milestone task brief; docs/PORT19_BOOTDISK_VBR.md:17-22]`. Four primary results were established:
+During physical hardware trials conducted on 2026-11-01, the camera owner evaluated candidate builds on an SD card formatted as FAT32 with `BOOTDISK` at offset `0x1E0` and `SCRIPT` at offset `0x1F0`, with the SD card write-protect switch set to **LOCKED** `[OWNER-REPORTED: milestone task brief; docs/PORT19_BOOTDISK_VBR.md:20-34]`. Four primary results were established:
 
 ### 1.1 Owner Trial Results (2026-11-01)
 
@@ -27,7 +27,7 @@ During the physical hardware trials conducted on 2026-11-01, the camera owner ev
    - **`DISKBOOT.BIN` SHA-256**: `757dfb7f7824ba968951724416a058a6881ad99a7a7a6cf7cd6e6f0e44db5286` `[VERIFIED: tests/test_port20_led_candidate.py:27; docs/PORT20_LED_CANDIDATE.md:71]`.
    - **Observation**: The rear green status LED lit for a few seconds, then went dark. The camera did not come up (LCD backlight completely off, no UI). A second power button press repeated the identical sequence `[OWNER-REPORTED: docs/PORT23_POWER_SUPERVISION.md:20]`.
 2. **Owner Result (b) — Short-Delay LED Build (`0x00600000` Stall)** `[OWNER-REPORTED: milestone task brief; docs/PORT23_POWER_SUPERVISION.md:21]`:
-   - **Target Binary**: Shortened delay variant with loop constant `0x00600000` (6,291,456 busy-wait iterations, 1/16th duration) `[VERIFIED: docs/PORT23_POWER_SUPERVISION.md:21]`.
+   - **Target Binary**: Shortened delay variant with loop constant `0x00600000` (6,291,456 busy-wait iterations, 1/16th stall duration; exact duration is UNKNOWN) `[OWNER-REPORTED: docs/PORT23_POWER_SUPERVISION.md:21, 27]`.
    - **`DISKBOOT.BIN` SHA-256**: `3922ddbecab362e8e13dc76bedd1758828fc91a2934310d3abb7d7d70f4e44ac` `[VERIFIED: docs/PORT23_POWER_SUPERVISION.md:21]`.
    - **Observation**: The green status LED flashed briefly, then the camera stayed dark and did not come up. The LCD backlight was completely off, indicating an unpowered state rather than an active black screen `[OWNER-REPORTED: docs/PORT23_POWER_SUPERVISION.md:21]`.
 3. **Owner Result (c) — Control: PORT-19 Default Build (No LED Prologue, Zero Delay)** `[OWNER-REPORTED: milestone task brief; docs/PORT23_POWER_SUPERVISION.md:22]`:
@@ -43,17 +43,17 @@ During the physical hardware trials conducted on 2026-11-01, the camera owner ev
 
 1. **The Stall-Length Theory is SUPERSEDED** `[VERIFIED by owner results a-c; docs/PORT23_POWER_SUPERVISION.md:26-30]`:
    - Prior to physical testing, it was hypothesized that a multi-second busy wait in `loader_entry_led.S` (`0x06000000` cycles) exceeded a hardware power supervision timer during the stall itself `[INFERRED: docs/PORT20_LED_CANDIDATE.md:172-180]`.
-   - However, reducing the delay 16-fold in Result (b) (`0x00600000` cycles, ~100–150 ms) still produced immediate power-off `[OWNER-REPORTED: docs/PORT23_POWER_SUPERVISION.md:27]`.
+   - However, reducing the delay 16-fold in Result (b) (`0x00600000` cycles) still produced immediate power-off with the backlight completely unpowered `[OWNER-REPORTED: docs/PORT23_POWER_SUPERVISION.md:27]`.
    - Furthermore, Result (c) (zero delay loop, zero LED code) also failed to boot on normal taps and failed on Playback presses `[OWNER-REPORTED: docs/PORT23_POWER_SUPERVISION.md:28]`.
-   - Therefore, the stall length is NOT the cause of shutdown `[VERIFIED by owner results a-c]`. The stall-length theory is decisively superseded `[VERIFIED]`.
-2. **DISKBOOT Execution is Conclusively Proven** `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:31-36]`:
-   - In both Results (a) and (b), the rear green LED physically illuminated `[OWNER-REPORTED]`.
+   - Therefore, the stall length is NOT the cause of shutdown `[VERIFIED by owner results a-c]`. The stall-length theory is superseded `[VERIFIED by owner results a-c; docs/PORT23_POWER_SUPERVISION.md:26-30]`.
+2. **DISKBOOT Execution is Physically Evidenced** `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:31-36]`:
+   - In both Results (a) and (b), the rear green LED physically illuminated `[OWNER-REPORTED: docs/PORT23_POWER_SUPERVISION.md:32]`.
    - Stock GM1.10C ROM never writes `0x004D0002` to `0xD20B0884` during early boot `[STATIC_VERIFIED: ROM 0xFC0D73C0-0xFC0D74BF; PORT23-ROM-GPIO-WRITE-MMIO]`.
    - Therefore, `StartDiskboot` successfully validated `BOOTDISK`, loaded `A/DISKBOOT.BIN` from the locked SD card into RAM, descrambled DancingBits, and jumped to loader entry `0x8001` `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:35]`.
-   - Early boot rejection (Hypothesis H1) is decisively refuted for initial entry `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:36]`.
+   - Early boot rejection (Hypothesis H1) is refuted for initial entry `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:36]`.
 3. **Failure Occurs Post-Loader-Entry** `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:29-30]`:
    - Both builds enter the loader, and the camera then ends up off `[VERIFIED by owner results a-c]`.
-   - The earlier stock-UI start observed in PORT-19 Run 1 was most likely a retry or the result of a long button press, rather than an uninterrupted first-boot normal sequence `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:49, 224-227, 264-267]`.
+   - The earlier stock-UI start observed in PORT-19 Run 1 was most likely a retry or the result of a long button press, rather than an uninterrupted first-boot normal sequence `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:49, 255-257, 264-267]`.
 
 ---
 
@@ -65,7 +65,7 @@ From the firmware disassembly analysis in `docs/PORT23_POWER_SUPERVISION.md:38-5
 
 | Rank | Hypothesis | Mechanism & Impact | Disassembly & Firmware Proof | Epistemic Status |
 | :---: | :--- | :--- | :--- | :---: |
-| **1** | **Power-On Check (`sub_fc1284ac`) Re-entry Failure in Stage 5 (`sub_fc05b962_my`)** | In stock boot, `sub_fc1284ac` runs BEFORE `task_Startup` and before `StartDiskboot`. Candidate `boot_prototype.c` re-runs `sub_fc1284ac` a SECOND time. If the user performed a normal brief tap, the button is released when `sub_fc1284ac` runs, returning `0`. Function `sub_fc05ba56` writes `0x004C0003` to GPIO 0x67 (power-hold), cutting DC-DC rails and hanging in `b .` | ROM `0xFC1284AC-0xFC12851A` (samples GPIO 0x97, 0x98, 0x88, 0x02; returns 0 if released); ROM `0xFC05B970-0xFC05B976` (calls `sub_fc05ba56` if r0 == 0); ROM `0xFC05BA56` (writes `0x004C0003` to GPIO 0x67 / MMIO `0xD20B099C`); candidate `boot_prototype.c:334, 342-356` | `[STATIC_VERIFIED / INFERRED: docs/PORT23_POWER_SUPERVISION.md:43-50, 277, 284-293]` |
+| **1** | **Power-On Check (`sub_fc1284ac`) Re-entry Failure in Stage 5 (`sub_fc05b962_my`)** | In stock boot, `sub_fc1284ac` runs BEFORE `task_Startup` and before `StartDiskboot`. Candidate `boot_prototype.c` re-runs `sub_fc1284ac` a SECOND time. If the user performed a normal brief tap, the button is released when `sub_fc1284ac` runs, returning `0`. Function `sub_fc05ba56` writes `0x004C0003` to GPIO 0x67 (power-hold), cutting DC-DC rails and hanging in `b .` | ROM `0xFC1284AC-0xFC12851A` (samples GPIO 0x97, 0x98, 0x88, 0x02; returns 0 if released); ROM `0xFC05B970-0xFC05B976` (calls `sub_fc05ba56` if r0 == 0); ROM `0xFC05BA56` (writes `0x004C0003` to GPIO 0x67 / MMIO `0xD20B099C`); candidate `chdk-port/platform/g3x/sub/110c/boot_prototype.c:334, 350-356` | `[STATIC_VERIFIED / INFERRED: docs/PORT23_POWER_SUPERVISION.md:43-50, 277, 284-293]` |
 | **2** | **External Sub-CPU Power-Hold Supervision & Hardware Handshake Timeout** | Canon DIGIC 6 cameras rely on an external power management microcontroller (sub-CPU). If the sub-CPU requires continuous serial communication (SioDrv / DcdcDrv) or a maintained hardware button hold, dropping the button or resetting I/O controllers during soft restart could cause the sub-CPU to drop the DC-DC rails autonomously | ROM `0xFC05B8FE-0xFC05B90A` (SioDrv / DcdcDrv initialization); sub-CPU internal firmware resides outside `PRIMARY.BIN` | `[INFERRED / UNKNOWN: docs/PORT23_POWER_SUPERVISION.md:278, 294-301]` |
 | **3** | **SD Bus Desynchronization / Peripheral Re-init Error** | Abrupt power cuts during SD bus transactions desynchronize the SD host controller or card state machine | ROM `0xFC05BC04-0xFC05BC1C` (SD bus initialization and VBR check) | `[INFERRED / UNKNOWN: docs/PORT23_POWER_SUPERVISION.md:279, 302-307]` |
 | **4** | **Hardware Watchdog (`0xD20A0000`) Expiry** | Hardware watchdog timer expires during loader execution | ROM `0xFC05B90E, 0xFC05B922` (sub_fc418f2a starts watchdog strictly 18 instructions AFTER StartDiskboot returns). Watchdog is NOT running during StartDiskboot or loader | `[UNKNOWN: CONTRADICTED for Pre-StartDiskboot; docs/PORT23_POWER_SUPERVISION.md:38-41, 280, 308-314]` |
@@ -77,33 +77,33 @@ T1 analyzed two distinct mechanisms explaining why subsequent power-on attempts 
 1. **Mechanism A (User Button-Hold Duration)** `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:265]`:
    - On a retry, the owner presses the Power button longer or more firmly.
    - If the button is held continuously through handoff, loader, core boot, and initial task until `sub_fc1284ac` executes in Stage 5, GPIO 0x97 is sampled as held (`1`).
-   - `sub_fc1284ac` returns `1`, allowing `sub_fc05b962_my` to branch to `loc_fc05b978` (`boot_prototype.c:356`), create `task_Startup_my`, and branch to `sub_fc0d0126` (`boot_prototype.c:438`), presenting the stock UI `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:49, 255-257]`.
+   - `sub_fc1284ac` returns `1`, allowing `sub_fc05b962_my` to branch to `loc_fc05b978` (`chdk-port/platform/g3x/sub/110c/boot_prototype.c:356`), create `task_Startup_my`, and branch to `sub_fc0d0126` (`chdk-port/platform/g3x/sub/110c/boot_prototype.c:438`), presenting the stock UI `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:49, 255-257]`.
    - Under Mechanism A, `StartDiskboot` is **NOT skipped**; rather, candidate execution completes through to stock continuation.
 2. **Mechanism B (SD Bus Desynchronization Skips StartDiskboot on Retry)** `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:266]`:
    - If the previous attempt cut power abruptly while the SD controller was active, the card or host interface state machine can be left in an unclean or busy state.
    - On an immediate retry, `StartDiskboot`'s SD check (`sub_fc05c4e0` / `sub_fc37aea6` at `0xFC05BC18`) fails or times out `[STATIC_VERIFIED: ROM 0xFC05BC04-0xFC05BC1C; PORT23-ROM-STARTDISKBOOT]`.
    - On failure, `StartDiskboot` returns cleanly to `task_Startup` at `0xFC05BC34` -> `0xFC05B912`, skipping `DISKBOOT.BIN` entirely and booting pure stock firmware `[STATIC_VERIFIED: ROM 0xFC05BC34-0xFC05BC38; PORT23-ROM-STARTDISKBOOT] [STATIC_VERIFIED: ROM 0xFC05B912; PORT23-ROM-STARTUP-TASKS]`.
    - Under Mechanism B, `StartDiskboot` is **cleanly bypassed** due to transient SD failure.
-3. Conclusively distinguishing Mechanism A from Mechanism B on a specific physical retry is `[UNKNOWN: docs/PORT23_POWER_SUPERVISION.md:267]` without diagnostic instrumentation.
+3. Distinguishing Mechanism A from Mechanism B on an uninstrumented physical retry is `[UNKNOWN: docs/PORT23_POWER_SUPERVISION.md:267]` without diagnostic optical signals.
 
 ---
 
 ## 3. Session Protocol & Steps (At Most Two Power-Ons)
 
-The objective of this session is to localise the failure point in at most two power-ons by first testing the **terminal loader boundary (`pre_jump`)** and then either discriminating the core root cause or bisecting the loader `[INFERRED]`.
+The objective of this session is to localise the failure point in at most two power-ons by first testing the **terminal loader boundary (`pre_jump`)** and then either discriminating the post-loader root cause or bisecting the loader `[INFERRED]`.
 
 ### 3.1 Overview of Candidate Breadcrumb Checkpoints (from T2)
 
 All breadcrumb candidate binaries are generated with `tools/build_candidate_port23_breadcrumb.py` and documented in `docs/PORT23_LED_BREADCRUMBS.md:39-116` `[VERIFIED]`:
 
 | Stage Name | Opt-In Flag | Source Location | Execution Milestone | `DISKBOOT.BIN` SHA-256 |
-| :--- | :--- | :--- | :--- | :---: |
-| `loader_entry` | `--stage loader_entry` | `loader_entry_breadcrumb.S:36` | Entry `_start` at `0x8000` reached | `60a78e40127d7aa2b05178a27d834545817ded7618fef9f26637b7789d92fe24` `[VERIFIED]` |
-| `before_copy` | `--stage before_copy` | `loader_main_breadcrumb.c:37` | `check_compat` passed (`0x32A8`), stack setup | `b2a2d55e25cfd422895854d47f0d186874df9bb3450cfc46a5be045179466852` `[VERIFIED]` |
-| `after_copy` | `--stage after_copy` | `loader_main_breadcrumb.c:52` | `core_copy` complete (116,816 B relocated) | `0b02b408b8f4c3f8ddfd2d0b0e6726355aa4440cb5a40c659f1d8515651c43df` `[VERIFIED]` |
-| `witness_entry` | `--stage witness_entry` | `loader_main_breadcrumb.c:59` | Alias of `after_copy` (identical hash) | `0b02b408b8f4c3f8ddfd2d0b0e6726355aa4440cb5a40c659f1d8515651c43df` `[VERIFIED]` |
-| `witness_write` | `--stage witness_write` | `loader_main_breadcrumb.c:79` | Boot witness struct written to `0x0035F7A0` | `1fcad53e31f18c378b84918b65f9365e7400185423ad7dbeac62ac04555e3de8` `[VERIFIED]` |
-| `pre_jump` | `--stage pre_jump` | `loader_main_breadcrumb.c:117` | Cache maintenance complete, `cpsid if` enforced, handoff via `bx r0` to `0x003489B5` imminent | `abe7432ea4f2a7df3778fb8023209639da675687e3eb0ab826de4a73cc767f75` `[VERIFIED]` |
+| :--- | :--- | :--- | :--- | :--- |
+| `loader_entry` | `--stage loader_entry` | `chdk-port/platform/g3x/sub/110c/loader_entry_breadcrumb.S:36` | Entry `_start` at `0x8000` reached | `60a78e40127d7aa2b05178a27d834545817ded7618fef9f26637b7789d92fe24` `[VERIFIED]` |
+| `before_copy` | `--stage before_copy` | `chdk-port/platform/g3x/sub/110c/loader_main_breadcrumb.c:37` | `check_compat` passed (`0x32A8`), stack setup | `b2a2d55e25cfd422895854d47f0d186874df9bb3450cfc46a5be045179466852` `[VERIFIED]` |
+| `after_copy` | `--stage after_copy` | `chdk-port/platform/g3x/sub/110c/loader_main_breadcrumb.c:52` | `core_copy` complete (116,816 B relocated) | `0b02b408b8f4c3f8ddfd2d0b0e6726355aa4440cb5a40c659f1d8515651c43df` `[VERIFIED]` |
+| `witness_entry` | `--stage witness_entry` | `chdk-port/platform/g3x/sub/110c/loader_main_breadcrumb.c:59` | Alias of `after_copy` (identical hash) | `0b02b408b8f4c3f8ddfd2d0b0e6726355aa4440cb5a40c659f1d8515651c43df` `[VERIFIED]` |
+| `witness_write` | `--stage witness_write` | `chdk-port/platform/g3x/sub/110c/loader_main_breadcrumb.c:79` | Boot witness struct written to `0x0035F7A0` | `1fcad53e31f18c378b84918b65f9365e7400185423ad7dbeac62ac04555e3de8` `[VERIFIED]` |
+| `pre_jump` | `--stage pre_jump` | `chdk-port/platform/g3x/sub/110c/loader_main_breadcrumb.c:117` | Cache maintenance complete, `cpsid if` enforced, handoff via `bx r0` to `0x003489B5` imminent | `abe7432ea4f2a7df3778fb8023209639da675687e3eb0ab826de4a73cc767f75` `[VERIFIED]` |
 
 In all documented stage builds, delay is set to 0 (`LED_BREADCRUMB_DELAY` not defined): the LED writes `0x004D0002` to `0xD20B0884` and execution proceeds immediately without blocking `[VERIFIED: docs/PORT23_LED_BREADCRUMBS.md:41, 140]`.
 
@@ -120,12 +120,12 @@ Power-On 1 tests whether execution successfully completes the entire loader sequ
   - **`DISKBOOT.BIN` Size**: `118,021` bytes `[VERIFIED: docs/PORT23_LED_BREADCRUMBS.md:114]`
   - **Delay Iterations**: `0` (default; non-blocking) `[VERIFIED: docs/PORT23_LED_BREADCRUMBS.md:41, 140]`
 - **Card Setup**:
-  - SD card formatted FAT32, `BOOTDISK` string at offset `0x1E0`, `SCRIPT` string at offset `0x1F0` `[VERIFIED: docs/PORT19_BOOTDISK_VBR.md:17-22]`.
+  - SD card formatted FAT32, `BOOTDISK` string at offset `0x1E0`, `SCRIPT` string at offset `0x1F0` `[VERIFIED: docs/PORT19_BOOTDISK_VBR.md:20-34]`.
   - Copy `candidate_breadcrumb/pre_jump/DISKBOOT.BIN` to SD card root directory `[VERIFIED: docs/PORT19_GO_NOGO.md:20]`.
   - Set SD card write-protect lock switch to **LOCKED** `[OWNER-REPORTED: milestone task brief]`.
 - **Owner Action**:
   - Insert locked card and freshly charged battery.
-  - Perform a **normal brief tap** of the Power button (~100–250 ms) `[INFERRED]`.
+  - Perform a **normal brief tap** of the Power button (exact tap duration is UNKNOWN; owner measures and reports estimated duration in template) `[UNKNOWN]`.
 - **Expected Breadcrumb Sequence & Stage Mapping**:
   1. `0x8000`: Loader entry `_start` sets `sp = 0x8000` and branches to `my_restart` `[VERIFIED: chdk-port/platform/g3x/sub/110c/loader_entry_breadcrumb.S:57-58]`.
   2. `check_compat()` verifies GM1.10C model ID `0x32A8` `[VERIFIED: chdk-port/platform/g3x/sub/110c/loader_main_breadcrumb.c:35]`.
@@ -136,12 +136,13 @@ Power-On 1 tests whether execution successfully completes the entire loader sequ
   7. **CHECKPOINT FIRES**: `str r1, [r0]` writes `0x004D0002` to MMIO `0xD20B0884` (Green LED ON) `[VERIFIED: chdk-port/platform/g3x/sub/110c/loader_main_breadcrumb.c:118-120]`.
   8. `bx r0` branches to relocated core entry `0x003489B5` `[VERIFIED: chdk-port/platform/g3x/sub/110c/loader_main_breadcrumb.c:136]`.
 - **What to Watch**:
-  - **LED Pattern**: Does the rear green LED light up?
-    - *Brief Flash (~10–100 ms) then dark*: `pre_jump` was reached! Execution entered relocated core, where a subsequent power-cut killed power rails `[INFERRED]`.
-    - *Solid Green*: Camera hung after `pre_jump` with power rails intact `[INFERRED]`.
-    - *Stays Dark*: Execution halted inside the loader before `pre_jump` `[INFERRED]`.
-  - **LCD Backlight**: Backlight completely unpowered/dark vs dimly glowing black screen.
-  - **Time to Dark**: Time from button press until LED goes dark (estimated 50–150 ms if power cut).
+  - **LED Pattern Interpretation** (The T2 builds write LED ON and never write OFF (`docs/PORT23_LED_BREADCRUMBS.md:13, 41`), so the LED goes dark only when system power rails drop; no prediction is made regarding how long the flash lasts):
+    - *LED came on at all*: the checkpoint was reached `[INFERRED]`.
+    - *LED on, then dark, with the backlight off*: power-off after the checkpoint `[INFERRED]`.
+    - *LED on indefinitely*: a hang, or execution continued `[INFERRED]`.
+    - *LED never on*: the checkpoint was not reached, or `StartDiskboot` did not run the candidate this time `[INFERRED / UNKNOWN]`.
+  - **LCD Backlight State**: Backlight completely off/unpowered (clean power-off) vs illuminated glowing panel (system hang with display controller initialized).
+  - **Time to Dark**: Time from power-on until the LED and system go dark (timing is UNKNOWN; owner measures and reports duration in template) `[UNKNOWN]`.
 
 ---
 
@@ -149,19 +150,23 @@ Power-On 1 tests whether execution successfully completes the entire loader sequ
 
 The selection of Power-On 2 depends strictly on the observation from Power-On 1:
 
-#### Branch A: Power-On 1 Showed Green LED Flash at `pre_jump`
-If the green LED flashed in Power-On 1, the entire loader is 100% verified. The failure is strictly post-loader in core execution. Power-On 2 immediately tests **Hypothesis Rank 1 (`sub_fc1284ac` Power-On Check Re-entry Failure)** `[INFERRED]`.
+#### Branch A: Power-On 1 Showed Green LED at `pre_jump` (LED On, Then Dark)
+If the green LED illuminated in Power-On 1, the entire loader sequence through `pre_jump` is verified. The failure is strictly post-loader in core execution. Power-On 2A discriminates **Hypothesis Rank 1 (`sub_fc1284ac` Power-On Check Re-entry Failure)** from Rank 2 `[INFERRED]`.
 
-- **Power-On 2A — Long Power-Button Hold Trial**:
-  - **Target Binary**: Use the exact same `pre_jump` build (`abe7432ea4f2a7df3778fb8023209639da675687e3eb0ab826de4a73cc767f75`) or the default baseline build (`9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136`) `[VERIFIED]`.
+- **Power-On 2A — Maintained Power-Button Hold Trial**:
+  - **Target Binary**: Power-On 2A MUST use the `pre_jump` LED build (`candidate_breadcrumb/pre_jump/DISKBOOT.BIN`, SHA-256 `abe7432ea4f2a7df3778fb8023209639da675687e3eb0ab826de4a73cc767f75`) `[VERIFIED]`. Do not use the no-LED baseline build. **"LED lit before UI" is what separates Mechanism A from Mechanism B** `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:264-267]`:
+    - If a no-LED build were run, a stock UI boot could be Mechanism B (transient SD bus error causing `StartDiskboot` to bypass `DISKBOOT.BIN` entirely).
+    - With the `pre_jump` LED build, observing the **green LED illuminate before the stock UI appears** proves that `StartDiskboot` executed the candidate through the loader to `pre_jump` (Mechanism A) `[INFERRED]`.
   - **Card Setup**: SD card locked, FAT32 `[OWNER-REPORTED]`.
-  - **Owner Action**: Press and **HOLD the Power button continuously for 3.0 seconds** (do not release upon feeling tactile click; maintain firm pressure) `[INFERRED]`.
+  - **Owner Action**: Press and **HOLD the Power button continuously** (maintain firm pressure; do not release immediately upon tactile click; required hold duration to pass Stage 5 check is UNKNOWN; owner maintains hold until UI appears or camera powers off, and measures/reports hold duration in template) `[UNKNOWN]`.
   - **Discrimination Criteria**:
-    - *Camera stays powered on and boots to stock UI*: Conclusively PROVES **Rank 1 (`sub_fc1284ac` Power-On Check Re-entry Failure)** `[STATIC_VERIFIED / INFERRED: docs/PORT23_POWER_SUPERVISION.md:43-50, 255-257]`. Holding the button maintained GPIO 0x97 active (`1`), passing the second `sub_fc1284ac` check in `sub_fc05b962_my` and preventing `sub_fc05ba56` from cutting power `[INFERRED]`.
-    - *Camera still cuts power and goes dark within ~100 ms despite holding button*: Conclusively points to **Rank 2 (External Sub-CPU Hardware Handshake Timeout)** `[INFERRED / UNKNOWN: docs/PORT23_POWER_SUPERVISION.md:278, 294-301]`.
+    - *LED lights, then camera stays powered on and boots to stock UI*: Strongly supports **Rank 1 (`sub_fc1284ac` Power-On Check Re-entry Failure)** `[INFERRED]`. Holding the button maintained GPIO 0x97 active (`1`), passing the second `sub_fc1284ac` check in `sub_fc05b962_my` (`chdk-port/platform/g3x/sub/110c/boot_prototype.c:350`) and preventing `sub_fc05ba56` from cutting power via GPIO 0x67 (`chdk-port/platform/g3x/sub/110c/boot_prototype.c:352`).
+      - *Alternative*: If the camera boots to stock UI but the LED never illuminated on Run 2, `StartDiskboot` skipped the candidate under Mechanism B due to transient SD bus desynchronization `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:266]`.
+    - *Camera still cuts power and goes dark (backlight off) despite holding button*: Points to **Rank 2 (External Sub-CPU Hardware Handshake Timeout)** `[INFERRED / UNKNOWN: docs/PORT23_POWER_SUPERVISION.md:278, 294-301]`.
+      - *Alternative*: A power-off could mean the button hold was too short. The required hold time to pass `sub_fc1284ac` is UNKNOWN `[UNKNOWN: docs/PORT23_POWER_SUPERVISION.md:324-325]`.
 
 #### Branch B: Power-On 1 Showed NO Green LED (Stays Completely Dark)
-If the LED never lit in Power-On 1, execution halted inside the loader before `pre_jump`. Power-On 2 performs a midpoint bisection of the loader at **Stage 3 (`after_copy`)** `[INFERRED]`.
+If the LED never lit in Power-On 1, execution did not reach `pre_jump`. Power-On 2 performs a midpoint bisection of the loader at **Stage 3 (`after_copy`)** `[INFERRED]`.
 
 - **Power-On 2B — Midpoint Loader Bisection (`after_copy`)**:
   - **Tool Command**: `python3 tools/build_candidate_port23_breadcrumb.py --stage after_copy --out-dir candidate_breadcrumb/after_copy` `[VERIFIED: docs/PORT23_LED_BREADCRUMBS.md:80]`
@@ -169,10 +174,13 @@ If the LED never lit in Power-On 1, execution halted inside the loader before `p
   - **`DISKBOOT.BIN` SHA-256**: `0b02b408b8f4c3f8ddfd2d0b0e6726355aa4440cb5a40c659f1d8515651c43df` `[VERIFIED: docs/PORT23_LED_BREADCRUMBS.md:85]`
   - **`DISKBOOT.BIN` Size**: `118,021` bytes `[VERIFIED: docs/PORT23_LED_BREADCRUMBS.md:84]`
   - **Card Setup**: SD card locked, FAT32 `[OWNER-REPORTED]`.
-  - **Owner Action**: Normal brief tap of Power button `[INFERRED]`.
+  - **Owner Action**: Normal brief tap of Power button (exact tap duration is UNKNOWN; owner measures and reports in template) `[UNKNOWN]`.
   - **Discrimination Criteria**:
-    - *Green LED flashes*: `check_compat()` and `core_copy()` (116,816 B relocation) succeeded! The loader failure is strictly located between `after_copy` and `pre_jump` (in native cache routines `0xFC127AB1` / `0xFC127B09` or witness write) `[INFERRED]`.
-    - *Green LED stays dark*: Failure occurs before `after_copy`. Since loader entry `0x8000` is proven to run, failure is strictly in `check_compat()` (model ID mismatch `0x32A8`) or in `core_copy()` `[INFERRED]`.
+    - *Green LED illuminates*: `check_compat()` and `core_copy()` (116,816 B relocation) succeeded! The loader failure is located between `after_copy` and `pre_jump` (in native cache routines `0xFC127AB1` / `0xFC127B09` or witness write) `[INFERRED]`.
+    - *Green LED stays dark*: Execution did not reach `after_copy`. Plausible explanations `[INFERRED]`:
+      1. *Early loader failure*: Execution entered `0x8000` but faulted before `after_copy`, specifically in `check_compat()` (model ID mismatch `0x32A8`) or in `core_copy()` `[INFERRED]`.
+      2. *`StartDiskboot` did not load candidate*: `StartDiskboot` failed to load `DISKBOOT.BIN` on this power-on (transient SD bus desynchronization under Mechanism B, or a card VBR problem) `[INFERRED / UNKNOWN: docs/PORT23_POWER_SUPERVISION.md:266]`.
+      - *Note*: Loader entry `0x8000` was physically proven on hardware for the PORT-20 builds, but for this specific build or trial, `StartDiskboot` skipping remains a plausible alternative `[INFERRED / UNKNOWN]`.
 
 ---
 
@@ -181,22 +189,24 @@ If the LED never lit in Power-On 1, execution halted inside the loader before `p
 | Characteristic | Clean Power-Off (DC-DC De-asserted) | System Hang / Freeze | Hardware or Software Reset |
 | :--- | :--- | :--- | :--- |
 | **LCD Backlight State** | Completely DARK and unpowered (no edge illumination or panel glow) `[OWNER-REPORTED: docs/PORT23_POWER_SUPERVISION.md:21]` | If hang is early: dark. If hang is after LCD init: backlight glows (black screen) `[INFERRED]` | Backlight flickers or remains uninitialized `[INFERRED]` |
-| **LED Behavior** | Green LED flashes briefly (~20–100 ms) while rails are up, then turns OFF when rails collapse `[OWNER-REPORTED]` | If checkpoint passed: green LED remains **permanently illuminated** (solid green) `[INFERRED]` | Green LED or power LED cycles repeatedly (periodic blinks) `[INFERRED]` |
+| **LED Behavior** | Green LED turns on when checkpoint is reached, then turns dark when power rails drop `[INFERRED: docs/PORT23_LED_BREADCRUMBS.md:13, 41]`. LED duration depends on rail collapse time (timing is UNKNOWN; owner measures and reports) `[UNKNOWN]` | If checkpoint passed: green LED remains **permanently illuminated** (solid green) `[INFERRED]` | Green LED cycles repeatedly on each reboot `[INFERRED]` |
 | **System Power Rails** | Main DC-DC converters shut down; GPIO 0x67 de-asserted via `0x004C0003` `[STATIC_VERIFIED: ROM 0xFC05BA56]` | Power rails remain energized; camera draws continuous battery current `[INFERRED]` | Rails toggle or CPU reboots into reset vector `0xFC02000C` `[STATIC_VERIFIED: ROM 0xFC02000C]` |
-| **Recovery Requirement** | Camera responds to subsequent physical Power button press `[OWNER-REPORTED]` | Requires **physical battery pull** to recover `[INFERRED: docs/PORT21_OWNER_SESSION_PLAN.md:12]` | Continues boot cycling until battery is removed `[INFERRED]` |
+| **Recovery Requirement** | Camera responds to subsequent physical Power button press `[OWNER-REPORTED]` | Requires **physical battery pull** to recover `[INFERRED]` | Continues boot cycling until battery is removed `[INFERRED]` |
 
 ---
 
 ## 4. Decision Table
 
-| Last Breadcrumb Seen | Power-On 1 Result (`pre_jump`) | Power-On 2 Result | Failing Stage / Mechanism | Root Cause Classification | Next Host-Side Step |
+All rows in this table represent mutually exclusive physical observation outcomes:
+
+| Last Breadcrumb Seen | Power-On 1 Observation (`pre_jump`) | Power-On 2 Observation (Conditional) | LCD Backlight State | Failing Stage / Mechanism (Epistemic Status) | Next Host-Side Step |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **`pre_jump`** | Green LED flash (~50 ms), then power-off | **2A**: 3s hold boots to stock UI | Stage 5 startup check: `sub_fc1284ac` returns 0 on brief tap, calling `sub_fc05ba56` | **Rank 1**: Button release cuts power via GPIO 0x67 `[STATIC_VERIFIED / INFERRED]` | PORT-24 Remediation: Patch `sub_fc05b962_my` in `boot_prototype.c` to bypass `sub_fc1284ac` (force `r0 = 1`), matching sister port G3 X 1.10E `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:344-348]` |
-| **`pre_jump`** | Green LED flash (~50 ms), then power-off | **2A**: 3s hold still powers off within ~100 ms | Sub-CPU PMIC hardware power supervision drops rails independently of button hold | **Rank 2**: Sub-CPU hardware handshake timeout `[INFERRED / UNKNOWN]` | Investigate sub-CPU SIO/DCDC communication sequence prior to `task_Startup` |
-| **`pre_jump`** | Green LED remains **solid ON**, camera hung | *(Not needed)* | reloc core entry (`startup` at `0x003489B4`) hangs in vector copy or BSS zeroing | Core execution fault / infinite loop `[INFERRED]` | Audit core startup instructions and memory map (`candidate_main.map`) |
-| **`after_copy`** | Dark in Power-On 1 | **2B**: Green LED flash | Cache sync (`0xFC127AB1` / `0xFC127B09`) or boot witness write at `0x0035F7A0` | Loader stage 4–6 fault `[INFERRED]` | Generate differential candidate (`--stage witness_write`) to isolate cache routine from witness store |
-| **`before_copy`** | Dark in Power-On 1 | **2B**: Dark in Power-On 2B | `check_compat()` (`0x32A8`) or `core_copy()` inside `my_restart` | Loader stage 2–3 fault `[INFERRED]` | Generate `before_copy` candidate (`b2a2d55e...`) to test `check_compat` platform ID check |
-| **None** | Dark in Power-On 1 | Dark across all candidates | ROM `StartDiskboot` fails to execute `DISKBOOT.BIN` | Transient SD bus desync (Mechanism B) or corrupted card file | Re-verify SD card VBR marker (`BOOTDISK`) and re-check file SHA-256 on host `[VERIFIED: docs/PORT19_BOOTDISK_VBR.md:17-22]` |
+| **`pre_jump`** | LED on, then dark | **2A (`pre_jump`, button held)**: LED on, then camera boots to stock UI | Power-On 1: dark/off; Power-On 2A: ON with stock UI | Stage 5 startup check: `sub_fc1284ac` returns 0 on brief tap, cutting power via GPIO 0x67 (`sub_fc05ba56`) (**Rank 1 / Mechanism A**) `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:43-50, 265, 277]` | PORT-24 Remediation: Patch `sub_fc05b962_my` in `boot_prototype.c` to bypass `sub_fc1284ac` (force `r0 = 1`), matching sister port G3 X 1.10E `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:344-348]` |
+| **`pre_jump`** | LED on, then dark | **2A (`pre_jump`, button held)**: LED on, then dark (power-off persists despite button hold) | Dark and completely unpowered across both runs | Sub-CPU PMIC hardware power supervision drops rails independently of button hold (**Rank 2**) `[INFERRED / UNKNOWN: docs/PORT23_POWER_SUPERVISION.md:278, 294-301]`, or button hold was too short (required hold duration is UNKNOWN) `[INFERRED / UNKNOWN: docs/PORT23_POWER_SUPERVISION.md:324-325]` | Investigate sub-CPU SIO/DCDC communication sequence prior to `task_Startup` or re-test with extended button hold |
+| **`pre_jump`** | LED remains solid ON indefinitely, camera hung | *(Not needed; single run diagnostic)* | Dark (uninitialized display controller) or dim uninitialized glow; power rails remain energized | Core entry execution fault or infinite loop in early `startup` (`0x003489B4`) vector copy or BSS zeroing `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:43-45]` | Audit relocated core startup code and memory map (`candidate_main.map`) between `0x003489B4` and initial task |
+| **`None`** | LED on, then dark | **2A (`pre_jump`, button held)**: Stock UI appears, but LED NEVER lit on Run 2 | Power-On 1: dark/off; Power-On 2A: ON with stock UI | Transient SD bus desynchronization caused `StartDiskboot` to fail SD check on retry, cleanly bypassing `DISKBOOT.BIN` and booting stock firmware (**Rank 3 / Mechanism B**) `[STATIC_VERIFIED / INFERRED: docs/PORT23_POWER_SUPERVISION.md:84-86, 266]` | Perform clean power cycle with battery pull to reset SD host controller, re-verify card contacts and filesystem |
+| **`after_copy`** | LED never lit (stays completely dark) | **2B (`after_copy`, brief tap)**: LED on, then dark (or solid ON) | Dark and completely unpowered | Loader execution fault between `after_copy` and `pre_jump`: decoupled cache routines (`0xFC127AB1` / `0xFC127B09`) or boot witness write at `0x0035F7A0` `[INFERRED: docs/PORT23_LED_BREADCRUMBS.md:50]` | Generate differential candidate with `--stage witness_write` (`1fcad53e...`) to isolate cache routine from witness store |
+| **`None`** | LED never lit (stays completely dark) | **2B (`after_copy`, brief tap)**: LED never lit (stays completely dark) | Dark and completely unpowered across both runs | Early loader failure before `after_copy` (`check_compat` model check or `core_copy`), or `StartDiskboot` failed to run candidate on both trials (card VBR marker or SD bus fault) `[INFERRED / UNKNOWN: docs/PORT23_POWER_SUPERVISION.md:266]` | Build `before_copy` candidate (`b2a2d55e...`) to test `check_compat`, and re-verify SD card VBR marker (`BOOTDISK`) on host |
 
 ---
 
@@ -212,74 +222,28 @@ The trial must be immediately aborted if any of the following occur `[VERIFIED: 
 
 ### 5.2 Verified Recovery Procedure
 
-If the camera powers off, hangs, or fails to boot, execute the verified recovery sequence `[VERIFIED: hardware trial 2026-11-01; docs/PORT21_OWNER_SESSION_PLAN.md:12]`:
+If the camera powers off, hangs, or fails to boot, execute the recovery sequence:
 
-1. **Card Unlock or Removal** `[VERIFIED: hardware trial 2026-11-01]`:
+1. **Card Unlock or Removal**:
    - Eject the SD card from the camera.
    - Slide the physical write-protect switch to the **UNLOCKED** (up) position.
-2. **Capacitor Discharge / Quiescent Reset** `[INFERRED: docs/PORT21_OWNER_SESSION_PLAN.md:12]`:
+2. **Capacitor Discharge / PMIC Reset**:
    - Remove the rechargeable battery from the camera battery compartment.
-   - Leave the battery compartment open and unpowered for at least **10 seconds** to allow decoupling capacitors to fully discharge and reset external PMIC / sub-CPU state registers.
+   - Leave the battery compartment open and unpowered (capacitor discharge and PMIC reset time is UNKNOWN; owner pauses before battery re-insertion, recommended quiescent pause, owner reports duration in template) `[UNKNOWN]`.
 3. **Battery Re-insertion**:
    - Re-insert the fully charged battery and securely close the battery door.
-4. **Normal Stock Start Verification** `[VERIFIED: hardware trial 2026-11-01]`:
+4. **Normal Stock Start Verification**:
    - Insert the UNLOCKED SD card (or power on with no card inserted).
    - Press the Power button.
-   - **Verification**: The camera boots normally into the stock Canon UI, lens extends, LCD backlight turns on, and full camera functionality is restored `[VERIFIED: hardware trial 2026-11-01]`.
+   - **Verification**: The camera boots normally into the stock Canon UI, lens extends, LCD backlight turns on, and full camera functionality is restored `[OWNER-REPORTED: owner results 2026-11-01 Session 1; milestone task brief]`.
 
 ---
 
 ## 6. Machine-Readable Report-Back Template
 
-The owner copies and completes this template for each power-on trial, returning the filled block for automated processing.
+The owner completes this machine-readable report template for each power-on trial and returns the block for automated processing.
 
-### 6.1 YAML Format Template
-
-```yaml
-session_report:
-  session_id: "PORT23-SESSION-20261101"
-  camera_model: "Canon PowerShot G3 X"
-  firmware_version: "GM1.10C"
-  platform_id: "0x32A8"
-  runs:
-    - power_on_index: 1
-      build_stage: "pre_jump"
-      build_flag: "--stage pre_jump"
-      diskboot_sha256: "abe7432ea4f2a7df3778fb8023209639da675687e3eb0ab826de4a73cc767f75"
-      card_filesystem: "FAT32"
-      card_lock_state: "LOCKED"
-      bootdisk_vbr_present: true
-      script_vbr_present: true
-      button_pressed: "POWER"
-      button_action: "brief_tap"
-      button_hold_approx_ms: 200
-      led_observed: "flash_brief"
-      led_approx_duration_ms: 50
-      lcd_backlight_state: "off_unpowered"
-      time_to_dark_ms: 100
-      outcome: "power_off"
-      notes: "Green LED flashed once briefly, camera remained completely off with dark backlight"
-
-    - power_on_index: 2
-      build_stage: "pre_jump"
-      build_flag: "--stage pre_jump"
-      diskboot_sha256: "abe7432ea4f2a7df3778fb8023209639da675687e3eb0ab826de4a73cc767f75"
-      card_filesystem: "FAT32"
-      card_lock_state: "LOCKED"
-      bootdisk_vbr_present: true
-      script_vbr_present: true
-      button_pressed: "POWER"
-      button_action: "long_hold_3s"
-      button_hold_approx_ms: 3000
-      led_observed: "solid_on"
-      led_approx_duration_ms: 3000
-      lcd_backlight_state: "on_stock_ui"
-      time_to_dark_ms: 0
-      outcome: "stock_ui"
-      notes: "Holding power button brought up stock UI, confirming sub_fc1284ac button hold requirement"
-```
-
-### 6.2 JSON Format Template
+### 6.1 JSON Format Template
 
 ```json
 {
@@ -300,13 +264,13 @@ session_report:
         "script_vbr_present": true,
         "button_pressed": "POWER",
         "button_action": "brief_tap",
-        "button_hold_approx_ms": 200,
-        "led_observed": "flash_brief",
-        "led_approx_duration_ms": 50,
+        "button_hold_duration_measured_ms": null,
+        "led_observed": "flash_brief_then_dark",
+        "led_duration_measured_ms": null,
         "lcd_backlight_state": "off_unpowered",
-        "time_to_dark_ms": 100,
+        "time_to_dark_measured_ms": null,
         "outcome": "power_off",
-        "notes": "Green LED flashed once briefly, camera remained completely off with dark backlight"
+        "notes": "Green LED flashed once, then went dark. Backlight stayed completely unpowered."
       },
       {
         "power_on_index": 2,
@@ -318,16 +282,62 @@ session_report:
         "bootdisk_vbr_present": true,
         "script_vbr_present": true,
         "button_pressed": "POWER",
-        "button_action": "long_hold_3s",
-        "button_hold_approx_ms": 3000,
-        "led_observed": "solid_on",
-        "led_approx_duration_ms": 3000,
+        "button_action": "continuous_hold",
+        "button_hold_duration_measured_ms": null,
+        "led_observed": "led_lit_before_ui",
+        "led_duration_measured_ms": null,
         "lcd_backlight_state": "on_stock_ui",
-        "time_to_dark_ms": 0,
+        "time_to_dark_measured_ms": null,
         "outcome": "stock_ui",
-        "notes": "Holding power button brought up stock UI, confirming sub_fc1284ac button hold requirement"
+        "notes": "Maintained continuous hold on Power button. Green LED illuminated before stock UI appeared."
       }
     ]
   }
 }
+```
+
+### 6.2 YAML Format Template
+
+```yaml
+session_report:
+  session_id: "PORT23-SESSION-20261101"
+  camera_model: "Canon PowerShot G3 X"
+  firmware_version: "GM1.10C"
+  platform_id: "0x32A8"
+  runs:
+    - power_on_index: 1
+      build_stage: "pre_jump"
+      build_flag: "--stage pre_jump"
+      diskboot_sha256: "abe7432ea4f2a7df3778fb8023209639da675687e3eb0ab826de4a73cc767f75"
+      card_filesystem: "FAT32"
+      card_lock_state: "LOCKED"
+      bootdisk_vbr_present: true
+      script_vbr_present: true
+      button_pressed: "POWER"
+      button_action: "brief_tap"
+      button_hold_duration_measured_ms: null
+      led_observed: "flash_brief_then_dark"
+      led_duration_measured_ms: null
+      lcd_backlight_state: "off_unpowered"
+      time_to_dark_measured_ms: null
+      outcome: "power_off"
+      notes: "Green LED flashed once, then went dark. Backlight stayed completely unpowered."
+
+    - power_on_index: 2
+      build_stage: "pre_jump"
+      build_flag: "--stage pre_jump"
+      diskboot_sha256: "abe7432ea4f2a7df3778fb8023209639da675687e3eb0ab826de4a73cc767f75"
+      card_filesystem: "FAT32"
+      card_lock_state: "LOCKED"
+      bootdisk_vbr_present: true
+      script_vbr_present: true
+      button_pressed: "POWER"
+      button_action: "continuous_hold"
+      button_hold_duration_measured_ms: null
+      led_observed: "led_lit_before_ui"
+      led_duration_measured_ms: null
+      lcd_backlight_state: "on_stock_ui"
+      time_to_dark_measured_ms: null
+      outcome: "stock_ui"
+      notes: "Maintained continuous hold on Power button. Green LED illuminated before stock UI appeared."
 ```

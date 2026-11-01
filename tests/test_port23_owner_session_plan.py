@@ -11,11 +11,12 @@ Validates that:
    - Section 4: Decision table from last breadcrumb seen to failing stage and next host-side step.
    - Section 5: Stop conditions and recovery plan (card unlock/removal, battery pull, normal start).
    - Section 6: Machine-readable report-back template.
-2. Candidate DISKBOOT.BIN SHA-256 digests in the document match what T2 recorded.
+2. Candidate DISKBOOT.BIN SHA-256 digests in the document match what T2 recorded (parsed at runtime).
 3. Owner results (a)-(d) SHA-256 values and polarity constants are present.
-4. The report template parses cleanly as YAML and JSON.
-5. All citations point to valid tracked files and line ranges.
-6. Scope integrity: only allowed files are modified.
+4. The report template parses cleanly as JSON using the standard library.
+5. All citations point to valid tracked files and line ranges (failing if non-existent).
+6. Scope integrity: only allowed files are modified, and no binaries or build outputs are present.
+7. No 'conclusively' and no unevidenced timings outside lines labelled UNKNOWN or OWNER-REPORTED.
 """
 
 from __future__ import annotations
@@ -25,30 +26,43 @@ from pathlib import Path
 import re
 import subprocess
 import unittest
-import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOC_PATH = REPO_ROOT / "docs" / "PORT23_OWNER_SESSION_PLAN.md"
 
-# Canonical values from T2 (docs/PORT23_LED_BREADCRUMBS.md)
-EXPECTED_T2_STAGE_HASHES = {
-    "loader_entry": "60a78e40127d7aa2b05178a27d834545817ded7618fef9f26637b7789d92fe24",
-    "before_copy": "b2a2d55e25cfd422895854d47f0d186874df9bb3450cfc46a5be045179466852",
-    "after_copy": "0b02b408b8f4c3f8ddfd2d0b0e6726355aa4440cb5a40c659f1d8515651c43df",
-    "witness_entry": "0b02b408b8f4c3f8ddfd2d0b0e6726355aa4440cb5a40c659f1d8515651c43df",
-    "witness_write": "1fcad53e31f18c378b84918b65f9365e7400185423ad7dbeac62ac04555e3de8",
-    "pre_jump": "abe7432ea4f2a7df3778fb8023209639da675687e3eb0ab826de4a73cc767f75",
-}
-
 # Owner trial results 2026-11-01
 OWNER_RESULT_HASH_A_PORT20 = "757dfb7f7824ba968951724416a058a6881ad99a7a7a6cf7cd6e6f0e44db5286"
 OWNER_RESULT_HASH_B_SHORT_DELAY = "3922ddbecab362e8e13dc76bedd1758828fc91a2934310d3abb7d7d70f4e44ac"
-OWNER_RESULT_HASH_C_PORT19_CONTROL = "9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136"
 
 # Polarity constants
 POLARITY_MMIO_ADDR = "0xD20B0884"
 POLARITY_LED_ON = "0x004D0002"
 POLARITY_LED_OFF = "0x004C0003"
+
+
+def parse_t2_stage_hashes_and_flags() -> tuple[dict[str, str], set[str]]:
+    """Parse expected T2 stage hashes and flags dynamically from docs/PORT23_LED_BREADCRUMBS.md."""
+    breadcrumbs_doc = REPO_ROOT / "docs" / "PORT23_LED_BREADCRUMBS.md"
+    content = breadcrumbs_doc.read_text(encoding="utf-8")
+    sec4 = content.split("## 4. Host Build Commands & Expected Hashes", 1)[1].split("## 5.", 1)[0]
+    stages = re.findall(r"### 4\.\d+\s+Stage \d+:\s+`([a-z_]+)`", sec4)
+    hashes = re.findall(r"\*\*`DISKBOOT\.BIN` SHA-256\*\*:\s*`([0-9a-f]{64})`", sec4)
+    flags = re.findall(r"--stage\s+([a-z_]+)", sec4)
+    stage_hashes = dict(zip(stages, hashes))
+    return stage_hashes, set(flags)
+
+
+def parse_port19_sha() -> str:
+    """Parse the full PORT-19 DISKBOOT.BIN SHA-256 dynamically from docs/PORT16_CANDIDATE_BUILD.md."""
+    cb_doc = REPO_ROOT / "docs" / "PORT16_CANDIDATE_BUILD.md"
+    content = cb_doc.read_text(encoding="utf-8")
+    m = re.search(
+        r"\|\s*\*\*`DISKBOOT\.BIN`\*\*\s*\|\s*`candidate_port2a/DISKBOOT\.BIN`\s*\|\s*[\d,]+\s*\|\s*`([0-9a-f]{64})`",
+        content,
+    )
+    if not m:
+        raise ValueError("Could not parse PORT-19 DISKBOOT.BIN SHA-256 from docs/PORT16_CANDIDATE_BUILD.md")
+    return m.group(1)
 
 
 class TestPort23OwnerSessionPlan(unittest.TestCase):
@@ -57,8 +71,10 @@ class TestPort23OwnerSessionPlan(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         if not DOC_PATH.is_file():
-            raise unittest.SkipTest(f"Missing doc file: {DOC_PATH}")
+            raise AssertionError(f"Required document does not exist: {DOC_PATH}")
         cls.content = DOC_PATH.read_text(encoding="utf-8")
+        cls.t2_hashes, cls.t2_flags = parse_t2_stage_hashes_and_flags()
+        cls.port19_sha = parse_port19_sha()
 
     def test_file_exists_and_substantive(self):
         """Verify the session plan exists and has substantive content."""
@@ -78,7 +94,7 @@ class TestPort23OwnerSessionPlan(unittest.TestCase):
         """Verify owner results (a)-(d) from 2026-11-01 are documented with their exact SHA-256 values."""
         self.assertIn(OWNER_RESULT_HASH_A_PORT20, self.content)
         self.assertIn(OWNER_RESULT_HASH_B_SHORT_DELAY, self.content)
-        self.assertIn(OWNER_RESULT_HASH_C_PORT19_CONTROL, self.content)
+        self.assertIn(self.port19_sha, self.content)
 
     def test_stall_length_superseded_and_verified(self):
         """Verify the stall-length theory is marked superseded with VERIFIED label and citations."""
@@ -88,7 +104,6 @@ class TestPort23OwnerSessionPlan(unittest.TestCase):
             or "stall-length theory is superseded" in self.content.lower(),
             "Must state that the stall length is not the cause and superseded",
         )
-        # Check VERIFIED label associated with stall-length or owner results
         self.assertIn("[VERIFIED by owner results a-c", self.content)
 
     def test_polarity_constants_present(self):
@@ -98,8 +113,9 @@ class TestPort23OwnerSessionPlan(unittest.TestCase):
         self.assertIn(POLARITY_LED_OFF, self.content)
 
     def test_t2_candidate_hashes_match_recorded(self):
-        """Verify candidate DISKBOOT.BIN SHA-256 hashes match what T2 recorded."""
-        for stage, expected_hash in EXPECTED_T2_STAGE_HASHES.items():
+        """Verify candidate DISKBOOT.BIN SHA-256 hashes match what T2 recorded (parsed at runtime)."""
+        self.assertGreaterEqual(len(self.t2_hashes), 5, "Must have parsed at least 5 T2 stages")
+        for stage, expected_hash in self.t2_hashes.items():
             self.assertIn(
                 expected_hash,
                 self.content,
@@ -107,7 +123,7 @@ class TestPort23OwnerSessionPlan(unittest.TestCase):
             )
 
     def test_t2_build_flags_present(self):
-        """Verify opt-in build flags (--stage pre_jump, --stage after_copy, etc.) are present."""
+        """Verify opt-in build flags parsed from T2 are present in document."""
         self.assertIn("--stage pre_jump", self.content)
         self.assertIn("--stage after_copy", self.content)
         self.assertIn("tools/build_candidate_port23_breadcrumb.py", self.content)
@@ -116,7 +132,6 @@ class TestPort23OwnerSessionPlan(unittest.TestCase):
         """Verify session protocol needs at most two power-ons."""
         self.assertIn("Power-On 1", self.content)
         self.assertIn("Power-On 2", self.content)
-        # Verify it explicitly caps power-ons at two
         self.assertTrue(
             "at most two" in self.content.lower() or "at most 2" in self.content.lower(),
             "Must state that the session needs at most two power-ons",
@@ -137,7 +152,7 @@ class TestPort23OwnerSessionPlan(unittest.TestCase):
         self.assertIn("Mechanism B", self.content)
         self.assertIn("StartDiskboot", self.content)
 
-    def test_decision_table_structure(self):
+    def test_decision_table_structure_and_mutual_exclusion(self):
         """Verify decision table maps last breadcrumb seen to failing stage and next host-side step."""
         sec4 = self.content.split("## 4. Decision Table", 1)[1].split("## 5. Stop Conditions", 1)[0]
         self.assertIn("Last Breadcrumb Seen", sec4)
@@ -145,6 +160,19 @@ class TestPort23OwnerSessionPlan(unittest.TestCase):
         self.assertIn("Next Host-Side Step", sec4)
         self.assertIn("pre_jump", sec4)
         self.assertIn("after_copy", sec4)
+        self.assertIn("None", sec4)
+        # Verify before_copy is not used as last breadcrumb seen
+        table_lines = [line for line in sec4.splitlines() if line.startswith("|") and not line.startswith("| :---")]
+        # Headers: table_lines[0]
+        for row in table_lines[1:]:
+            cells = [c.strip() for c in row.split("|")[1:-1]]
+            if cells:
+                first_cell = cells[0].replace("*", "")
+                self.assertNotEqual(
+                    first_cell,
+                    "before_copy",
+                    "Table must not list 'before_copy' as a last breadcrumb seen (that build is never flashed)",
+                )
 
     def test_recovery_plan_present(self):
         """Verify recovery plan covers card unlock/removal, battery pull, and normal start."""
@@ -154,19 +182,9 @@ class TestPort23OwnerSessionPlan(unittest.TestCase):
         self.assertIn("UNLOCKED", sec5)
         self.assertIn("Normal Stock Start", sec5)
 
-    def test_report_back_template_parses(self):
-        """Verify the report-back template contains valid YAML and JSON blocks that parse cleanly."""
+    def test_report_back_template_parses_json(self):
+        """Verify the report-back template contains a valid JSON block that parses cleanly."""
         sec6 = self.content.split("## 6. Machine-Readable Report-Back Template", 1)[1]
-
-        # Extract YAML block
-        yaml_match = re.search(r"```yaml\s*\n(.*?)\n```", sec6, re.DOTALL)
-        self.assertIsNotNone(yaml_match, "Must contain a ```yaml code block")
-        yaml_content = yaml_match.group(1)
-        parsed_yaml = yaml.safe_load(yaml_content)
-        self.assertIsInstance(parsed_yaml, dict, "YAML must parse into a dict")
-        self.assertIn("session_report", parsed_yaml)
-        self.assertIn("runs", parsed_yaml["session_report"])
-        self.assertGreaterEqual(len(parsed_yaml["session_report"]["runs"]), 1)
 
         # Extract JSON block
         json_match = re.search(r"```json\s*\n(.*?)\n```", sec6, re.DOTALL)
@@ -176,10 +194,10 @@ class TestPort23OwnerSessionPlan(unittest.TestCase):
         self.assertIsInstance(parsed_json, dict, "JSON must parse into a dict")
         self.assertIn("session_report", parsed_json)
         self.assertIn("runs", parsed_json["session_report"])
-        self.assertGreaterEqual(len(parsed_json["session_report"]["runs"]), 1)
+        self.assertGreaterEqual(len(parsed_json["session_report"]["runs"]), 2)
 
         # Verify key fields in template runs
-        run1 = parsed_yaml["session_report"]["runs"][0]
+        run1 = parsed_json["session_report"]["runs"][0]
         for field in (
             "power_on_index",
             "build_stage",
@@ -198,16 +216,31 @@ class TestPort23OwnerSessionPlan(unittest.TestCase):
 
     def test_citations_resolve_to_tracked_files(self):
         """Verify all file:line citations point to existing tracked files with valid line ranges."""
+        res = subprocess.run(
+            ["git", "ls-files"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        tracked_files = set(res.stdout.splitlines())
+
         citation_re = re.compile(r"\b([a-zA-Z0-9_\-./]+?\.[a-zA-Z0-9]+):(\d+)(?:-(\d+))?\b")
+        allowed_non_file_prefixes = ("http://", "https://")
+
         for match in citation_re.finditer(self.content):
             fpath_str = match.group(1)
-            # Skip URLs, hex offsets, and doc names that aren't file paths
-            if fpath_str.startswith("http") or fpath_str.startswith("0x"):
+            if fpath_str.startswith(allowed_non_file_prefixes):
                 continue
+
             fpath = REPO_ROOT / fpath_str
-            if not fpath.is_file():
-                continue
-            line_count = len(fpath.read_text(encoding="utf-8", errors="replace").splitlines())
+            self.assertTrue(
+                fpath_str in tracked_files or fpath.is_file(),
+                f"Cited path '{fpath_str}' does not exist or is not tracked in git",
+            )
+
+            lines = fpath.read_text(encoding="utf-8", errors="replace").splitlines()
+            line_count = len(lines)
             start_line = int(match.group(2))
             end_line = int(match.group(3)) if match.group(3) else start_line
             self.assertLessEqual(
@@ -220,6 +253,64 @@ class TestPort23OwnerSessionPlan(unittest.TestCase):
                 line_count,
                 f"Citation {fpath_str}:{end_line} exceeds file line count ({line_count})",
             )
+
+    def test_scope_integrity(self):
+        """Verify only allowed files are modified, and no binaries or build outputs are present."""
+        allowed_modified = {
+            "docs/PORT23_OWNER_SESSION_PLAN.md",
+            "tests/test_port23_owner_session_plan.py",
+        }
+        res = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        for line in res.stdout.splitlines():
+            fpath = line[3:].strip()
+            if " -> " in fpath:
+                fpath = fpath.split(" -> ")[1].strip()
+            self.assertIn(
+                fpath,
+                allowed_modified,
+                f"File '{fpath}' is modified or untracked outside allowed scope",
+            )
+            forbidden_exts = (".bin", ".elf", ".o", ".a", ".dump", ".rom")
+            self.assertFalse(
+                fpath.endswith(forbidden_exts),
+                f"Binary/build artifact '{fpath}' must not be modified or added",
+            )
+
+    def test_no_conclusively_and_no_unevidenced_timings(self):
+        """Verify doc contains no 'conclusively' and no unevidenced timings outside UNKNOWN/OWNER-REPORTED."""
+        # 1. No 'conclusively'
+        self.assertNotIn("conclusively", self.content.lower(), "Document must not contain 'conclusively'")
+
+        # 2. No '~N ms' or 'N seconds' outside lines labelled UNKNOWN or OWNER-REPORTED
+        timing_pattern = re.compile(
+            r"(?:~\s*\d+(?:[–-]\d+)?\s*(?:ms|s|seconds?|sec)|\b\d+(?:\.\d+)?\s*(?:seconds?|sec|ms)\b)",
+            re.IGNORECASE,
+        )
+        lines = self.content.splitlines()
+        in_code_block = False
+        for line_no, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                in_code_block = not in_code_block
+                continue
+            if in_code_block:
+                continue
+
+            matches = timing_pattern.findall(line)
+            if matches:
+                upper = line.upper()
+                has_unknown = "[UNKNOWN" in upper or "UNKNOWN" in upper
+                has_owner = "OWNER-REPORTED" in upper
+                self.assertTrue(
+                    has_unknown or has_owner,
+                    f"Line {line_no} contains timing {matches} without UNKNOWN or OWNER-REPORTED label: {line}",
+                )
 
 
 if __name__ == "__main__":
