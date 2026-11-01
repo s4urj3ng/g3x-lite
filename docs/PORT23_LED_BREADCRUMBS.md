@@ -2,13 +2,14 @@
 
 ## 1. Overview & Objective
 
-During the first physical hardware trial of the Canon PowerShot G3 X (GM1.10C) on 2026-11-01, the camera owner verified two crucial hardware facts:
+During the physical hardware trials of the Canon PowerShot G3 X (GM1.10C) on 2026-11-01, the camera owner verified:
 1. Writing `0x004D0002` to MMIO `0xD20B0884` turns the rear green LED **ON** `[VERIFIED: hardware trial 2026-11-01]`.
 2. Writing `0x004C0003` to MMIO `0xD20B0884` turns the rear green LED **OFF** `[VERIFIED: hardware trial 2026-11-01]`.
 3. The loader-entry prologue at `0x8000` executes on camera power-on with an encoded boot disk `[VERIFIED: hardware trial 2026-11-01]`.
-4. Busy-wait stalls of `0x06000000` (~1–2 s) and `0x00600000` (~100–200 ms) both ended with the camera dark (shutdown or watchdog reset) `[VERIFIED: hardware trial 2026-11-01]`.
+4. The `0x06000000` busy-wait stall lasted "a few seconds" `[VERIFIED: hardware trial 2026-11-01]`. The duration estimates of ~1–2 s for `0x06000000` and ~100–200 ms for `0x00600000` are uncalibrated `[INFERRED: rough CPU cycle estimation; no instrumented timing evidence]`.
+5. Both busy-wait stalls (`0x06000000` and `0x00600000`) ended with the camera dark `[VERIFIED: hardware trial 2026-11-01]`. The exact root cause of the dark state (shutdown vs reset) was unobserved dynamically on hardware `[UNKNOWN: no dynamic hardware probe evidence]`. Analysis in `docs/PORT23_POWER_SUPERVISION.md:72-92` confirms that the DIGIC 6 hardware watchdog controller (`0xD20A0000`) is not yet activated during `StartDiskboot` or loader execution `[VERIFIED: ROM 0xFC05B8FC-0xFC05B922; docs/PORT23_POWER_SUPERVISION.md:72-78]`, indicating that the dark state resulted from power-hold de-assertion (`sub_fc05ba56`) upon button release rather than a watchdog timeout `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:80-92]`.
 
-The objective of **PORT-23** is to provide an opt-in set of diagnostic build candidates where exactly one checkpoint in the loader execution sequence turns the green LED **ON** and leaves it on (delay = 0). Physical power-ons by the camera owner with these targeted builds will isolate exactly how far execution proceeds after loader entry `0x8000` without triggering watchdog resets from long delay loops.
+The objective of **PORT-23** is to provide an opt-in set of diagnostic build candidates where exactly one checkpoint in the loader execution sequence turns the green LED **ON** and leaves it on (delay = 0). Physical power-ons by the camera owner with these targeted builds will isolate exactly how far execution proceeds after loader entry `0x8000` without introducing delay-loop timing hazards `[INFERRED]`.
 
 ---
 
@@ -26,12 +27,11 @@ The default production build produced by `tools/build_candidate_port2a.py` witho
 
 All breadcrumb helpers live in new files (`chdk-port/platform/g3x/sub/110c/led_breadcrumb.h`, `chdk-port/platform/g3x/sub/110c/loader_entry_breadcrumb.S`, `chdk-port/platform/g3x/sub/110c/loader_main_breadcrumb.c`) or inside `#if defined(LED_BREADCRUMB_<STAGE>)` guards. When `LED_BREADCRUMB` is undefined, `led_breadcrumb.h` defines zero symbols, and preprocessed loader source is token-identical to baseline.
 
-### 2.1 Rationale for `loader_main_breadcrumb.c` and Scope Isolation
+### 2.1 Rationale for `loader_main_breadcrumb.c` and Citation Protection
 
-Editing `chdk-port/loader/g3x/main_prototype.c` was intentionally avoided:
-1. `tests/test_port21_witness_roundtrip.py:103-125` and `docs/PORT21_WITNESS_AUDIT.md:13-123` cite and protect exact line numbers in `main_prototype.c` (e.g., lines 42–56).
-2. The AgentBridge task scope for PORT-23 T2b strictly restricts modifications to `chdk-port/platform/g3x/sub/110c/**`, `tools/build_candidate_port23_breadcrumb.py`, `docs/PORT23_LED_BREADCRUMBS.md`, and `tests/test_port23_led_breadcrumbs.py`. The path `chdk-port/loader/g3x/` is outside this permitted scope.
-3. Drift prevention: `tests/test_port23_led_breadcrumbs.py` includes `test_loader_drift_and_parity`, which compiles both `loader_main_breadcrumb.c` and `main_prototype.c` through `arm-none-eabi-gcc -E` without `LED_BREADCRUMB*` defines and asserts that the resulting preprocessed token streams are identical. Any future divergence will fail the test.
+Editing `chdk-port/loader/g3x/main_prototype.c` was intentionally avoided because tracked docs and tests cite `main_prototype.c` by exact line numbers (for example, `tests/test_port21_witness_roundtrip.py:103-125` and `docs/PORT21_WITNESS_AUDIT.md:13-123` cite lines 42–56), so editing `main_prototype.c` would break those citations. Note that scope-integrity tests do not protect `main_prototype.c` directly (`FORBIDDEN_PREFIXES` and `FORBIDDEN_FILES` in `tests/test_port21_ram_lifetime.py:71-72` do not include it). Rather, placing the breadcrumb-enabled loader in `chdk-port/platform/g3x/sub/110c/loader_main_breadcrumb.c` preserves citation stability in existing tests and documents.
+
+To ensure `loader_main_breadcrumb.c` does not diverge from `main_prototype.c`, `tests/test_port23_led_breadcrumbs.py` includes `test_loader_drift_and_parity`, which compiles both `loader_main_breadcrumb.c` and `main_prototype.c` through `arm-none-eabi-gcc -E` without `LED_BREADCRUMB*` defines and asserts that the resulting preprocessed token streams are identical. Any future divergence will fail the test.
 
 ---
 
@@ -44,11 +44,11 @@ Each stage build activates the green LED at exactly one explicit source location
 | **`loader_entry`** | `chdk-port/platform/g3x/sub/110c/loader_entry_breadcrumb.S:36` | `LED_BREADCRUMB_LOADER_ENTRY` | ROM loaded `DISKBOOT.BIN`, decrypted dancingbits, and reached `_start` at `0x8000`. `[VERIFIED: hardware trial 2026-11-01]` | Verified single write and instructions by `test_stage_differs_only_by_breadcrumb_instructions` and `test_exactly_one_on_write` `[VERIFIED]` |
 | **`before_copy`** | `chdk-port/platform/g3x/sub/110c/loader_main_breadcrumb.c:35` | `LED_BREADCRUMB_BEFORE_COPY` | Loader initialized stack (`0x8000`), entered `my_restart()`, and passed `check_compat()` model ID check (`0x32A8`). `[INFERRED]` | Verified checkpoint between `check_compat` and `core_copy` by `test_exactly_one_on_write` `[VERIFIED]` |
 | **`after_copy`** | `chdk-port/platform/g3x/sub/110c/loader_main_breadcrumb.c:50` | `LED_BREADCRUMB_AFTER_COPY` | `core_copy()` returned; 116,816 bytes relocated from loader to `0x003489B4`. `[INFERRED]` | Verified checkpoint between `core_copy` and witness store by `test_exactly_one_on_write` `[VERIFIED]` |
-| **`witness_entry`** | `chdk-port/platform/g3x/sub/110c/loader_main_breadcrumb.c:57` | `LED_BREADCRUMB_WITNESS_ENTRY` | Loader reached Boot Witness Stage 1 block prior to store sequence. `[INFERRED]` | Verified checkpoint before witness store by `test_exactly_one_on_write` `[VERIFIED]` |
+| **`witness_entry`** *(alias for `after_copy`)* | `chdk-port/platform/g3x/sub/110c/loader_main_breadcrumb.c:57` | `LED_BREADCRUMB_WITNESS_ENTRY` | Loader reached Boot Witness Stage 1 block prior to store sequence. Compiles to byte-identical image as `after_copy`. `[INFERRED]` | Verified checkpoint before witness store by `test_exactly_one_on_write` `[VERIFIED]` |
 | **`witness_write`** | `chdk-port/platform/g3x/sub/110c/loader_main_breadcrumb.c:77` | `LED_BREADCRUMB_WITNESS_WRITE` | All 8 Boot Witness Stage 1 fields and checksum were stored to `0x0035F7A0`. `[INFERRED]` | Verified checkpoint after witness store by `test_exactly_one_on_write` `[VERIFIED]` |
 | **`pre_jump`** | `chdk-port/platform/g3x/sub/110c/loader_main_breadcrumb.c:115` | `LED_BREADCRUMB_PRE_JUMP` | Cache maintenance (`0xFC127AB1`, `0xFC127B09`) returned, interrupts disabled (`cpsid if`), handoff via `bx r0` to `0x003489B5` imminent. `[INFERRED]` | Verified checkpoint after `cpsid if` and before `bx r0` by `test_pre_jump_stage_position` `[VERIFIED]` |
 
-*Note on `after_copy` vs `witness_entry`*: Because no C statements intervene between `core_copy()` and the declaration of `volatile boot_witness_t *w`, both stages compile to the identical binary and assembly checkpoint when delay is 0 and `--off-next` is not set.
+*Note on `after_copy` vs `witness_entry` (Duplicate / Alias Stage)*: Because no executable C statements intervene between `core_copy()` and the declaration of `volatile boot_witness_t *w`, both `after_copy` and `witness_entry` compile to 100% byte-identical binaries and share the exact same DISKBOOT.BIN SHA-256 (`0b02b408b8f4c3f8ddfd2d0b0e6726355aa4440cb5a40c659f1d8515651c43df`). Stage `witness_entry` is an alias for `after_copy`. The camera owner should NOT spend a power-on trial on `witness_entry` once `after_copy` has been tested.
 
 ---
 
@@ -83,10 +83,13 @@ python3 tools/build_candidate_port23_breadcrumb.py --stage after_copy --out-dir 
 - **`DISKBOOT.BIN` Size**: `118,021` bytes `[VERIFIED: host build]`
 - **`DISKBOOT.BIN` SHA-256**: `0b02b408b8f4c3f8ddfd2d0b0e6726355aa4440cb5a40c659f1d8515651c43df` `[VERIFIED: host build]`
 
-### 4.4 Stage 4: `witness_entry`
+### 4.4 Stage 4: `witness_entry` (Alias for `after_copy`)
 ```bash
 python3 tools/build_candidate_port23_breadcrumb.py --stage witness_entry --out-dir candidate_breadcrumb/witness_entry
 ```
+> [!NOTE]
+> `witness_entry` compiles to the exact same SHA-256 as `after_copy` (`0b02b408b8f4c3f8ddfd2d0b0e6726355aa4440cb5a40c659f1d8515651c43df`). It is an alias of `after_copy`. The camera owner should NOT spend a physical power-on trial on `witness_entry` once `after_copy` has been tried.
+
 - **`candidate_loader.bin` Size**: `118,020` bytes `[VERIFIED: host build]`
 - **`candidate_loader.bin` SHA-256**: `95e833aee0cd7a99cdb574315247efe69cb9c478a2c7333d3d9434f7af444ef4` `[VERIFIED: host build]`
 - **`DISKBOOT.BIN` Size**: `118,021` bytes `[VERIFIED: host build]`

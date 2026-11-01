@@ -31,6 +31,11 @@
 #endif
 #endif
 
+#ifndef _STR
+#define __STR(x) #x
+#define _STR(x) __STR(x)
+#endif
+
 static inline __attribute__((always_inline)) void g3x_breadcrumb_led_on(void)
 {
     asm volatile (
@@ -39,16 +44,13 @@ static inline __attribute__((always_inline)) void g3x_breadcrumb_led_on(void)
         "    str     r3, [r2]\n"
         "    dsb     sy\n"
 #if defined(LED_BREADCRUMB_DELAY) && (LED_BREADCRUMB_DELAY > 0)
-        "    ldr     r2, =%0\n"
+        "    ldr     r2, =" _STR(LED_BREADCRUMB_DELAY) "\n"
         "1:\n"
         "    subs    r2, r2, #1\n"
         "    bne     1b\n"
 #endif
         :
         :
-#if defined(LED_BREADCRUMB_DELAY) && (LED_BREADCRUMB_DELAY > 0)
-          "i"(LED_BREADCRUMB_DELAY)
-#endif
         : "r2", "r3", "memory"
     );
 }

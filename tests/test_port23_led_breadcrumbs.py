@@ -598,45 +598,96 @@ class TestPort23LedBreadcrumbs(unittest.TestCase):
                     f"Stage {stage} introduced unexpected busy-wait delay loops ({stg_loop_count} vs {default_loop_count})",
                 )
 
-        # Delay build test: verify bounded loop count <= 0x00600000
+        # Delay build test: verify non-documented stage build with LED_BREADCRUMB_DELAY=0x00100000 succeeds
+        # and has delay count <= 0x00600000 in disassembly.
         test_delay = 0x00100000
-        with tempfile.TemporaryDirectory() as delay_dir:
-            subprocess.run(
-                [
-                    "python3",
-                    str(BUILD_PORT23),
-                    "--stage",
-                    "loader_entry",
-                    "--delay",
-                    f"0x{test_delay:X}",
-                    "--out-dir",
-                    delay_dir,
-                ],
-                cwd=REPO_ROOT,
-                check=True,
-                capture_output=True,
-            )
-            dump_delay = subprocess.check_output(
-                [str(OBJDUMP), "-d", str(Path(delay_dir) / "candidate_loader.elf")], text=True
-            )
-            delay_loops = len(re.findall(r"subs\s+[^,\n]+,\s*#1\s*\n\s*[0-9a-f]+:\s+[0-9a-f ]+\s+bne", dump_delay))
-            self.assertEqual(delay_loops, default_loop_count + 1, "Delay build must add exactly 1 delay loop")
+        for test_stage in ("before_copy", "loader_entry"):
+            with tempfile.TemporaryDirectory() as delay_dir:
+                subprocess.run(
+                    [
+                        "python3",
+                        str(BUILD_PORT23),
+                        "--stage",
+                        test_stage,
+                        "--delay",
+                        f"0x{test_delay:X}",
+                        "--out-dir",
+                        delay_dir,
+                    ],
+                    cwd=REPO_ROOT,
+                    check=True,
+                    capture_output=True,
+                )
+                dump_delay = subprocess.check_output(
+                    [str(OBJDUMP), "-d", str(Path(delay_dir) / "candidate_loader.elf")], text=True
+                )
+                delay_loops = len(re.findall(r"subs\s+[^,\n]+,\s*#1\s*\n\s*[0-9a-f]+:\s+[0-9a-f ]+\s+bne", dump_delay))
+                self.assertEqual(
+                    delay_loops,
+                    default_loop_count + 1,
+                    f"Delay build for {test_stage} must add exactly 1 delay loop",
+                )
 
-            # Check delay loop instruction
-            lines = dump_delay.splitlines()
-            subs_indices = [i for i, l in enumerate(lines) if "subs\tr2, #1" in l]
-            self.assertTrue(subs_indices, "Delay loop subs r2, #1 not found")
-            idx = subs_indices[0]
-            # Immediately preceding instruction should load r2 (either mov.w r2, #... or ldr r2, [pc, ...])
-            load_line = lines[idx - 1]
-            match_val = re.search(r"#([0-9]+)", load_line)
-            if match_val:
-                loaded_count = int(match_val.group(1))
-            else:
-                match_hex = re.search(r"0x([0-9a-fA-F]+)", load_line)
-                loaded_count = int(match_hex.group(1), 16) if match_hex else 0
-            self.assertEqual(loaded_count, test_delay)
-            self.assertLessEqual(loaded_count, MAX_SAFETY_DELAY)
+                # Check delay loop instruction
+                lines = dump_delay.splitlines()
+                subs_indices = [i for i, l in enumerate(lines) if "subs\tr2, #1" in l]
+                self.assertTrue(subs_indices, f"Delay loop subs r2, #1 not found in {test_stage}")
+                idx = subs_indices[0]
+                # Immediately preceding instruction should load r2 (either mov.w r2, #... or ldr r2, [pc, ...])
+                load_line = lines[idx - 1]
+                match_val = re.search(r"#([0-9]+)", load_line)
+                if match_val:
+                    loaded_count = int(match_val.group(1))
+                else:
+                    match_hex = re.search(r"0x([0-9a-fA-F]+)", load_line)
+                    loaded_count = int(match_hex.group(1), 16) if match_hex else 0
+                self.assertEqual(loaded_count, test_delay)
+                self.assertLessEqual(loaded_count, MAX_SAFETY_DELAY)
+
+        # Compile-time rejection test: delay > 0x00600000 fails with #error
+        hdr_path = REPO_ROOT / "chdk-port" / "platform" / "g3x" / "sub" / "110c" / "led_breadcrumb.h"
+        entry_s_path = REPO_ROOT / "chdk-port" / "platform" / "g3x" / "sub" / "110c" / "loader_entry_breadcrumb.S"
+
+        # Check C header #error
+        res_hdr = subprocess.run(
+            [
+                str(CC),
+                "-c",
+                "-nostdinc",
+                "-DLED_BREADCRUMB=1",
+                "-DLED_BREADCRUMB_DELAY=0x00600001",
+                "-x",
+                "c",
+                str(hdr_path),
+                "-o",
+                "/dev/null",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(res_hdr.returncode, 0, "Delay > 0x00600000 must fail C compilation")
+        self.assertIn("#error", res_hdr.stderr)
+        self.assertIn("exceeds maximum safety cap of 0x00600000", res_hdr.stderr)
+
+        # Check assembly entry #error
+        res_asm = subprocess.run(
+            [
+                str(CC),
+                "-c",
+                "-nostdinc",
+                "-DLED_BREADCRUMB=1",
+                "-DLED_BREADCRUMB_LOADER_ENTRY=1",
+                "-DLED_BREADCRUMB_DELAY=0x00600001",
+                str(entry_s_path),
+                "-o",
+                "/dev/null",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(res_asm.returncode, 0, "Delay > 0x00600000 must fail assembly compilation")
+        self.assertIn("#error", res_asm.stderr)
+        self.assertIn("exceeds maximum safety cap of 0x00600000", res_asm.stderr)
 
         # CLI rejection test: delay > 0x00600000 rejected fail-closed
         with tempfile.TemporaryDirectory() as err_dir:
@@ -645,7 +696,7 @@ class TestPort23LedBreadcrumbs(unittest.TestCase):
                     "python3",
                     str(BUILD_PORT23),
                     "--stage",
-                    "loader_entry",
+                    "before_copy",
                     "--delay",
                     "0x00600001",
                     "--out-dir",
@@ -655,7 +706,24 @@ class TestPort23LedBreadcrumbs(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-            self.assertNotEqual(res_bad.returncode, 0, "Delay > 0x00600000 must fail closed")
+            self.assertNotEqual(res_bad.returncode, 0, "Delay > 0x00600000 must fail closed at CLI")
+
+    def test_builder_fails_when_loader_main_breadcrumb_missing(self):
+        """tools/build_candidate_port23_breadcrumb.py raises FileNotFoundError when loader_main_breadcrumb.c is missing (fail closed, no fallback)."""
+        import unittest.mock
+        import build_candidate_port23_breadcrumb as bcb
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            nonexistent = "/nonexistent/test/path/loader_main_breadcrumb.c"
+            with unittest.mock.patch.object(bcb, "BREADCRUMB_LOADER_C", nonexistent):
+                with self.assertRaises(FileNotFoundError) as ctx:
+                    bcb.build_breadcrumb_loader(
+                        core_elf=str(BUILD_PORT2A),
+                        core_bin=str(BUILD_PORT2A),
+                        stage="before_copy",
+                        candidate_dir=tmpdir,
+                    )
+                self.assertIn("loader_main_breadcrumb.c", str(ctx.exception))
 
     def test_loader_drift_and_parity(self):
         """With no LED_BREADCRUMB* defines, gcc -E output of loader_main_breadcrumb.c equals main_prototype.c."""

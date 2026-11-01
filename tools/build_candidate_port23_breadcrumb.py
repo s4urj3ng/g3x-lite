@@ -84,6 +84,9 @@ G3X_LED_ON_VAL = 0x004D0002
 G3X_LED_OFF_VAL = 0x004C0003
 MAX_SAFETY_DELAY = 0x00600000  # 6,291,456 iterations max
 
+BREADCRUMB_ENTRY_S = os.path.join(SUB_DIR, "loader_entry_breadcrumb.S")
+BREADCRUMB_LOADER_C = os.path.join(SUB_DIR, "loader_main_breadcrumb.c")
+
 
 def build_breadcrumb_loader(
     core_elf: str,
@@ -108,8 +111,12 @@ def build_breadcrumb_loader(
 
     macro_name = STAGE_MACROS[stage_norm]
 
-    # Entry assembly source
-    loader_entry_s = os.path.join(SUB_DIR, "loader_entry_breadcrumb.S")
+    # Entry assembly source (fail closed if missing)
+    loader_entry_s = BREADCRUMB_ENTRY_S
+    if not os.path.isfile(loader_entry_s):
+        raise FileNotFoundError(
+            f"Required breadcrumb entry source not found: {loader_entry_s}"
+        )
     loader_entry_o = os.path.join(candidate_dir, "entry_breadcrumb.o")
 
     entry_cmd = [
@@ -129,12 +136,12 @@ def build_breadcrumb_loader(
     entry_cmd.extend(["-c", "-o", loader_entry_o, loader_entry_s])
     run_cmd(entry_cmd, cwd=LOADER_DIR)
 
-    # Loader C source: prefer tracked loader_main_breadcrumb.c if available, else main_prototype.c
-    sub_loader_c = os.path.join(SUB_DIR, "loader_main_breadcrumb.c")
-    if os.path.isfile(sub_loader_c):
-        loader_c = sub_loader_c
-    else:
-        loader_c = os.path.join(LOADER_DIR, "main_prototype.c")
+    # Loader C source: strictly use tracked loader_main_breadcrumb.c (fail closed, no fallback)
+    loader_c = BREADCRUMB_LOADER_C
+    if not os.path.isfile(loader_c):
+        raise FileNotFoundError(
+            f"Required breadcrumb loader source not found: {loader_c}"
+        )
 
     blobs_s = os.path.join(LOADER_DIR, "blobs.S")
 
