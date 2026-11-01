@@ -1163,5 +1163,119 @@ class TestPort24SessionPlan(unittest.TestCase):
             self.assertNotIn(b"\x00", raw_bytes, f"File {path.name} must not contain null bytes")
 
 
+    def test_power_on_1_specifies_continuous_hold_not_short_press(self):
+        """Verify per feedback (1) that Power-On 1 specifies continuous hold (not short press) as the main procedure,
+        tells the owner to keep holding until the LCD comes on or ladder has finished and stayed dark for about 10 s,
+        and carries an INFERRED label."""
+        p1_match = re.search(
+            r"####\s+Step\s+1:\s+Power-On\s+1\s*—\s*(.*?)\n(.*?)(?=####\s+Step\s+2:|\Z)",
+            self.content,
+            re.DOTALL | re.IGNORECASE,
+        )
+        self.assertIsNotNone(p1_match, "Step 1: Power-On 1 section must exist")
+        p1_title = p1_match.group(1)
+        p1_body = p1_match.group(2)
+
+        # Title must specify continuous hold / held press, not short press
+        self.assertTrue(
+            re.search(r"continuous hold|held press", p1_title, re.IGNORECASE),
+            f"Step 1 title must specify continuous hold or held press: {p1_title}",
+        )
+        self.assertNotIn("short press", p1_title.lower(), "Step 1 title must not specify short press")
+
+        # Step 1 guidance must instruct holding until LCD comes on or ~10 s
+        self.assertTrue(
+            re.search(
+                r"keep holding (?:it )?until the LCD comes on(?:,\s*or until the LED ladder has finished and stayed dark for (?:about|~)\s*10\s*s)?",
+                p1_body,
+                re.IGNORECASE,
+            ),
+            "Step 1 must instruct holding until LCD comes on or ladder finished and stayed dark for about 10 s",
+        )
+
+        # Must carry an INFERRED label
+        guidance_line_match = re.search(r"-\s+\*\*Guidance & Evidence Level\*\*:(.*?)\n", p1_body)
+        self.assertIsNotNone(guidance_line_match, "Step 1 Guidance line must exist")
+        self.assertIn(
+            "[INFERRED",
+            guidance_line_match.group(1),
+            f"Step 1 guidance must carry an INFERRED label: {guidance_line_match.group(1)}",
+        )
+
+        # Base it on O1 owner result and boot_prototype.c:350
+        self.assertIn("O1", p1_body, "Step 1 must cite O1 owner result")
+        self.assertIn("boot_prototype.c:350", p1_body, "Step 1 must cite boot_prototype.c:350")
+
+    def test_decode_table_solid_on_row(self):
+        """Verify per feedback (2) that the decode table has a dedicated row for the solid-ON final state,
+        carries an INFERRED label, and cites docs/PORT24_BREADCRUMB_LADDER.md."""
+        table_sec_match = re.search(
+            r"## 3\..*?Decode Table.*?\n(.*?)(?=\n## 4\.|\Z)",
+            self.content,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(table_sec_match, "Section 3 Decode Table must exist")
+        table_text = table_sec_match.group(1)
+
+        rows = [
+            line.strip()
+            for line in table_text.splitlines()
+            if line.strip().startswith("|") and not re.match(r"^\|(\s*:?-+:?\s*\|)+\s*$", line.strip())
+        ]
+        data_rows = rows[1:]
+
+        solid_on_rows = []
+        for row in data_rows:
+            if re.search(r"solid(?:ly)?\s+ON|stays\s+ON", row, re.IGNORECASE):
+                solid_on_rows.append(row)
+
+        self.assertGreaterEqual(
+            len(solid_on_rows),
+            1,
+            "Decode table must contain at least one row for an LED that stays solidly ON (no final OFF)",
+        )
+
+        for row in solid_on_rows:
+            # Must carry an INFERRED label
+            self.assertIn(
+                "[INFERRED",
+                row,
+                f"Solid-ON decode row must carry an INFERRED label: {row}",
+            )
+            # Must cite ladder doc
+            self.assertIn(
+                "docs/PORT24_BREADCRUMB_LADDER.md",
+                row,
+                f"Solid-ON decode row must cite docs/PORT24_BREADCRUMB_LADDER.md: {row}",
+            )
+            # Must treat as stop during ON phase of pulse k+1
+            self.assertTrue(
+                re.search(r"ON phase of pulse\s*k\+1", row, re.IGNORECASE),
+                f"Solid-ON row must treat as stop during ON phase of pulse k+1: {row}",
+            )
+            # Must allow for hang in delay loop or stall with LED left on
+            self.assertTrue(
+                re.search(r"hang in the delay loop|stall with the LED left on", row, re.IGNORECASE),
+                f"Solid-ON row must allow for hang in delay loop or stall: {row}",
+            )
+            # Must give recovery guidance: battery out or card out
+            self.assertTrue(
+                re.search(r"battery out|card out", row, re.IGNORECASE),
+                f"Solid-ON row must give recovery guidance (battery out or card out): {row}",
+            )
+            # Must cover k=0 case
+            self.assertTrue(
+                re.search(r"k=0", row),
+                f"Solid-ON row must cover k=0 case: {row}",
+            )
+
+        # Check that report template wording matches the new row
+        self.assertIn(
+            "k complete flashes, then the LED stays ON (no final OFF)",
+            self.content,
+            "Report template must contain 'k complete flashes, then the LED stays ON (no final OFF)' matching decode row",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
