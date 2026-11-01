@@ -823,7 +823,8 @@ class TestPort24LoaderTrace(unittest.TestCase):
         self.assertIn("CONT_ATTEMPTED", sec)
         self.assertIn("FRESHNESS_UNVERIFIED", sec)
         self.assertIn("0x0035F7A0", sec)
-        self.assertIn("boot_prototype.c:350", sec)
+        self.assertIn("boot_prototype.c:352", sec)
+        self.assertNotIn("boot_prototype.c:350", sec)
 
         # Observable cues list
         self.assertIn("Rear Green Status LED", sec)
@@ -1059,6 +1060,57 @@ class TestPort24LoaderTrace(unittest.TestCase):
             t2_bytes += count
 
         self.assertLessEqual(t2_bytes, 32768, f"Total T2 bytes exceed 32 KiB: {t2_bytes} B")
+
+    def test_restart_path_cue_list_no_verified_no_flash_or_hypothetical_outcomes(self):
+        """(a) Restart path cue list has no VERIFIED-labelled 'no flash' or hypothetical LED-build outcome."""
+        sec = self.content.split("## Restart path", 1)[1]
+        cues_sec = sec.split("### 3. Observable Cues for Hand Inspection", 1)[1]
+
+        # No 'no flash' or 'zero green LED flash' entry is labelled VERIFIED
+        for line in cues_sec.splitlines():
+            lower = line.lower()
+            if "no flash" in lower or "zero green led flash" in lower or "zero.*flash" in lower:
+                self.assertNotIn(
+                    "[VERIFIED",
+                    line,
+                    f"Restart path cue list has VERIFIED-labelled 'no flash' or hypothetical outcome: {line}",
+                )
+
+        # Hypothetical outcomes must use conditional phrasing 'If the owner sees...' and be labelled INFERRED
+        self.assertIn("If the owner sees zero green LED flash and the camera remains completely unpowered", cues_sec)
+        self.assertIn("If the owner sees zero green LED flash, but the camera boots directly to stock UI", cues_sec)
+
+        # Verified owner observations are strictly those actually reported:
+        self.assertIn("docs/PORT23_POWER_SUPERVISION.md:20-21", cues_sec)
+        self.assertIn("docs/PORT23_POWER_SUPERVISION.md:22", cues_sec)
+        self.assertIn("docs/PORT18_OWNER_TRIAL_PLAN.md:262", cues_sec)
+
+    def test_doc_button_check_citation_uses_current_line_352(self):
+        """(b) Doc does not cite boot_prototype.c:350 for the button check and does cite the correct current line (352)."""
+        self.assertNotIn("boot_prototype.c:350", self.content, "Found outdated citation 'boot_prototype.c:350' in doc")
+        self.assertIn("boot_prototype.c:352", self.content, "Missing current citation 'boot_prototype.c:352' in doc")
+
+        sec = self.content.split("## Restart path", 1)[1]
+        self.assertIn("boot_prototype.c:352", sec)
+        self.assertNotIn("boot_prototype.c:350", sec)
+
+    def test_loc_fc05b976_described_as_candidate_ram_loop(self):
+        """(c) loc_fc05b976 is described as the candidate (RAM) loop and distinguished from stock ROM loop 0xFC05B976."""
+        sec = self.content.split("## Restart path", 1)[1]
+        self.assertIn("loc_fc05b976", sec)
+
+        # loc_fc05b976 must be described as a candidate (RAM) symbol/loop
+        self.assertTrue(
+            bool(re.search(r"candidate\s*\((?:RAM|core)\)\s*(?:copy of the halt loop|symbol)[^.\n]*loc_fc05b976", sec, re.IGNORECASE))
+            or bool(re.search(r"loc_fc05b976[^.\n]*candidate\s*\((?:RAM|core)\)[^.\n]*symbol", sec, re.IGNORECASE)),
+            "loc_fc05b976 not described as candidate (RAM) symbol/loop in Restart path",
+        )
+
+        # loc_fc05b976 must be explicitly distinguished from the stock ROM loop at 0xFC05B976
+        self.assertTrue(
+            bool(re.search(r"not the stock ROM loop at `?0xFC05B976`?", sec, re.IGNORECASE)),
+            "loc_fc05b976 not explicitly distinguished from stock ROM loop at 0xFC05B976",
+        )
 
 
 if __name__ == "__main__":
