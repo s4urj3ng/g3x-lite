@@ -33,24 +33,38 @@ The expected outcome of the opt-in fix (that forcing `r0 = 1` and bypassing `sub
 
 ## 2. Reference Port Survey & Evidence
 
-We surveyed DIGIC 6 CHDK platform code to establish how other ports handle the post-restart power-on check in their `boot.c`:
+We surveyed DIGIC 6 CHDK platform code to establish how other ports handle the post-restart power-on check in their `boot.c` and loader code.
 
-| Platform | Firmware | File & Line Reference | Handling Pattern | Status |
-|---|---|---|---|---|
-| **G3 X** | GM1.10E | `g3x_110e.patch`: L1681–1703 (`sub_fc05bb6a_my`) | Bypassed both `sub_fc079404` (`IsNormalCameraMode`) and `sub_fc1284ac` entirely. Synthesized boot cause by directly writing `*(int*)(0x9bc4 + 12) = 0x80000;` ("Power-on") based on button reads. | **INFERRED** (historical patch) |
-| **G5 X** | GM1.00C | `chdk-port/platform/g5x/sub/100c/boot.c`: L333–339, 411, 418–420 | Substituted stock handler with `sub_fc0ecf20_my`. Deleted the failure branch (`beq`) so power-cut is never reached. Forced `movs r0, #1` to ensure success return to caller. | **INFERRED** (in-tree source) |
-| **SX60 HS** | GM1.00B | `chdk-port/platform/sx60hs/sub/100b/boot.c`: L433, 441 | Retained call to `sub_fc14fa40`, but deleted `beq loc_fc0725a2` (the branch to power cut). In addition, `loader/sx60hs/main.c`: L38 writes `*(0x4ffc) = 0x12345678` (DryOS reboot flag). | **INFERRED** (in-tree source) |
-| **G7 X** | GM1.00B | `chdk-port/loader/g7x/main.c`: L37–39; `chdk-port/platform/g7x/sub/100b/boot.c`: L161, 321 | Writes `*(volatile unsigned *)(0x4ffc) = 0x12345678;` with comment `"allows boot on short press"`. Kept stock power check because reboot flag test bypasses shutdown. | **INFERRED** (in-tree source) |
-| **SX710 HS** | GM1.00A | `chdk-port/platform/sx710hs/sub/100a/boot.c`: L396, 455–457 | Replaced stock handler with `sub_fc0cb934_my`. If buttons are released, defaults to simulating Play button press (`0x100000`). | **INFERRED** (in-tree source) |
-| **G7 X Mark II** | GM1.01A | `chdk-port/platform/g7x2/sub/101a/boot.c`: L460, 522, 529–530 | Calls stock power check `sub_fc0723dc`, forces `movs r0, #1`, branches unconditional over power-cut call (`b loc_fc0723fe`). | **INFERRED** (in-tree source) |
-| **M10** | GM1.10D | `chdk-port/platform/m10/sub/110d/boot.c`: L342–347 | Kept stock handler without modification; annotated `"returns 1"`. | **INFERRED** (in-tree source) |
+### 2.1 In-Tree Baseline Source Citation
+In the current repository worktree (verified tracked via `git ls-files`):
+- **File:** `chdk-port/platform/g3x/sub/110c/boot_prototype.c`
+- **Revision / Commit:** `deda42b8ae7c495250d3176a64cd8c3c2146d96f` (HEAD)
+- **Lines 351–354 (default baseline stock ROM button check path):**
+  - Line 351: `        // Native Canon power-on button check (unmodified stock ROM handler)`
+  - Line 352: `        "    bl      sub_fc1284ac\n"`
+  - Line 353: `        "    cbnz    r0, loc_fc05b978\n"`
+  - Line 354: `        "    bl      sub_fc05ba56\n"`
 
-### Key Takeaway from Survey
-The classic, most conservative CHDK pattern for DIGIC 6 cameras (as exemplified by **G7 X Mark II** and **G5 X**) is:
-1. Retain the call to the stock button check `sub_fc1284ac` (so hardware button states are sampled and internal variables are updated if a button *is* pressed).
-2. Override the return register `movs r0, #1` so caller logic treats the check as successful.
-3. Branch unconditionally over the power-cut call (`sub_fc05ba56`).
-4. Keep the code sequence size-preserving so that all downstream functions, offsets, and symbol bindings (`boot_witness`, `_end`) are exactly maintained.
+### 2.2 External Upstream Reference Port Citations
+Because other camera platform directories are excluded from the `g3x-lite` repository worktree, upstream DIGIC 6 reference implementations are cited from the authoritative public CHDK mirror:
+- **Repository Mirror URL:** <https://github.com/01luna/CHDK> (mirroring the official CHDK Subversion repository)
+- **Pinned Commit SHA:** `21b9a14eb2043aeffdd2cb141081e7dcfe75f7e6` (SVN revision `r5491`)
+- **Retrieval Date:** `2026-11-01`
+
+| Platform | Firmware | File & Line Reference | Verbatim Quoted Source | Handling Pattern | Status |
+|---|---|---|---|---|---|
+| **G5 X** | GM1.00C | `platform/g5x/sub/100c/boot.c`: L411, L418–420 ([URL](https://github.com/01luna/CHDK/blob/21b9a14eb2043aeffdd2cb141081e7dcfe75f7e6/platform/g5x/sub/100c/boot.c#L411)) | L411: `//"    beq     loc_fc0ecfba\n" // -`<br>L418: `//"    bl      sub_fc09b450\n" // -`<br>L419: `//"    bl      sub_fc09b44e\n" // -`<br>L420: `"    movs    r0, #1\n"` | Replaced callee with `sub_fc0ecf20_my`; commented out failure branch (`beq loc_fc0ecfba`); commented out start-cause recorder calls; forced `movs r0, #1` at return. | **INFERRED** (upstream source inspection) |
+| **SX60 HS** | GM1.00B | `platform/sx60hs/sub/100b/boot.c`: L433, L441–443 ([URL](https://github.com/01luna/CHDK/blob/21b9a14eb2043aeffdd2cb141081e7dcfe75f7e6/platform/sx60hs/sub/100b/boot.c#L433)) | L433: `//"beq.n   loc_fc06037e\n"  // - this check fails and results in shutdown`<br>L441: `//"bl      sub_fc06082a\n"  // - startupchecks`<br>L442: `//"bl      sub_fc060828\n"  // - nullsub`<br>L443: `"movs    r0, #1\n"` | Replaced callee; commented out shutdown branch (`beq.n loc_fc06037e`); commented out startup checks; forced `movs r0, #1` before return. | **INFERRED** (upstream source inspection) |
+| **SX710 HS** | GM1.00A | `platform/sx710hs/sub/100a/boot.c`: L455–458, L467 ([URL](https://github.com/01luna/CHDK/blob/21b9a14eb2043aeffdd2cb141081e7dcfe75f7e6/platform/sx710hs/sub/100a/boot.c#L455-L458)) | L455: `//"    beq     loc_fc0cf15e\n" // old behavior, skip to return if none set`<br>L456: `"    bne     loc_fc0cf14a\n" // new behavior, go to final code if any set`<br>L457: `// otherwise, act as if play was held`<br>L458: `    "mov  r7, #1\n"`<br>L467: `"    movs    r0, #1\n"` | Replaced callee `sub_fc0cb934_my`. If buttons released, simulates Play button press (`mov r7, #1`), calls recorder `sub_fc086a04`, forces `movs r0, #1`. | **INFERRED** (upstream source inspection) |
+| **M10** | GM1.10D | `platform/m10/sub/110d/boot.c`: L342–345 ([URL](https://github.com/01luna/CHDK/blob/21b9a14eb2043aeffdd2cb141081e7dcfe75f7e6/platform/m10/sub/110d/boot.c#L342-L345)) | L342: `"    bl      sub_fc07ea92\n"        // IsNormalCameraMode_FW`<br>L343: `"    bl      sub_fc08c9c8\n"        // returns 1`<br>L344: `"    cbnz    r0, loc_fc06cab0\n"`<br>L345: `"    bl      sub_fc06cb8e\n"        // sets GPIO 0x67"` | Retained stock caller check without modification; annotated `"returns 1"` in stock ROM. | **INFERRED** (upstream source inspection) |
+| **G7 X** | GM1.00B | `loader/g7x/main.c`: L37–39 ([URL](https://github.com/01luna/CHDK/blob/21b9a14eb2043aeffdd2cb141081e7dcfe75f7e6/loader/g7x/main.c#L37-L39)); `platform/g7x/sub/100b/boot.c`: L161, L321 ([URL](https://github.com/01luna/CHDK/blob/21b9a14eb2043aeffdd2cb141081e7dcfe75f7e6/platform/g7x/sub/100b/boot.c#L161)) | `loader/g7x/main.c`: L37–39:<br>`    // allows boot on short press without fiddling sub_fc075b56 values or modifying/replacing sub_fc0781f4 (100d addresses)`<br>`    // not clear why not set after DISKBOOT.BIN reboot`<br>`    *(volatile unsigned *)(0x4ffc)=0x12345678;`<br>`platform/g7x/sub/100b/boot.c`: L161:<br>`// no GPIO checks needed with 0x12345678 set, native fw handles long press`<br>L321:<br>`"    bl      sub_fc0781f4\n" // power-on mode handling & startupchecks here, no override needed with 0x12345678 set` | Loader sets DryOS reboot flag `*(0x4ffc) = 0x12345678`; stock power check in `boot.c` is retained unmodified because the reboot flag bypasses shutdown. | **INFERRED** (upstream source inspection) |
+| **G7 X Mark II** | GM1.01A | `platform/g7x2/sub/101a/boot.c`: L522, L529–531 ([URL](https://github.com/01luna/CHDK/blob/21b9a14eb2043aeffdd2cb141081e7dcfe75f7e6/platform/g7x2/sub/101a/boot.c#L522)) | L522: `//            "    beq     loc_e005b49a\n"`<br>L529: `//            "    bl      sub_e004e4d6\n"`<br>L530: `//            "    bl      sub_e004e4d4\n"`<br>L531: `            "    movs    r0, #1\n"` | Replaced callee `sub_e005b418_my`; commented out failure branch; commented out start-cause calls; forced `movs r0, #1`. | **INFERRED** (upstream source inspection) |
+| **G3 X (Historical)** | GM1.10E | `g3x_110e.patch` (Historical forum attachment) | N/A (contents unretrievable) | Forum user `ranma` reported bypassing button check and synthesizing boot cause. Attachment contents cannot be retrieved (`docs/PATCH_AUDIT_110E.md`). | **UNKNOWN** (historical forum report only) |
+
+### 2.3 Distinctive Nature of the G3 X Caller Patch
+No other DIGIC 6 port verified in the upstream repository supports the caller-side `'bl sub_fc1284ac; movs r0, #1; b loc_fc05b978; nop'` approach directly in the spawner function `sub_fc05b962_my`. Other DIGIC 6 ports modify or replace the callee button-check function (commenting out the branch to shutdown and forcing `movs r0, #1`), simulate a button press inside the callee, rely on the loader setting the DryOS reboot flag `*(0x4ffc) = 0x12345678`, or keep the stock check if the camera firmware already returns 1.
+
+The caller-side approach chosen for G3 X (`movs r0, #1; b loc_fc05b978`) achieves the equivalent effect (guaranteeing that the power-cut call is bypassed and execution continues to task spawning) while preserving the exact 10-byte instruction budget and leaving all downstream offsets untouched. This specific caller-side patch is therefore **INFERRED** for G3 X.
 
 ---
 
@@ -135,36 +149,54 @@ Every ROM address used or cited in this analysis was independently read from `fi
 - **Ranges:** `PORT24-ROM-NORMAL-MODE` (`0xFC079400`..`0xFC0794BF`, 192 bytes, SHA-256: `cc71c4d4d3014205a860babbed28baa316d475bf1932d2368b5b4cad983a8214`), `PORT24-ROM-NORMAL-FLAG` (`0xFDF20380`..`0xFDF2038F`, 16 bytes, SHA-256: `7998b107f5214f071a101c994a4c8081a9c4abcd72e3970049a923c4bc137f64`)
 - **Disassembly:**
   ```arm
-  fc079404:   492a        ldr     r1, [pc, #168]      ; Literal 0xFDF20380
-  fc079406:   7808        ldrb    r0, [r1, #0]
-  fc079408:   b108        cbz     r0, 0xfc07940e
-  fc07940a:   2000        movs    r0, #0
-  fc07940c:   4770        bx      lr
-  fc07940e:   2001        movs    r0, #1
-  fc079410:   4770        bx      lr
+  fc079404:	482a      	ldr	r0, [pc, #168]	; (0xfc0794b0)
+  fc079406:	7800      	ldrb	r0, [r0, #0]
+  fc079408:	b108      	cbz	r0, 0xfc07940e
+  fc07940a:	2000      	movs	r0, #0
+  fc07940c:	4770      	bx	lr
+  fc07940e:	2001      	movs	r0, #1
+  fc079410:	4770      	bx	lr
   ```
-- **Finding:** The byte at `0xFDF20380` in ROM is `0x00`, so `sub_fc079404` unconditionally returns `r0 = 1` in stock configuration.
+- **Finding:** At `0xFC0794B0`, literal pool word is `0xFDF20380`. The byte at `0xFDF20380` in ROM is `0x00`, so `sub_fc079404` unconditionally returns `r0 = 1` in stock configuration.
 
 ### 5. Startup Reason Recorder `sub_fc08ecbc` (`0xFC08ECBC`) & Structure Pointer `0x9BC4` — `PORT24-ROM-STARTCAUSE-SAVE` & `PORT24-ROM-STARTCAUSE-PTR`
 - **Ranges:** `PORT24-ROM-STARTCAUSE-SAVE` (`0xFC08ECB0`..`0xFC08ECFF`, 80 bytes, SHA-256: `039ca184b58d48f853b02fd60a4ad72f45f389790e6da71c6488d99162f8277d`), `PORT24-ROM-STARTCAUSE-PTR` (`0xFC08EEE0`..`0xFC08EEFF`, 32 bytes, SHA-256: `0ceabc1be63a68d5c37a240c220c5e3e4448271ffa11c6d28c4a3d20e72506c6`)
 - **Disassembly:**
   ```arm
-  fc08ecbc:   498c        ldr     r1, [pc, #560]      ; Literal 0xFC08EEF0 = 0x00009BC4
-  ...
-  fc08ecd8:   60c8        str     r0, [r1, #12]       ; Stores start cause word at 0x9BC4 + 12
+  fc08ecbc:	b530      	push	{r4, r5, lr}
+  fc08ecbe:	4b8c      	ldr	r3, [pc, #560]	; (0xfc08eef0)
+  fc08ecc0:	2400      	movs	r4, #0
+  fc08ecc2:	9d03      	ldr	r5, [sp, #12]
+  fc08ecc4:	60dc      	str	r4, [r3, #12]
+  fc08ecc6:	b115      	cbz	r5, 0xfc08ecce
+  fc08ecc8:	f44f 3400 	mov.w	r4, #131072	; 0x20000
+  fc08eccc:	60dc      	str	r4, [r3, #12]
+  fc08ecce:	b112      	cbz	r2, 0xfc08ecd6
+  fc08ecd0:	f444 2280 	orr.w	r2, r4, #262144	; 0x40000
+  fc08ecd4:	60da      	str	r2, [r3, #12]
+  fc08ecd6:	b118      	cbz	r0, 0xfc08ece0
+  fc08ecd8:	68d8      	ldr	r0, [r3, #12]
+  fc08ecda:	f440 2000 	orr.w	r0, r0, #524288	; 0x80000
+  fc08ecde:	60d8      	str	r0, [r3, #12]
+  fc08ece0:	2900      	cmp	r1, #0
+  fc08ece2:	d003      	beq.n	0xfc08ecec
+  fc08ece4:	68d8      	ldr	r0, [r3, #12]
+  fc08ece6:	f440 1080 	orr.w	r0, r0, #1048576	; 0x100000
+  fc08ecea:	60d8      	str	r0, [r3, #12]
+  fc08ecec:	bd30      	pop	{r4, r5, pc}
   ```
-- **Literal Value:** At `0xFC08EEF0`, the 32-bit word is `0x00009BC4`. This proves that `0x9BC4` is the start-cause structure on GM1.10C, identical to historical G3 X GM1.10E.
+- **Literal Value:** At `0xFC08EEF0`, the 32-bit word is `0x00009BC4`. This proves that `0x9BC4` is the start-cause structure on GM1.10C, and `sub_fc08ecbc` writes the startup reason word at offset `+12` (`0x00009BC4 + 12 = 0x00009BD0`): `0x80000` for Power button (`r0`), `0x100000` for Playback button (`r1`), `0x40000` for WiFi button (`r2`), `0x20000` for GPIO 2 (`r5`).
 
 ### 6. GPIO Primitives (`0xFC0D73C0`..`0xFC0D73FF`) — `PORT24-ROM-GPIO-PRIMITIVES`
 - **Range:** 64 bytes, SHA-256: `00cb15ba364370a85edf8e4c4002f260078fe4e888ab7344d985757c5416c23d`
 - **Disassembly:**
   ```arm
-  fc0d73c4:   4b04        ldr     r3, [pc, #16]       ; Base 0xD20B0800
-  fc0d73c6:   eb03 0080   add.w   r0, r3, r0, lsl #2  ; Address = 0xD20B0800 + pin*4
-  fc0d73ca:   6001        str     r1, [r0, #0]
-  fc0d73cc:   4770        bx      lr
+  fc0d73c4:	4a07      	ldr	r2, [pc, #28]	; (0xfc0d73e4)
+  fc0d73c6:	eb02 0080 	add.w	r0, r2, r0, lsl #2
+  fc0d73ca:	f8c0 1800 	str.w	r1, [r0, #2048]	; 0x800
+  fc0d73ce:	4770      	bx	lr
   ```
-- **Finding:** Pin `0x67` (103 decimal) computes `0xD20B0800 + 103*4 = 0xD20B099C`. Writing `0x004C0003` to `0xD20B099C` controls the PMIC power-hold line.
+- **Finding:** Literal at `0xFC0D73E4` is `0xD20B0000`. `add.w r0, r2, r0, lsl #2` computes `0xD20B0000 + pin*4`. `str.w r1, [r0, #2048]` adds `0x800` offset (`0xD20B0000 + 0x800 + pin*4 = 0xD20B0800 + pin*4`). For Pin `0x67` (103 decimal): `0xD20B0800 + 103*4 = 0xD20B099C`. Writing `0x004C0003` to `0xD20B099C` controls the PMIC power-hold line.
 
 ---
 
@@ -254,9 +286,9 @@ Both builds were executed with the pinned `arm-none-eabi-gcc` toolchain (`gcc-ar
 | C3 | `sub_fc1284ac` tests button GPIOs and returns `r0 = 0` when buttons are released | Manifest `PORT24-ROM-POWERON-CHECK` (`0xFC1284A0`..`0xFC12851F`, SHA-256 `f683e2af7e75023d5e311752ab674c1a965933457698a33bf49e78f6a90e4eb0`) | **VERIFIED** (direct ROM citation) |
 | C4 | `sub_fc079404` reads camera mode byte from `0xFDF20380` | Manifest `PORT24-ROM-NORMAL-MODE` (`0xFC079400`..`0xFC0794BF`, SHA-256 `cc71c4d4d3014205a860babbed28baa316d475bf1932d2368b5b4cad983a8214`) and `PORT24-ROM-NORMAL-FLAG` (`0xFDF20380`..`0xFDF2038F`, SHA-256 `7998b107f5214f071a101c994a4c8081a9c4abcd72e3970049a923c4bc137f64`) | **VERIFIED** (direct ROM citation) |
 | C5 | Startup cause structure is located at RAM `0x00009BC4` | Manifest `PORT24-ROM-STARTCAUSE-SAVE` (`0xFC08ECB0`..`0xFC08ECFF`, SHA-256 `039ca184b58d48f853b02fd60a4ad72f45f389790e6da71c6488d99162f8277d`) and `PORT24-ROM-STARTCAUSE-PTR` (`0xFC08EEE0`..`0xFC08EEFF`, SHA-256 `0ceabc1be63a68d5c37a240c220c5e3e4448271ffa11c6d28c4a3d20e72506c6`) | **VERIFIED** (direct ROM citation) |
-| C6 | G5X 100c replaces power handler and removes failure branch | `chdk-port/platform/g5x/sub/100c/boot.c` L333–339, 411, 418–420 | **INFERRED** (in-tree source code inspection) |
-| C7 | SX60HS 100b deletes failure branch `beq loc_fc0725a2` | `chdk-port/platform/sx60hs/sub/100b/boot.c` L433, 441 | **INFERRED** (in-tree source code inspection) |
-| C8 | G7X 100b sets `0x4ffc = 0x12345678` for short-press boot | `chdk-port/loader/g7x/main.c` L37–39 | **INFERRED** (in-tree source code inspection) |
+| C6 | G5X 100c replaces power handler and removes failure branch | Upstream `01luna/CHDK@21b9a14eb2043aeffdd2cb141081e7dcfe75f7e6`: `platform/g5x/sub/100c/boot.c` L411, L418–420 | **INFERRED** (upstream source code inspection) |
+| C7 | SX60HS 100b deletes failure branch `beq.n loc_fc06037e` | Upstream `01luna/CHDK@21b9a14eb2043aeffdd2cb141081e7dcfe75f7e6`: `platform/sx60hs/sub/100b/boot.c` L433, L441–443 | **INFERRED** (upstream source code inspection) |
+| C8 | G7X 100b sets `0x4ffc = 0x12345678` for short-press boot | Upstream `01luna/CHDK@21b9a14eb2043aeffdd2cb141081e7dcfe75f7e6`: `loader/g7x/main.c` L37–39; `platform/g7x/sub/100b/boot.c` L161, L321 | **INFERRED** (upstream source code inspection) |
 | C9 | Default build DISKBOOT SHA-256 is byte-identical to `9468257364...` | `build_candidate_port24_poweron_fix.py --default` build output | **INFERRED** (local build toolchain result) |
 | C10 | Opt-in build DISKBOOT SHA-256 is `faad4d8242fbf6f79a44b10a9956f7eb04de9b65f42221f82a3b69eb024cf056` | `build_candidate_port24_poweron_fix.py` build output | **INFERRED** (local build toolchain result) |
 | C11 | Both builds preserve symbol addresses `boot_witness` = `0x0035F7A0` and `_end` = `0x00366CB0` | ELF symbol table disassembly via `arm-none-eabi-nm` | **INFERRED** (ELF inspection) |
@@ -264,6 +296,7 @@ Both builds were executed with the pinned `arm-none-eabi-gcc` toolchain (`gcc-ar
 | C13 | Expected opt-in outcome: opt-in candidate power-cut bypass will allow short-press boot to O1 | Reasoned from owner held-button trial and DIGIC 6 reference ports | **INFERRED** (Pending owner hardware trial) |
 | C14 | Opt-in candidate (`faad4d8242...`) has reached O1 or been run on physical hardware | STRICT NO-GO in Phase 0; candidate has never been run on camera | **UNKNOWN** (never executed on hardware) |
 | C15 | Downstream start-cause behaviour (`sub_fc08ecbc`, or anything else that reads the power-on reason later) | DryOS task startup decompilation in progress | **UNKNOWN** |
+| C16 | In-tree G3 X `boot_prototype.c` contains stock power check calling `sub_fc1284ac` and `sub_fc05ba56` | In-tree git-tracked `chdk-port/platform/g3x/sub/110c/boot_prototype.c` L351–354 (commit `deda42b8ae7c495250d3176a64cd8c3c2146d96f`) | **VERIFIED** (in-tree source code inspection) |
 
 ---
 
