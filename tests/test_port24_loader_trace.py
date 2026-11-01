@@ -633,6 +633,12 @@ class TestPort24LoaderTrace(unittest.TestCase):
         self.assertIn("Contrast with Direct Power Cut", ranking_section)
         self.assertIn("LED flashed, then LCD backlight off", ranking_section)
         self.assertIn("HIGH confidence", ranking_section)
+        # Qualified panic-hang checks (Issue 3):
+        self.assertNotIn("eventually", ranking_section.lower())
+        self.assertNotIn("regardless of button", ranking_section.lower())
+        self.assertIn("POSSIBLE but UNKNOWN", ranking_section)
+        self.assertIn("docs/PORT23_POWER_SUPERVISION.md:211, 295-300", ranking_section)
+        self.assertIn("conditional mechanism", ranking_section.lower())
 
     def test_all_claim_bullets_and_rows_carry_epistemic_labels(self):
         """Every claim bullet, numbered item, table row, and prose paragraph carries an epistemic label."""
@@ -740,9 +746,16 @@ class TestPort24LoaderTrace(unittest.TestCase):
             return any(start <= addr_int <= end for start, end, _ in evidence_ranges)
 
         def is_in_source_operand_allowlist(addr_int: int) -> bool:
-            return (addr_int in ROM_SOURCE_OPERAND_ALLOWLIST) or ((addr_int & ~1) in ROM_SOURCE_OPERAND_ALLOWLIST)
+            return addr_int in ROM_SOURCE_OPERAND_ALLOWLIST
 
         source_file_line_pattern = re.compile(r"\b[\w\-\.\/]+\.(?:c|h|S):\d+\b")
+        p_manifest_id = re.compile(r"\bPORT24-ROM-[A-Z0-9\-]+\b")
+        p_disasm_line = re.compile(r"\b(?:0x)?[fF][c-fC-F0-9][0-9a-fA-F]{6}\s*:\s*[a-zA-Z]", re.IGNORECASE)
+        p_rom_cite = re.compile(r"\bROM\s+(?:at\s+)?[`*_]*0x[0-9a-fA-F]+", re.IGNORECASE)
+        p_rom_content_claim = re.compile(
+            r"\b(?:ROM\s+(?:at\s+)?(?:source\s+address\s+)?(?:`?0x[0-9a-fA-F]+`?\s+)?(?:contains?|holds?)|bytes\s+at|instructions?\s+at|disassembly|reads\b|loads?\s+from\s+ROM|ROM\s+contents?|image\s+in\s+ROM)\b",
+            re.IGNORECASE,
+        )
 
         verified_rom_addrs = set()
         allowed_source_operands = set()
@@ -758,23 +771,19 @@ class TestPort24LoaderTrace(unittest.TestCase):
 
             # Line-wide disqualification flags for allowlisted addresses:
             # (a) Any ROM disassembly line (pattern like `fcXXXXXX: <mnemonic>`)
-            has_disasm_line = (
-                bool(disasm_matches)
-                or bool(re.search(r"\b(?:0x)?[fF][c-fC-F0-9][0-9a-fA-F]{6}\s*:\s*[a-zA-Z]", line, re.IGNORECASE))
-            )
+            has_disasm_line = bool(disasm_matches) or bool(p_disasm_line.search(line))
 
             # (b) Any `ROM 0x...` citation claiming ROM content/address directly as evidence,
             # in any form including Markdown-wrapped `ROM \`0x...\`` or `ROM **0x...**`
-            has_rom_citation = bool(re.search(r"\bROM\s+[`*_]*0x[0-9a-fA-F]+", line, re.IGNORECASE))
+            has_rom_citation = bool(p_rom_cite.search(line))
 
-            # (c) Any claim about ROM contents at an address
-            has_rom_content_claim = (
-                bool(re.search(r"\bROM\s+contents?\s+(?:at\s+)?(?:source\s+address\s+)?`?0x[0-9a-fA-F]+`?\s+(?:is|are|contains?)\b", line, re.IGNORECASE))
-                or bool(re.search(r"\bROM\s+(?:at\s+)?`?0x[0-9a-fA-F]+`?\s+contains?\b", line, re.IGNORECASE))
-                or bool(re.search(r"\bimage\s+in\s+ROM\s+at\s+`?0x[0-9a-fA-F]+`?\b", line, re.IGNORECASE))
-            )
+            # (c) Any manifest evidence ID (any PORT24-ROM-* identifier)
+            has_manifest_id = bool(p_manifest_id.search(line))
 
-            # (d) Allowlisted addresses may be exempt ONLY when they appear as explicit
+            # (d) Any ROM content claim (e.g. 'ROM contains', 'ROM holds', 'bytes at', 'instruction at', 'disassembly', 'reads', 'loads from ROM')
+            has_rom_content_claim = bool(p_rom_content_claim.search(line))
+
+            # (e) Allowlisted addresses may be exempt ONLY when they appear as explicit
             # source-code operands or constants cited by file:line
             has_source_citation = bool(source_file_line_pattern.search(line))
 
@@ -793,6 +802,10 @@ class TestPort24LoaderTrace(unittest.TestCase):
                     elif has_rom_citation:
                         uncovered_addrs.append(
                             f"Line {line_no}: 0x{val:08X} is allowlisted but appears on a line with a ROM citation: {line.strip()}"
+                        )
+                    elif has_manifest_id:
+                        uncovered_addrs.append(
+                            f"Line {line_no}: 0x{val:08X} is allowlisted but appears on a line with a manifest evidence ID: {line.strip()}"
                         )
                     elif has_rom_content_claim:
                         uncovered_addrs.append(
@@ -893,7 +906,7 @@ class TestPort24LoaderTrace(unittest.TestCase):
         """
         sample_stub_line = (
             "| `stub_fc05c5bc` (`stubs_prototype.S:11`) | `STUB` | `0x00349894: ldr.w pc, [pc]` | "
-            "`0x00349898` | `0xFC05C5BD` | `1` | `Thumb` | "
+            "`0x00349898` | `0xFC05C5BC` | `1` | `Thumb` | "
             "[VERIFIED (source/build): candidate_main.elf:0x00349898; stubs_prototype.S:11; stubs_asm.h:60] "
             "[UNKNOWN: callee target unread from ROM] |"
         )
@@ -1005,6 +1018,55 @@ class TestPort24LoaderTrace(unittest.TestCase):
             any("FCEC854C" in u for u in uncovered_b),
             f"'ROM `0xFCEC854C`' in backticks must fail coverage: {uncovered_b}",
         )
+
+    def test_regression_odd_thumb_address_without_allowlist_entry_fails(self):
+        """Regression test for Issue 1: removing addr_int & ~1 normalisation.
+        An odd Thumb-bit form like 0xFCEC854D does not pass just because 0xFCEC854C is allowlisted.
+        A synthetic doc line citing 0xFCEC854D with boot_prototype.c:107 citation must FAIL coverage.
+        """
+        synth_line = "Candidate references 0xFCEC854D [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:107]"
+        uncovered, _ = self.check_rom_addresses_coverage(synth_line)
+        self.assertTrue(
+            any("FCEC854D" in u for u in uncovered),
+            f"Synthetic citation of 0xFCEC854D with boot_prototype.c:107 should have failed coverage: {uncovered}",
+        )
+
+    def test_regression_enforce_source_only_rule_for_allowlisted_addresses(self):
+        """Regression tests for Issue 2: allowlisted addresses must be rejected when on a line with:
+        (1) ROM content claim: 'At address 0xFCEC854C the ROM contains a copy image [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:107]'
+        (2) A manifest evidence ID (PORT24-ROM-*): line mixing an allowlisted operand with a PORT24-ROM-* ID
+        (3) Words indicating ROM content: 'ROM holds', 'bytes at', 'instruction at', 'disassembly', 'reads', 'loads from ROM'
+        """
+        # (1) Exact reviewer test sentence
+        line_content = "At address 0xFCEC854C the ROM contains a copy image [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:107]"
+        uncovered_c, _ = self.check_rom_addresses_coverage(line_content)
+        self.assertTrue(
+            any("FCEC854C" in u for u in uncovered_c),
+            f"Line with 'the ROM contains' should have failed coverage: {uncovered_c}",
+        )
+
+        # (2) Mixed allowlisted operand with PORT24-ROM-* ID
+        line_mixed = "0xFCEC854C operand is verified [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:107; PORT24-ROM-CACHE-HELPERS]"
+        uncovered_m, _ = self.check_rom_addresses_coverage(line_mixed)
+        self.assertTrue(
+            any("FCEC854C" in u for u in uncovered_m),
+            f"Line mixing allowlisted address with PORT24-ROM-* ID should have failed coverage: {uncovered_m}",
+        )
+
+        # (3) Other ROM content claim forms
+        for wording, test_line in [
+            ("ROM holds", "ROM holds data at 0xFCEC854C [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:107]"),
+            ("bytes at", "bytes at 0xFCEC854C are copied [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:107]"),
+            ("instruction at", "instruction at 0xFCEC854C executes [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:107]"),
+            ("disassembly", "disassembly of 0xFCEC854C shows veneer [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:107]"),
+            ("reads", "stub_fc05c5bc reads hardware state [VERIFIED: chdk-port/platform/g3x/sub/110c/stubs_prototype.S:11]"),
+            ("loads from ROM", "loads from ROM 0xFCEC854C [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:107]"),
+        ]:
+            uncovered_w, _ = self.check_rom_addresses_coverage(test_line)
+            self.assertTrue(
+                len(uncovered_w) > 0,
+                f"Line with wording '{wording}' should have failed coverage: {uncovered_w}",
+            )
 
 
     def test_offline_manifest_table_matches_json(self):
