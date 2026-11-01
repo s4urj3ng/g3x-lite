@@ -285,6 +285,7 @@ class TestPort24PoweronFix(unittest.TestCase):
         self.assertIn("platform/sx60hs/sub/100b/boot.c", doc_content)
         self.assertIn("loader/g7x/main.c", doc_content)
         self.assertIn("g3x_110e.patch", doc_content)
+        self.assertIn("docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md", doc_content)
 
         # ROM addresses
         self.assertIn("0xFC05B962", doc_content)
