@@ -81,6 +81,16 @@
           "label": "PORT24-ROM-VECTOR-TABLE"
         },
         {
+          "start_address": "0xFC54E000",
+          "end_address": "0xFC54E0FF",
+          "label": "PORT24-ROM-OUT-OF-SCOPE-VER"
+        },
+        {
+          "start_address": "0xFDF20200",
+          "end_address": "0xFDF202FF",
+          "label": "PORT24-ROM-OUT-OF-SCOPE-PID"
+        },
+        {
           "start_address": "0xFC05C4D0",
           "end_address": "0xFC05C51F",
           "label": "PORT24-ROM-CARD-SWITCHES"
@@ -345,6 +355,42 @@
       "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
       "classification": "STATIC_VERIFIED",
       "notes": "Stock exception vector table ROM 0xFC05B47C..0xFC05B4B3 (56 bytes, 14 words copied to 0x00000000..0x00000037 by sub_fc02007e): contains 14 stock exception vector words"
+    },
+    {
+      "evidence_id": "PORT24-ROM-OUT-OF-SCOPE-VER",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC54E000",
+      "end_address": "0xFC54E0FF",
+      "expected_byte_count": 256,
+      "sha256": "6828d1a977736227ecad15c6fee4b6b4bd358749a585c1b1ebcc55b7f7dec413",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
+      "classification": "UNKNOWN",
+      "status": "out_of_scope",
+      "out_of_scope": true,
+      "relied_upon": false,
+      "notes": "OUT-OF-SCOPE: Disclosed out-of-scope read from earlier attempts per task instructions; contents are not relied upon as evidence and actual ROM contents remain unverified [UNKNOWN]."
+    },
+    {
+      "evidence_id": "PORT24-ROM-OUT-OF-SCOPE-PID",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFDF20200",
+      "end_address": "0xFDF202FF",
+      "expected_byte_count": 256,
+      "sha256": "19a0057d572b8040e18349f9266768b6ece0bf8e60c41591a964cca8d9bb1733",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT24-LOADER-TRACE",
+      "classification": "UNKNOWN",
+      "status": "out_of_scope",
+      "out_of_scope": true,
+      "relied_upon": false,
+      "notes": "OUT-OF-SCOPE: Disclosed out-of-scope read from earlier attempts per task instructions; contents are not relied upon as evidence and actual ROM contents remain unverified [UNKNOWN]."
     },
     {
       "evidence_id": "PORT24-ROM-CARD-SWITCHES",
