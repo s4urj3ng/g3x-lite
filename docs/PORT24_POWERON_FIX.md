@@ -20,11 +20,11 @@ The O1 result is credited solely to that unchanged PORT-19 default build with he
 ### Owner Trial Result (2026-11-02)
 On 2026-11-02, the owner tested the PORT-24 opt-in short-press candidate (`faad4d8242fbf6f79a44b10a9956f7eb04de9b65f42221f82a3b69eb024cf056`, 118,001 B, built from `origin/main` `81532bb` with `build_candidate_port24_poweron_fix.py --poweron-fix`):
 - **Card Setup**: `extend.m`, `WITNESS.BIN` (`241420a6...`), and `script.req` unchanged from PORT-19; card locked, FAT32, `BOOTDISK` `0x1E0`, `SCRIPT` `0x1F0`.
-- **(1) Short press**: No LED, LCD stayed off -> **`O10`** `[VERIFIED: 2026-11-02 owner trial]`.
-- **(2) Held press**: Normal LED blink, Canon logo, stock UI, inspector shows `CONT_ATTEMPTED / FRESHNESS_UNVERIFIED`, no `TRACE.LOG` -> **`O1`** `[VERIFIED: 2026-11-02 owner trial]`.
+- **(1) Short press**: No LED, LCD stayed off -> **`O10`** `[VERIFIED: 2026-11-02 owner trial; outcome O10 in tools/port18_trial_report.py:248-256]`.
+- **(2) Held press**: Normal LED blink, Canon logo, stock UI, inspector shows `CONT_ATTEMPTED / FRESHNESS_UNVERIFIED`, no `TRACE.LOG` -> **`O1`** `[VERIFIED: 2026-11-02 owner trial; outcome O1 in tools/port18_trial_report.py:92-96]`.
 
 **Trial Conclusion & Relabeling**:
-Removing the second `sub_fc1284ac` check in `sub_fc05b962_my` is **VERIFIED insufficient** for a short-press boot (cited from this 2026-11-02 trial, where short press still failed to boot and produced O10), and the remaining cause of the short-press power-off is **UNKNOWN**.
+Removing the second `sub_fc1284ac` check in `sub_fc05b962_my` is **VERIFIED insufficient** for a short-press boot (cited from this 2026-11-02 trial, where short press still failed to boot and produced outcome O10 `[VERIFIED: tools/port18_trial_report.py:248-256]`), and the remaining cause of the short-press power-off is **UNKNOWN**.
 
 ### The Failure Mechanism (**INFERRED — SUPERSEDED**)
 *(Superseded by 2026-11-02 owner trial: removing the second `sub_fc1284ac` check in `sub_fc05b962_my` is **VERIFIED insufficient** for a short-press boot [cite 2026-11-02 trial], and the remaining cause is **UNKNOWN**. The earlier inferred mechanism below is retained for historical context).*
