@@ -6,7 +6,7 @@ Verifies:
 2. The cited candidate SHA-256 matches the one parsed from docs/PORT24_BREADCRUMB_LADDER.md (no hardcoding).
 3. Every ladder code parsed from docs/PORT24_BREADCRUMB_LADDER.md appears in the decode table.
 4. The exact card setup values (LOCKED, FAT32, BOOTDISK 0x1E0, SCRIPT 0x1F0) are present.
-5. The plan specifies at most two power-ons (Power-On 1 and Power-On 2, no Power-On 3).
+5. The plan specifies at most two power-ons with the ladder card inserted, recovery ends diagnosis, and real action paths satisfy criteria (a)-(d).
 6. Power button handling (hold vs short press) explicitly accounts for the O1 result and boot_prototype.c:350.
 7. StartDiskboot-skip cues from T2 are documented.
 8. Recovery procedures (card unlock/removal, long-press/repeated press, capacitor discharge / PMIC reset) are present.
@@ -120,24 +120,73 @@ class TestPort24SessionPlan(unittest.TestCase):
             "Card setup must specify SCRIPT marker at offset 0x1F0",
         )
 
-    def test_at_most_two_power_ons_in_plan(self):
-        """Verify the execution plan specifies at most two power-ons inside the diagnostic budget."""
+    def test_power_on_budget_and_action_paths(self):
+        """Verify the power-on budget and real action paths per feedback (2):
+        (a) Count power-on steps that happen with the ladder card inserted is <= 2 on every branch.
+        (b) Every branch ends either at report or at card-removed recovery.
+        (c) After a recovery step, no step reinserts the card or runs another ladder power-on.
+        (d) No phrase in the doc claims that recovery counts toward the two power-ons.
+        """
+        # (a) Power-on budget is defined as at most two power-ons with the ladder card inserted
         self.assertIn("Power-On 1", self.content)
         self.assertIn("Power-On 2", self.content)
-        # Ensure there is no Power-On 3
         self.assertNotIn("Power-On 3", self.content)
 
-        # Parse distinct Power-On actions in the plan (outside report template)
-        # Check that the number of distinct power-on actions inside the diagnostic budget is at most 2
-        diagnostic_matches = re.findall(r"Power-On\s*(\d+)", self.content)
-        distinct_diagnostic_nums = set(diagnostic_matches)
+        # Budget definition check
         self.assertTrue(
-            distinct_diagnostic_nums.issubset({"1", "2"}),
-            f"Only Power-On 1 and Power-On 2 are permitted; found: {distinct_diagnostic_nums}",
+            re.search(
+                r"at most two power-ons with the ladder card inserted",
+                self.content,
+                re.IGNORECASE,
+            ),
+            "Document must explicitly define budget as 'at most two power-ons with the ladder card inserted'",
         )
-        self.assertLessEqual(len(distinct_diagnostic_nums), 2)
 
-        # In recovery section: assert any recovery power-on is either counted inside budget or carries explicit marker
+        # Parse branches in Section 2
+        sec2_match = re.search(
+            r"## 2\..*?Step-by-Step Execution Plan.*?\n(.*?)(?=\n## 3\.|\Z)",
+            self.content,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(sec2_match, "Section 2 must exist")
+        sec2_text = sec2_match.group(1)
+
+        # Parse branches under triage or actions:
+        branch_matches = re.findall(
+            r"-\s+\*\*(Count[^:]+|Optional Single Power-On Alternative)\*\*:(.*?)(?=\n\s*-\s+\*\*|\n\n|\Z)",
+            sec2_text,
+            re.DOTALL,
+        )
+        self.assertGreaterEqual(len(branch_matches), 4, "Must find triage branches in Section 2")
+
+        for branch_name, branch_body in branch_matches:
+            # Count ladder power-on steps in this branch.
+            # Base step is Power-On 1 (or direct single power-on).
+            # If branch mentions Power-On 2, ladder power-ons = 2; else 1.
+            ladder_power_on_count = 1
+            if re.search(r"Power-On\s*2", branch_body):
+                ladder_power_on_count = 2
+            self.assertLessEqual(
+                ladder_power_on_count,
+                2,
+                f"Branch '{branch_name}' has ladder power-on count > 2",
+            )
+
+        # (b) Every branch ends either at report or at card-removed recovery
+        for branch_name, branch_body in branch_matches:
+            has_report = bool(re.search(r"(?:Section\s*6|report)", branch_body, re.IGNORECASE))
+            has_recovery = bool(re.search(r"(?:Section\s*5|recovery)", branch_body, re.IGNORECASE))
+            self.assertTrue(
+                has_report or has_recovery,
+                f"Branch '{branch_name}' must end either at report or recovery",
+            )
+            if has_recovery:
+                self.assertTrue(
+                    re.search(r"(?:card\s*removed|without\s*the\s*ladder\s*card)", branch_body, re.IGNORECASE),
+                    f"Branch '{branch_name}' ending at recovery must specify card removed",
+                )
+
+        # (c) After a recovery step, no step reinserts the card or runs another ladder power-on
         sec5_match = re.search(
             r"## 5\..*?Recovery Procedures.*?\n(.*?)(?=\n## 6\.|\Z)",
             self.content,
@@ -146,27 +195,52 @@ class TestPort24SessionPlan(unittest.TestCase):
         self.assertIsNotNone(sec5_match, "Section 5 Recovery Procedures must exist")
         sec5_text = sec5_match.group(1)
 
-        # Check reconciliation sentence reconciling recovery power-ons with the limit
-        self.assertIn(
-            "outside the diagnostic budget",
-            sec5_text,
-            "Recovery section must explicitly mark extra recovery power-ons as outside the diagnostic budget",
+        # Must explicitly prohibit reinserting the ladder card
+        self.assertTrue(
+            re.search(
+                r"never\s+(?:tell the owner to\s+)?reinsert\s+or\s+relock\s+the\s+ladder\s+card|never\s+reinsert\s+the\s+(?:locked\s+)?ladder\s+card",
+                self.content,
+                re.IGNORECASE,
+            ),
+            "Document must state that after recovery, the ladder card is never reinserted or relocked in the same session",
         )
         self.assertTrue(
             re.search(
-                r"Any additional power-on beyond Power-On 2 is strictly outside the diagnostic budget,\s*serving exclusively as owner recovery to return the camera to stock service,\s*and is not part of the diagnosis",
-                sec5_text,
+                r"no\s+branch\s+may\s+run\s+a\s+diagnostic\s+power-on\s+after\s+any\s+recovery\s+step|no\s+diagnostic\s+power-on\s+may\s+be\s+run\s+after\s+any\s+recovery\s+step",
+                self.content,
+                re.IGNORECASE,
             ),
-            "Reconciliation sentence reconciling recovery power-ons with the two-power-on limit must be present",
+            "Document must state that no branch may run a diagnostic power-on after any recovery step",
         )
 
-        # Every power-on instruction in Section 5 must specify either 'Power-On 2' or 'outside the diagnostic budget'
+        # In section 5, ensure no instruction tells the owner to reinsert the ladder card
         for line in sec5_text.splitlines():
-            if re.search(r"recovery power-on", line, re.IGNORECASE):
-                self.assertTrue(
-                    "Power-On 2" in line or "outside the diagnostic budget" in line,
-                    f"Line mentioning recovery power-on must either count as Power-On 2 or mark outside budget: {line}",
-                )
+            if (
+                re.search(r"re-?insert", line, re.IGNORECASE)
+                and not re.search(r"battery", line, re.IGNORECASE)
+                and not re.search(r"never|not|no\b", line, re.IGNORECASE)
+            ):
+                # If card is mentioned, it must be UNLOCKED or normal SD card, never ladder card / DISKBOOT
+                self.assertNotIn("ladder card", line.lower())
+                self.assertNotIn("diskboot", line.lower())
+
+        # (d) No phrase in the doc claims that recovery counts toward the two power-ons
+        forbidden_phrases = [
+            r"at most two power-ons including recovery",
+            r"including recovery",
+            r"counts as Power-On 2",
+            r"counts toward the two power-ons",
+            r"Power-On 2 is either a second diagnostic run or recovery",
+            r"which counts as Power-On 2",
+            r"outside the diagnostic budget",
+            r"exempt from diagnostic budget",
+        ]
+        for phrase in forbidden_phrases:
+            match = re.search(phrase, self.content, re.IGNORECASE)
+            self.assertIsNone(
+                match,
+                f"Document must not contain phrase '{phrase}' claiming recovery counts toward power-ons or using old budget exemption wording",
+            )
 
     def test_no_first_second_only_observation_instruction(self):
         """Verify the plan does NOT restrict observation to the first second and requires continuous observation."""
@@ -514,6 +588,89 @@ class TestPort24SessionPlan(unittest.TestCase):
             re.search(r"does not skip SD initialis?ation", self.content, re.IGNORECASE),
             "Session plan must clarify that the unlocked-card branch does not skip SD initialisation",
         )
+
+    def test_witness_invalid_and_sd_desync_labelled_unknown(self):
+        """Verify that WITNESS_INVALID and SD-bus desynchronisation statements are labelled UNKNOWN and not VERIFIED or INFERRED."""
+        lines = self.content.splitlines()
+
+        # Check WITNESS_INVALID
+        witness_invalid_lines = [
+            (idx, line)
+            for idx, line in enumerate(lines, start=1)
+            if "WITNESS_INVALID" in line
+            and not line.strip().startswith("#")
+            and not line.strip().startswith("|")
+            and not line.strip().startswith("```")
+            and "extend.m" not in line
+            and "Inspector Overlay" not in line
+        ]
+        self.assertGreaterEqual(
+            len(witness_invalid_lines),
+            1,
+            "Must find substantive WITNESS_INVALID claim line in Section 4.3",
+        )
+        for idx, line in witness_invalid_lines:
+            self.assertIn(
+                "UNKNOWN",
+                line,
+                f"Line {idx} mentioning WITNESS_INVALID must be labelled UNKNOWN: {line}",
+            )
+            self.assertIn(
+                "docs/PORT18_OWNER_TRIAL_PLAN.md:267",
+                line,
+                f"Line {idx} mentioning WITNESS_INVALID must cite docs/PORT18_OWNER_TRIAL_PLAN.md:267",
+            )
+            self.assertNotIn(
+                "[VERIFIED",
+                line,
+                f"Line {idx} mentioning WITNESS_INVALID must NOT carry [VERIFIED: {line}",
+            )
+            self.assertNotIn(
+                "[INFERRED",
+                line,
+                f"Line {idx} mentioning WITNESS_INVALID must NOT carry [INFERRED: {line}",
+            )
+
+        # Check SD-bus desynchronisation
+        sd_desync_lines = [
+            (idx, line)
+            for idx, line in enumerate(lines, start=1)
+            if re.search(r"desynchronis?ation", line, re.IGNORECASE)
+        ]
+        self.assertGreaterEqual(
+            len(sd_desync_lines),
+            1,
+            "Must find SD-bus desynchronisation statement",
+        )
+        for idx, line in sd_desync_lines:
+            self.assertIn(
+                "UNKNOWN",
+                line,
+                f"Line {idx} mentioning SD desync must be labelled UNKNOWN: {line}",
+            )
+            self.assertIn(
+                "docs/PORT24_LOADER_TRACE.md:959",
+                line,
+                f"Line {idx} mentioning SD desync must cite docs/PORT24_LOADER_TRACE.md:959",
+            )
+            self.assertNotIn(
+                "[VERIFIED",
+                line,
+                f"Line {idx} mentioning SD desync must NOT carry [VERIFIED: {line}",
+            )
+            self.assertNotIn(
+                "[INFERRED",
+                line,
+                f"Line {idx} mentioning SD desync must NOT carry [INFERRED: {line}",
+            )
+            self.assertTrue(
+                re.search(r"possible explanation", line, re.IGNORECASE),
+                f"Line {idx} must present SD desync as possible explanation: {line}",
+            )
+            self.assertTrue(
+                re.search(r"not (?:as )?a recovery mechanism", line, re.IGNORECASE),
+                f"Line {idx} must state SD desync is not a recovery mechanism: {line}",
+            )
 
     def test_binary_guard_scoped(self):
         """Verify that the files touched by this task are plain text and contain no raw binaries or ROM dumps."""
