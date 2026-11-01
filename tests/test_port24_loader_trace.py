@@ -360,7 +360,42 @@ ROM_SOURCE_OPERAND_ALLOWLIST: dict[int, tuple[str, str]] = {
         "Driver stub address operand stub_fc31b1f4 from STUB2(fc31b1f4); claim is about literal pool operand in stub veneer, contents unread from ROM",
         "chdk-port/platform/g3x/sub/110c/stubs_prototype.S:56",
     ),
+    # 2 Pointer Operands from bin_compat.h (disclosed out-of-scope reads, covered as source literals):
+    0xFC54E08D: (
+        "Literal pointer operand for version string GM1.10C in bin_compat.h:4; claim is about the pointer constant in source, contents unverified as evidence",
+        "chdk-port/platform/g3x/sub/110c/bin_compat.h:4",
+    ),
+    0xFDF20270: (
+        "Literal pointer operand for PLATFORMID in bin_compat.h:7; claim is about the pointer constant in source, contents unverified as evidence",
+        "chdk-port/platform/g3x/sub/110c/bin_compat.h:7",
+    ),
 }
+
+def verify_source_operand_allowlist_entry(addr: int, file_line: str) -> tuple[bool, str]:
+    """Verify that an allowlist entry address literally occurs in its cited source file at the given line."""
+    if not (ROM_COVERAGE_START <= addr <= ROM_COVERAGE_END):
+        return False, f"Invalid allowlist address: 0x{addr:08X}"
+    if ":" not in file_line:
+        return False, f"Invalid file:line citation '{file_line}' for 0x{addr:08X}"
+    rel_file, line_num_str = file_line.split(":", 1)
+    if not rel_file.endswith((".c", ".h", ".S")):
+        return False, f"Allowlist citation file '{rel_file}' for 0x{addr:08X} is not a C, header, or assembly source file"
+    file_path = REPO_ROOT / rel_file
+    if not file_path.exists():
+        return False, f"Allowlist citation file missing: {file_path}"
+    try:
+        line_num = int(line_num_str)
+    except ValueError:
+        return False, f"Invalid line number in citation: '{file_line}'"
+    file_lines = file_path.read_text(encoding="utf-8").splitlines()
+    if not (1 <= line_num <= len(file_lines)):
+        return False, f"Line {line_num} out of bounds for {rel_file} (total {len(file_lines)})"
+    line_text = file_lines[line_num - 1].lower()
+    hex_8 = f"{addr:08x}".lower()
+    hex_var = f"{addr:x}".lower()
+    if hex_8 in line_text or hex_var in line_text:
+        return True, ""
+    return False, f"Address 0x{addr:08X} does not literally occur in {rel_file} at line {line_num}: {file_lines[line_num - 1]!r}"
 
 # Strict label pattern: only VERIFIED, INFERRED, UNKNOWN allowed
 LABEL_PATTERN = re.compile(
@@ -632,12 +667,13 @@ class TestPort24LoaderTrace(unittest.TestCase):
         self.assertIn("docs/RESTART_IRQ_PENDING_AUDIT.md", ranking_section)
         self.assertIn("Contrast with Direct Power Cut", ranking_section)
         self.assertIn("LED flashed, then LCD backlight off", ranking_section)
-        self.assertIn("HIGH confidence", ranking_section)
+        self.assertIn("MEDIUM confidence", ranking_section)
+        self.assertNotIn("HIGH confidence", ranking_section)
         # Qualified panic-hang checks (Issue 3):
         self.assertNotIn("eventually", ranking_section.lower())
         self.assertNotIn("regardless of button", ranking_section.lower())
         self.assertIn("POSSIBLE but UNKNOWN", ranking_section)
-        self.assertIn("docs/PORT23_POWER_SUPERVISION.md:211, 295-300", ranking_section)
+        self.assertIn("docs/PORT23_POWER_SUPERVISION.md:21, 242", ranking_section)
         self.assertIn("conditional mechanism", ranking_section.lower())
 
     def test_all_claim_bullets_and_rows_carry_epistemic_labels(self):
@@ -740,6 +776,7 @@ class TestPort24LoaderTrace(unittest.TestCase):
         evidence_ranges = [
             (int(e["start_address"], 16), int(e["end_address"], 16), e["evidence_id"])
             for e in entries
+            if not e.get("out_of_scope") and e.get("relied_upon") is not False
         ]
 
         def is_in_evidence_entries(addr_int: int) -> bool:
@@ -920,26 +957,9 @@ class TestPort24LoaderTrace(unittest.TestCase):
     def test_source_operand_allowlist_entries_are_justified(self):
         """Every entry in ROM_SOURCE_OPERAND_ALLOWLIST is justified and literally occurs at its cited source line."""
         for addr, (justification, file_line) in ROM_SOURCE_OPERAND_ALLOWLIST.items():
-            self.assertTrue(ROM_COVERAGE_START <= addr <= ROM_COVERAGE_END, f"Invalid allowlist address: 0x{addr:08X}")
             self.assertTrue(justification and len(justification) > 10, f"Missing justification for 0x{addr:08X}")
-            self.assertIn(":", file_line, f"Invalid file:line citation '{file_line}' for 0x{addr:08X}")
-            rel_file, line_num_str = file_line.split(":", 1)
-            self.assertTrue(
-                rel_file.endswith((".c", ".h", ".S")),
-                f"Allowlist citation file '{rel_file}' for 0x{addr:08X} is not a C or assembly source file",
-            )
-            file_path = REPO_ROOT / rel_file
-            self.assertTrue(file_path.exists(), f"Allowlist citation file missing: {file_path}")
-            file_lines = file_path.read_text(encoding="utf-8").splitlines()
-            line_num = int(line_num_str)
-            self.assertTrue(1 <= line_num <= len(file_lines), f"Line {line_num} out of bounds for {rel_file}")
-            line_text = file_lines[line_num - 1]
-            addr_hex = f"{addr:x}".lower()
-            self.assertIn(
-                addr_hex,
-                line_text.lower(),
-                f"Address 0x{addr:08X} does not literally occur in {rel_file} at line {line_num}: {line_text!r}",
-            )
+            ok, msg = verify_source_operand_allowlist_entry(addr, file_line)
+            self.assertTrue(ok, msg)
 
     def test_regression_unmanifested_address_with_source_citation_fails_coverage(self):
         """Regression test: an unmanifested ROM address on a line with a source file:line citation must FAIL coverage."""
@@ -956,25 +976,38 @@ class TestPort24LoaderTrace(unittest.TestCase):
 
     def test_regression_allowlist_entry_with_wrong_source_line_fails(self):
         """Regression test: an allowlist entry whose source line does not contain the address must FAIL verification."""
-        def verify_allowlist_entry(addr: int, file_line: str) -> bool:
-            rel_file, line_num_str = file_line.split(":", 1)
-            file_path = REPO_ROOT / rel_file
-            if not file_path.exists():
-                return False
-            file_lines = file_path.read_text(encoding="utf-8").splitlines()
-            line_num = int(line_num_str)
-            if not (1 <= line_num <= len(file_lines)):
-                return False
-            line_text = file_lines[line_num - 1]
-            return f"{addr:x}".lower() in line_text.lower()
-
         # Legitimate entry must pass
-        self.assertTrue(verify_allowlist_entry(0xFC05B4B4, "chdk-port/platform/g3x/sub/110c/boot_prototype.c:93"))
+        ok, msg = verify_source_operand_allowlist_entry(0xFC05B4B4, "chdk-port/platform/g3x/sub/110c/boot_prototype.c:93")
+        self.assertTrue(ok, f"Legitimate entry failed: {msg}")
+
+        # Legitimate header (.h) entry must pass
+        ok_h, msg_h = verify_source_operand_allowlist_entry(0xFC54E08D, "chdk-port/platform/g3x/sub/110c/bin_compat.h:4")
+        self.assertTrue(ok_h, f"Legitimate .h entry failed: {msg_h}")
 
         # Wrong line must fail
-        self.assertFalse(verify_allowlist_entry(0xFC05B4B4, "chdk-port/platform/g3x/sub/110c/boot_prototype.c:100"))
+        ok_wrong, _ = verify_source_operand_allowlist_entry(0xFC05B4B4, "chdk-port/platform/g3x/sub/110c/boot_prototype.c:100")
+        self.assertFalse(ok_wrong, "Allowlist entry with wrong source line should have failed")
+
         # Non-occurring address on line 93 must fail
-        self.assertFalse(verify_allowlist_entry(0xFC999999, "chdk-port/platform/g3x/sub/110c/boot_prototype.c:93"))
+        ok_nonexistent, _ = verify_source_operand_allowlist_entry(0xFC999999, "chdk-port/platform/g3x/sub/110c/boot_prototype.c:93")
+        self.assertFalse(ok_nonexistent, "Allowlist entry with non-occurring address should have failed")
+
+    def test_regression_address_in_out_of_scope_range_without_allowlist_fails_coverage(self):
+        """Regression test for Point 1: an address inside an out-of-scope manifest range,
+        with no allowlist entry, must FAIL coverage.
+        """
+        synth_line_ver = "Candidate references 0xFC54E050 without allowlist entry [UNKNOWN]."
+        uncovered_ver, _ = self.check_rom_addresses_coverage(synth_line_ver)
+        self.assertTrue(
+            any("FC54E050" in u for u in uncovered_ver),
+            f"Address 0xFC54E050 inside out-of-scope range without allowlist must fail coverage: {uncovered_ver}",
+        )
+        synth_line_pid = "Candidate references 0xFDF20250 without allowlist entry [UNKNOWN]."
+        uncovered_pid, _ = self.check_rom_addresses_coverage(synth_line_pid)
+        self.assertTrue(
+            any("FDF20250" in u for u in uncovered_pid),
+            f"Address 0xFDF20250 inside out-of-scope PID range without allowlist must fail coverage: {uncovered_pid}",
+        )
 
     def test_regression_rom_coverage_interval_fe_and_ff_fail(self):
         """Regression test for coverage upper bound: interval is 0xFC000000..0xFFFFFFFF inclusive.
