@@ -218,6 +218,29 @@ NEWLY_READ_ENTRIES = {
 VALID_LABEL_PATTERN = re.compile(r"\[(?:STATIC_)?VERIFIED\b|\[INFERRED\b|\[UNKNOWN\b")
 
 
+def extract_cited_rom_addresses(text: str) -> set[str]:
+    """Extract ROM addresses from doc text: bare 0xFC/0xFD, bare fc/fd, and sub_/loc_ with optional suffix."""
+    pattern = re.compile(
+        r"\b(?:sub_|loc_)((?:fc|fd)[0-9a-f]{6})(?:_[a-z0-9_]+)?\b|(?:0x|\b)((?:fc|fd)[0-9a-f]{6})\b",
+        re.IGNORECASE,
+    )
+    addrs = set()
+    for m in pattern.finditer(text):
+        raw = m.group(1) or m.group(2)
+        addrs.add("0x" + raw.upper())
+    return addrs
+
+
+def get_uncovered_rom_addresses(cited_addrs: set[str], evidence_ranges: list[tuple[int, int, str]]) -> list[str]:
+    """Returns sorted list of addresses in cited_addrs not covered by any manifest [start, start + length) range."""
+    unapproved = []
+    for addr_str in sorted(cited_addrs):
+        val = int(addr_str, 16)
+        if not any(start <= val < end for start, end, _ in evidence_ranges):
+            unapproved.append(addr_str)
+    return unapproved
+
+
 class TestPort25EvidenceManifest(unittest.TestCase):
     """Validates docs/agentbridge/PORT25_EVIDENCE_MANIFEST.json integrity and compliance."""
 
@@ -390,7 +413,7 @@ class TestPort25LocaliseDocument(unittest.TestCase):
         )
 
     def test_every_cited_rom_address_covered_by_manifest(self):
-        """Every 0xFC..., 0xFD..., and bare fc.../fd... address cited in doc falls within [start, start + length)."""
+        """Every 0xFC..., 0xFD..., bare fc.../fd..., and sub_/loc_ address cited in doc falls within [start, start + length)."""
         evidence_entries = self.manifest.get("evidence_entries", [])
         self.assertTrue(len(evidence_entries) > 0, "No evidence entries in manifest")
 
@@ -400,21 +423,10 @@ class TestPort25LocaliseDocument(unittest.TestCase):
             for e in evidence_entries
         ]
 
-        # Match hex addresses case-insensitively: 0xfc..., 0xFC..., and fc/fd forms without 0x
-        raw_matches = re.finditer(r"(?i)(?:0x|sub_|loc_|\b)((?:fc|fd)[0-9a-f]{6})\b", self.content)
-        cited_addrs = set()
-        for m in raw_matches:
-            cited_addrs.add("0x" + m.group(1).upper())
-
+        cited_addrs = extract_cited_rom_addresses(self.content)
         self.assertGreaterEqual(len(cited_addrs), 25, "Expected at least 25 ROM addresses cited in doc")
 
-        unapproved_addrs = []
-        for addr_str in sorted(cited_addrs):
-            val = int(addr_str, 16)
-            is_covered = any(start <= val < end for start, end, _ in evidence_ranges)
-            if not is_covered:
-                unapproved_addrs.append(addr_str)
-
+        unapproved_addrs = get_uncovered_rom_addresses(cited_addrs, evidence_ranges)
         self.assertEqual(
             unapproved_addrs,
             [],
@@ -423,13 +435,39 @@ class TestPort25LocaliseDocument(unittest.TestCase):
         )
 
     def test_synthetic_uncovered_address_fails(self):
-        """Verifies that an uncovered ROM address like 0xfc000002 fails the address coverage check."""
+        """Verifies that extraction and coverage on synthetic doc text citing an uncovered
+
+        suffixed symbol (sub_fc000002_my) and bare address (0xFC000002) fail coverage.
+        """
         evidence_entries = self.manifest.get("evidence_entries", [])
         evidence_ranges = [
             (int(e["start_address"], 16), int(e["start_address"], 16) + int(e["expected_byte_count"]), e["evidence_id"])
             for e in evidence_entries
         ]
 
+        # 1. Negative test running extraction and coverage together on synthetic doc text citing an uncovered suffixed symbol
+        synthetic_suffixed_doc = (
+            "Document discussing early execution in sub_fc000002_my and sub_fc000004_stub before loader."
+        )
+        extracted_suffixed = extract_cited_rom_addresses(synthetic_suffixed_doc)
+        self.assertIn("0xFC000002", extracted_suffixed, "Extraction must capture 0xFC000002 from sub_fc000002_my")
+        self.assertIn("0xFC000004", extracted_suffixed, "Extraction must capture 0xFC000004 from sub_fc000004_stub")
+        unapproved_suffixed = get_uncovered_rom_addresses(extracted_suffixed, evidence_ranges)
+        self.assertEqual(
+            unapproved_suffixed,
+            ["0xFC000002", "0xFC000004"],
+            "Uncovered suffixed symbols must fail manifest coverage",
+        )
+
+        # 2. Negative test on bare 0xFC forms and bare hex in synthetic doc
+        synthetic_bare_doc = "Reference to bare 0xFC000006 and fc000008 in synthetic text."
+        extracted_bare = extract_cited_rom_addresses(synthetic_bare_doc)
+        self.assertIn("0xFC000006", extracted_bare)
+        self.assertIn("0xFC000008", extracted_bare)
+        unapproved_bare = get_uncovered_rom_addresses(extracted_bare, evidence_ranges)
+        self.assertEqual(unapproved_bare, ["0xFC000006", "0xFC000008"])
+
+        # 3. Direct numeric check
         uncovered_addr = 0xFC000002
         is_covered = any(start <= uncovered_addr < end for start, end, _ in evidence_ranges)
         self.assertFalse(is_covered, "0xFC000002 should not be covered by manifest ranges")
