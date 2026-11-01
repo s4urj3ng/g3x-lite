@@ -497,6 +497,52 @@ class TestPort24SessionPlan(unittest.TestCase):
         self.assertTrue(re.search(r"short press|brief tap", self.content, re.IGNORECASE))
         self.assertTrue(re.search(r"held press|continuous hold|long press", self.content, re.IGNORECASE))
 
+        # Button-check diagnosis must NOT use 'confirms', 'isolates', or 'proves'
+        forbidden_button_diag_patterns = [
+            r"\b(?:confirms?|isolates?|proves?)\b.*?(?:second\s+)?sub_fc1284ac",
+            r"(?:second\s+)?sub_fc1284ac.*?\b(?:confirms?|isolates?|proves?)\b",
+            r"\b(?:confirms?|isolates?|proves?)\b.*?(?:button-release|button\s+check)",
+            r"(?:button-release|button\s+check).*?\b(?:confirms?|isolates?|proves?)\b",
+            r"confirms?\s+whether\s+releasing\s+the\s+power\s+button",
+        ]
+        for pat in forbidden_button_diag_patterns:
+            match = re.search(pat, self.content, re.IGNORECASE)
+            self.assertIsNone(
+                match,
+                f"Plan must not use 'confirms', 'isolates' or 'proves' for button-check diagnosis (found '{match.group(0) if match else ''}')",
+            )
+
+        # Held-press success followed by short-press failure must be described as supporting
+        # the second sub_fc1284ac check (Rank 1) as the leading hypothesis, labelled INFERRED
+        self.assertTrue(
+            re.search(
+                r"supports the second (?:`sub_fc1284ac`|sub_fc1284ac) check \((?:T1 )?Rank 1\) as the leading hypothesis.*?\[INFERRED",
+                self.content,
+                re.DOTALL | re.IGNORECASE,
+            ),
+            "Button-check diagnosis must state that the outcome supports the second sub_fc1284ac check (Rank 1) as leading hypothesis, labelled INFERRED",
+        )
+
+        # External power-supervision alternative must be mentioned next to that diagnosis (citing docs/PORT24_LOADER_TRACE.md:999-1002)
+        self.assertTrue(
+            re.search(
+                r"external power supervision affected by the same button hold.*?(?:docs/PORT24_LOADER_TRACE\.md:999-1002)",
+                self.content,
+                re.DOTALL | re.IGNORECASE,
+            ),
+            "Plan must mention external power supervision affected by the same button hold citing docs/PORT24_LOADER_TRACE.md:999-1002 next to button diagnosis",
+        )
+
+        # State as UNKNOWN which of the two paths actually cut power
+        self.assertTrue(
+            re.search(
+                r"which of the two paths actually cut power is UNKNOWN",
+                self.content,
+                re.IGNORECASE,
+            ),
+            "Plan must state as UNKNOWN which of the two paths actually cut power",
+        )
+
     def test_decode_table_contains_all_ladder_codes(self):
         """Verify that every ladder code parsed from docs/PORT24_BREADCRUMB_LADDER.md appears in the decode table."""
         self.assertGreaterEqual(len(self.ladder_codes), 7, "Ladder doc must define at least 7 ladder codes")
@@ -1258,16 +1304,52 @@ class TestPort24SessionPlan(unittest.TestCase):
                 re.search(r"hang in the delay loop|stall with the LED left on", row, re.IGNORECASE),
                 f"Solid-ON row must allow for hang in delay loop or stall: {row}",
             )
-            # Must give recovery guidance: battery out or card out
-            self.assertTrue(
-                re.search(r"battery out|card out", row, re.IGNORECASE),
-                f"Solid-ON row must give recovery guidance (battery out or card out): {row}",
+            # Reject any power-cut or hang-recovery instruction that offers card removal alone
+            # or as an alternative to battery removal
+            self.assertFalse(
+                re.search(r"battery\s+(?:out|pull)\s+or\s+card\s+(?:out|removal)", row, re.IGNORECASE),
+                f"Solid-ON row must not offer card removal as an alternative to battery removal: {row}",
             )
+            self.assertFalse(
+                re.search(r"card\s+(?:out|removal)\s+(?:alone|only)", row, re.IGNORECASE),
+                f"Solid-ON row must not offer card removal alone: {row}",
+            )
+            # Must require battery removal to come before card removal
+            self.assertTrue(
+                re.search(r"remove\s+the\s+battery\s+first,\s*then\s+remove\s+the\s+card", row, re.IGNORECASE),
+                f"Solid-ON row must require battery removal first, then card removal: {row}",
+            )
+            # Must cite docs/PORT18_OWNER_TRIAL_PLAN.md:332-333 and docs/PORT18_OWNER_TRIAL_PLAN.md:327
+            self.assertIn("docs/PORT18_OWNER_TRIAL_PLAN.md:332-333", row)
+            self.assertIn("docs/PORT18_OWNER_TRIAL_PLAN.md:327", row)
             # Must cover k=0 case
             self.assertTrue(
                 re.search(r"k=0", row),
                 f"Solid-ON row must cover k=0 case: {row}",
             )
+
+        # Document-wide check: reject any power-cut or hang-recovery instruction offering card removal alone
+        # or as an alternative to battery removal
+        for line in self.content.splitlines():
+            if re.search(r"hang|freeze|power-cut|solid\s+on", line, re.IGNORECASE):
+                self.assertFalse(
+                    re.search(r"battery\s+(?:out|pull)\s+or\s+card\s+(?:out|removal)", line, re.IGNORECASE),
+                    f"Hang recovery line must not offer card removal as an alternative to battery removal: {line}",
+                )
+                self.assertFalse(
+                    re.search(r"card\s+(?:out|removal)\s+or\s+battery\s+(?:out|pull)", line, re.IGNORECASE),
+                    f"Hang recovery line must not offer card removal as an alternative to battery removal: {line}",
+                )
+
+        # Verify 'removing only the card can leave the camera powered and hung' is labelled INFERRED
+        self.assertTrue(
+            re.search(
+                r"removing only the card can leave the camera powered and hung\s*\[INFERRED",
+                self.content,
+                re.IGNORECASE,
+            ),
+            "'removing only the card can leave the camera powered and hung' must be present and labelled INFERRED",
+        )
 
         # Check that report template wording matches the new row
         self.assertIn(
