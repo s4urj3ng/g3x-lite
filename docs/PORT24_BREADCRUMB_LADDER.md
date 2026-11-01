@@ -13,8 +13,9 @@ The breadcrumb ladder is an opt-in diagnostic bootloader candidate (`DISKBOOT.BI
 - `[VERIFIED: host build & test]`: Default build invariance: When building without `--ladder` (or with `--no-ladder` / `--flag-off`), the DISKBOOT.BIN output is byte-identical to the locked baseline SHA-256 `9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136` (118,001 bytes).
 - `[VERIFIED: host build & test]`: Ladder candidate build output is deterministic across multiple independent builds (DISKBOOT.BIN SHA-256 `aa7963de9b6c04c8c5a3077efab12f8383a26db114d5d9b92e320780630abd3c`, 118,257 bytes; candidate_loader.bin SHA-256 `f3239e0b928dbe30022ce04f1e6d2a13b70409fe10f66ff121feb2efdde86289`, 118,256 bytes).
 - `[VERIFIED: host build & test]`: The ladder candidate passes all 7 validation checks of `tools/validate_candidate_port2a.py`.
-- `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:245; docs/PORT24_LOADER_TRACE.md:761]`: Timing calibration is derived from the PORT-23 `0x00600000` short-delay build using the exact same loop body (`subs r2, r2, #1; bne`). Total step duration at the slowest bound (300 ms) is 198.44 ms loop + 1.00 ms non-loop overhead = 199.44 ms (strictly < 200 ms cap).
+- `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:245; docs/PORT24_LOADER_TRACE.md:761]`: Timing calibration is derived from the PORT-23 `0x00600000` short-delay build using the exact same loop body (`subs r2, r2, #1; bne`). Slow-bound loop-only duration is 198.44 ms (4,161,536 / 6,291,456 * 300 ms). Per-step non-loop overhead is `[UNKNOWN]` (no latency evidence in repo); the 1.0 ms figure is an ASSUMPTION. Cap compliance: step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN).
 - `[INFERRED: timing models]`: Single pulse per step with maximized dark gap (~46.09 ms fastest bound, ~57.62 ms nominal, ~138.28 ms slowest bound). Human visual countability of the chosen ON/OFF durations on physical camera hardware is `[UNKNOWN]` (no optical trials or photodiode measurements exist in repo evidence).
+- `[UNKNOWN: hardware analysis]`: Per-step non-loop overhead (latency of MMIO store to `0xD20B0884` and DSB barrier on this SoC); no latency measurements exist in the repository. The 1.0 ms figure is an ASSUMPTION.
 - `[UNKNOWN: codebase analysis]`: The CHDK core entry point `_start` (`0x003489B4`) is defined in `chdk-port/core/entry.S:1-11`, which resides outside `chdk-port/platform/g3x/sub/110c/`. Per the task brief and repository scope rules, files outside the allowed paths are not edited. The final loader breadcrumb is therefore accurately designated `before_bx`, and core entry itself is NOT instrumented.
 - `[UNKNOWN: hardware trial 2026-11-01]`: Root cause of the shutdown after loader handoff (whether power supervision hold timeout, MMU/cache exception, or unhandled interrupt). The ladder candidate is designed to resolve this question.
 
@@ -51,11 +52,11 @@ Let us analyze the mathematical envelope of the calibration sources:
 Under the explicit constraints:
 (a) Simultaneous targets are impossible due to the 3x slow/fast ratio.
 (b) **Minimum-ON assumption**: We choose an ON iteration count of $N_{ON} = 0x00134000$ (1,261,568 iterations, ratio $77 / 384 \approx 0.20052$), yielding $T_{ON, fast} \approx 20.05$ ms at the fastest 100 ms bound. Whether this duration and the resulting dark gap are reliably countable by a human observer on physical camera hardware without instrumentation is `[UNKNOWN]` (no optical trial or photodiode evidence exists in the repository).
-(c) **Overhead bound**: Non-loop instructions in each pulse (3 literal pool loads, 2 MMIO stores, 2 DSB barriers, 2 MOVs) total 9 instructions and execute in < 200 cycles (< 0.01 ms at 100 MHz). A conservative overhead bound of **1.0 ms** is allocated.
-(d) **Full-step requirement**: Full modelled step duration (loop time + overhead bound) must be strictly < 200 ms at the slowest bound.
+(c) **Non-loop overhead [UNKNOWN: no latency evidence in repo]**: Non-loop instructions in each pulse (3 literal pool loads, 2 MMIO stores, 2 DSB barriers, 2 MOVs) total 9 instructions. The 1.0 ms figure is an ASSUMPTION; no MMIO store or DSB barrier latency measurements exist in the repository for this SoC.
+(d) **Cap compliance**: Slow-bound loop-only duration is 198.44 ms `[INFERRED]`. Full-step compliance with the 200 ms cap is conditional: **step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN)**. Under the 1.0 ms overhead ASSUMPTION, full modelled step is 198.44 ms + 1.0 ms = 199.44 ms.
 
 #### Maximizing OFF Gap Under the Constraints: Search Analysis
-- Available loop time budget at slowest bound: $200.0\text{ ms} - 1.0\text{ ms} = 199.0\text{ ms}$.
+- Available loop time budget under the 1.0 ms ASSUMPTION: $200.0\text{ ms} - 1.0\text{ ms} = 199.0\text{ ms}$.
 - Given fixed minimum ON count $N_{ON} = 0x00134000$ (1,261,568 iterations, which occupies $60.15625\text{ ms}$ at the slowest bound), the maximum allowable OFF loop time is:
   $$T_{OFF, slow} < 199.0\text{ ms} - 60.15625\text{ ms} = 138.84375\text{ ms}$$
 - In terms of reference loop count $N_{ref} = 0x00600000$ (6,291,456 iterations for 300 ms), this establishes a strict theoretical iteration bound:
@@ -66,28 +67,28 @@ Under the explicit constraints:
   1. **Chosen Value: $0x002C4000$ (2,899,968 iterations, $0xB1 \ll 14$)**:
      - Thumb-2 modified immediate: 8-bit pattern `0xB1` (`10110001` binary = 177) shifted left by 14 bits (opcode `f44f 1231` in `mov.w r2, #0x002C4000`).
      - Loop time at slowest bound: $2,899,968 / 6,291,456 \times 300\text{ ms} = 138.28125\text{ ms}$.
-     - Total loop time: $60.15625\text{ ms} + 138.28125\text{ ms} = 198.4375\text{ ms}$.
-     - Full step (loops + 1.0 ms overhead): $198.4375\text{ ms} + 1.00\text{ ms} = \mathbf{199.4375\text{ ms} \approx 199.44\text{ ms} < 200.0\text{ ms}}$ (**STRICTLY UNDER CAP, PASS**).
-     - Fastest bound (100 ms): OFF duration is **~46.09 ms** (maximized dark gap under the cap), full step is **~67.15 ms**.
-     - Nominal bound (125 ms): OFF duration is **~57.62 ms**, full step is **~83.68 ms**.
-     - Slowest bound (300 ms): OFF duration is **~138.28 ms**, full step is **199.44 ms**.
+     - Total loop time: $60.15625\text{ ms} + 138.28125\text{ ms} = 198.4375\text{ ms} \approx 198.44\text{ ms}$ `[INFERRED]`.
+     - Cap compliance: **step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN)**. Under the 1.0 ms ASSUMPTION, modelled full step is $198.4375\text{ ms} + 1.00\text{ ms} = \mathbf{199.4375\text{ ms} \approx 199.44\text{ ms}}$.
+     - Fastest bound (100 ms): OFF duration is **~46.09 ms** (maximized dark gap under the cap), loop total is **~66.15 ms** (~67.15 ms under 1.0 ms ASSUMPTION).
+     - Nominal bound (125 ms): OFF duration is **~57.62 ms**, loop total is **~82.68 ms** (~83.68 ms under 1.0 ms ASSUMPTION).
+     - Slowest bound (300 ms): OFF duration is **~138.28 ms**, loop total is **198.44 ms** `[INFERRED]` (step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN); 199.44 ms under 1.0 ms ASSUMPTION).
   2. **Next Larger Encodable Value: $0x002C8000$ (2,916,352 iterations, $0xB2 \ll 14$)**:
      - Thumb-2 modified immediate: 8-bit pattern `0xB2` (`10110010` binary = 178) shifted left by 14 bits (opcode `f44f 1232`).
      - Loop time at slowest bound: $2,916,352 / 6,291,456 \times 300\text{ ms} = 139.0625\text{ ms}$.
-     - Total loop time: $60.15625\text{ ms} + 139.0625\text{ ms} = 199.21875\text{ ms}$.
-     - Full step (loops + 1.0 ms overhead): $199.21875\text{ ms} + 1.00\text{ ms} = \mathbf{200.21875\text{ ms} \approx 200.22\text{ ms}}$ (**BREAKS THE 200.0 ms CAP**).
+     - Total loop time: $60.15625\text{ ms} + 139.0625\text{ ms} = 199.21875\text{ ms} \approx 199.22\text{ ms}$ (leaves only 0.78 ms margin for overhead).
+     - Full step under 1.0 ms ASSUMPTION: $199.21875\text{ ms} + 1.00\text{ ms} = \mathbf{200.21875\text{ ms} \approx 200.22\text{ ms}}$ (breaks the 200.0 ms cap even under the 1.0 ms assumption).
   3. **Verification of Tech Lead Arithmetic Scratchpad**:
      - In initial exploratory notes, candidates $0x002CC000$ ($0xB3 \ll 14$) and $0x002D0000$ ($0xB4 \ll 14$) were noted as approximately $199.83\text{ ms}$ and $200.02\text{ ms}$ respectively.
      - Mathematical audit explains the origin of those numbers: adding decimal `8,000` and `4,000` iterations to 199.44 ms instead of hexadecimal $0x8000$ (32,768) and $0x4000$ (16,384) produced $199.44 + (8,000 / 6,291,456) \times 300 = 199.44 + 0.381 = 199.82\text{ ms}$ and $199.82 + (4,000 / 6,291,456) \times 300 = 199.82 + 0.191 = 200.01\text{ ms}$.
      - Exact hexadecimal arithmetic demonstrates that:
-       - For $0x002CC000$ (2,932,736 iterations), loop time alone is exactly $200.000\text{ ms}$, and with 1.0 ms overhead is $201.000\text{ ms}$ (+1.00 ms over cap).
-       - For $0x002D0000$ (2,949,120 iterations), full step with overhead is $201.78125\text{ ms}$ (+1.78 ms over cap).
-     - As demonstrated above, $0x002C8000$ already breaks the cap at $200.22\text{ ms}$. Therefore, **$0x002C4000$ is proven to be the single largest encodable Thumb-2 modified immediate that keeps the full modelled step duration strictly under 200 ms**.
+       - For $0x002CC000$ (2,932,736 iterations), loop time alone is exactly $200.000\text{ ms}$, leaving 0.0 ms margin for overhead (breaks cap with any positive overhead).
+       - For $0x002D0000$ (2,949,120 iterations), loop time alone is $200.78125\text{ ms}$ (+0.78 ms over cap even with zero overhead).
+     - As demonstrated above, $0x002C8000$ leaves only 0.78 ms margin and breaks the cap under the 1.0 ms assumption. Therefore, **$0x002C4000$ is proven to be the single largest encodable Thumb-2 modified immediate that keeps loop-only duration strictly under 200 ms (198.44 ms, leaving 1.56 ms margin) and allows step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN)**.
 - **Resulting Timing Envelope** `[INFERRED]`:
-  - Fastest bound (100 ms): ON is **~20.05 ms**, OFF is **~46.09 ms** (maximized OFF gap under the budget), loop total is **~66.15 ms**, full step is **~67.15 ms** (< 200 ms).
-  - Nominal bound (125 ms): ON is **~25.07 ms**, OFF is **~57.62 ms**, loop total is **~82.68 ms**, full step is **~83.68 ms** (< 200 ms).
-  - Range max bound (150 ms): ON is **~30.08 ms**, OFF is **~69.14 ms** ($\ge 60$ ms), loop total is **~99.22 ms**, full step is **~100.22 ms** (< 200 ms).
-  - Slowest bound (300 ms): ON is **~60.16 ms** ($\ge 40$ ms), OFF is **~138.28 ms** ($\ge 60$ ms), loop total is **198.44 ms**, full step is **199.44 ms (< 200.0 ms strictly, PASS)**.
+  - Fastest bound (100 ms): ON is **~20.05 ms**, OFF is **~46.09 ms** (maximized OFF gap under the budget), loop total is **~66.15 ms**, full step is **~67.15 ms** under 1.0 ms ASSUMPTION (< 200 ms).
+  - Nominal bound (125 ms): ON is **~25.07 ms**, OFF is **~57.62 ms**, loop total is **~82.68 ms**, full step is **~83.68 ms** under 1.0 ms ASSUMPTION (< 200 ms).
+  - Range max bound (150 ms): ON is **~30.08 ms**, OFF is **~69.14 ms** ($\ge 60$ ms), loop total is **~99.22 ms**, full step is **~100.22 ms** under 1.0 ms ASSUMPTION (< 200 ms).
+  - Slowest bound (300 ms): ON is **~60.16 ms** ($\ge 40$ ms), OFF is **~138.28 ms** ($\ge 60$ ms), loop total is **198.44 ms** `[INFERRED]`. Cap compliance: **step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN)** (full step is 199.44 ms under 1.0 ms ASSUMPTION).
 
 ---
 
@@ -132,12 +133,14 @@ $$\text{Ratio}_{ON} = \frac{0x00134000}{0x00600000} = \frac{1,261,568}{6,291,456
 $$\text{Ratio}_{OFF} = \frac{0x002C4000}{0x00600000} = \frac{2,899,968}{6,291,456} = \frac{59}{128} \approx 0.46094$$
 $$\text{Ratio}_{step} = \frac{0x003F8000}{0x00600000} = \frac{4,161,536}{6,291,456} = \frac{127}{192} \approx 0.66146$$
 
-| Calibration Model | Reference Duration (0x00600000) | ON Duration ($N_{ON}$) | OFF Duration ($N_{OFF}$) | Total Step Loop ($N_{step}$) | Overhead Margin | Total with Margin (< 200 ms) |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Fastest Bound** (`PORT23_POWER_SUPERVISION.md:245`) | 100.0 ms | 20.05 ms | 46.09 ms | 66.15 ms | 1.00 ms | **67.15 ms (PASS)** |
-| **Nominal Model** (`PORT23_POWER_SUPERVISION.md:245`) | 125.0 ms | 25.07 ms | 57.62 ms | 82.68 ms | 1.00 ms | **83.68 ms (PASS)** |
-| **Range Max** (`PORT23_POWER_SUPERVISION.md:245`) | 150.0 ms | 30.08 ms | 69.14 ms | 99.22 ms | 1.00 ms | **100.22 ms (PASS)** |
-| **Slowest Bound** (`PORT24_LOADER_TRACE.md:761`) | 300.0 ms | 60.16 ms | 138.28 ms | 198.44 ms | 1.00 ms | **199.44 ms (< 200 ms, PASS)** |
+| Calibration Model | Reference Duration (0x00600000) | ON Duration ($N_{ON}$) [INFERRED] | OFF Duration ($N_{OFF}$) [INFERRED] | Total Step Loop ($N_{step}$) [INFERRED] | Overhead (ASSUMPTION) [UNKNOWN] | Total with Assumed Overhead | Cap Compliance (< 200 ms) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
+| **Fastest Bound** (`PORT23_POWER_SUPERVISION.md:245`) | 100.0 ms | 20.05 ms | 46.09 ms | 66.15 ms | 1.00 ms (ASSUMPTION) | 67.15 ms | step < 200 ms |
+| **Nominal Model** (`PORT23_POWER_SUPERVISION.md:245`) | 125.0 ms | 25.07 ms | 57.62 ms | 82.68 ms | 1.00 ms (ASSUMPTION) | 83.68 ms | step < 200 ms |
+| **Range Max** (`PORT23_POWER_SUPERVISION.md:245`) | 150.0 ms | 30.08 ms | 69.14 ms | 99.22 ms | 1.00 ms (ASSUMPTION) | 100.22 ms | step < 200 ms |
+| **Slowest Bound** (`PORT24_LOADER_TRACE.md:761`) | 300.0 ms | 60.16 ms | 138.28 ms | 198.44 ms | 1.00 ms (ASSUMPTION) | 199.44 ms | step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN) |
+
+*Note on Overhead and Cap Compliance*: Per-step non-loop overhead is [UNKNOWN] (no latency evidence in repo). The 1.0 ms figure is an ASSUMPTION. Loop-only duration at the slowest bound is 198.44 ms [INFERRED]. Compliance with the 200 ms cap is conditional: step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN).
 
 ---
 
@@ -466,15 +469,17 @@ Positioned after `cpsid if` (`0x8308`) and immediately before handoff address se
 ### 7.1 Generated Reference Table
 Generated by `python3 tools/port24_ladder_table.py --markdown`:
 
-| Step # | Step ID | T1 Step | Signal | Cumulative Flashes | Step Iterations | Nominal ms | Max ms (<200ms) | Disassembly Addr | Preserved State |
-| :---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| 1 | `after_prologue` | Step 1/2 | **Flash 1** | 1 | 4,161,536 | 82.68 ms | 198.44 ms (YES) | `0x000081E2` | r0-r3 clobbered per AAPCS; r4-r11, sp (0x7FF8), CPSR.I/F mask and Thumb state preserved (NZCV flags changed by subs loop) |
-| 2 | `after_copy` | Step 3/4 | **Flash 2** | 2 | 4,161,536 | 82.68 ms | 198.44 ms (YES) | `0x00008246` | r0-r3 clobbered per AAPCS; r5 (%0, dest 0x003489B4), r4 (%1, size), sp (0x7FF8), CPSR.I/F mask and Thumb state preserved (NZCV flags changed by subs loop) |
-| 3 | `before_dcache` | Step 5 | **Flash 3** | 3 | 4,161,536 | 82.68 ms | 198.44 ms (YES) | `0x00008268` | r0-r3 clobbered; r5 (%0, dest 0x003489B4), r4 (%1, size), sp (0x7FF8), CPSR.I/F mask and Thumb state preserved (NZCV flags changed by subs loop) |
-| 4 | `after_dcache` | Step 5 | **Flash 4** | 4 | 4,161,536 | 82.68 ms | 198.44 ms (YES) | `0x00008296` | r0-r3 clobbered; r5 (%0, dest 0x003489B4), r4 (%1, size), sp (0x7FF8), CPSR.I/F mask and Thumb state preserved (NZCV flags changed by subs loop) |
-| 5 | `before_icache` | Step 6 | **Flash 5** | 5 | 4,161,536 | 82.68 ms | 198.44 ms (YES) | `0x000082B8` | r0-r3 clobbered; r5 (%0, dest 0x003489B4), r4 (%1, size), sp (0x7FF8), CPSR.I/F mask and Thumb state preserved (NZCV flags changed by subs loop) |
-| 6 | `after_icache` | Step 6 | **Flash 6** | 6 | 4,161,536 | 82.68 ms | 198.44 ms (YES) | `0x000082EA` | r0-r3 clobbered; r5 (%0, dest 0x003489B4), r4 (%1, size), sp (0x7FF8), CPSR.I/F mask and Thumb state preserved (NZCV flags changed by subs loop) |
-| 7 | `before_bx` | Step 7 | **Flash 7** | 7 | 4,161,536 | 82.68 ms | 198.44 ms (YES) | `0x0000830E` | r5 (%0, dest 0x003489B4), sp (0x7FF8), CPSR.I/F=1 (disabled), Thumb mode (0x003489B5); NZCV flags changed by subs loop |
+> Note on overhead: 1.0 ms non-loop overhead is an ASSUMPTION; per-step overhead is UNKNOWN. Cap compliance: step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN).
+
+| Step # | Step ID | T1 Step | Signal | Cumulative Flashes | Step Iterations | Nominal ms | Max ms (loop-only [INFERRED]) | Cap Compliance | Disassembly Addr | Preserved State |
+| :---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :--- | :---: | :--- |
+| 1 | `after_prologue` | Step 1/2 | **Flash 1** | 1 | 4,161,536 | 82.68 ms | 198.44 ms | step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN) | `0x000081E2` | r0-r3 clobbered per AAPCS; r4-r11, sp (0x7FF8), CPSR.I/F mask and Thumb state preserved (NZCV flags changed by subs loop) |
+| 2 | `after_copy` | Step 3/4 | **Flash 2** | 2 | 4,161,536 | 82.68 ms | 198.44 ms | step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN) | `0x00008246` | r0-r3 clobbered per AAPCS; r5 (%0, dest 0x003489B4), r4 (%1, size), sp (0x7FF8), CPSR.I/F mask and Thumb state preserved (NZCV flags changed by subs loop) |
+| 3 | `before_dcache` | Step 5 | **Flash 3** | 3 | 4,161,536 | 82.68 ms | 198.44 ms | step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN) | `0x00008268` | r0-r3 clobbered; r5 (%0, dest 0x003489B4), r4 (%1, size), sp (0x7FF8), CPSR.I/F mask and Thumb state preserved (NZCV flags changed by subs loop) |
+| 4 | `after_dcache` | Step 5 | **Flash 4** | 4 | 4,161,536 | 82.68 ms | 198.44 ms | step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN) | `0x00008296` | r0-r3 clobbered; r5 (%0, dest 0x003489B4), r4 (%1, size), sp (0x7FF8), CPSR.I/F mask and Thumb state preserved (NZCV flags changed by subs loop) |
+| 5 | `before_icache` | Step 6 | **Flash 5** | 5 | 4,161,536 | 82.68 ms | 198.44 ms | step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN) | `0x000082B8` | r0-r3 clobbered; r5 (%0, dest 0x003489B4), r4 (%1, size), sp (0x7FF8), CPSR.I/F mask and Thumb state preserved (NZCV flags changed by subs loop) |
+| 6 | `after_icache` | Step 6 | **Flash 6** | 6 | 4,161,536 | 82.68 ms | 198.44 ms | step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN) | `0x000082EA` | r0-r3 clobbered; r5 (%0, dest 0x003489B4), r4 (%1, size), sp (0x7FF8), CPSR.I/F mask and Thumb state preserved (NZCV flags changed by subs loop) |
+| 7 | `before_bx` | Step 7 | **Flash 7** | 7 | 4,161,536 | 82.68 ms | 198.44 ms | step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN) | `0x0000830E` | r5 (%0, dest 0x003489B4), sp (0x7FF8), CPSR.I/F=1 (disabled), Thumb mode (0x003489B5); NZCV flags changed by subs loop |
 
 ### 7.2 Failure Point Triage Matrix for Camera Owner Observation
 

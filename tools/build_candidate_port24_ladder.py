@@ -17,7 +17,7 @@ Iteration parameters:
   Total loop: 0x003F8000 (4,161,536 iterations) -> ~66.15 ms (fast) / ~82.68 ms (nom) / 198.44 ms (slow) [INFERRED]
 
 Total flashes observed before shutdown indicates the last step reached.
-Full step (loops + 1.0 ms overhead) duration at slowest bound is 199.44 ms strictly under 200.0 ms.
+Loop-only duration at slowest bound is 198.44 ms [INFERRED]; step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN) (1.0 ms overhead is an ASSUMPTION).
 
 When --no-ladder / --flag-off is specified (or when flags are omitted by default), output is byte-identical
 to the locked PORT-19 default control:

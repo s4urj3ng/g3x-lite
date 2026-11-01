@@ -85,14 +85,15 @@ static inline __attribute__((always_inline)) void g3x_breadcrumb_led_off(void)
 //     Both targets are mathematically impossible simultaneously under the 200 ms cap.
 // (b) Minimum-ON assumption: ON = 0x00134000 (1,261,568 iterations, ~20.05 ms at fast 100ms bound).
 //     Perceptual noticeability / human countability on physical camera is UNKNOWN (no optical trials in repo).
-// (c) Non-loop overhead bound: ~9 instructions + 2 memory barriers (ldr, str, dsb, mov) execute in < 200 cycles (< 0.01 ms).
-//     A conservative overhead bound of 1.0 ms is allocated.
-// (d) Full-step requirement: Full modelled step (loops + overhead) must be strictly < 200 ms at slow bound.
+// (c) Non-loop overhead [UNKNOWN: no latency evidence in the repo]:
+//     The 1.0 ms figure is an ASSUMPTION (~9 instructions + 2 memory barriers: ldr, str, dsb, mov).
+// (d) Cap compliance: Loop-only duration at the slow bound is 198.44 ms [INFERRED].
+//     Full step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN).
 // Maximized OFF gap: OFF = 0x002C4000 (2,899,968 iterations, Thumb-2 modified immediate encodable by mov.w r2, #0x002C4000):
 // ON delay:  0x00134000 (1,261,568 iterations) -> ~20.05 ms (fast 100ms) / ~25.07 ms (nom 125ms) / ~60.16 ms (slow 300ms) [INFERRED]
 // OFF delay: 0x002C4000 (2,899,968 iterations) -> ~46.09 ms (fast 100ms) / ~57.62 ms (nom 125ms) / ~138.28 ms (slow 300ms) [INFERRED]
 // Total loop: 0x003F8000 (4,161,536 iterations) -> ~66.15 ms (fast) / ~82.68 ms (nom) / 198.44 ms (slow) [INFERRED]
-// Full step (loops + 1.0 ms overhead): 198.44 ms + 1.0 ms = 199.44 ms (< 200.0 ms strictly) [INFERRED]
+// Under the 1.0 ms overhead ASSUMPTION: 198.44 ms + 1.0 ms = 199.44 ms (step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN))
 #define G3X_LADDER_ON_DELAY    0x00134000
 #define G3X_LADDER_OFF_DELAY   0x002C4000
 

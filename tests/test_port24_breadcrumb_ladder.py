@@ -18,15 +18,16 @@ Verifies:
    - Building the ladder candidate twice produces identical SHA-256 hashes.
    - Ladder DISKBOOT.BIN hash differs from default control build hash.
    - Ladder DISKBOOT.BIN matches recorded hash:
-     67b04962421e601c291145f118ec1e022c93127fed29a960e3bf5ea8f61a541e (118,257 bytes).
+     aa7963de9b6c04c8c5a3077efab12f8383a26db114d5d9b92e320780630abd3c (118,257 bytes).
    - Ladder candidate_loader.bin matches recorded hash:
-     8c198ab62823a7ccee151054728b1a9bb3a2b74c8a4f2192392bba7796208d5b (118,256 bytes).
+     f3239e0b928dbe30022ce04f1e6d2a13b70409fe10f66ff121feb2efdde86289 (118,256 bytes).
    - Candidate core binary (candidate_main.bin) is bit-for-bit identical to default.
 4. Pulse timing and visibility under 200 ms:
-   - Single visible pulse per step (ON delay 0x00140000, OFF delay 0x002A0000; total 0x003E0000).
+   - Single visible pulse per step (ON delay 0x00134000, OFF delay 0x002C4000; total loop 0x003F8000).
    - Calibrated against PORT-23 0x00600000 loop with same loop body ('subs r2, r2, #1; bne').
-   - Total step duration at slowest bound (300 ms) is ~193.75 ms (< 200 ms, with 6.25 ms margin).
-   - OFF gap duration is maximized: ~43.8 ms fast, ~54.7 ms nominal, ~131.3 ms slowest bound.
+   - Slow-bound loop-only duration is 198.44 ms [INFERRED], leaving 1.56 ms margin for overhead.
+   - Non-loop overhead is UNKNOWN (1.0 ms is an ASSUMPTION); conditional cap: step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN).
+   - OFF gap duration is maximized: ~46.1 ms fast, ~57.6 ms nominal, ~138.3 ms slowest bound.
    - Uses verified MMIO register 0xD20B0884 with 0x004D0002 (ON) and 0x004C0003 (OFF).
 5. Breadcrumb insertion points match the T1 step list:
    - Verifies 7 breadcrumbs sit at every listed T1 checkpoint in candidate_loader.elf:
@@ -359,18 +360,35 @@ class TestPort24BreadcrumbLadder(unittest.TestCase):
         self.assertEqual(PULSE_OFF_ITERATIONS, 0x002C4000)
         self.assertEqual(SINGLE_STEP_ITERATIONS, 0x003F8000)
 
-        # Under documented calibration: slow-bound total < 200 ms cap
+        # Under documented calibration: slow-bound loop total < 200 ms cap (loop-only arithmetic)
         self.assertLess(
             timing["total_ms_nominal"],
             200.0,
             f"Nominal duration {timing['total_ms_nominal']} ms exceeds 200 ms cap!",
         )
+        self.assertEqual(
+            timing["total_ms_slowest"],
+            198.44,
+            f"Slow-bound loop-only duration expected 198.44 ms, got {timing['total_ms_slowest']}",
+        )
         self.assertLess(
             timing["total_ms_slowest"],
             200.0,
-            f"Max duration {timing['total_ms_slowest']} ms exceeds 200 ms cap!",
+            f"Max loop duration {timing['total_ms_slowest']} ms exceeds 200 ms cap!",
         )
-        self.assertTrue(timing["under_safety_limit"])
+        self.assertTrue(timing["loop_only_under_200ms"])
+
+        # Margin beyond loops at slow bound: 200.0 - 198.44 = 1.56 ms
+        margin_ms = round(200.0 - timing["total_ms_slowest"], 2)
+        self.assertEqual(margin_ms, 1.56)
+
+        # Overhead figure is an ASSUMPTION and status is UNKNOWN
+        self.assertEqual(timing["overhead_assumed_ms"], 1.0)
+        self.assertEqual(timing["overhead_status"], "UNKNOWN")
+        self.assertIn(
+            "step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN)",
+            timing["conditional_cap_status"],
+        )
 
         # Check fast-bound compromise:
         # (a) fast-bound ON >= stated minimum of 20.0 ms (~20.05 ms at 100 ms bound)
@@ -385,12 +403,56 @@ class TestPort24BreadcrumbLadder(unittest.TestCase):
             46.0,
             f"Fastest OFF {timing['off_ms_fastest']} ms below 46.0 ms!",
         )
-        # (c) slow-bound loop total (198.44 ms) + explicit 1.0 ms overhead margin strictly < 200 ms cap
-        full_step_slowest = timing["total_ms_slowest"] + timing["overhead_margin_ms"]
-        self.assertEqual(timing["overhead_margin_ms"], 1.0)
-        self.assertEqual(round(full_step_slowest, 2), 199.44)
-        self.assertLess(full_step_slowest, 200.0, f"Full step {full_step_slowest} ms not strictly < 200 ms!")
-        self.assertLess(timing["total_ms_slowest"], 200.0)
+        # (c) Document, table text, and header carry conditional/UNKNOWN wording for overhead
+        with open(DOCS_LADDER, "r", encoding="utf-8") as f:
+            doc_text = f.read()
+        self.assertIn(
+            "step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN)",
+            doc_text,
+        )
+        self.assertIn("1.0 ms figure is an ASSUMPTION", doc_text)
+        self.assertIn("Per-step non-loop overhead is [UNKNOWN]", doc_text)
+        self.assertIn("198.44 ms", doc_text)
+
+        # Check table text CLI carries conditional / UNKNOWN wording
+        res_table_text = subprocess.run(
+            ["python3", str(LADDER_TABLE), "--reference"],
+            cwd=REPO_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+        self.assertIn(
+            "step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN)",
+            res_table_text.stdout,
+        )
+        self.assertIn("1.0 ms ASSUMPTION [UNKNOWN: no latency evidence in repo]", res_table_text.stdout)
+
+        # Check table markdown CLI carries conditional / UNKNOWN wording
+        res_table_md = subprocess.run(
+            ["python3", str(LADDER_TABLE), "--reference", "--markdown"],
+            cwd=REPO_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+        self.assertIn(
+            "step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN)",
+            res_table_md.stdout,
+        )
+        self.assertIn("1.0 ms non-loop overhead is an ASSUMPTION; per-step overhead is UNKNOWN", res_table_md.stdout)
+
+        # Check header carries conditional / UNKNOWN wording
+        with open(SUB_DIR / "led_breadcrumb.h", "r", encoding="utf-8") as f:
+            hdr_text = f.read()
+        self.assertIn(
+            "step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN)",
+            hdr_text,
+        )
+        self.assertIn("1.0 ms figure is an ASSUMPTION", hdr_text)
+        self.assertIn("Non-loop overhead [UNKNOWN: no latency evidence in the repo]", hdr_text)
 
         # Immediate encoding assertions:
         # 0x002C4000 is 0xB1 << 14, an encodable Thumb-2 modified immediate

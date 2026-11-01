@@ -24,8 +24,10 @@ Timing Calibration (derived from PORT-23 short-delay build 0x00600000):
     N_on  = 0x00134000 (1,261,568 iterations) -> ~20.05 ms (fast 100ms) / ~25.07 ms (nom 125ms) / ~60.16 ms (slow 300ms) [INFERRED]
     N_off = 0x002C4000 (2,899,968 iterations) -> ~46.09 ms (fast 100ms) / ~57.62 ms (nom 125ms) / ~138.28 ms (slow 300ms) [INFERRED]
     Total loop = 0x003F8000 (4,161,536 iterations) -> ~66.15 ms (fast) / ~82.68 ms (nom) / 198.44 ms (slow) [INFERRED]
-- Non-loop overhead: conservative 1.0 ms allocated for ~9 instructions + 2 barriers (< 200 cycles).
-- Full step (loops + overhead): 198.44 ms + 1.0 ms = 199.44 ms strictly < 200.0 ms cap [INFERRED].
+- Non-loop overhead [UNKNOWN: no latency evidence in the repo]:
+  The 1.0 ms figure is an ASSUMPTION (~9 instructions + 2 barriers).
+- Loop-only duration at slow bound: 198.44 ms [INFERRED].
+- Cap compliance: step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN).
 """
 
 from __future__ import annotations
@@ -57,7 +59,8 @@ PULSE_ON_ITERATIONS = 0x00134000            # 1,261,568 iterations
 PULSE_OFF_ITERATIONS = 0x002C4000           # 2,899,968 iterations
 SINGLE_STEP_ITERATIONS = PULSE_ON_ITERATIONS + PULSE_OFF_ITERATIONS  # 4,161,536 (0x003F8000)
 
-NON_LOOP_OVERHEAD_MARGIN_MS = 1.0           # 1.0 ms justified non-loop instruction overhead bound
+NON_LOOP_OVERHEAD_ASSUMED_MS = 1.0           # 1.0 ms non-loop instruction overhead ASSUMPTION (overhead is UNKNOWN)
+NON_LOOP_OVERHEAD_MARGIN_MS = 1.0            # Retained for backwards compatibility
 MAX_SAFETY_LIMIT_MS = 200.0
 
 STATIC_REFERENCE_ADDRS = [
@@ -195,13 +198,15 @@ def calculate_timing() -> dict:
     on_ms_max = (PULSE_ON_ITERATIONS / PORT23_SHORT_DELAY_ITERATIONS) * PORT23_SHORT_DELAY_MS_SLOWEST
     off_ms_max = (PULSE_OFF_ITERATIONS / PORT23_SHORT_DELAY_ITERATIONS) * PORT23_SHORT_DELAY_MS_SLOWEST
     total_ms_max = (SINGLE_STEP_ITERATIONS / PORT23_SHORT_DELAY_ITERATIONS) * PORT23_SHORT_DELAY_MS_SLOWEST
-    full_step_ms_slowest = total_ms_max + NON_LOOP_OVERHEAD_MARGIN_MS
+    full_step_ms_slowest = total_ms_max + NON_LOOP_OVERHEAD_ASSUMED_MS
 
     return {
         "iterations_on": PULSE_ON_ITERATIONS,
         "iterations_off": PULSE_OFF_ITERATIONS,
         "total_iterations": SINGLE_STEP_ITERATIONS,
+        "overhead_assumed_ms": NON_LOOP_OVERHEAD_ASSUMED_MS,
         "overhead_margin_ms": NON_LOOP_OVERHEAD_MARGIN_MS,
+        "overhead_status": "UNKNOWN",
         "on_ms_fastest": round(on_ms_fast, 2),
         "off_ms_fastest": round(off_ms_fast, 2),
         "total_ms_fastest": round(total_ms_fast, 2),
@@ -212,7 +217,9 @@ def calculate_timing() -> dict:
         "off_ms_slowest": round(off_ms_max, 2),
         "total_ms_slowest": round(total_ms_max, 2),
         "full_step_ms_slowest": round(full_step_ms_slowest, 2),
+        "loop_only_under_200ms": total_ms_max < MAX_SAFETY_LIMIT_MS,
         "under_safety_limit": full_step_ms_slowest < MAX_SAFETY_LIMIT_MS,
+        "conditional_cap_status": "step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN)",
     }
 
 
@@ -404,9 +411,15 @@ def print_table_text(table: list[dict], is_reference: bool = False):
     print("PORT-24 T3: CANON POWERSHOT G3 X BREADCRUMB LADDER STEP-TO-CODE TABLE")
     print("=" * 105)
     print(
-        f"Timing: ON = 0x{timing['iterations_on']:X} ({timing['iterations_on']:,} iters, ~{timing['on_ms_nominal']} ms nom / ~{timing['on_ms_slowest']} ms max) | "
-        f"OFF = 0x{timing['iterations_off']:X} ({timing['iterations_off']:,} iters, ~{timing['off_ms_nominal']} ms nom / ~{timing['off_ms_slowest']} ms max) | "
-        f"Total = ~{timing['total_ms_nominal']} ms nom / ~{timing['total_ms_slowest']} ms max (< 200 ms: {timing['under_safety_limit']})"
+        f"Timing: ON = 0x{timing['iterations_on']:X} ({timing['iterations_on']:,} iters, ~{timing['on_ms_nominal']} ms nom / ~{timing['on_ms_slowest']} ms max [INFERRED]) | "
+        f"OFF = 0x{timing['iterations_off']:X} ({timing['iterations_off']:,} iters, ~{timing['off_ms_nominal']} ms nom / ~{timing['off_ms_slowest']} ms max [INFERRED])"
+    )
+    print(
+        f"Loop Total: ~{timing['total_ms_nominal']} ms nom / ~{timing['total_ms_slowest']} ms max [INFERRED] (loop-only < 200 ms: {timing['loop_only_under_200ms']})"
+    )
+    print(
+        "Overhead: 1.0 ms ASSUMPTION [UNKNOWN: no latency evidence in repo] | "
+        "Cap: step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN)"
     )
     print("-" * 105)
     header = f"{'Step':<5} | {'Step ID':<16} | {'T1 Step':<10} | {'Signal':<9} | {'Count':<5} | {'Disasm Addr':<12} | {'Preserved State'}"
@@ -437,13 +450,18 @@ def print_table_markdown(table: list[dict], is_reference: bool = False):
     timing = table[0]["timing"]
     if is_reference:
         print("> **STATIC REFERENCE, not extracted from a build**\n")
-    print("| Step # | Step ID | T1 Step | Signal | Cumulative Flashes | Step Iterations | Nominal ms | Max ms (<200ms) | Disassembly Addr | Preserved State |")
-    print("| :---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |")
+    print(
+        "> Note on overhead: 1.0 ms non-loop overhead is an ASSUMPTION; per-step overhead is UNKNOWN. "
+        "Cap compliance: step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN).\n"
+    )
+    print("| Step # | Step ID | T1 Step | Signal | Cumulative Flashes | Step Iterations | Nominal ms | Max ms (loop-only [INFERRED]) | Cap Compliance | Disassembly Addr | Preserved State |")
+    print("| :---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :--- | :---: | :--- |")
     for row in table:
         print(
             f"| {row['step_num']} | `{row['name']}` | {row['t1_step_id']} | "
             f"**{row['pulse_seq']}** | {row['cumulative_flashes']} | {timing['total_iterations']:,} | "
-            f"{timing['total_ms_nominal']} ms | {timing['total_ms_slowest']} ms (YES) | "
+            f"{timing['total_ms_nominal']} ms | {timing['total_ms_slowest']} ms | "
+            f"step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN) | "
             f"`{row['disassembly_addr']}` | {row['registers_preserved']} |"
         )
 
