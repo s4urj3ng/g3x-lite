@@ -41,7 +41,7 @@ This document establishes the technical design, verification evidence, stage-cod
        - Inter-digit separator gap with preemption: $[48.0, 69.0]\text{ ms}$.
        - Frame-end separator gap with preemption: $\ge 90.0\text{ ms}$.
        - Ambiguous windows: $(27.0, 48.0)\text{ ms}$ and $(69.0, 90.0)\text{ ms}$.
-   - Edge-Only Timestamp Decoding: An offline decoder reconstructs stage codes from timestamped ON/OFF edges without gap labels. Any delay up to tolerance decodes correctly; any delay beyond tolerance is detected as ambiguous framing and reported rather than wrongly decoded `[VERIFIED: tests/test_port25_ladder_fix.py]`. Worst-case code (22) tested and proven at nominal and tolerance bounds.
+   - Edge-Only Timestamp Decoding: An offline decoder reconstructs stage codes from timestamped ON/OFF edges without gap labels. Within the tested tolerance envelope (preemption delay up to 50.0 ms on all dark intervals at slow bound, and up to 20.0 ms at nominal bound), every stage code decodes unambiguously `[VERIFIED: tests/test_port25_ladder_fix.py]`. Delays that fall into intermediate deadbands are flagged as ambiguous framing. Decoding outside this tested tolerance envelope is strictly unreliable: preemption delays exceeding the envelope can impersonate valid separators and produce a wrong code with status `OK` (demonstrated by regression test `test_decoder_out_of_envelope_preemption_unreliable`, where Code 22 with 100 ms pulse and digit delays decodes to `[11, 11]`). Terminal darkness must equal or exceed the frame-gap threshold (215.0 ms slow / 90.0 ms nominal); premature or truncated captures are flagged as `INCOMPLETE` (`test_decoder_incomplete_capture_handling`).
    - Every frame running after watchdog arming takes strictly under 1000 ms at the slow conservative bound (ranging from 628.13 ms for Code 41 to 825.00 ms for Code 44), leaving at least 175.0 ms margin below the 1000 ms bound.
 6. **Hardware Register Invariants**:
    - Reuses exclusively the verified green LED MMIO register `0xD20B0884` (ON: `0x004D0002`, OFF: `0x004C0003`). No new firmware or MMIO addresses are introduced.
@@ -60,7 +60,7 @@ This document establishes the technical design, verification evidence, stage-cod
 - `[STATIC_VERIFIED: disassembly]`: In every core frame, every ON store is preceded by `cpsid i` and followed by the OFF store before `msr CPSR_fsxc, r3`.
 - `[STATIC_VERIFIED: disassembly]`: In every core frame, all gap delay loops (OFF gap, digit gap, frame-end gap) execute with interrupts unmasked.
 - `[INFERRED: loop arithmetic]`: Single ON pulse duration is bounded by $\le 50.0\text{ ms}$ at slowest reference calibration bound.
-- `[INFERRED: timing model]`: Preemption tolerance $\ge 50.0\text{ ms}$ at slow bound (20.0 ms at nominal bound) ensures timestamped edges decode without label ambiguity under interrupt jitter.
+- `[INFERRED: timing model]`: Preemption tolerance envelope (up to 50.0 ms at slow bound, up to 20.0 ms at nominal bound) ensures timestamped edges decode without label ambiguity under interrupt jitter within the envelope; decoding outside the envelope is unreliable.
 - `[UNKNOWN: hardware register documentation]`: Exact hardware watchdog expiry deadline programmed into MMIO `0xD20A0000`.
 - `[INFERRED: watchdog hardware model]`: Residual starvation risk exists if boot stalls or interrupts remain masked for longer than the hardware watchdog timeout before `task_WdtReset` can service it `[PORT25_SHORT_PRESS_LOCALISE.md:228]`.
 
@@ -266,8 +266,12 @@ Once execution enters core `boot()`, every checkpoint emits a self-contained two
     - Digit gap with preemption: $[48.0\text{ ms}, 69.0\text{ ms}]$
     - Ambiguous window: $(69.0\text{ ms}, 90.0\text{ ms})$
     - Frame gap with preemption: $\ge 90.0\text{ ms}$
-  - Delays up to $T_{\text{tol}}$ preserve 100% correct decoding. Delays beyond $T_{\text{tol}}$ fall into ambiguous windows and are reported as ambiguous rather than decoded wrongly.
-  - Worst-case code (22) tested and verified at nominal base and at tolerance bounds in `tests/test_port25_ladder_fix.py`.
+  - Tested Tolerance Envelope and Boundaries:
+    - Within the tested tolerance envelope (preemption delay up to $50.0\text{ ms}$ on all dark intervals at slow bound, and up to $20.0\text{ ms}$ at nominal bound), 100% of stage codes decode correctly and unambiguously `[VERIFIED: tests/test_port25_ladder_fix.py]`.
+    - Worst-case code (22) is tested and verified at nominal base and at the upper tolerance bounds (50.0 ms slow, 20.0 ms nominal) in `test_decoder_worst_case_code_22_at_tolerance_bounds`.
+    - Delays that land in intermediate unassigned windows ($(66.0, 115.0)\text{ ms}$ and $(166.0, 215.0)\text{ ms}$ slow) are detected and reported as ambiguous framing (`test_decoder_reports_ambiguous_on_delay_exceeding_tolerance`).
+    - **Out-of-Envelope Unreliability**: Decoding outside the tested tolerance envelope is strictly unreliable. Preemption delays longer than tolerance can cross interval thresholds, impersonate valid separators, and produce a wrong code with status `OK`. For example, Code 22 subjected to `pulse_preempt=100.0` ms and `digit_preempt=100.0` ms at the slow bound decodes to `[11, 11]` with status `OK` because intra-pulse gaps mimic digit gaps and digit gaps mimic frame gaps (proven and guarded by regression test `test_decoder_out_of_envelope_preemption_unreliable`).
+    - **Capture Completion and Terminal Darkness**: The decoder requires that the observed terminal darkness after the last pulse must meet or exceed the frame-gap threshold ($215.0\text{ ms}$ slow / $90.0\text{ ms}$ nominal). Captures truncated prematurely (stopping inside a pulse gap, inside a digit gap, mid-pulse, or with an early capture end) report status `INCOMPLETE` rather than fabricating frame endings or decoding truncated digits (`test_decoder_incomplete_capture_handling`).
 
 - **Functional Group Demarcation**:
   - **Group 1 ($T=1$)**: Core entry, RAM copy, BSS clear & DryOS kernel init (Codes 11–15)
@@ -398,24 +402,26 @@ The test suite in `tests/test_port25_ladder_fix.py` verifies all task invariants
 4. `test_combined_build_determinism_and_hash`: Confirms independent builds yield identical SHA-256 `9ba62067c17d654a3b8995fc6e8c26176321154054a138a465ca66f9ff763a15` and size 124,865 B.
 5. `test_ladder_only_combination_assembles`: Confirms that the ladder-only combination (`ladder=True, poweron_fix=False`) builds successfully without branch-out-of-range errors (SHA-256 `45da469f3eb4...`, 126,081 B).
 6. `test_combined_build_enables_both_macros`: Disassembles core and confirms both `movs r0, #1` bypass in `sub_fc05b962_my` and MMIO stores to `0xD20B0884`.
-7. `test_disassembled_stage_codes_and_atomicity`: Disassembles `candidate_main.elf` with pinned objdump, derives all stage codes from LED-ON stores and inter-digit loops, verifies targeted `cpsid i` IRQ masking strictly during ON pulses, confirms all gap delay loops are unmasked, computes total iterations per frame, asserts per-frame bound (< 1000 ms at slow bound) for all post-arming stages (Codes 41..44), verifies all 20 core codes are distinct and match `[11..15, 21..26, 31..35, 41..44]`, verifies that instruction sequences are unique, confirms ON pulse delay loop constant `0x00100000` is $\le 50.0\text{ ms}$, and verifies CreateTask codes (26, 31, 32) are distinct and documented with their emitting contexts.
+7. `test_disassembled_stage_codes_and_atomicity`: Disassembles `candidate_main.elf` with pinned objdump, derives all stage codes from LED-ON stores and inter-digit loops, verifies targeted `cpsid i` IRQ masking strictly during ON pulses, confirms all gap delay loops are unmasked, computes total iterations per frame, asserts per-frame bound (< 1000 ms at slow bound) for all post-arming stages (Codes 41..44), verifies all 20 core codes are distinct and match `[11..15, 21..26, 31..35, 41..44]`, verifies that instruction sequences are unique (rejecting duplicate macros), confirms ON pulse delay loop constant `0x00100000` is $\le 50.0\text{ ms}$, and verifies CreateTask codes (26, 31, 32) are distinct and documented with their emitting contexts.
 8. `test_single_emitter_no_parent_emit_after_createtask`: Confirms single-emitter rule: parent Initial Task emits no frames, LED stores, CPSID masking, or replay calls after `blx sub_fc31bbc4` (CreateTask); disassembly and source contain no `ladder_createtask_done`, `ladder_pending_mask`, or `ladder_replay_pending`; child emits Code 31 directly as its first frame.
-9. `test_duplicate_macro_detection_fails`: Confirms that duplicate codes or identical instruction sequences cause validation assertions to fail.
-10. `test_decoder_timestamped_edges_with_preemption_tolerance`: Reconstructs codes from timestamped ON/OFF edges without gap labels under injected preemption delays up to stated tolerance ($\ge 50.0\text{ ms}$ at slow bound, 20.0 ms at nominal bound). Includes worst-case code (22) tests at nominal base and at tolerance bounds.
-11. `test_decoder_reports_ambiguous_on_delay_exceeding_tolerance`: Confirms preemption delays exceeding tolerance are detected and reported as ambiguous rather than decoded wrongly.
-12. `test_port25_output_directories_disjoint_from_port24`: Asserts all PORT-25 output directories are disjoint from all PORT-24 output directories.
-13. `test_protocol_description_matches_macro_structure`: Asserts that `CORE_LADDER_FRAME` macro definition emits tens pulses then units pulses directly, and verifies doc accurately covers loader single pulses and core framed codes with all nominal and slow gap durations (pulse gap 6.55/15.625 ms, digit gap 41.94/100.0 ms, frame gap 83.89/200.0 ms, loader transition 57.62/138.28 ms).
-14. `test_pulse_timing_under_150ms_and_200ms_cap`: Mathematically verifies that `0x00100000` is 50.0 ms at the slow conservative bound, with 100 ms margin below the 150 ms bound and 150 ms margin below the 200 ms cap.
-15. `test_final_state_led_off`: Confirms macro terminates by writing `0x004C0003` (OFF) and holding OFF during frame-end gap.
-16. `test_reversible_dancingbits_decoding`: Confirms dancingbits decoding produces bit-for-bit loader binary.
-17. `test_embedded_core_integrity`: Confirms loader embeds core binary bit-for-bit.
-18. `test_no_new_addresses`: Confirms no addresses outside verified MMIO `0xD20B0884` are introduced.
+9. `test_decoder_timestamped_edges_with_preemption_tolerance`: Reconstructs codes from timestamped ON/OFF edges without gap labels under injected preemption delays up to stated tolerance ($\le 50.0\text{ ms}$ at slow bound, $\le 20.0\text{ ms}$ at nominal bound).
+10. `test_decoder_worst_case_code_22_at_tolerance_bounds`: Tests worst-case code (22) at nominal base and at tolerance bounds (50 ms slow, 20 ms nominal).
+11. `test_decoder_reports_ambiguous_on_delay_exceeding_tolerance`: Confirms preemption delays landing in intermediate deadbands are detected and reported as ambiguous rather than decoded wrongly.
+12. `test_decoder_incomplete_capture_handling`: Confirms truncated captures (e.g. Code 22 with early capture end, ending in pulse gap, digit gap, or mid-pulse) report `INCOMPLETE` and never decode as valid codes, while full captures decode correctly `[P2-a]`.
+13. `test_decoder_out_of_envelope_preemption_unreliable`: Regression test verifying that out-of-envelope delays (e.g. 100 ms preemption on Code 22) impersonate valid separators and decode as `[11, 11]` with status `OK`, proving out-of-envelope decoding is unreliable `[P2-b]`.
+14. `test_port25_output_directories_disjoint_from_port24`: Asserts all PORT-25 output directories are disjoint from all PORT-24 output directories.
+15. `test_protocol_description_matches_macro_structure`: Asserts that `CORE_LADDER_FRAME` macro definition emits tens pulses then units pulses directly, and verifies doc accurately covers loader single pulses and core framed codes with all nominal and slow gap durations (pulse gap 6.55/15.625 ms, digit gap 41.94/100.0 ms, frame gap 83.89/200.0 ms, loader transition 57.62/138.28 ms).
+16. `test_pulse_timing_under_150ms_and_200ms_cap`: Mathematically verifies that `0x00100000` is 50.0 ms at the slow conservative bound, with 100 ms margin below the 150 ms bound and 150 ms margin below the 200 ms cap.
+17. `test_final_state_led_off`: Confirms macro terminates by writing `0x004C0003` (OFF) and holding OFF during frame-end gap.
+18. `test_reversible_dancingbits_decoding`: Confirms dancingbits decoding produces bit-for-bit loader binary.
+19. `test_embedded_core_integrity`: Confirms loader embeds core binary bit-for-bit.
+20. `test_no_new_addresses`: Confirms no addresses outside verified MMIO `0xD20B0884` are introduced.
 
 ### Verification Command & Output
 ```bash
 python3 -m unittest tests/test_port25_ladder_fix.py
 ```
-Output: `Ran 18 tests — OK`.
+Output: `Ran 20 tests in 1.74s — OK`.
 Both `candidate_build` (`tools/build_candidate_port2a.py`) and `candidate_validate` (`tools/validate_candidate_port2a.py`) pass with exit code `0`.
 
 ---

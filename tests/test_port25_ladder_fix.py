@@ -1,35 +1,7 @@
 #!/usr/bin/env python3
 """Unit tests for PORT-25 T3b: Opt-in Combined Breadcrumb Ladder + G3X_POWERON_FIX Candidate.
-
-Redesigned under Single-Emitter Rule:
-1. Hash invariance of default and existing PORT-24 opt-in builds:
-   - Default build is byte-identical: DISKBOOT SHA-256 9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136 (118,001 B).
-   - PORT-24 --poweron-fix build is byte-identical: DISKBOOT SHA-256 faad4d8242fbf6f79a44b10a9956f7eb04de9b65f42221f82a3b69eb024cf056 (118,001 B).
-   - PORT-24 --ladder build is byte-identical: DISKBOOT SHA-256 aa7963de9b6c04c8c5a3077efab12f8383a26db114d5d9b92e320780630abd3c (118,257 B).
-2. Combined build enables both macros:
-   - Compiles with LED_LADDER=1 and G3X_POWERON_FIX=1.
-   - Core disassembly verifies G3X_POWERON_FIX bypass in sub_fc05b962_my (movs r0, #1; b loc_fc05b978).
-   - Core disassembly verifies LED pulse stores (0xD20B0884 with 0x004D0002 / 0x004C0003).
-3. Determinism and reproducibility of the combined build:
-   - Building twice yields identical SHA-256: 9ba62067c17d654a3b8995fc6e8c26176321154054a138a465ca66f9ff763a15 (124,865 B).
-4. Ladder-only combination builds:
-   - Builds ladder-only combination (ladder=True, poweron_fix=False) with pinned toolchain without branch errors:
-     SHA-256: 45da469f3eb46c4d2aff77a032e5c8bb4eedf8ec8846526853d716d05d2b2f4e (126,081 B).
-5. Single-emitter rule & disassembly verification:
-   - Parent Initial Task emits stages in order: entry to sub_fc05b962_my (21), MPU setup checks (22, 23),
-     power check (24), power check pass (25), and before task creation (26).
-   - Parent emits NOTHING after calling DryOS CreateTask routine (sub_fc31bbc4).
-   - 'After task creation' is defined as the FIRST frame emitted by the created Startup Task (Code 31).
-   - No cross-context pending bitmask, replay routine, or completion flag exists.
-   - Child Startup Task emits later stages (32, 33, 34, 35, 41, 42, 43, 44) directly.
-   - Final state: LED OFF (0x004C0003).
-6. Timing safety and assembly-faithful edge decoder:
-   - Assembly-faithful edge generator: every pulse (including the last pulse before separators) is followed
-     by its OFF delay, and then the digit/frame separator.
-   - Decoder thresholds decode all stage codes unambiguously under nominal timing and under claimed tolerance
-     (50.0 ms slow bound, 20.0 ms nominal bound), verified with worst-case code (22) tests.
-   - Delays exceeding tolerance report ambiguous rather than decoding wrongly.
-   - Every single ON pulse is strictly under 200 ms cap (50.0 ms slow / 20.97 ms nom).
+Single-emitter rule: parent Initial Task emits no frames after CreateTask; child emits Code 31 on entry.
+Edge generator and decoder assembly-faithful with preemption tolerance envelope and capture-end checking.
 """
 
 from __future__ import annotations
@@ -138,10 +110,11 @@ def generate_timestamped_edges(
     digit_preempt: float = 0.0,
     frame_preempt: float = 0.0,
     bound: str = "slow",
-) -> list[tuple[float, str]]:
+) -> tuple[list[tuple[float, str]], float]:
     """Assembly-faithful edge generator: every pulse (including the last pulse of a digit/frame)
     is followed by its OFF delay exactly as led_breadcrumb.h emits it, and then the separator.
     Level is strictly 'ON' or 'OFF' - no gap labels.
+    Returns (edges, capture_end_timestamp).
     """
     if bound == "slow":
         on_dur = 50.0
@@ -185,10 +158,14 @@ def generate_timestamped_edges(
         # Frame-end gap follows the last pulse's OFF delay
         t += frame_gap + frame_preempt
 
-    return edges
+    return edges, round(t, 4)
 
 
-def decode_timestamped_edges(edges: list[tuple[float, str]], bound: str = "slow") -> tuple[list[int] | None, str]:
+def decode_timestamped_edges(
+    edges: list[tuple[float, str]],
+    capture_end: float | None = None,
+    bound: str = "slow",
+) -> tuple[list[int] | None, str]:
     """Decode stage codes from a stream of timestamped (time_ms, level) edges.
 
     Level is strictly 'ON' or 'OFF'. No DIGIT_GAP or FRAME_GAP labels.
@@ -228,14 +205,18 @@ def decode_timestamped_edges(edges: list[tuple[float, str]], bound: str = "slow"
         frame_gap_min = 90.0
 
     i = 0
+    last_off = 0.0
     while i < len(edges):
         if edges[i][1] != "ON":
             return None, f"Expected ON edge at index {i}"
         t_on = edges[i][0]
         i += 1
-        if i >= len(edges) or edges[i][1] != "OFF":
+        if i >= len(edges):
+            return None, f"INCOMPLETE: capture ended during ON pulse at index {i - 1}"
+        if edges[i][1] != "OFF":
             return None, f"Expected OFF edge after ON at index {i}"
         t_off = edges[i][0]
+        last_off = t_off
         on_dur = t_off - t_on
         if on_dur < min_on or on_dur > max_on:
             return None, f"Ambiguous/invalid ON pulse duration {on_dur:.2f} ms"
@@ -246,8 +227,12 @@ def decode_timestamped_edges(edges: list[tuple[float, str]], bound: str = "slow"
                 return None, f"Expected ON edge at index {i}"
             gap_dur = edges[i][0] - t_off
             gaps.append(gap_dur)
-        else:
-            gaps.append(frame_gap_min + 10.0)
+
+    # Check terminal darkness after the last OFF edge
+    terminal_darkness = (capture_end - last_off) if capture_end is not None else 0.0
+    if terminal_darkness < frame_gap_min:
+        return None, f"INCOMPLETE: terminal darkness {terminal_darkness:.2f} ms < frame gap threshold {frame_gap_min:.2f} ms"
+    gaps.append(terminal_darkness)
 
     decoded = []
     tens = 0
@@ -567,21 +552,21 @@ class TestPort25LadderFix(unittest.TestCase):
         """Timestamped edge decoder accurately recovers codes under injected preemption delays up to stated tolerance."""
         # 1. Test every core code individually with no preemption delay at slow bound
         for code in EXPECTED_CORE_CODES:
-            edges = generate_timestamped_edges([code], pulse_preempt=0.0, digit_preempt=0.0, frame_preempt=0.0, bound="slow")
-            decoded, err = decode_timestamped_edges(edges, bound="slow")
+            edges, cap_end = generate_timestamped_edges([code], pulse_preempt=0.0, digit_preempt=0.0, frame_preempt=0.0, bound="slow")
+            decoded, err = decode_timestamped_edges(edges, capture_end=cap_end, bound="slow")
             self.assertEqual(err, "OK", f"Decoding error for code {code}: {err}")
             self.assertEqual(decoded, [code], f"Code {code} must decode correctly with zero delay")
 
         # 2. Inject delays up to stated preemption tolerance (50.0 ms at slow bound) into all dark intervals
         for delay in [0.0, 10.0, 25.0, 45.0, 50.0]:
-            edges = generate_timestamped_edges(
+            edges, cap_end = generate_timestamped_edges(
                 EXPECTED_CORE_CODES,
                 pulse_preempt=delay,
                 digit_preempt=delay,
                 frame_preempt=delay,
                 bound="slow",
             )
-            decoded, err = decode_timestamped_edges(edges, bound="slow")
+            decoded, err = decode_timestamped_edges(edges, capture_end=cap_end, bound="slow")
             self.assertEqual(err, "OK", f"Error at preemption delay {delay} ms: {err}")
             self.assertEqual(
                 decoded,
@@ -591,14 +576,14 @@ class TestPort25LadderFix(unittest.TestCase):
 
         # 3. Test at nominal bound with tolerance up to 20.0 ms
         for delay in [0.0, 5.0, 10.0, 20.0]:
-            edges = generate_timestamped_edges(
+            edges, cap_end = generate_timestamped_edges(
                 EXPECTED_CORE_CODES,
                 pulse_preempt=delay,
                 digit_preempt=delay,
                 frame_preempt=delay,
                 bound="nominal",
             )
-            decoded, err = decode_timestamped_edges(edges, bound="nominal")
+            decoded, err = decode_timestamped_edges(edges, capture_end=cap_end, bound="nominal")
             self.assertEqual(err, "OK", f"Nominal bound error at preemption delay {delay} ms: {err}")
             self.assertEqual(
                 decoded,
@@ -611,48 +596,100 @@ class TestPort25LadderFix(unittest.TestCase):
         Asserts correct decoding at nominal timing and at claimed tolerance bounds (50 ms slow, 20 ms nom).
         """
         # Slow bound nominal (0 ms delay)
-        edges_slow_nom = generate_timestamped_edges([22], pulse_preempt=0.0, digit_preempt=0.0, frame_preempt=0.0, bound="slow")
-        dec, err = decode_timestamped_edges(edges_slow_nom, bound="slow")
+        edges_slow_nom, cap_slow_nom = generate_timestamped_edges([22], pulse_preempt=0.0, digit_preempt=0.0, frame_preempt=0.0, bound="slow")
+        dec, err = decode_timestamped_edges(edges_slow_nom, capture_end=cap_slow_nom, bound="slow")
         self.assertEqual(err, "OK")
         self.assertEqual(dec, [22], "Code 22 must decode at slow nominal")
 
         # Slow bound at upper tolerance limit (50.0 ms delay on all dark gaps)
-        edges_slow_max = generate_timestamped_edges([22], pulse_preempt=50.0, digit_preempt=50.0, frame_preempt=50.0, bound="slow")
-        dec, err = decode_timestamped_edges(edges_slow_max, bound="slow")
+        edges_slow_max, cap_slow_max = generate_timestamped_edges([22], pulse_preempt=50.0, digit_preempt=50.0, frame_preempt=50.0, bound="slow")
+        dec, err = decode_timestamped_edges(edges_slow_max, capture_end=cap_slow_max, bound="slow")
         self.assertEqual(err, "OK")
         self.assertEqual(dec, [22], "Code 22 must decode at slow tolerance bound (50 ms)")
 
         # Nominal bound nominal (0 ms delay)
-        edges_nom_nom = generate_timestamped_edges([22], pulse_preempt=0.0, digit_preempt=0.0, frame_preempt=0.0, bound="nominal")
-        dec, err = decode_timestamped_edges(edges_nom_nom, bound="nominal")
+        edges_nom_nom, cap_nom_nom = generate_timestamped_edges([22], pulse_preempt=0.0, digit_preempt=0.0, frame_preempt=0.0, bound="nominal")
+        dec, err = decode_timestamped_edges(edges_nom_nom, capture_end=cap_nom_nom, bound="nominal")
         self.assertEqual(err, "OK")
         self.assertEqual(dec, [22], "Code 22 must decode at nominal base")
 
         # Nominal bound at upper tolerance limit (20.0 ms delay on all dark gaps)
-        edges_nom_max = generate_timestamped_edges([22], pulse_preempt=20.0, digit_preempt=20.0, frame_preempt=20.0, bound="nominal")
-        dec, err = decode_timestamped_edges(edges_nom_max, bound="nominal")
+        edges_nom_max, cap_nom_max = generate_timestamped_edges([22], pulse_preempt=20.0, digit_preempt=20.0, frame_preempt=20.0, bound="nominal")
+        dec, err = decode_timestamped_edges(edges_nom_max, capture_end=cap_nom_max, bound="nominal")
         self.assertEqual(err, "OK")
         self.assertEqual(dec, [22], "Code 22 must decode at nominal tolerance bound (20 ms)")
 
     def test_decoder_reports_ambiguous_on_delay_exceeding_tolerance(self):
-        """Delays beyond stated preemption tolerance are reported as ambiguous rather than decoded wrongly."""
+        """Delays beyond stated preemption tolerance that fall in intermediate deadbands are reported as ambiguous."""
         # Case 1: Pulse gap delayed beyond 50 ms tolerance into ambiguous zone (e.g. 55 ms delay -> gap 70.625 ms in (66, 115))
-        edges_ambig_gap = generate_timestamped_edges([22], pulse_preempt=55.0, digit_preempt=0.0, bound="slow")
-        decoded, err = decode_timestamped_edges(edges_ambig_gap, bound="slow")
+        edges_ambig_gap, cap_ambig_gap = generate_timestamped_edges([22], pulse_preempt=55.0, digit_preempt=0.0, bound="slow")
+        decoded, err = decode_timestamped_edges(edges_ambig_gap, capture_end=cap_ambig_gap, bound="slow")
         self.assertIsNone(decoded, "Decoder must return None for gap in ambiguous window")
         self.assertIn("Ambiguous", err, "Decoder must report Ambiguous when delay exceeds tolerance")
 
         # Case 2: Digit gap delayed beyond 50 ms tolerance into ambiguous zone (e.g. 55 ms delay -> gap 170.625 ms in (166, 215))
-        edges_ambig_digit = generate_timestamped_edges([22], pulse_preempt=0.0, digit_preempt=55.0, bound="slow")
-        decoded, err = decode_timestamped_edges(edges_ambig_digit, bound="slow")
+        edges_ambig_digit, cap_ambig_digit = generate_timestamped_edges([22], pulse_preempt=0.0, digit_preempt=55.0, bound="slow")
+        decoded, err = decode_timestamped_edges(edges_ambig_digit, capture_end=cap_ambig_digit, bound="slow")
         self.assertIsNone(decoded, "Decoder must return None when digit gap delayed into ambiguous zone")
         self.assertIn("Ambiguous", err)
 
         # Case 3: Distorted ON pulse duration (e.g. 90 ms > 70 ms max_on)
         edges_bad_on = [(0.0, "ON"), (90.0, "OFF"), (290.0, "ON"), (340.0, "OFF")]
-        decoded, err = decode_timestamped_edges(edges_bad_on, bound="slow")
+        decoded, err = decode_timestamped_edges(edges_bad_on, capture_end=560.0, bound="slow")
         self.assertIsNone(decoded, "Decoder must return None on distorted ON pulse")
         self.assertTrue("Ambiguous" in err or "invalid" in err)
+
+    def test_decoder_incomplete_capture_handling(self):
+        """Decoder rejects truncated captures and requires terminal darkness >= frame gap threshold [P2-a].
+        (1) Truncated code 22 (edges[:6] with early capture end) must not decode as OK or [21].
+        (2) Capture ending inside a digit gap or pulse gap must report INCOMPLETE.
+        (3) Full capture with sufficient terminal darkness decodes correctly.
+        """
+        edges_22, cap_end_22 = generate_timestamped_edges([22], bound="slow")
+        self.assertEqual(len(edges_22), 8)
+
+        # (1) Truncated capture: first 6 edges (tens 1, tens 2, units 1) with early capture end
+        dec_early, err_early = decode_timestamped_edges(edges_22[:6], capture_end=edges_22[5][0] + 10.0, bound="slow")
+        self.assertIsNone(dec_early, "Truncated code 22 must never decode as a valid stage code")
+        self.assertNotEqual(err_early, "OK", "Truncated code 22 must not have status OK")
+        self.assertIn("INCOMPLETE", err_early)
+
+        # Omitted capture_end also defaults to zero terminal darkness -> INCOMPLETE
+        dec_none, err_none = decode_timestamped_edges(edges_22[:6], capture_end=None, bound="slow")
+        self.assertIsNone(dec_none)
+        self.assertIn("INCOMPLETE", err_none)
+
+        # (2) Capture ending inside a pulse gap (between tens pulse 1 and tens pulse 2)
+        dec_pulse, err_pulse = decode_timestamped_edges(edges_22[:2], capture_end=55.0, bound="slow")
+        self.assertIsNone(dec_pulse)
+        self.assertIn("INCOMPLETE", err_pulse)
+
+        # Capture ending inside digit gap (after tens pulse 2 at 115.625 ms, before units pulse 1 at 231.25 ms)
+        dec_digit, err_digit = decode_timestamped_edges(edges_22[:4], capture_end=150.0, bound="slow")
+        self.assertIsNone(dec_digit)
+        self.assertIn("INCOMPLETE", err_digit)
+
+        # Capture ending mid-ON pulse (edges[:3], cut off while LED ON)
+        dec_on, err_on = decode_timestamped_edges(edges_22[:3], capture_end=75.0, bound="slow")
+        self.assertIsNone(dec_on)
+        self.assertIn("INCOMPLETE", err_on)
+
+        # (3) Full capture with sufficient terminal darkness decodes correctly as [22]
+        dec_full, err_full = decode_timestamped_edges(edges_22, capture_end=cap_end_22, bound="slow")
+        self.assertEqual(err_full, "OK")
+        self.assertEqual(dec_full, [22])
+
+    def test_decoder_out_of_envelope_preemption_unreliable(self):
+        """Regression test for P2-b: preemption delays exceeding the claimed tolerance envelope
+        are unreliable and can impersonate valid separators, causing incorrect decoding with status OK.
+        Code 22 with pulse_preempt=100.0 and digit_preempt=100.0 at slow bound decodes as [11, 11] with status OK.
+        """
+        edges, cap_end = generate_timestamped_edges(
+            [22], pulse_preempt=100.0, digit_preempt=100.0, frame_preempt=0.0, bound="slow"
+        )
+        decoded, err = decode_timestamped_edges(edges, capture_end=cap_end, bound="slow")
+        self.assertEqual(err, "OK")
+        self.assertEqual(decoded, [11, 11], "Out-of-envelope delays masquerade as valid separators ([11, 11])")
 
     def test_port25_output_directories_disjoint_from_port24(self):
         """PORT-25 output directories must be strictly disjoint from all PORT-24 directories."""
