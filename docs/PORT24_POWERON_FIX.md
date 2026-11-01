@@ -13,9 +13,12 @@
 
 ## 1. Executive Summary & Problem Statement
 
-In owner trials of the PORT-19 first-boot candidate on physical hardware (2026-11-01), the camera reached the stock user interface (`O1`) **only when the physical power button was held down** until the LCD illuminated. When the power button was given a normal short press (tap), the camera powered off immediately after loader execution.
+In owner trials of the unchanged PORT-19 default build (`DISKBOOT.BIN` SHA-256 `9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136`) on physical hardware (2026-11-01), the camera reached the stock user interface (`O1`) **only when the physical power button was held down** until the LCD illuminated. When the power button was given a normal short press (tap), the camera powered off immediately after loader execution.
 
-### The Failure Mechanism (**VERIFIED**)
+The O1 result is credited solely to that unchanged PORT-19 default build with held power button. The opt-in short-press candidate (`faad4d8242fbf6f79a44b10a9956f7eb04de9b65f42221f82a3b69eb024cf056`) has never been run on physical camera hardware.
+
+### The Failure Mechanism (**INFERRED**)
+Supported by GM1.10C ROM disassembly and the owner's recorded observation of held-button boot success vs short-press immediate power-off:
 1. **Cold Boot Stage**: When the user presses the power button, hardware power circuitry powers on the SoC. Canon ROM early boot code executes. Before spawning `task_Startup` or running `StartDiskboot`, ROM function `sub_fc05b962` executes. It calls `sub_fc1284ac` to sample the hardware buttons. Because the button was just pressed, `sub_fc1284ac` detects a pressed button, records the boot cause (power-on: `0x80000`), returns `r0 = 1`, branches past `sub_fc05ba56`, creates `task_Startup`, and continues boot.
 2. **DISKBOOT Execution & Reboot**: `task_Startup` discovers the `BOOTDISK` FAT volume, decrypts and jumps to `DISKBOOT.BIN` in RAM. The CHDK loader prepares the environment, and the CHDK prototype `boot()` function executes.
 3. **Canon BSS Clearing**: `boot()` clears Canon DryOS BSS (`0x80E0` through `0x30000`), wiping the startup cause and state structures (including `0x9BC4`).
@@ -23,6 +26,8 @@ In owner trials of the PORT-19 first-boot candidate on physical hardware (2026-1
 5. **Button Released on Short Press**: On a short button tap (e.g., 100–200 ms), the user has already released the power button by the time DISKBOOT and `sub_fc05b962_my` run.
 6. **Power-Cut Execution**: In `sub_fc1284ac`, all button GPIO reads return released (`0`). `sub_fc1284ac` returns `r0 = 0`. The instruction `cbnz r0, loc_fc05b978` fails to branch. `sub_fc05b962_my` immediately calls `sub_fc05ba56`.
 7. **GPIO 0x67 Hardware Power-Down**: `sub_fc05ba56` writes `0x004C0003` to GPIO 0x67 (`0xD20B099C`), immediately commanding the power management IC to cut DC-DC power to the SoC. It then enters `b .` (infinite hang).
+
+The expected outcome of the opt-in fix (that forcing `r0 = 1` and bypassing `sub_fc05ba56` will allow a short press to boot without holding the button) is **INFERRED**, with the owner's held-button trial serving as primary empirical supporting evidence.
 
 ---
 
@@ -32,13 +37,13 @@ We surveyed DIGIC 6 CHDK platform code to establish how other ports handle the p
 
 | Platform | Firmware | File & Line Reference | Handling Pattern | Status |
 |---|---|---|---|---|
-| **G3 X** | GM1.10E | `g3x_110e.patch`: L1681–1703 (`sub_fc05bb6a_my`) | Bypassed both `sub_fc079404` (`IsNormalCameraMode`) and `sub_fc1284ac` entirely. Synthesized boot cause by directly writing `*(int*)(0x9bc4 + 12) = 0x80000;` ("Power-on") based on button reads. | **VERIFIED** (historical patch) |
-| **G5 X** | GM1.00C | `chdk-port/platform/g5x/sub/100c/boot.c`: L333–339, 411, 418–420 | Substituted stock handler with `sub_fc0ecf20_my`. Deleted the failure branch (`beq`) so power-cut is never reached. Forced `movs r0, #1` to ensure success return to caller. | **VERIFIED** (in-tree source) |
-| **SX60 HS** | GM1.00B | `chdk-port/platform/sx60hs/sub/100b/boot.c`: L433, 441 | Retained call to `sub_fc14fa40`, but deleted `beq loc_fc0725a2` (the branch to power cut). In addition, `loader/sx60hs/main.c`: L38 writes `*(0x4ffc) = 0x12345678` (DryOS reboot flag). | **VERIFIED** (in-tree source) |
-| **G7 X** | GM1.00B | `chdk-port/loader/g7x/main.c`: L37–39; `chdk-port/platform/g7x/sub/100b/boot.c`: L161, 321 | Writes `*(volatile unsigned *)(0x4ffc) = 0x12345678;` with comment `"allows boot on short press"`. Kept stock power check because reboot flag test bypasses shutdown. | **VERIFIED** (in-tree source) |
-| **SX710 HS** | GM1.00A | `chdk-port/platform/sx710hs/sub/100a/boot.c`: L396, 455–457 | Replaced stock handler with `sub_fc0cb934_my`. If buttons are released, defaults to simulating Play button press (`0x100000`). | **VERIFIED** (in-tree source) |
-| **G7 X Mark II** | GM1.01A | `chdk-port/platform/g7x2/sub/101a/boot.c`: L460, 522, 529–530 | Calls stock power check `sub_fc0723dc`, forces `movs r0, #1`, branches unconditional over power-cut call (`b loc_fc0723fe`). | **VERIFIED** (in-tree source) |
-| **M10** | GM1.10D | `chdk-port/platform/m10/sub/110d/boot.c`: L342–347 | Kept stock handler without modification; annotated `"returns 1"`. | **VERIFIED** (in-tree source) |
+| **G3 X** | GM1.10E | `g3x_110e.patch`: L1681–1703 (`sub_fc05bb6a_my`) | Bypassed both `sub_fc079404` (`IsNormalCameraMode`) and `sub_fc1284ac` entirely. Synthesized boot cause by directly writing `*(int*)(0x9bc4 + 12) = 0x80000;` ("Power-on") based on button reads. | **INFERRED** (historical patch) |
+| **G5 X** | GM1.00C | `chdk-port/platform/g5x/sub/100c/boot.c`: L333–339, 411, 418–420 | Substituted stock handler with `sub_fc0ecf20_my`. Deleted the failure branch (`beq`) so power-cut is never reached. Forced `movs r0, #1` to ensure success return to caller. | **INFERRED** (in-tree source) |
+| **SX60 HS** | GM1.00B | `chdk-port/platform/sx60hs/sub/100b/boot.c`: L433, 441 | Retained call to `sub_fc14fa40`, but deleted `beq loc_fc0725a2` (the branch to power cut). In addition, `loader/sx60hs/main.c`: L38 writes `*(0x4ffc) = 0x12345678` (DryOS reboot flag). | **INFERRED** (in-tree source) |
+| **G7 X** | GM1.00B | `chdk-port/loader/g7x/main.c`: L37–39; `chdk-port/platform/g7x/sub/100b/boot.c`: L161, 321 | Writes `*(volatile unsigned *)(0x4ffc) = 0x12345678;` with comment `"allows boot on short press"`. Kept stock power check because reboot flag test bypasses shutdown. | **INFERRED** (in-tree source) |
+| **SX710 HS** | GM1.00A | `chdk-port/platform/sx710hs/sub/100a/boot.c`: L396, 455–457 | Replaced stock handler with `sub_fc0cb934_my`. If buttons are released, defaults to simulating Play button press (`0x100000`). | **INFERRED** (in-tree source) |
+| **G7 X Mark II** | GM1.01A | `chdk-port/platform/g7x2/sub/101a/boot.c`: L460, 522, 529–530 | Calls stock power check `sub_fc0723dc`, forces `movs r0, #1`, branches unconditional over power-cut call (`b loc_fc0723fe`). | **INFERRED** (in-tree source) |
+| **M10** | GM1.10D | `chdk-port/platform/m10/sub/110d/boot.c`: L342–347 | Kept stock handler without modification; annotated `"returns 1"`. | **INFERRED** (in-tree source) |
 
 ### Key Takeaway from Survey
 The classic, most conservative CHDK pattern for DIGIC 6 cameras (as exemplified by **G7 X Mark II** and **G5 X**) is:
@@ -127,7 +132,7 @@ Every ROM address used or cited in this analysis was independently read from `fi
 - **Finding:** If all buttons are released (`r0 == 0`), `sub_fc1284ac` branches directly to `0xFC12851A` **without calling `sub_fc08ecbc`**, and returns `r0 = 0`.
 
 ### 4. Mode Check `sub_fc079404` (`0xFC079404`) — `PORT24-ROM-NORMAL-MODE` & `PORT24-ROM-NORMAL-FLAG`
-- **Ranges:** `0xFC079400`..`0xFC0794BF` (192 bytes, SHA-256: `cc71c4d4d3...`), `0xFDF20380`..`0xFDF2038F` (16 bytes, SHA-256: `7998b107f5...`)
+- **Ranges:** `0xFC079400`..`0xFC0794BF` (192 bytes, SHA-256: `cc71c4d4d38eac4b3e6c0cff0fe12f5a54db6aa52296d11fca34015f814df344`), `0xFDF20380`..`0xFDF2038F` (16 bytes, SHA-256: `7998b107f5d4750a6cb7fa37f6834b7f7fc708451f28b49dbb0ec1161d2d3121`)
 - **Disassembly:**
   ```arm
   fc079404:   492a        ldr     r1, [pc, #168]      ; Literal 0xFDF20380
@@ -141,7 +146,7 @@ Every ROM address used or cited in this analysis was independently read from `fi
 - **Finding:** The byte at `0xFDF20380` in ROM is `0x00`, so `sub_fc079404` unconditionally returns `r0 = 1` in stock configuration.
 
 ### 5. Startup Reason Recorder `sub_fc08ecbc` (`0xFC08ECBC`) & Structure Pointer `0x9BC4`
-- **Ranges:** `0xFC08ECB0`..`0xFC08ECFF` (80 bytes, SHA-256: `039ca184b5...`), `0xFC08EEE0`..`0xFC08EEFF` (32 bytes, SHA-256: `0ceabc1be6...`)
+- **Ranges:** `0xFC08ECB0`..`0xFC08ECFF` (80 bytes, SHA-256: `039ca184b5534c03ba8d7c1e54911082c5ff23b2c286da5a97aafe1d5854746f`), `0xFC08EEE0`..`0xFC08EEFF` (32 bytes, SHA-256: `0ceabc1be6ca2cb1c4558e80717208d0e51beea9cbbd5cbbf7dd810fbbe3cb0f`)
 - **Disassembly:**
   ```arm
   fc08ecbc:   498c        ldr     r1, [pc, #560]      ; Literal 0xFC08EEF0 = 0x00009BC4
@@ -197,9 +202,9 @@ In `chdk-port/platform/g3x/sub/110c/boot_prototype.c` around line 349:
 
 Because the replacement length is **identically 10 bytes**, the function size of `sub_fc05b962_my` remains completely unaltered.
 Zero downstream symbols shift in memory:
-- `boot_witness` address remains **`0x0035F7A0`** (**VERIFIED**).
-- Core end address (`_end`) remains **`0x00366CB0`** (**VERIFIED**).
-- Default build produces byte-identical DISKBOOT.BIN SHA-256 **`9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136`** (**VERIFIED**).
+- `boot_witness` address remains `0x0035F7A0` (confirmed by ELF symbol table).
+- Core end address (`_end`) remains `0x00366CB0` (confirmed by ELF symbol table).
+- Default build produces byte-identical DISKBOOT.BIN SHA-256 `9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136` (confirmed by build toolchain).
 
 ### Analysis of the Start-Cause Risk (**IMPORTANT**)
 When the camera is booted via a normal short press, the user's finger has already left the power button by the time `sub_fc1284ac` executes in Stage 5.
@@ -211,7 +216,7 @@ As demonstrated by the ROM disassembly above:
 #### Comparison with Reference Ports
 - **G3 X GM1.10E (ranma)**: Ranma recognized that `sub_fc1284ac` failed on short-press restart, and bypassed both `IsNormalCameraMode_FW` and `sub_fc1284ac`. To ensure a valid start cause, ranma's patch manually wrote `*(int*)(0x9bc4 + 12) = 0x80000` (Power) or `0x100000` (Play) based on momentary button states.
 - **G5 X 100C / G7 X Mark II 101A**: Both ports take the simpler approach: they call the stock check, force `r0 = 1`, and bypass the shutdown branch without synthesizing custom start-cause words. Both cameras boot successfully into CHDK and stock UI.
-- **Consequence for G3 X GM1.10C**: If `*(0x9BC4 + 12)` remains 0, whether later DryOS tasks make behavioral decisions based on a zero start cause is **UNKNOWN** (unobserved on physical hardware). However, during cold boot prior to DISKBOOT reboot, the initial stock boot sequence *already* ran `sub_fc1284ac` and recorded the start cause once. In the post-reboot phase, forcing `r0 = 1` successfully reaches the stock UI (`O1`) without hardware power-cut.
+- **Downstream Start-Cause Behaviour**: The downstream start-cause behaviour (the effect of skipping `sub_fc08ecbc`, and anything else in DryOS that reads the power-on reason `*(0x9BC4 + 12)` later) is **UNKNOWN** (not yet evaluated on physical hardware or via full DryOS decompilation). On physical hardware, the only observed successful boot to the stock user interface (`O1`) was on the unchanged PORT-19 default build (`9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136`) with the physical power button held until the LCD illuminated (which allowed the unmodified second `sub_fc1284ac` call to detect the button). The opt-in candidate (`faad4d8242fbf6f79a44b10a9956f7eb04de9b65f42221f82a3b69eb024cf056`) with `movs r0, #1` has **never been run on the camera**. Whether forcing `r0 = 1` and skipping `sub_fc08ecbc` produces any unintended side effects in downstream DryOS tasks remains **UNKNOWN**, while the expectation that it will allow short-press boot without holding the button is **INFERRED** from reference ports and the held-button trial.
 
 ---
 
@@ -224,18 +229,18 @@ Both builds were executed with the pinned `arm-none-eabi-gcc` toolchain (`gcc-ar
 - `candidate_main.bin` size: `116,816` bytes
 - `candidate_main.bin` SHA-256: `420b3842ed56b59dd0434771694bfd0a5b8e97c9b883d690a2fcad73eb0ffca7`
 - `DISKBOOT.BIN` size: `118,001` bytes
-- `DISKBOOT.BIN` SHA-256: **`9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136`** (Matches PORT-19/20/21/23 locked production baseline)
+- `DISKBOOT.BIN` SHA-256: `9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136` (Matches PORT-19/20/21/23 locked production baseline)
 - Symbol `boot_witness`: `0x0035F7A0`
 - Symbol `_end`: `0x00366CB0`
 
 ### Opt-In Fix Build (`G3X_POWERON_FIX=1`)
 - Command: `python3 -B tools/build_candidate_port24_poweron_fix.py --poweron-fix`
 - `candidate_main.bin` size: `116,816` bytes
-- `candidate_main.bin` SHA-256: **`b9c5b718cd90f7a791c216f07f92758cbdfcd56e4e34702235cffdcc204e6580`**
+- `candidate_main.bin` SHA-256: `b9c5b718cd90f7a791c216f07f92758cbdfcd56e4e34702235cffdcc204e6580`
 - `candidate_main.elf` symbol `boot_witness`: `0x0035F7A0`
 - `candidate_main.elf` symbol `_end`: `0x00366CB0`
 - `DISKBOOT.BIN` size: `118,001` bytes
-- `DISKBOOT.BIN` SHA-256: **`faad4d8242fbf6f79a44b10a9956f7eb04de9b65f42221f82a3b69eb024cf056`**
+- `DISKBOOT.BIN` SHA-256: `faad4d8242fbf6f79a44b10a9956f7eb04de9b65f42221f82a3b69eb024cf056`
 
 ---
 
@@ -243,19 +248,22 @@ Both builds were executed with the pinned `arm-none-eabi-gcc` toolchain (`gcc-ar
 
 | ID | Claim | Evidence / Citation | Status |
 |---|---|---|---|
-| C1 | `sub_fc05b962` at `0xFC05B962` is stock caller of `sub_fc1284ac` and `sub_fc05ba56` | Manifest `PORT24-ROM-CALLER-STARTUP` (`0xFC05B960`..`0xFC05B9BF`, SHA-256 `3403a6bdb7...`) | **VERIFIED** |
-| C2 | `sub_fc05ba56` writes `0x004C0003` to GPIO `0x67`, commanding hardware power-down | Manifest `PORT24-ROM-POWERCUT` (`0xFC05BA50`..`0xFC05BA6F`, SHA-256 `c7b4308268...`) | **VERIFIED** |
-| C3 | `sub_fc1284ac` tests button GPIOs and returns `r0 = 0` when buttons are released | Manifest `PORT24-ROM-POWERON-CHECK` (`0xFC1284A0`..`0xFC12851F`, SHA-256 `f683e2af7e...`) | **VERIFIED** |
-| C4 | `sub_fc079404` reads camera mode byte from `0xFDF20380` | Manifest `PORT24-ROM-NORMAL-MODE` and `PORT24-ROM-NORMAL-FLAG` | **VERIFIED** |
-| C5 | Startup cause structure is located at RAM `0x00009BC4` | Manifest `PORT24-ROM-STARTCAUSE-PTR` (`0xFC08EEE0`..`0xFC08EEFF`, SHA-256 `0ceabc1be6...`) | **VERIFIED** |
-| C6 | G5X 100c replaces power handler and removes failure branch | `chdk-port/platform/g5x/sub/100c/boot.c` L333–339, 411, 418–420 | **VERIFIED** |
-| C7 | SX60HS 100b deletes failure branch `beq loc_fc0725a2` | `chdk-port/platform/sx60hs/sub/100b/boot.c` L433, 441 | **VERIFIED** |
-| C8 | G7X 100b sets `0x4ffc = 0x12345678` for short-press boot | `chdk-port/loader/g7x/main.c` L37–39 | **VERIFIED** |
-| C9 | Default build DISKBOOT SHA-256 is byte-identical to `9468257364...` | `build_candidate_port24_poweron_fix.py --default` build output | **VERIFIED** |
-| C10 | Opt-in build DISKBOOT SHA-256 is `faad4d8242fbf6f79a44b10a9956f7eb04de9b65f42221f82a3b69eb024cf056` | `build_candidate_port24_poweron_fix.py` build output | **VERIFIED** |
-| C11 | Both builds preserve symbol addresses `boot_witness` = `0x0035F7A0` and `_end` = `0x00366CB0` | ELF symbol table disassembly via `arm-none-eabi-nm` | **VERIFIED** |
-| C12 | Power-cut bypass will allow short-press boot on physical G3 X hardware | Reasoned from DIGIC 6 architecture and owner trial | **INFERRED** (Pending owner hardware trial) |
-| C13 | Whether DryOS task_Startup expects specific start-cause bits at `0x9BC4+12` when booted via Play vs Power | DryOS task startup decompilation in progress | **UNKNOWN** |
+| C0 | Unchanged PORT-19 default build reaches stock UI (`O1`) when physical power button is held until LCD illuminates, but powers off immediately on short press | Recorded owner observation on physical G3 X hardware, 2026-11-01 (`docs/PROJECT_STATE.md`, `docs/HANDOFF.md`) | **VERIFIED** (recorded owner observation) |
+| C1 | `sub_fc05b962` at `0xFC05B962` is stock caller of `sub_fc1284ac` and `sub_fc05ba56` | Manifest `PORT24-ROM-CALLER-STARTUP` (`0xFC05B960`..`0xFC05B9BF`, SHA-256 `3403a6bdb72b4895d8a28cba2339318c32536439cd7ee35e06488000ccd8383d`) | **VERIFIED** (direct ROM citation) |
+| C2 | `sub_fc05ba56` writes `0x004C0003` to GPIO `0x67`, commanding hardware power-down | Manifest `PORT24-ROM-POWERCUT` (`0xFC05BA50`..`0xFC05BA6F`, SHA-256 `c7b43082682963f5df642e3d16af5971072984845a3bc0a88f31a5f54e76049c`) | **VERIFIED** (direct ROM citation) |
+| C3 | `sub_fc1284ac` tests button GPIOs and returns `r0 = 0` when buttons are released | Manifest `PORT24-ROM-POWERON-CHECK` (`0xFC1284A0`..`0xFC12851F`, SHA-256 `f683e2af7e75023d5e311752ab674c1a965933457698a33bf49e78f6a90e4eb0`) | **VERIFIED** (direct ROM citation) |
+| C4 | `sub_fc079404` reads camera mode byte from `0xFDF20380` | Manifest `PORT24-ROM-NORMAL-MODE` (`cc71c4d4d38e...`) and `PORT24-ROM-NORMAL-FLAG` (`7998b107f5d4...`) | **VERIFIED** (direct ROM citation) |
+| C5 | Startup cause structure is located at RAM `0x00009BC4` | Manifest `PORT24-ROM-STARTCAUSE-PTR` (`0xFC08EEE0`..`0xFC08EEFF`, SHA-256 `0ceabc1be6ca2cb1c4558e80717208d0e51beea9cbbd5cbbf7dd810fbbe3cb0f`) | **VERIFIED** (direct ROM citation) |
+| C6 | G5X 100c replaces power handler and removes failure branch | `chdk-port/platform/g5x/sub/100c/boot.c` L333–339, 411, 418–420 | **INFERRED** (in-tree source code inspection) |
+| C7 | SX60HS 100b deletes failure branch `beq loc_fc0725a2` | `chdk-port/platform/sx60hs/sub/100b/boot.c` L433, 441 | **INFERRED** (in-tree source code inspection) |
+| C8 | G7X 100b sets `0x4ffc = 0x12345678` for short-press boot | `chdk-port/loader/g7x/main.c` L37–39 | **INFERRED** (in-tree source code inspection) |
+| C9 | Default build DISKBOOT SHA-256 is byte-identical to `9468257364...` | `build_candidate_port24_poweron_fix.py --default` build output | **INFERRED** (local build toolchain result) |
+| C10 | Opt-in build DISKBOOT SHA-256 is `faad4d8242fbf6f79a44b10a9956f7eb04de9b65f42221f82a3b69eb024cf056` | `build_candidate_port24_poweron_fix.py` build output | **INFERRED** (local build toolchain result) |
+| C11 | Both builds preserve symbol addresses `boot_witness` = `0x0035F7A0` and `_end` = `0x00366CB0` | ELF symbol table disassembly via `arm-none-eabi-nm` | **INFERRED** (ELF inspection) |
+| C12 | Failure mechanism: second `sub_fc1284ac` check in `sub_fc05b962_my` cuts power on short press | GM1.10C ROM disassembly and owner held-button trial observation | **INFERRED** |
+| C13 | Expected opt-in outcome: opt-in candidate power-cut bypass will allow short-press boot to O1 | Reasoned from owner held-button trial and DIGIC 6 reference ports | **INFERRED** (Pending owner hardware trial) |
+| C14 | Opt-in candidate (`faad4d8242...`) has reached O1 or been run on physical hardware | STRICT NO-GO in Phase 0; candidate has never been run on camera | **UNKNOWN** (never executed on hardware) |
+| C15 | Downstream start-cause behaviour (`sub_fc08ecbc`, or anything else that reads the power-on reason later) | DryOS task startup decompilation in progress | **UNKNOWN** |
 
 ---
 
@@ -264,3 +272,4 @@ Both builds were executed with the pinned `arm-none-eabi-gcc` toolchain (`gcc-ar
 1. **Safety Boundary**: The fix only affects `sub_fc05b962_my` during the second boot stage (post-DISKBOOT entry). It does **not** alter hardware protection, temperature cutoffs, lens barriers, or battery voltage supervision.
 2. **Crash Resilience**: If an abnormal condition occurs where power-down was legitimately intended, the camera UI and event procedures (`TurnOffE1_FW`, `task_Startup`) retain full software shutdown capability via normal button event dispatch.
 3. **Hardware Policy Compliance**: STRICT NO-GO remains in effect. No binary is flashed, no SD card is written, and no physical camera trial is conducted autonomously. All artifacts are prepared strictly for human owner review and voluntary deployment.
+4. **Pre-Existing Test Inconsistency**: In `tests/test_port21_ram_lifetime.py`, entries are filtered for `SCOPE-PORT21-RAM-LIFETIME` because `docs/agentbridge/PORT21_EVIDENCE_MANIFEST.json` already contains merged entries from both `SCOPE-PORT21-RAM-LIFETIME` and `SCOPE-PORT21-DISKBOOT-TIMING` on `origin/main`, which is a pre-existing base inconsistency.
