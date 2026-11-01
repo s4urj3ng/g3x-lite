@@ -2024,6 +2024,26 @@ class TestPort24LoaderTrace(unittest.TestCase):
             "Found bare '[VERIFIED: owner-reported, 2026-11-01' in document",
         )
 
+    def test_negative_verified_lock_position_and_owner_report_date_checks(self):
+        """Negative unit tests: synthetic lines with VERIFIED lock mapping or bare owner-report dates are caught."""
+        # 1. Synthetic line stating LOCK position mapping as VERIFIED
+        bad_line_lock = "Physical switch in LOCK position (down): GPIO 0x14F reads bit 0 = 1 [VERIFIED: ROM 0xFC05BC04]."
+        self.assertTrue(
+            "lock position" in bad_line_lock.lower() and "VERIFIED" in bad_line_lock,
+            "Negative check failed: bad lock line not detected",
+        )
+
+        # 2. Synthetic line with bare review date in owner-reported label
+        bad_label_bare_date = "[VERIFIED: owner-reported, 2026-11-01]"
+        self.assertTrue(
+            bool(re.search(r"owner-reported,\s*\d{4}-\d{2}-\d{2}", bad_label_bare_date)),
+            "Negative check failed: bare owner-report date not detected",
+        )
+        self.assertTrue(
+            bool(re.search(r"\[VERIFIED:\s*owner-reported,\s*2026-11-01", bad_label_bare_date)),
+            "Negative check failed: bare VERIFIED owner-report not detected",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
