@@ -1,5 +1,5 @@
 /*
- * PORT-23 T2b: LED breadcrumb helpers for Canon PowerShot G3 X (GM1.10C).
+ * PORT-23 T2b / PORT-25 T3: LED breadcrumb helpers for Canon PowerShot G3 X (GM1.10C).
  *
  * Hardware facts VERIFIED on camera (owner, 2026-11-01):
  * - MMIO 0xD20B0884 is the green LED register.
@@ -9,7 +9,7 @@
  * - A 0x06000000 stall and a 0x00600000 stall both ended with the camera dark.
  *
  * Design constraints:
- * - This header defines NO symbols unless LED_BREADCRUMB is defined.
+ * - This header defines NO symbols unless LED_BREADCRUMB or LED_LADDER is defined.
  * - In documented stage builds, delay is 0 (LED turns ON and stays ON).
  * - Optional busy-wait delay is capped at 0x00600000.
  */
@@ -94,8 +94,37 @@ static inline __attribute__((always_inline)) void g3x_breadcrumb_led_off(void)
 // OFF delay: 0x002C4000 (2,899,968 iterations) -> ~46.09 ms (fast 100ms) / ~57.62 ms (nom 125ms) / ~138.28 ms (slow 300ms) [INFERRED]
 // Total loop: 0x003F8000 (4,161,536 iterations) -> ~66.15 ms (fast) / ~82.68 ms (nom) / 198.44 ms (slow) [INFERRED]
 // Under the 1.0 ms overhead ASSUMPTION: 198.44 ms + 1.0 ms = 199.44 ms (step < 200 ms at the slow bound IF non-loop overhead < 1.56 ms (UNKNOWN))
+
 #define G3X_LADDER_ON_DELAY    0x00134000
 #define G3X_LADDER_OFF_DELAY   0x002C4000
+
+// PORT-25 Frame Timing Configuration (under 1000 ms whole-frame post-arming):
+// Clock assumption: DIGIC 6 Cortex-R4 CPU core clock running at nominal ~150-250 MHz
+// (2-3 CPU cycles per iteration for 'subs r2, #1; bne').
+// At 200 MHz, 3 cycles/iteration: 6,291,456 iterations ~ 94.4 ms (~100 ms fast bound).
+// At 150 MHz, 3 cycles/iteration: 6,291,456 iterations ~ 125.8 ms (nominal bound).
+// At 66.6 MHz reference clock: 6,291,456 iterations ~ 283 ms (~300 ms slow conservative bound).
+//
+// Frame Timing Configuration with Preemption Tolerance (>= 50 ms difference at slow bound):
+// ON pulse delay:       0x00100000 (1,048,576 iterations) -> 50.0 ms slow / 20.97 ms nom / 15.73 ms fast
+// Pulse OFF gap:        0x00050000 (  327,680 iterations) -> 15.625 ms slow / 6.55 ms nom / 4.91 ms fast
+// Inter-digit gap:      0x00200000 (2,097,152 iterations) -> 100.0 ms slow / 41.94 ms nom / 31.46 ms fast
+// Frame-end gap:        0x00400000 (4,194,304 iterations) -> 200.0 ms slow / 83.89 ms nom / 62.91 ms fast
+//
+// Separator differences at slow bound:
+//   Digit gap - Pulse gap = 100.0 ms - 15.625 ms = 84.375 ms >= 50 ms preemption tolerance.
+//   Frame gap - Digit gap = 200.0 ms - 100.0 ms = 100.0 ms >= 50 ms preemption tolerance.
+// Every single LED-ON pulse is strictly <= 150 ms (50.0 ms at slow bound, 150 ms headroom below 200 ms cap).
+// Whole-frame duration for post-arming stages (Codes 41..44) is strictly < 1000 ms at slow bound:
+// Code 41: 712.50 ms slow / 298.80 ms nom / 224.12 ms fast
+// Code 42: 778.125 ms slow / 326.32 ms nom / 244.75 ms fast
+// Code 43: 843.75 ms slow / 353.84 ms nom / 265.39 ms fast
+// Code 44: 909.375 ms slow / 381.36 ms nom / 286.02 ms fast
+
+#define G3X_FRAME_ON_DELAY     0x00100000
+#define G3X_FRAME_OFF_DELAY    0x00050000
+#define G3X_FRAME_DIGIT_GAP    0x00200000
+#define G3X_FRAME_END_GAP      0x00400000
 
 #define LADDER_ASM_PULSE \
     "    ldr     r0, =0xD20B0884\n" \
@@ -123,6 +152,158 @@ static inline __attribute__((always_inline)) void g3x_ladder_pulse_c(void)
         : "r0", "r1", "r2", "r3", "cc", "memory"
     );
 }
+
+// Single pulse within a framed stage code:
+// Turns LED ON (0x004D0002), waits G3X_FRAME_ON_DELAY (0x00100000 = 50 ms slow bound <= 150 ms),
+// turns LED OFF (0x004C0003), waits G3X_FRAME_OFF_DELAY (0x00050000 = 15.625 ms slow bound).
+// IRQ is masked (cpsid i) strictly between the LED-ON store and the LED-OFF store,
+// restoring saved CPSR immediately after the OFF store. OFF gaps remain unmasked.
+#define LADDER_PULSE_ON_OFF \
+    "    movw    r1, #0x0002\n" \
+    "    movt    r1, #0x004d\n" \
+    "    mrs     r3, cpsr\n" \
+    "    cpsid   i\n" \
+    "    str     r1, [r0]\n" \
+    "    dsb     sy\n" \
+    "    mov.w   r2, #0x00100000\n" \
+    "1:\n" \
+    "    subs    r2, r2, #1\n" \
+    "    bne     1b\n" \
+    "    movw    r1, #0x0003\n" \
+    "    movt    r1, #0x004c\n" \
+    "    str     r1, [r0]\n" \
+    "    dsb     sy\n" \
+    "    msr     cpsr_cxsf, r3\n" \
+    "    mov.w   r2, #0x00050000\n" \
+    "2:\n" \
+    "    subs    r2, r2, #1\n" \
+    "    bne     2b\n"
+
+#define LADDER_DIGIT_GAP \
+    "    mov.w   r2, #0x00200000\n" \
+    "3:\n" \
+    "    subs    r2, r2, #1\n" \
+    "    bne     3b\n"
+
+#define LADDER_FRAME_END \
+    "    mov.w   r2, #0x00400000\n" \
+    "4:\n" \
+    "    subs    r2, r2, #1\n" \
+    "    bne     4b\n"
+
+#define LADDER_PULSES_1 LADDER_PULSE_ON_OFF
+#define LADDER_PULSES_2 LADDER_PULSES_1 LADDER_PULSE_ON_OFF
+#define LADDER_PULSES_3 LADDER_PULSES_2 LADDER_PULSE_ON_OFF
+#define LADDER_PULSES_4 LADDER_PULSES_3 LADDER_PULSE_ON_OFF
+#define LADDER_PULSES_5 LADDER_PULSES_4 LADDER_PULSE_ON_OFF
+#define LADDER_PULSES_6 LADDER_PULSES_5 LADDER_PULSE_ON_OFF
+#define LADDER_PULSES_7 LADDER_PULSES_6 LADDER_PULSE_ON_OFF
+#define LADDER_PULSES_8 LADDER_PULSES_7 LADDER_PULSE_ON_OFF
+#define LADDER_PULSES_9 LADDER_PULSES_8 LADDER_PULSE_ON_OFF
+
+#define CORE_LADDER_FRAME(tens, units) \
+    "    b.w     98f\n" \
+    "    .ltorg\n" \
+    "98:\n" \
+    "    push    {r0, r1, r2, r3, r12, lr}\n" \
+    "    movw    r0, #0x0884\n" \
+    "    movt    r0, #0xd20b\n" \
+    LADDER_PULSES_##tens \
+    LADDER_DIGIT_GAP \
+    LADDER_PULSES_##units \
+    LADDER_FRAME_END \
+    "    pop     {r0, r1, r2, r3, r12, lr}\n"
+
+#define CORE_LADDER_PULSE_11 CORE_LADDER_FRAME(1, 1)
+#define CORE_LADDER_PULSE_12 CORE_LADDER_FRAME(1, 2)
+#define CORE_LADDER_PULSE_13 CORE_LADDER_FRAME(1, 3)
+#define CORE_LADDER_PULSE_14 CORE_LADDER_FRAME(1, 4)
+#define CORE_LADDER_PULSE_15 CORE_LADDER_FRAME(1, 5)
+
+#define CORE_LADDER_PULSE_21 CORE_LADDER_FRAME(2, 1)
+#define CORE_LADDER_PULSE_22 CORE_LADDER_FRAME(2, 2)
+#define CORE_LADDER_PULSE_23 CORE_LADDER_FRAME(2, 3)
+#define CORE_LADDER_PULSE_24 CORE_LADDER_FRAME(2, 4)
+#define CORE_LADDER_PULSE_25 CORE_LADDER_FRAME(2, 5)
+#define CORE_LADDER_PULSE_26 CORE_LADDER_FRAME(2, 6)
+#define CORE_LADDER_PULSE_27 CORE_LADDER_FRAME(2, 7)
+#define CORE_LADDER_PULSE_28 CORE_LADDER_FRAME(2, 8)
+#define CORE_LADDER_PULSE_29 CORE_LADDER_FRAME(2, 9)
+
+// Under the Single-Emitter Rule, at any moment only one execution context emits
+// LED frames. The parent Initial Task finishes emitting before CreateTask is called.
+// The child Startup Task is the sole emitter once created and emits directly.
+// No cross-context flags, replay queues, or bitmasks are used.
+#define CHILD_LADDER_FRAME(tens, units) CORE_LADDER_FRAME(tens, units)
+
+#define CHILD_LADDER_PULSE_31 CORE_LADDER_FRAME(3, 1)
+#define CHILD_LADDER_PULSE_32 CORE_LADDER_FRAME(3, 2)
+#define CHILD_LADDER_PULSE_33 CORE_LADDER_FRAME(3, 3)
+#define CHILD_LADDER_PULSE_34 CORE_LADDER_FRAME(3, 4)
+#define CHILD_LADDER_PULSE_35 CORE_LADDER_FRAME(3, 5)
+
+#define CHILD_LADDER_PULSE_41 CORE_LADDER_FRAME(4, 1)
+#define CHILD_LADDER_PULSE_42 CORE_LADDER_FRAME(4, 2)
+#define CHILD_LADDER_PULSE_43 CORE_LADDER_FRAME(4, 3)
+#define CHILD_LADDER_PULSE_44 CORE_LADDER_FRAME(4, 4)
+
+#define CHILD_LADDER_PULSE_FAIL CORE_LADDER_PULSE_28
+#define CHILD_LADDER_PULSE_HALT CORE_LADDER_PULSE_29
+
+#define CORE_LADDER_PULSE_31 CHILD_LADDER_PULSE_31
+#define CORE_LADDER_PULSE_32 CHILD_LADDER_PULSE_32
+#define CORE_LADDER_PULSE_33 CHILD_LADDER_PULSE_33
+#define CORE_LADDER_PULSE_34 CHILD_LADDER_PULSE_34
+#define CORE_LADDER_PULSE_35 CHILD_LADDER_PULSE_35
+
+#define CORE_LADDER_PULSE_41 CHILD_LADDER_PULSE_41
+#define CORE_LADDER_PULSE_42 CHILD_LADDER_PULSE_42
+#define CORE_LADDER_PULSE_43 CHILD_LADDER_PULSE_43
+#define CORE_LADDER_PULSE_44 CHILD_LADDER_PULSE_44
+
+#define CORE_LADDER_PULSE_FAIL CORE_LADDER_PULSE_28
+#define CORE_LADDER_PULSE_HALT CORE_LADDER_PULSE_29
+
+#else
+
+#define CHILD_LADDER_FRAME(tens, units) ""
+#define CHILD_LADDER_PULSE_31 ""
+#define CHILD_LADDER_PULSE_32 ""
+#define CHILD_LADDER_PULSE_33 ""
+#define CHILD_LADDER_PULSE_34 ""
+#define CHILD_LADDER_PULSE_35 ""
+#define CHILD_LADDER_PULSE_41 ""
+#define CHILD_LADDER_PULSE_42 ""
+#define CHILD_LADDER_PULSE_43 ""
+#define CHILD_LADDER_PULSE_44 ""
+#define CHILD_LADDER_PULSE_FAIL ""
+#define CHILD_LADDER_PULSE_HALT ""
+
+#define CORE_LADDER_PULSE_11 ""
+#define CORE_LADDER_PULSE_12 ""
+#define CORE_LADDER_PULSE_13 ""
+#define CORE_LADDER_PULSE_14 ""
+#define CORE_LADDER_PULSE_15 ""
+#define CORE_LADDER_PULSE_21 ""
+#define CORE_LADDER_PULSE_22 ""
+#define CORE_LADDER_PULSE_23 ""
+#define CORE_LADDER_PULSE_24 ""
+#define CORE_LADDER_PULSE_25 ""
+#define CORE_LADDER_PULSE_26 ""
+#define CORE_LADDER_PULSE_27 ""
+#define CORE_LADDER_PULSE_28 ""
+#define CORE_LADDER_PULSE_29 ""
+#define CORE_LADDER_PULSE_31 ""
+#define CORE_LADDER_PULSE_32 ""
+#define CORE_LADDER_PULSE_33 ""
+#define CORE_LADDER_PULSE_34 ""
+#define CORE_LADDER_PULSE_35 ""
+#define CORE_LADDER_PULSE_41 ""
+#define CORE_LADDER_PULSE_42 ""
+#define CORE_LADDER_PULSE_43 ""
+#define CORE_LADDER_PULSE_44 ""
+#define CORE_LADDER_PULSE_FAIL ""
+#define CORE_LADDER_PULSE_HALT ""
 
 #endif /* LED_LADDER */
 
