@@ -430,25 +430,59 @@ def verify_source_operand_allowlist_entry(addr: int, file_line: str) -> tuple[bo
         return True, ""
     return False, f"Address 0x{addr:08X} does not literally occur in {rel_file} at line {line_num}: {file_lines[line_num - 1]!r}"
 
+# Explicit, enumerated permitted shorthands per repo-relative source path.
+# Each shorthand must uniquely resolve to its expected file in the repository (tested below).
+PERMITTED_SOURCE_SHORTHANDS: dict[str, set[str]] = {
+    "chdk-port/platform/g3x/sub/110c/boot_prototype.c": {"boot_prototype.c"},
+    "chdk-port/platform/g3x/sub/110c/stubs_prototype.S": {"stubs_prototype.S"},
+}
+
+def normalize_cited_path(cited_path: str) -> Optional[str]:
+    """Normalize a cited file path relative to repository root.
+    Rejects paths containing '..' components.
+    Normalizes repo-relative paths (stripping leading './').
+    Normalizes absolute paths inside REPO_ROOT to repo-relative paths;
+    rejects absolute paths outside REPO_ROOT.
+    """
+    if cited_path.startswith("file://"):
+        cited_path = cited_path[7:]
+    parts = [p for p in cited_path.replace("\\", "/").split("/") if p]
+    if ".." in parts:
+        return None
+    if cited_path.startswith("/"):
+        try:
+            resolved = Path(cited_path).resolve()
+            rel = resolved.relative_to(REPO_ROOT).as_posix()
+            return rel
+        except (ValueError, RuntimeError):
+            return None
+    norm_parts = [p for p in parts if p != "."]
+    return "/".join(norm_parts)
+
 def line_cites_allowlist_entry(line: str, addr: int) -> bool:
     """Check if the doc line cites the allowlist entry's own source file.
-    Requires path match and line/range inclusion if specified."""
+    Requires exact path match relative to repo root (or an explicitly permitted shorthand)
+    and line/range inclusion. Rejects '..' components, suffix-only matches, and unrelated files."""
     if addr not in ROM_SOURCE_OPERAND_ALLOWLIST:
         return False
     _, file_line = ROM_SOURCE_OPERAND_ALLOWLIST[addr]
     expected_path, expected_line_str = file_line.split(":", 1)
     expected_line = int(expected_line_str)
-    expected_basename = Path(expected_path).name
+
+    allowed_paths = {expected_path} | PERMITTED_SOURCE_SHORTHANDS.get(expected_path, set())
 
     file_pattern = re.compile(
-        r"(?:^|[\s\[\(`;])([\w\-\.\/]*" + re.escape(expected_basename) + r"):([0-9,\-\s]+)",
+        r"(?:^|[\s\[\(`;>\"'])([a-zA-Z0-9_\-\.\/]+):([0-9]+(?:[,\-\s]+[0-9]+)*)",
         re.IGNORECASE,
     )
     for m in file_pattern.finditer(line):
         cited_file = m.group(1).strip()
         ranges_str = m.group(2).strip()
-        if not (cited_file == expected_basename or expected_path.endswith(cited_file) or cited_file.endswith(expected_path)):
+
+        norm_path = normalize_cited_path(cited_file)
+        if norm_path is None or norm_path not in allowed_paths:
             continue
+
         for part in ranges_str.split(","):
             part = part.strip()
             if not part:
@@ -580,6 +614,23 @@ class TestPort24LoaderTrace(unittest.TestCase):
             self.assertTrue(entry.get("out_of_scope"))
             self.assertFalse(entry.get("relied_upon"))
             self.assertIn("OUT-OF-SCOPE", entry.get("notes", ""))
+            self.assertNotEqual(entry["provenance_source"]["type"], "ROM_VERIFIED")
+            self.assertEqual(entry["provenance_source"]["type"], "SOURCE_REPO")
+
+    def test_no_out_of_scope_entry_claims_rom_verified_provenance(self):
+        """No entry with out_of_scope true has provenance_source.type == 'ROM_VERIFIED'."""
+        for entry in self.manifest.get("evidence_entries", []):
+            if entry.get("out_of_scope") or entry.get("status") == "out_of_scope":
+                self.assertNotEqual(
+                    entry.get("provenance_source", {}).get("type"),
+                    "ROM_VERIFIED",
+                    f"Out-of-scope entry '{entry.get('evidence_id')}' must not claim ROM_VERIFIED provenance",
+                )
+                self.assertEqual(
+                    entry.get("provenance_source", {}).get("type"),
+                    "SOURCE_REPO",
+                    f"Out-of-scope entry '{entry.get('evidence_id')}' expected SOURCE_REPO provenance",
+                )
 
     def test_no_allowlist_address_in_out_of_scope_ranges(self):
         """No ROM_SOURCE_OPERAND_ALLOWLIST address falls inside any out_of_scope manifest range."""
@@ -1255,9 +1306,69 @@ class TestPort24LoaderTrace(unittest.TestCase):
             f"Address 0xFDF20250 inside out-of-scope PID range without allowlist must fail coverage: {uncovered_pid}",
         )
 
+    def test_permitted_shorthands_uniquely_resolve_to_allowlist_sources(self):
+        """Ensure each permitted shorthand uniquely resolves to its expected allowlist source file in the repository."""
+        repo_root = REPO_ROOT
+        all_files = [p.relative_to(repo_root).as_posix() for p in repo_root.rglob("*") if p.is_file() and not p.name.startswith(".")]
+        for expected_path, shorthands in PERMITTED_SOURCE_SHORTHANDS.items():
+            self.assertTrue((repo_root / expected_path).is_file(), f"Expected path does not exist: {expected_path}")
+            for sh in shorthands:
+                matching_files = [f for f in all_files if f.endswith("/" + sh) or f == sh]
+                self.assertEqual(
+                    matching_files,
+                    [expected_path],
+                    f"Shorthand '{sh}' does not uniquely match '{expected_path}': matched {matching_files}",
+                )
+
+    def test_line_cites_allowlist_entry_path_binding_and_rejections(self):
+        """Test exact path binding, rejection of '..' and suffix-only matches, and acceptance of permitted shorthand."""
+        addr = 0xFC05B4B4  # expected: chdk-port/platform/g3x/sub/110c/boot_prototype.c:93
+
+        # Positive tests: exact repo path and permitted bare shorthand
+        self.assertTrue(line_cites_allowlist_entry("0xFC05B4B4 [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:93]", addr))
+        self.assertTrue(line_cites_allowlist_entry("0xFC05B4B4 [VERIFIED: boot_prototype.c:93]", addr))
+        self.assertTrue(line_cites_allowlist_entry("0xFC05B4B4 [VERIFIED: boot_prototype.c:90-100]", addr))
+
+        # Negative tests:
+        # (a) unrelated/<correct path>:<line> must fail
+        self.assertFalse(line_cites_allowlist_entry("0xFC05B4B4 [VERIFIED: unrelated/chdk-port/platform/g3x/sub/110c/boot_prototype.c:93]", addr))
+
+        # (b) ../<correct path>:<line> must fail
+        self.assertFalse(line_cites_allowlist_entry("0xFC05B4B4 [VERIFIED: ../chdk-port/platform/g3x/sub/110c/boot_prototype.c:93]", addr))
+
+        # (c) different directory path with same filename must fail
+        self.assertFalse(line_cites_allowlist_entry("0xFC05B4B4 [VERIFIED: other_dir/boot_prototype.c:93]", addr))
+        self.assertFalse(line_cites_allowlist_entry("0xFC05B4B4 [VERIFIED: other_dir/sub/110c/boot_prototype.c:93]", addr))
+
+        # Unrelated file must fail
+        self.assertFalse(line_cites_allowlist_entry("0xFC05B4B4 [VERIFIED: chdk-port/loader/generic/unrelated.c:93]", addr))
+
+        # Wrong line must fail
+        self.assertFalse(line_cites_allowlist_entry("0xFC05B4B4 [VERIFIED: boot_prototype.c:10-20]", addr))
+
     def test_regression_allowlisted_address_with_unrelated_citation_fails_coverage(self):
-        """Regression test: an allowlisted address cited with an unrelated file:line must FAIL coverage."""
-        # 0xFC05B4B4 is defined in boot_prototype.c:93; citing with unrelated.c:93 must fail
+        """Regression test: an allowlisted address cited with an unrelated file:line must FAIL coverage.
+        Enforces exact repo-relative path binding (or explicitly permitted shorthand) and line range.
+        Fails on:
+          - unrelated/<correct path>:<line> (suffix match rejected)
+          - ../<correct path>:<line> ('..' components rejected)
+          - different directory path with same filename (arbitrary shorthand/path rejected)
+          - unrelated file:line
+          - wrong line range in expected file
+        Passes on:
+          - exact repo-relative path:line
+          - explicitly permitted shorthand:line
+        """
+        # Positive tests: exact repo-relative path and permitted shorthand must pass coverage
+        pos_line_full = "Vector table end bound 0xFC05B4B4 [VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:93]"
+        uncovered_pos, _ = self.check_rom_addresses_coverage(pos_line_full)
+        self.assertEqual(uncovered_pos, [], f"Exact repo-relative citation should have passed coverage: {uncovered_pos}")
+
+        pos_line_shorthand = "Vector table end bound 0xFC05B4B4 [VERIFIED: boot_prototype.c:93]"
+        uncovered_sh, _ = self.check_rom_addresses_coverage(pos_line_shorthand)
+        self.assertEqual(uncovered_sh, [], f"Permitted shorthand citation should have passed coverage: {uncovered_sh}")
+
+        # Negative test: unrelated file must fail
         bad_line_unrelated_file = "Vector table end bound 0xFC05B4B4 [VERIFIED: chdk-port/loader/generic/unrelated.c:93]"
         uncovered, _ = self.check_rom_addresses_coverage(bad_line_unrelated_file)
         self.assertTrue(
@@ -1265,7 +1376,38 @@ class TestPort24LoaderTrace(unittest.TestCase):
             f"Allowlisted address cited with unrelated file should have failed coverage: {uncovered}",
         )
 
-        # Citing with wrong line range in same file must also fail
+        # (a) Regression test: unrelated/<correct path>:<line> must FAIL
+        bad_line_unrelated_prefix = "Vector table end bound 0xFC05B4B4 [VERIFIED: unrelated/chdk-port/platform/g3x/sub/110c/boot_prototype.c:93]"
+        uncovered_a, _ = self.check_rom_addresses_coverage(bad_line_unrelated_prefix)
+        self.assertTrue(
+            any("FC05B4B4" in u for u in uncovered_a),
+            f"Allowlisted address cited with unrelated/<correct path> should have failed coverage: {uncovered_a}",
+        )
+
+        # (b) Regression test: ../<correct path>:<line> must FAIL
+        bad_line_parent_ref = "Vector table end bound 0xFC05B4B4 [VERIFIED: ../chdk-port/platform/g3x/sub/110c/boot_prototype.c:93]"
+        uncovered_b, _ = self.check_rom_addresses_coverage(bad_line_parent_ref)
+        self.assertTrue(
+            any("FC05B4B4" in u for u in uncovered_b),
+            f"Allowlisted address cited with ../<correct path> should have failed coverage: {uncovered_b}",
+        )
+
+        # (c) Regression test: a different directory path with same filename must FAIL
+        bad_line_diff_dir = "Vector table end bound 0xFC05B4B4 [VERIFIED: other_dir/boot_prototype.c:93]"
+        uncovered_c, _ = self.check_rom_addresses_coverage(bad_line_diff_dir)
+        self.assertTrue(
+            any("FC05B4B4" in u for u in uncovered_c),
+            f"Allowlisted address cited with different directory path should have failed coverage: {uncovered_c}",
+        )
+
+        bad_line_diff_dir_sub = "Vector table end bound 0xFC05B4B4 [VERIFIED: other_dir/sub/110c/boot_prototype.c:93]"
+        uncovered_c2, _ = self.check_rom_addresses_coverage(bad_line_diff_dir_sub)
+        self.assertTrue(
+            any("FC05B4B4" in u for u in uncovered_c2),
+            f"Allowlisted address cited with different sub-directory path should have failed coverage: {uncovered_c2}",
+        )
+
+        # Wrong line range in same file must also fail
         bad_line_wrong_line = "Vector table end bound 0xFC05B4B4 [VERIFIED: boot_prototype.c:10-20]"
         uncovered_line, _ = self.check_rom_addresses_coverage(bad_line_wrong_line)
         self.assertTrue(
