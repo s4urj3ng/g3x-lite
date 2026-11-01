@@ -3,20 +3,20 @@
 - **Target Camera**: Canon PowerShot G3 X (Firmware **GM1.10C**, Platform ID `0x32A8` = 12968) `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:7]`
 - **Evaluation Mode**: Phase 0 Read-Only Offline Firmware Disassembly & Architectural Analysis `[VERIFIED: AGENTS.md:3; docs/SAFETY.md:1-8]`
 - **Safety Restriction**: STRICT NO-GO on hardware trials, camera connection, SD card writing, and firmware flashing (`docs/SAFETY.md:1-8`).
-- **Evidence Governance**: All ROM reads are strictly bounded (slice sizes <= 768 B <= 4096 B, total newly read ROM bytes: 784 B, total manifest bytes: 6,320 B <= 65,536 B budget). All 25 evidence ranges are recorded in `docs/agentbridge/PORT25_EVIDENCE_MANIFEST.json` and validate cleanly via `tools/port11c_evidence_validator.py` `[VERIFIED: tools/port11c_evidence_validator.py]`.
+- **Evidence Governance**: All ROM reads are strictly bounded (slice sizes <= 768 B <= 4096 B, total newly read ROM bytes: 784 B across 6 ranges, total manifest bytes: 6,320 B <= 65,536 B budget). All 25 evidence ranges are recorded in `docs/agentbridge/PORT25_EVIDENCE_MANIFEST.json` and validate cleanly via `tools/port11c_evidence_validator.py` `[VERIFIED: tools/port11c_evidence_validator.py]`.
 - **Bounded Research Guarantee**: No full-ROM scans and no pattern searches over the whole image were performed `[VERIFIED]`.
 - **Epistemic Classifications**:
   - `[VERIFIED]`: Directly proven by repository tracked files, source code, or owner-reported physical test records.
   - `[STATIC_VERIFIED]`: Confirmed directly from bounded static ROM disassembly within the approved evidence manifest ranges.
   - `[INFERRED]`: Deduced from verified static disassembly, hardware architecture, and execution sequences.
-  - `[UNKNOWN]`: Dynamic hardware states or unmapped runtime conditions that cannot be determined offline.
+  - `[UNKNOWN]`: Dynamic hardware states, external microcontroller firmware, or unmapped runtime conditions that cannot be determined offline.
   - `[OWNER-REPORTED]`: Observations recorded by the camera owner during physical sessions.
 
 ---
 
 ## 1. Executive Summary
 
-This study provides an exhaustive localization and comparative ranking of all potential power-cut and power-button-wait points on the Canon PowerShot G3 X (firmware GM1.10C) boot execution path following loader hand-off `[VERIFIED]`. 
+This study provides an exhaustive localization and comparative ranking of all potential power-cut and power-button-wait points on the Canon PowerShot G3 X (firmware GM1.10C) boot execution path following loader hand-off `[VERIFIED]`.
 
 In physical trials of the unchanged PORT-19 baseline build (`DISKBOOT.BIN` SHA-256 `9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136`), the camera achieved successful boot into the stock user interface (`O1`) **exclusively when the physical power button was held continuously down** until LCD illumination `[OWNER-REPORTED: milestone brief; docs/PORT24_POWERON_FIX.md:19-24]`. Conversely, giving the power button a standard brief press (tap of ~100–250 ms) resulted in immediate shutdown shortly after the loader executed `[OWNER-REPORTED: milestone brief; docs/PORT24_POWERON_FIX.md:21-25]`.
 
@@ -26,16 +26,22 @@ In physical trials of the unchanged PORT-19 baseline build (`DISKBOOT.BIN` SHA-2
    - In `chdk-port/platform/g3x/sub/110c/boot_prototype.c:351-354`, the Stage 5 routine `sub_fc05b962_my` retains the native Canon button check `bl sub_fc1284ac` `[VERIFIED: boot_prototype.c:352]`.
    - On a short press, the user has already released the button before Stage 5 executes `[INFERRED]`. `sub_fc1284ac` samples GPIO 0x97 as released (`0`), returns `r0 = 0`, fails `cbnz r0, loc_fc05b978`, and branches to `sub_fc05ba56` (`0xFC05BA56`), which writes `0x004C0003` to GPIO 0x67 (`0xD20B099C`), immediately de-asserting the power-hold latch and cutting system power `[STATIC_VERIFIED: ROM 0xFC05B96C-0xFC05B976, 0xFC05BA56; PORT25-ROM-STARTUP-TASKS; ROM 0xFC0D73C4; PORT25-ROM-GPIO-WRITE-MMIO]`.
 
-2. **Downstream Blocker in Opt-In Fix (`G3X_POWERON_FIX=1`) [Rank 2 — INFERRED / STATIC_VERIFIED]**:
-   - Under `G3X_POWERON_FIX=1` (`boot_prototype.c:349`), `sub_fc05b962_my` forces `movs r0, #1` and branches to `loc_fc05b978`, successfully bypassing `sub_fc05ba56` `[VERIFIED: boot_prototype.c:349]`.
-   - **Crucially, `sub_fc1284ac` is still called at line 349** `[VERIFIED: boot_prototype.c:349]`.
-   - Inside `sub_fc1284ac` (`0xFC1284AC`..`0xFC12851A`), if all buttons are released, the routine branches to `0xFC12851A`, **skipping `bl sub_fc08ecbc` at `0xFC128510`** `[STATIC_VERIFIED: ROM 0xFC1284FC-0xFC12851A; PORT25-ROM-POWERON-CHECK]`.
-   - Function `sub_fc08ecbc` is the start-cause recorder; skipping it leaves `*(0x00009BD0)` unwritten (`0x00000000` from initial Low RAM copy) `[STATIC_VERIFIED: ROM 0xFC08ECBC-0xFC08ECEC; PORT25-ROM-STARTCAUSE-SAVE; ROM 0xFC08EEF0; PORT25-ROM-STARTCAUSE-PTR]`.
-   - When downstream firmware tasks (such as `task_PhySw` or power property services) query the boot reason, a zero/unrecognized start cause can trigger an orderly or emergency shutdown via `TurnOffE1_FW` (`0xFC0D01EC`; `PORT25-ROM-FIRMWARE-CONT`) or `ExecuteShutDownPropertyService_FW` (`0xFC1352BD`; `PORT25-ROM-MPU-CONFIG`) `[INFERRED]`. This matches historical findings in sister port G3 X 1.10E (`g3x_110e.patch:1681-1703`), where ranma had to manually write the start cause `0x80000` to memory `[VERIFIED: docs/PORT6C_CHDK_INTEGRATION_GAPS.md:42]`.
+2. **Sub-CPU Power-Hold Supervision & Hardware Handshake Timeout [Rank 2 — INFERRED / UNKNOWN]**:
+   - In DIGIC 6 cameras, the power rails are initially latched by an external power management microcontroller (sub-CPU/PMIC) when the physical button is pressed `[INFERRED: docs/PORT23_POWER_SUPERVISION.md:294-300]`.
+   - The main SoC establishes communication with the sub-CPU during Stage 5 via `sub_fc05ba68` (`0xFC05BA68`), which calls `mpuSetup` (`0xFC135280`) `[STATIC_VERIFIED: ROM 0xFC05BA68-0xFC05BA8A; PORT25-ROM-STARTUP-TASKS; ROM 0xFC135280; PORT25-ROM-MPU-CONFIG]`. In stock firmware, SIO and DC-DC communication drivers are also initialized at `0xFC05B8FE..0xFC05B90A` `[STATIC_VERIFIED: ROM 0xFC05B8FE-0xFC05B90A; PORT25-ROM-STARTUP-TASKS]`.
+   - If the external sub-CPU firmware enforces an autonomous timeout that unlatches DC-DC power if a valid handshake is not received within a fixed window after button release, or if peripheral register resets drop the hardware latch before MPU communication is established, power is cut externally `[INFERRED]`. Because the sub-CPU runs external microcontroller firmware not contained in `PRIMARY.BIN`, the exact handshake protocol and timeout duration remain `[UNKNOWN: external microcontroller firmware]`.
 
-3. **Watchdog Expiration Risk [Rank 3 — INFERRED / STATIC_VERIFIED]**:
-   - `task_Startup_my` arms the hardware watchdog timer via `sub_fc418f2a` at `boot_prototype.c:408` (`StartWDT_FW` `0xFC135D2C`, timeout ~2.0 seconds) `[STATIC_VERIFIED: ROM 0xFC418F2A; PORT25-ROM-WATCHDOG-START; ROM 0xFC135D2C; PORT25-ROM-WATCHDOG-MODULE]`.
-   - If the watchdog reset task `task_WdtReset` (`0xFC135CB0`) has not yet started or if execution stalls before `sub_fc0d0126`, the watchdog timer underflows and cuts power `[INFERRED]`.
+3. **Watchdog Expiration Risk [Rank 3 — INFERRED / STATIC_VERIFIED / UNKNOWN]**:
+   - `task_Startup_my` arms the hardware watchdog timer via `sub_fc418f2a` at `boot_prototype.c:408` (`StartWDT_FW` `0xFC135D2C`) `[STATIC_VERIFIED: ROM 0xFC418F2A; PORT25-ROM-WATCHDOG-START; ROM 0xFC135D2C; PORT25-ROM-WATCHDOG-MODULE]`.
+   - In stock Canon operation, the watchdog is kept alive by `task_WdtReset` (`0xFC135CB0`), which sleeps for 2000 ms (`SleepTask(2000)` at `0xFC135CC6`) and resets the timer by writing `0xAA55` to MMIO `0xD20A0004` `[STATIC_VERIFIED: ROM 0xFC135CB0-0xFC135CC8; PORT25-ROM-WATCHDOG-MODULE]`. Note that 2000 ms is the software service interval, NOT the hardware timer expiry deadline `[VERIFIED]`.
+   - If execution stalls after line 408 or if `task_WdtReset` is delayed, the watchdog expires, triggering interrupt `WdtInt` (`0xFC135C92`) `[STATIC_VERIFIED: ROM 0xFC135C92, 0xFC135CEE-0xFC135CF6; PORT25-ROM-WATCHDOG-MODULE]`. The hardware outcome (hard SoC reset, bus lockup, or PMIC power cut) remains `[UNKNOWN]`.
+
+4. **Startup Cause at `0x00009BD0` in Opt-In Fix (`G3X_POWERON_FIX=1`) [Rank 4 — INFERRED / UNKNOWN]**:
+   - Under `G3X_POWERON_FIX=1` (`boot_prototype.c:349`), `sub_fc05b962_my` forces `movs r0, #1` and branches to `loc_fc05b978`, successfully bypassing `sub_fc05ba56` `[VERIFIED: boot_prototype.c:349]`.
+   - However, `sub_fc1284ac` is still executed at line 349 `[VERIFIED: boot_prototype.c:349]`. When buttons are released, `sub_fc1284ac` branches to `0xFC12851A`, **skipping `bl sub_fc08ecbc` at `0xFC128510`** `[STATIC_VERIFIED: ROM 0xFC1284FC-0xFC12851A; PORT25-ROM-POWERON-CHECK]`.
+   - Function `sub_fc08ecbc` is the start-cause recorder; skipping it leaves `*(0x00009BD0)` unwritten `[STATIC_VERIFIED: ROM 0xFC08ECBC-0xFC08ECEC; PORT25-ROM-STARTCAUSE-SAVE; ROM 0xFC08EEF0; PORT25-ROM-STARTCAUSE-PTR]`.
+   - Address `0x00009BD0` lies within Low RAM (`0x00008000`..`0x0003F4F4`) populated by Copy Loop 3 (`boot_prototype.c:133-143`). Because the ROM source bytes copied to `0x00009BD0` are not covered by an evidence manifest range, its initial value after `boot()` is `[UNKNOWN]` (`docs/PORT24_POWERON_FIX.md:246`).
+   - Furthermore, while `sub_fc12851e` (`0xFC12851E`) acts as a getter returning `*(0x00009BD0)` `[STATIC_VERIFIED: ROM 0xFC12851E-0xFC128522; PORT25-ROM-POWERON-CHECK]`, which downstream tasks consume this value and whether an uninitialized value triggers an orderly shutdown or error remain `[UNKNOWN]`.
 
 ---
 
@@ -104,7 +110,7 @@ Following DISKBOOT loader decryption and preparation, execution transitions to r
 Task T2 specifically evaluates the execution path in `chdk-port/platform/g3x/sub/110c/boot_prototype.c` when the opt-in fix `G3X_POWERON_FIX=1` is active `[VERIFIED]`.
 
 ### 3.1 Remaining Checks in `sub_fc05b962_my`
-In `boot_prototype.c:344-374`:
+In `boot_prototype.c:344-358`:
 ```arm
 /* boot_prototype.c:345 */    push    {r3, lr}
 /* boot_prototype.c:346 */    bl      sub_fc05ba68
@@ -123,7 +129,7 @@ In `boot_prototype.c:344-374`:
 
 1. **`sub_fc05ba68` (`0xFC05BA68`)** `[STATIC_VERIFIED: ROM 0xFC05BA68-0xFC05BA8A; PORT25-ROM-STARTUP-TASKS]`:
    - Calls `pxSetup`, `dhcpc_setup`, and branches to `mpuSetup` (`0xFC135280`) `[STATIC_VERIFIED: ROM 0xFC05BA8A; PORT25-ROM-STARTUP-TASKS; ROM 0xFC135280; PORT25-ROM-MPU-CONFIG]`.
-   - These are standard driver setup routines; none query buttons or cut power `[STATIC_VERIFIED]`.
+   - Establishes serial communication with the sub-CPU/MPU; does not sample buttons or directly de-assert GPIO 0x67 `[STATIC_VERIFIED]`.
 
 2. **`sub_fc079404` (`IsNormalCameraMode_FW`)** `[STATIC_VERIFIED: ROM 0xFC079404-0xFC079410; PORT25-ROM-NORMAL-MODE]`:
    - Reads byte from pointer `0xFDF20380` (verified `0x00` in ROM) `[STATIC_VERIFIED: ROM 0xFDF20380; PORT25-ROM-NORMAL-FLAG]`.
@@ -134,7 +140,7 @@ In `boot_prototype.c:344-374`:
    - `sub_fc1284ac` samples GPIO 0x97 (Power), 0x98 (Playback), 0x88 (WiFi), and 0x02 via `sub_fc08711a` (`GPIO_Read` at `0xFC0D73D0`) `[STATIC_VERIFIED: ROM 0xFC1284BC-0xFC1284EC; PORT25-ROM-POWERON-CHECK; ROM 0xFC08711A; PORT25-ROM-GPIO-READ; ROM 0xFC0D73D0; PORT25-ROM-GPIO-WRITE-MMIO]`.
    - When the button has been released (raw reading `1`, inverted by `bic` to `0`), all button states are `0` `[STATIC_VERIFIED: ROM 0xFC1284C4, 0xFC1284CE; PORT25-ROM-POWERON-CHECK]`.
    - At `0xFC1284FC-0xFC128504`, `orrs r0, r4` produces `0`, and `beq.n 0xfc12851a` jumps directly to the function exit at `0xFC12851A` `[STATIC_VERIFIED: ROM 0xFC128504, 0xFC12851A; PORT25-ROM-POWERON-CHECK]`.
-   - **Crucial Side Effect**: It bypasses `bl sub_fc08ecbc` (`0xFC128510`) `[STATIC_VERIFIED: ROM 0xFC128510; PORT25-ROM-POWERON-CHECK]`. The start-cause structure at `0x00009BD0` is therefore **not populated** `[INFERRED]`.
+   - **Crucial Side Effect**: It bypasses `bl sub_fc08ecbc` (`0xFC128510`) `[STATIC_VERIFIED: ROM 0xFC128510; PORT25-ROM-POWERON-CHECK]`. The start-cause structure at `0x00009BD0` is therefore **not updated** `[INFERRED]`.
 
 4. **Power-Cut Bypass**:
    - `movs r0, #1` and `b loc_fc05b978` force the branch into `loc_fc05b978`, successfully jumping over `sub_fc05ba56` `[VERIFIED: boot_prototype.c:349]`.
@@ -150,12 +156,12 @@ Multiple DryOS tasks are spawned during the post-loader sequence:
    - Priority `0x19` (25 decimal), default stack size `0`, task name literal `"Startup"` (`0xFC05B9A0`), entry `task_Startup_my` (`boot_prototype.c:366-370`).
 3. **"ClockSave" Task** `[STATIC_VERIFIED: ROM 0xFC0D0166-0xFC0D0174; PORT25-ROM-FIRMWARE-CONT]`:
    - Spawned inside `sub_fc0d0150` (`0xFC0D0150`), which is called as the first action of `task_Startup_my` at `boot_prototype.c:385` `[VERIFIED: boot_prototype.c:385]`.
-   - Entry point: `0xFC0D00ED` (`0xFC0D00EC`), Priority 32, Stack 512 bytes, Name `"ClockSave"` (`0xFC0D01DC`) via `sub_fc31be8c` `[STATIC_VERIFIED: ROM 0xFC0D0166-0xFC0D01DC; PORT25-ROM-FIRMWARE-CONT]`.
+   - Entry point: `0xFC0D00ED` (`0xFC0D00EC`), Priority 32, Stack 512 bytes, Name `"ClockSave"` (`0xFC0D01DC`) via DryOS CreateTask veneer (called at `0xFC0D0174`) `[STATIC_VERIFIED: ROM 0xFC0D0166-0xFC0D01DC; PORT25-ROM-FIRMWARE-CONT]`.
 4. **"SD1stInit" Task** `[VERIFIED: boot_prototype.c:397-402; ROM 0xFC31B1F4; PORT25-ROM-SD1STINIT-VENEER]`:
    - Spawned in `task_Startup_my` at `boot_prototype.c:401` via `blx sub_fc31b1f4` (`0xFC31B1F4`), conditional on `sub_fc05c4e0(0)` bit 0 == 0 `[VERIFIED: boot_prototype.c:397-402; ROM 0xFC05C4E0; PORT25-ROM-CARD-SWITCHES]`.
 5. **"PhySw" Physical Switch Task** `[VERIFIED: boot_prototype.c:413; ROM 0xFC1283D2; PORT25-ROM-PHYSW-TASK]`:
    - Spawned in `task_Startup_my` at `boot_prototype.c:413` by calling `sub_fc1283d2` (`0xFC1283D2`) `[VERIFIED: boot_prototype.c:413]`.
-   - Entry point: `task_PhySw` (`0xFC1283AD`), Priority 23, Stack 2048 bytes, Name `"PhySw"` (`0xFC12870C`) via `sub_fc31be8c` `[STATIC_VERIFIED: ROM 0xFC1283D2-0xFC1283FC, 0xFC128708, 0xFC12870C; PORT25-ROM-PHYSW-TASK; PORT25-ROM-PHYSW-LITERALS]`.
+   - Entry point: `task_PhySw` (`0xFC1283AD`), Priority 23, Stack 2048 bytes, Name `"PhySw"` (`0xFC12870C`) via DryOS CreateTask veneer (called at `0xFC1283F8`) `[STATIC_VERIFIED: ROM 0xFC1283D2-0xFC1283FC, 0xFC128708, 0xFC12870C; PORT25-ROM-PHYSW-TASK; PORT25-ROM-PHYSW-LITERALS]`.
 
 ### 3.3 Core Entry and Exit Points
 - **Core Entry Point**: Hand-off from loader branches to `boot()` at relocated address `MEMISOSTART = 0x003489B4` (`boot_prototype.c:82-85`) `[VERIFIED: boot_prototype.c:82-85]`.
@@ -184,40 +190,56 @@ Multiple DryOS tasks are spawned during the post-loader sequence:
 
 ---
 
-### Candidate 2: Unwritten Startup Cause at `0x00009BD0` (Bypassed `sub_fc08ecbc`)
-- **Citations**: `boot_prototype.c:349` (`G3X_POWERON_FIX=1`); ROM `0xFC128504-0xFC12851A` (`PORT25-ROM-POWERON-CHECK`), ROM `0xFC08ECBC-0xFC08ECEC` (`PORT25-ROM-STARTCAUSE-SAVE`), ROM `0xFC08EEF0` (`PORT25-ROM-STARTCAUSE-PTR`), ROM `0xFC0D01EC` (`PORT25-ROM-FIRMWARE-CONT`).
-- **Classification**: `[STATIC_VERIFIED]` in ROM disassembly; `[INFERRED]` as primary failure mode for `G3X_POWERON_FIX=1`.
-- **Trigger Condition**: `G3X_POWERON_FIX=1` active on a short press.
+### Candidate 2: Sub-CPU Power-Hold Supervision & Hardware Handshake Timeout
+- **Citations**: `boot_prototype.c:346`; ROM `0xFC05BA68`..`0xFC05BA8A` (`PORT25-ROM-STARTUP-TASKS`), ROM `0xFC135280`..`0xFC1352FF` (`PORT25-ROM-MPU-CONFIG`), ROM `0xFC05B8FE`..`0xFC05B90A` (`PORT25-ROM-STARTUP-TASKS`), `docs/PORT23_POWER_SUPERVISION.md:294-300`.
+- **Classification**: `[INFERRED]` as hardware power-supervision mechanism; `[UNKNOWN: external microcontroller firmware]` for internal protocol timing and firmware behaviour.
+- **Trigger Condition**: Power button pressed and released; sub-CPU hardware latch timeout expires or peripheral re-init drops latch before handshake.
+- **Supported Call Sites**:
+  1. In `sub_fc05b962_my`, line 346 calls `sub_fc05ba68` (`0xFC05BA68`), which calls `pxSetup`, `dhcpc_setup`, and branches to `mpuSetup` (`0xFC135280`) `[STATIC_VERIFIED: ROM 0xFC05BA68-0xFC05BA8A; PORT25-ROM-STARTUP-TASKS; ROM 0xFC135280; PORT25-ROM-MPU-CONFIG]`. This routine initializes serial peripheral communication with the camera's external microcontroller (sub-CPU/MPU).
+  2. In stock `task_Startup` (`0xFC05B8FC`), SIO and DC-DC communication drivers are initialized at `0xFC05B8FE..0xFC05B90A` immediately prior to `StartDiskboot` (`0xFC05B90E`) `[STATIC_VERIFIED: ROM 0xFC05B8FE-0xFC05B90A; PORT25-ROM-STARTUP-TASKS]`.
+- **Remaining UNKNOWN Protocol Details**:
+  1. The sub-CPU / PMIC controller runs independent proprietary microcontroller firmware outside the main ARM address space and not contained in `PRIMARY.BIN` `[UNKNOWN: external microcontroller firmware]`.
+  2. The exact handshake protocol, packet formats, heartbeat intervals, and autonomous power-rail cut-off timeout duration implemented in the sub-CPU firmware are `[UNKNOWN: external microcontroller firmware]`.
 - **Mechanism**:
-  1. `G3X_POWERON_FIX=1` forces `r0 = 1` and branches to `loc_fc05b978`, successfully bypassing `sub_fc05ba56` `[VERIFIED: boot_prototype.c:349]`.
-  2. However, line 349 **still called `sub_fc1284ac`** `[VERIFIED: boot_prototype.c:349]`.
-  3. Because the button was released, `sub_fc1284ac` jumped straight from `0xFC128504` to `0xFC12851A`, completely skipping `bl sub_fc08ecbc` at `0xFC128510` `[STATIC_VERIFIED: ROM 0xFC1284FC-0xFC12851A; PORT25-ROM-POWERON-CHECK]`.
-  4. `sub_fc08ecbc` is the start-cause recorder: in GM1.10C, it sets `*( *(0xFC08EEF0) + 12 ) = *(0x00009BC4 + 12) = *(0x00009BD0)` to `0x80000` (Power), `0x100000` (Play), `0x40000` (WiFi), or `0x20000` (GPIO2) `[STATIC_VERIFIED: ROM 0xFC08ECBC-0xFC08ECEC; PORT25-ROM-STARTCAUSE-SAVE; ROM 0xFC08EEF0; PORT25-ROM-STARTCAUSE-PTR]`.
-  5. Because `sub_fc08ecbc` was never called, `*(0x00009BD0)` remains unwritten `[INFERRED]`.
-  6. During `boot()`, Copy Loop 3 copied Low RAM data from ROM `[VERIFIED: boot_prototype.c:133-143]`. The Low RAM image bytes corresponding to `0x00009BD0` are initialized to all zeros (`0x00000000`) `[STATIC_VERIFIED]`.
-  7. Downstream tasks (such as `task_PhySw` or power management services during `sub_fc0d0126`) inspect `*(0x00009BD0)` (or call `sub_fc12851e` which loads the start cause) `[STATIC_VERIFIED: ROM 0xFC12851E-0xFC128522; PORT25-ROM-POWERON-CHECK]`.
-  8. If the start cause is `0x00000000`, the firmware detects an invalid boot factor (spurious wake without button press) and immediately initiates an orderly or emergency shutdown via `TurnOffE1_FW` (`0xFC0D01EC`) `[INFERRED]`.
-  9. **Historical Precedent**: In sister port G3 X 1.10E (`g3x_110e.patch:1681-1703`), ranma explicitly documented that `sub_fc1284ac` failed on warm boot and had to be replaced by manually writing `0x80000` into `*(0x9BC4 + 12)` `[VERIFIED: docs/PORT6C_CHDK_INTEGRATION_GAPS.md:42; docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md]`.
+  1. DIGIC 6 cameras rely on an external power management controller (sub-CPU) that latches the main DC-DC rails when the Power button is pressed `[INFERRED: docs/PORT6A_POWERON_EVIDENCE.md:14-20]`.
+  2. If the sub-CPU requires continuous communication or if resetting the SoC peripheral registers drops the hardware latch before Stage 5 completes, the sub-CPU may cut power autonomously `[INFERRED]`.
+- **Likelihood & Breadcrumbs**: Ranked **Rank 2** (Plausible Alternative for Both Builds). Breadcrumbs `STAGE_BC_PRE_MPU_SETUP` (line 346) and `STAGE_BC_POST_MPU_SETUP` (line 347) can isolate whether power drops before or after sub-CPU communication is initialized.
 
 ---
 
 ### Candidate 3: Hardware Watchdog Timer Expiry (`sub_fc418f2a` / `StartWDT_FW`)
 - **Citations**: `boot_prototype.c:408`; ROM `0xFC418F2A` (`PORT25-ROM-WATCHDOG-START`), ROM `0xFC135C00`..`0xFC135E3F` (`PORT25-ROM-WATCHDOG-MODULE`), MMIO `0xD20A0000`, MMIO `0xD20A0004`.
-- **Classification**: `[STATIC_VERIFIED]` in ROM disassembly; `[INFERRED]` as hardware watchdog expiration mechanism.
-- **Trigger Condition**: Boot sequence takes longer than ~2.0 seconds after line 408, or any task stalls before `task_WdtReset` runs.
-- **Mechanism**:
-  1. In `task_Startup_my`, line 408 calls `sub_fc418f2a` (`0xFC418F2A`) `[VERIFIED: boot_prototype.c:408]`.
-  2. `sub_fc418f2a` configures parameters (`r0=2, r1=4`), initializes watchdog subsystem via `sub_fc135ccc`, and invokes `StartWDT_FW` (`0xFC135D2C`) `[STATIC_VERIFIED: ROM 0xFC418F2A-0xFC418F38; PORT25-ROM-WATCHDOG-START; ROM 0xFC135D2C; PORT25-ROM-WATCHDOG-MODULE]`.
-  3. `StartWDT_FW` arms the DIGIC 6 hardware watchdog controller at MMIO `0xD20A0000` with a countdown window of ~2.0 seconds `[STATIC_VERIFIED: ROM 0xFC135D2C, 0xFC135DFC; PORT25-ROM-WATCHDOG-MODULE]`.
-  4. In stock Canon operation, the watchdog is kept alive by `task_WdtReset` (`0xFC135CB0`), which sleeps for 2000 ms (`SleepTask(2000)` at `0xFC135CC6`) and resets the hardware timer by writing `0xAA55` to MMIO `0xD20A0004` `[STATIC_VERIFIED: ROM 0xFC135CB0-0xFC135CC8; PORT25-ROM-WATCHDOG-MODULE]`.
-  5. If `task_WdtReset` is delayed, blocked by higher priority tasks, or if execution stalls anywhere after line 408, the watchdog expires, triggering interrupt `WdtInt` (`0xFC135C14`) and forcing an immediate hardware reset or sub-CPU power shutdown `[STATIC_VERIFIED: ROM 0xFC135C14; PORT25-ROM-WATCHDOG-MODULE]`.
-- **Physical Evidence**: Observed in owner trial Observation (b), where an artificial multi-second stall resulted in the green LED staying on for several seconds before the camera shut down `[OWNER-REPORTED]`.
+- **Classification**: `[STATIC_VERIFIED]` in ROM disassembly; `[UNKNOWN]` for hardware countdown duration and physical expiration effect.
+- **Trigger Condition**: Boot sequence execution stalls after line 408 or `task_WdtReset` is delayed beyond the hardware timeout.
+- **Detailed Architectural Analysis**:
+  1. **Software Servicing**: In `task_Startup_my`, line 408 calls `sub_fc418f2a` (`0xFC418F2A`), which configures parameters and invokes `StartWDT_FW` (`0xFC135D2C`) `[STATIC_VERIFIED: ROM 0xFC418F2A; PORT25-ROM-WATCHDOG-START; ROM 0xFC135D2C; PORT25-ROM-WATCHDOG-MODULE]`. In stock operation, `task_WdtReset` (`0xFC135CB0`) loops indefinitely, executing `SleepTask(2000)` at `0xFC135CC6` and resetting the hardware counter by writing `0xAA55` to MMIO `0xD20A0004` `[STATIC_VERIFIED: ROM 0xFC135CB0-0xFC135CC8; PORT25-ROM-WATCHDOG-MODULE]`. **`SleepTask(2000)` is the verified software service interval, NOT the hardware expiry deadline** `[VERIFIED]`.
+  2. **Hardware Expiry Timing**: `StartWDT_FW` writes control parameters to MMIO `0xD20A0000` `[STATIC_VERIFIED: ROM 0xFC135D2C, 0xFC135DFC; PORT25-ROM-WATCHDOG-MODULE]`. The exact countdown clock divisor, countdown duration, and hardware expiry deadline in milliseconds are `[UNKNOWN]` without hardware register documentation.
+  3. **Diagnostic Handling**: During watchdog initialization in `sub_fc135ccc`, interrupt vector 395 (`0x18B`, `"WdtInt"`) is registered with handler function `0xFC135C92` (Thumb address `0xFC135C93`) at `0xFC135CEE-0xFC135CF6` `[STATIC_VERIFIED: ROM 0xFC135CEA-0xFC135CF6, 0xFC135E04, 0xFC135E08; PORT25-ROM-WATCHDOG-MODULE]`. When the watchdog interrupt triggers, handler `WdtInt` at `0xFC135C92` clears the interrupt bit at MMIO `0xD20A0000` and dispatches diagnostic trace routine `0xFC135C14` (`0xFC135C15`) to DryOS `[STATIC_VERIFIED: ROM 0xFC135C92-0xFC135CAC, 0xFC135E00; PORT25-ROM-WATCHDOG-MODULE]`.
+  4. **Unknown Hardware Effect**: Whether unserviced timer expiration forces an immediate SoC hardware reset, an NMI exception, a bus hang, or an external sub-CPU power shutdown is `[UNKNOWN]`.
+  5. **Correction Regarding Loader Stall**: Earlier physical trials observed that an artificial multi-second stall in the loader resulted in a shutdown. Because that stall occurred during loader execution, strictly *before* `task_Startup_my` was created and *before* `sub_fc418f2a` armed the watchdog at line 408, it could not have been caused by this watchdog `[VERIFIED: docs/PORT23_POWER_SUPERVISION.md:280]`.
+- **Likelihood & Breadcrumbs**: Ranked **Rank 3** (Plausible if execution stalls after line 408). Breadcrumbs `STAGE_BC_PRE_WATCHDOG_START` (line 408) and `STAGE_BC_POST_WATCHDOG_START` (line 409) isolate watchdog activation.
 
 ---
 
-### Candidate 4: `task_PhySw` Button Release / Button Event Dispatch
+### Candidate 4: Startup Cause at `0x00009BD0` (Bypassed `sub_fc08ecbc`)
+- **Citations**: `boot_prototype.c:349` (`G3X_POWERON_FIX=1`); ROM `0xFC128504-0xFC12851A` (`PORT25-ROM-POWERON-CHECK`), ROM `0xFC08ECBC-0xFC08ECEC` (`PORT25-ROM-STARTCAUSE-SAVE`), ROM `0xFC08EEF0` (`PORT25-ROM-STARTCAUSE-PTR`), ROM `0xFC12851E-0xFC128522` (`PORT25-ROM-POWERON-CHECK`).
+- **Classification**: `[STATIC_VERIFIED]` for ROM disassembly of `sub_fc1284ac` and `sub_fc08ecbc`; `[UNKNOWN]` for initial Low RAM value and downstream consumer/shutdown edge; `[INFERRED]` as unverified boot-factor hypothesis.
+- **Trigger Condition**: `G3X_POWERON_FIX=1` active on a short press.
+- **Mechanism & Unknowns**:
+  1. `G3X_POWERON_FIX=1` forces `r0 = 1` and branches to `loc_fc05b978`, successfully bypassing `sub_fc05ba56` `[VERIFIED: boot_prototype.c:349]`.
+  2. However, line 349 **still called `sub_fc1284ac`** `[VERIFIED: boot_prototype.c:349]`.
+  3. Because the button was released, `sub_fc1284ac` jumped straight from `0xFC128504` to `0xFC12851A`, completely skipping `bl sub_fc08ecbc` at `0xFC128510` `[STATIC_VERIFIED: ROM 0xFC1284FC-0xFC12851A; PORT25-ROM-POWERON-CHECK]`.
+  4. `sub_fc08ecbc` is the start-cause recorder: in GM1.10C, it sets `*( *(0xFC08EEF0) + 12 ) = *(0x00009BC4 + 12) = *(0x00009BD0)` to `0x80000` (Power), `0x100000` (Play), `0x40000` (WiFi), or `0x20000` (GPIO2) `[STATIC_VERIFIED: ROM 0xFC08ECBC-0xFC08ECEC; PORT25-ROM-STARTCAUSE-SAVE; ROM 0xFC08EEF0; PORT25-ROM-STARTCAUSE-PTR]`.
+  5. Because `sub_fc08ecbc` was never called, `*(0x00009BD0)` is not updated. During `boot()`, Copy Loop 3 copied Low RAM data from ROM source bytes into `0x00008000`..`0x0003F4F4` `[VERIFIED: boot_prototype.c:133-143]`. Because the ROM source bytes copied to `0x00009BD0` are not covered by an evidence manifest range, the start-cause word's initial value after `boot()` is `[UNKNOWN]` (rather than known zero; cf. `docs/PORT24_POWERON_FIX.md:246`).
+  6. Getter function `sub_fc12851e` (`0xFC12851E`) returns `*(0x00009BD0)` `[STATIC_VERIFIED: ROM 0xFC12851E-0xFC128522; PORT25-ROM-POWERON-CHECK]`. However, which downstream tasks consume this value and whether an uninitialized or unrecognized value causes an orderly shutdown or error are `[UNKNOWN]` (no bounded control-flow edge to shutdown is mapped).
+  7. **Historical Precedent**: In sister port G3 X 1.10E (`g3x_110e.patch:1681-1703`), ranma explicitly documented that `sub_fc1284ac` failed on warm boot and had to be replaced by manually writing `0x80000` into `*(0x9BC4 + 12)` `[VERIFIED: docs/PORT6C_CHDK_INTEGRATION_GAPS.md:42; docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md]`. Whether GM1.10C requires this or shuts down without it remains `[UNKNOWN]`.
+- **Likelihood & Breadcrumbs**: Ranked **Rank 4** (Unverified Downstream Hypothesis for Opt-In Build). Re-ranked lower because claims regarding the initial value and shutdown edges are UNKNOWN.
+
+---
+
+### Candidate 5: `task_PhySw` Button Release / Button Event Dispatch
 - **Citations**: `boot_prototype.c:413`; ROM `0xFC1283D2` (`PORT25-ROM-PHYSW-TASK`), ROM `0xFC1283AD` (`task_PhySw` in `PORT25-ROM-PHYSW-TASK`), ROM `0xFC128680`..`0xFC12877F` (`PORT25-ROM-PHYSW-LITERALS`).
-- **Classification**: `[STATIC_VERIFIED]` in ROM disassembly; `[INFERRED]` as runtime button supervision mechanism.
+- **Classification**: `[STATIC_VERIFIED]` in ROM disassembly; `[INFERRED]` as runtime button supervision mechanism; `[UNKNOWN]` for downstream event handling.
 - **Trigger Condition**: Physical button state transition detected after `task_PhySw` starts.
 - **Mechanism**:
   1. `task_Startup_my` invokes `sub_fc1283d2` at line 413 `[VERIFIED: boot_prototype.c:413]`.
@@ -225,42 +247,38 @@ Multiple DryOS tasks are spawned during the post-loader sequence:
   3. `task_PhySw` enters an infinite polling loop `sub_fc12868c`, sampling switches and buttons and storing normalized status masks into RAM `0x00040DAC` `[STATIC_VERIFIED: ROM 0xFC1283B0-0xFC1283C8, 0xFC12868C-0xFC128700, 0xFC128720; PORT25-ROM-PHYSW-TASK; PORT25-ROM-PHYSW-LITERALS]`.
   4. If `task_PhySw` determines that a button was released prematurely during startup, or if it dispatches a button event that triggers an early shutdown property, power could be cut downstream `[INFERRED]`.
   5. However, `task_PhySw` operates as a standard input event generator rather than an immediate power-cut gate `[INFERRED]`.
+- **Likelihood**: Ranked **Rank 5** (Medium).
 
 ---
 
-### Candidate 5: Canon Firmware Continuation Safety Interlocks (`sub_fc0d0126` -> `TurnOffE1_FW`)
+### Candidate 6: Downstream Canon Firmware Interlocks & Orderly Shutdown (`TurnOffE1_FW`)
 - **Citations**: `boot_prototype.c:438`; ROM `0xFC0D0126`, `0xFC0D01EC` (`PORT25-ROM-FIRMWARE-CONT`), ROM `0xFC0D73C4` (`PORT25-ROM-GPIO-WRITE-MMIO`).
-- **Classification**: `[STATIC_VERIFIED]` in ROM disassembly; `[INFERRED]` as downstream safety shutdown path.
-- **Trigger Condition**: Battery door open, SD card door open, low battery voltage, or hardware interlock failure during stock continuation.
-- **Mechanism**:
+- **Classification**: `[STATIC_VERIFIED]` for function bodies in ROM disassembly; `[UNKNOWN]` for trigger conditions and reachability edges from `sub_fc0d0126`.
+- **Trigger Condition**: Potential hardware interlocks (e.g. battery door, SD card door, low voltage) or shutdown property events during stock continuation.
+- **Mechanism & Reachability Analysis**:
   1. At `boot_prototype.c:438`, `task_Startup_my` branches to `sub_fc0d0126` `[VERIFIED: boot_prototype.c:438]`.
-  2. Stock firmware continues driver initialization, querying battery door switches (`sub_fc05c4e0`), battery voltage, and lens sensors `[STATIC_VERIFIED: ROM 0xFC05C4E0; PORT25-ROM-CARD-SWITCHES]`.
-  3. If any interlock fails, stock firmware invokes `TurnOffE1_FW` (`0xFC0D01EC`) `[STATIC_VERIFIED: ROM 0xFC0D01EC; PORT25-ROM-FIRMWARE-CONT]`.
-  4. `TurnOffE1_FW` disables interrupts via `sub_fc31befc` (`cpsid if` at `0xFC0D01F2`), stops the watchdog via `sub_fc135d9a` (`0xFC0D01F6`), writes `0x004C0003` to GPIO 0x67 at `0xFC0D0202` via `GPIO_Write` (`0xFC0D73C4`), and enters an infinite hang loop `b.n 0xfc0d0206` at `0xFC0D0206` `[STATIC_VERIFIED: ROM 0xFC0D01EC-0xFC0D0206; PORT25-ROM-FIRMWARE-CONT; ROM 0xFC0D73C4; PORT25-ROM-GPIO-WRITE-MMIO]`.
-  5. Since the camera booted to UI when the button was held (Observation O1), these interlocks pass under normal physical conditions `[INFERRED: Observation O1]`.
+  2. Disassembly of `sub_fc0d0126` (`0xFC0D0126`..`0xFC0D014C`) reveals that it only performs internal counter bookkeeping at Low RAM `0x00008380` and branches out `[STATIC_VERIFIED: ROM 0xFC0D0126-0xFC0D014C; PORT25-ROM-FIRMWARE-CONT]`. It does not directly perform sensor checks or call shutdown functions.
+  3. `TurnOffE1_FW` (`0xFC0D01EC`) is an independent shutdown helper that disables interrupts at `0xFC0D01F2`, stops the watchdog via `sub_fc135d9a` (`0xFC0D01F6`), writes `0x004C0003` to GPIO 0x67 at `0xFC0D0202` via `GPIO_Write` (`0xFC0D73C4`), and enters an infinite halt loop at `0xFC0D0206` `[STATIC_VERIFIED: ROM 0xFC0D01EC-0xFC0D0206; PORT25-ROM-FIRMWARE-CONT; ROM 0xFC0D73C4; PORT25-ROM-GPIO-WRITE-MMIO]`.
+  4. However, no bounded control-flow evidence is cited connecting `sub_fc0d0126` to `TurnOffE1_FW`, nor showing that battery door, SD card door, or lens sensor failures call `TurnOffE1_FW`. The trigger conditions and reachability from `sub_fc0d0126` are therefore `[UNKNOWN]`.
+  5. In physical Observation O1, the camera booted to the stock user interface when the button was held down, proving that standard hardware interlocks pass under normal operating conditions `[INFERRED: Observation O1]`.
+- **Likelihood**: Ranked **Rank 6** (Low).
 
 ---
 
-### Candidate 6: Initial Task Stage 4 Subsystem Failures (`sub_fc05b558_my` -> `sub_fc05b5ea`)
+### Candidate 7: Initial Task Stage 4 Subsystem Failures (`sub_fc05b5ea`)
 - **Citations**: `boot_prototype.c:280-330`; ROM `0xFC05B540`..`0xFC05B73F` (`PORT25-ROM-INIT-TASK`).
 - **Classification**: `[STATIC_VERIFIED]` in ROM disassembly; `[INFERRED]` as non-power-cut halt path.
 - **Trigger Condition**: Failure of USER_MEM check or any subsystem initialization in Stage 4.
 - **Mechanism**:
-  1. In Stage 4, seven sequential subsystem calls are checked:
-     - USER_MEM size check: `[0x80EC] >= [0x8074] + 0x10` (`boot_prototype.c:274-282`)
-     - `dmSetup` (`boot_prototype.c:293-297`)
-     - `termDriverInit` (`boot_prototype.c:299-303`)
-     - `termDeviceCreate` (`boot_prototype.c:305-310`)
-     - `stdioSetup` (`boot_prototype.c:312-317`)
-     - `stdlibSetup` (`boot_prototype.c:319-323`)
-     - `extlib_setup` (`boot_prototype.c:325-329`)
+  1. In Stage 4, seven sequential subsystem calls are checked: USER_MEM size, `dmSetup`, `termDriverInit`, `termDeviceCreate`, `stdioSetup`, `stdlibSetup`, `extlib_setup` (`boot_prototype.c:280-330`).
   2. If any check fails, execution branches to `sub_fc05b5ea` (`0xFC05B5EA`) with an error string literal `[STATIC_VERIFIED: ROM 0xFC05B5EA; PORT25-ROM-INIT-TASK]`.
   3. `sub_fc05b5ea` logs an error message and enters an infinite halt loop `[STATIC_VERIFIED: ROM 0xFC05B5EA; PORT25-ROM-INIT-TASK]`.
   4. This does not write to GPIO 0x67 (does not cut power directly), and all checks are known to succeed empirically in Observation O1 `[INFERRED]`.
+- **Likelihood**: Ranked **Rank 7** (Negligible).
 
 ---
 
-### Candidate 7: Heap Headroom Check Failure in `sub_fc05b3c8_my`
+### Candidate 8: Heap Headroom Check Failure in `sub_fc05b3c8_my`
 - **Citations**: `boot_prototype.c:184-191`; ROM `0xFC05B3C8`..`0xFC05B3DA` (`PORT25-ROM-HEAP-SETUP`).
 - **Classification**: `[STATIC_VERIFIED]` in source code and ROM disassembly; `[INFERRED]` as non-power-cut halt path.
 - **Trigger Condition**: Insufficient DryOS heap headroom (`0x006CE000 - new_sa < 0x000B1FEC`).
@@ -268,6 +286,7 @@ Multiple DryOS tasks are spawned during the post-loader sequence:
   1. `sub_fc05b3c8_my` checks if `0x006CE000 - r4 >= 0x000B1FEC` (712 KiB) `[VERIFIED: boot_prototype.c:184-188]`.
   2. If headroom fails, it branches to `loc_fc05b3d8: b loc_fc05b3d8` (infinite spin loop) `[VERIFIED: boot_prototype.c:189-191]`.
   3. With `new_sa = 0x00366CB0`, headroom is ~3.4 MiB, far exceeding 712 KiB. This check statically passes and does not cut power `[VERIFIED]`.
+- **Likelihood**: Ranked **Rank 8** (Negligible).
 
 ---
 
@@ -278,12 +297,13 @@ The table below summarizes all post-loader candidate points that can cut power o
 | Rank | Candidate Name | Code & ROM Citation | Active Condition | Failure / Power-Cut Action | Epistemic Status & Likelihood |
 |:---:|---|---|---|---|:---:|
 | **1** | Native Button Check & Power Cut in `sub_fc05b962_my` | `boot_prototype.c:351-354`<br>ROM `0xFC05B96C-0xFC05B976`<br>`PORT25-ROM-STARTUP-TASKS`<br>ROM `0xFC1284BC-0xFC12851A`<br>`PORT25-ROM-POWERON-CHECK` | Default build (`G3X_POWERON_FIX=0`); button released before Stage 5 runs | `sub_fc1284ac` returns `0`; `sub_fc05b962_my` calls `sub_fc05ba56` (`0xFC05BA56`), writing `0x004C0003` to GPIO 0x67 (`0xD20B099C`), cutting DC-DC power and hanging at `0xFC05B976` | `[STATIC_VERIFIED]` in ROM<br>`[INFERRED]` as root cause<br>**Rank 1 (Definitive for Default Build)** |
-| **2** | Unwritten Startup Cause at `0x00009BD0` (Bypassed `sub_fc08ecbc`) | `boot_prototype.c:349`<br>ROM `0xFC128504-0xFC12851A`<br>`PORT25-ROM-POWERON-CHECK`<br>ROM `0xFC08ECBC-0xFC08ECEC`<br>`PORT25-ROM-STARTCAUSE-SAVE`<br>ROM `0xFC08EEF0`<br>`PORT25-ROM-STARTCAUSE-PTR` | Opt-in build (`G3X_POWERON_FIX=1`); button released before line 349 runs | `sub_fc1284ac` skips `bl sub_fc08ecbc` at `0xFC128510`, leaving `*(0x00009BD0)` zeroed (`0x00000000`). Downstream tasks detect invalid boot factor and trigger shutdown via `TurnOffE1_FW` (`0xFC0D01EC`) | `[STATIC_VERIFIED]` in ROM<br>`[INFERRED]` as leading fix blocker<br>**Rank 2 (Very High for Opt-In Build)** |
-| **3** | Hardware Watchdog Expiry (`sub_fc418f2a` / `StartWDT_FW`) | `boot_prototype.c:408`<br>ROM `0xFC418F2A`<br>`PORT25-ROM-WATCHDOG-START`<br>ROM `0xFC135D2C`<br>`PORT25-ROM-WATCHDOG-MODULE`<br>MMIO `0xD20A0000` | Post-loader boot delay or execution stall exceeding ~2.0 s after line 408 | Hardware watchdog countdown timer underflows, triggering `WdtInt` (`0xFC135C14`) and forcing hardware reset or sub-CPU power shutdown | `[STATIC_VERIFIED]` in ROM<br>`[INFERRED]` as timeout mechanism<br>**Rank 3 (Medium-High if stalled)** |
-| **4** | `task_PhySw` Button Release / Button Event Dispatch | `boot_prototype.c:413`<br>ROM `0xFC1283D2`<br>`PORT25-ROM-PHYSW-TASK`<br>ROM `0xFC1283AD`<br>`PORT25-ROM-PHYSW-TASK`<br>ROM `0xFC12868C`<br>`PORT25-ROM-PHYSW-LITERALS` | `task_PhySw` polling loop running after line 413 | If `task_PhySw` interprets early button release as an immediate power-down request rather than normal power-on release | `[STATIC_VERIFIED]` in ROM<br>`[INFERRED]` as event mechanism<br>**Rank 4 (Medium)** |
-| **5** | Canon Firmware Continuation Interlocks (`TurnOffE1_FW`) | `boot_prototype.c:438`<br>ROM `0xFC0D0126`<br>`PORT25-ROM-FIRMWARE-CONT`<br>ROM `0xFC0D01EC`<br>`PORT25-ROM-FIRMWARE-CONT`<br>ROM `0xFC0D73C4`<br>`PORT25-ROM-GPIO-WRITE-MMIO` | Battery door open, SD card door open, low battery voltage, or hardware interlock failure | Downstream Canon initialization calls `TurnOffE1_FW` (`0xFC0D01EC`), writing `0x004C0003` to GPIO 0x67 and halting | `[STATIC_VERIFIED]` in ROM<br>`[INFERRED]` downstream path<br>**Rank 5 (Low-Medium; passes in O1)** |
-| **6** | Initial Task Stage 4 Subsystem Failures (`sub_fc05b5ea`) | `boot_prototype.c:280-330`<br>ROM `0xFC05B540-0xFC05B73F`<br>`PORT25-ROM-INIT-TASK` | USER_MEM check failure or driver setup error (< 0) in Stage 4 | Calls `sub_fc05b5ea` (`0xFC05B5EA`) with error literal, logging error and halting. Does not cut GPIO 0x67 power directly | `[STATIC_VERIFIED]` in ROM<br>`[INFERRED]` non-power-cut halt<br>**Rank 6 (Negligible; passes in O1)** |
-| **7** | Heap Headroom Failure in `sub_fc05b3c8_my` | `boot_prototype.c:184-191`<br>ROM `0xFC05B3C8`<br>`PORT25-ROM-HEAP-SETUP` | DryOS heap headroom < 712 KiB | Enters infinite spin loop `b loc_fc05b3d8` at `boot_prototype.c:190`. Does not cut GPIO 0x67 power directly | `[STATIC_VERIFIED]` in source<br>`[INFERRED]` non-power-cut halt<br>**Rank 7 (Negligible; passes in O1)** |
+| **2** | Sub-CPU Power-Hold Supervision & Hardware Handshake Timeout | `boot_prototype.c:346`<br>ROM `0xFC05BA68-0xFC05BA8A`<br>`PORT25-ROM-STARTUP-TASKS`<br>ROM `0xFC135280-0xFC1352FF`<br>`PORT25-ROM-MPU-CONFIG`<br>ROM `0xFC05B8FE-0xFC05B90A`<br>`PORT25-ROM-STARTUP-TASKS` | Both builds; button released on short press before sub-CPU handshake established | Sub-CPU hardware latch drops DC-DC power rails autonomously if handshake packet not exchanged before internal timeout | `[INFERRED]` power supervision<br>`[UNKNOWN: external microcontroller firmware]`<br>**Rank 2 (Plausible Alternative for Both Builds)** |
+| **3** | Hardware Watchdog Timer Expiry (`sub_fc418f2a` / `StartWDT_FW`) | `boot_prototype.c:408`<br>ROM `0xFC418F2A`<br>`PORT25-ROM-WATCHDOG-START`<br>ROM `0xFC135C00-0xFC135E3F`<br>`PORT25-ROM-WATCHDOG-MODULE`<br>MMIO `0xD20A0000` | Post-loader boot delay or execution stall after line 408 | Hardware watchdog countdown timer underflows, triggering `WdtInt` (`0xFC135C92`) and causing hardware reset or power cut | `[STATIC_VERIFIED]` in ROM<br>`[UNKNOWN]` hardware effect<br>**Rank 3 (Plausible if Stalled After Line 408)** |
+| **4** | Startup Cause at `0x00009BD0` (Bypassed `sub_fc08ecbc`) | `boot_prototype.c:349`<br>ROM `0xFC128504-0xFC12851A`<br>`PORT25-ROM-POWERON-CHECK`<br>ROM `0xFC08ECBC-0xFC08ECEC`<br>`PORT25-ROM-STARTCAUSE-SAVE`<br>ROM `0xFC08EEF0`<br>`PORT25-ROM-STARTCAUSE-PTR` | Opt-in build (`G3X_POWERON_FIX=1`); button released before line 349 runs | `sub_fc1284ac` skips `bl sub_fc08ecbc` at `0xFC128510`, leaving `*(0x00009BD0)` unwritten. Initial value is UNKNOWN; whether downstream tasks require it or shut down is UNKNOWN | `[STATIC_VERIFIED]` in ROM<br>`[UNKNOWN]` initial value & shutdown edge<br>`[INFERRED]` downstream risk<br>**Rank 4 (Unverified Downstream Hypothesis)** |
+| **5** | `task_PhySw` Button Release / Button Event Dispatch | `boot_prototype.c:413`<br>ROM `0xFC1283D2`<br>`PORT25-ROM-PHYSW-TASK`<br>ROM `0xFC1283AD`<br>`PORT25-ROM-PHYSW-TASK`<br>ROM `0xFC12868C`<br>`PORT25-ROM-PHYSW-LITERALS` | `task_PhySw` polling loop running after line 413 | If `task_PhySw` interprets early button release as an immediate power-down request rather than normal power-on release | `[STATIC_VERIFIED]` in ROM<br>`[INFERRED]` event mechanism<br>`[UNKNOWN]` event handling<br>**Rank 5 (Medium; input event generator)** |
+| **6** | Downstream Canon Firmware Interlocks & Orderly Shutdown (`TurnOffE1_FW`) | `boot_prototype.c:438`<br>ROM `0xFC0D0126`<br>`PORT25-ROM-FIRMWARE-CONT`<br>ROM `0xFC0D01EC`<br>`PORT25-ROM-FIRMWARE-CONT`<br>ROM `0xFC0D73C4`<br>`PORT25-ROM-GPIO-WRITE-MMIO` | Battery door open, SD card door open, low battery voltage, or hardware interlock failure | Downstream Canon initialization calls `TurnOffE1_FW` (`0xFC0D01EC`), writing `0x004C0003` to GPIO 0x67 and halting | `[STATIC_VERIFIED]` in ROM<br>`[UNKNOWN]` call edge from continuation<br>**Rank 6 (Low; passes in Observation O1)** |
+| **7** | Initial Task Stage 4 Subsystem Failures (`sub_fc05b5ea`) | `boot_prototype.c:280-330`<br>ROM `0xFC05B540-0xFC05B73F`<br>`PORT25-ROM-INIT-TASK` | USER_MEM check failure or driver setup error (< 0) in Stage 4 | Calls `sub_fc05b5ea` (`0xFC05B5EA`) with error literal, logging error and halting. Does not cut GPIO 0x67 power directly | `[STATIC_VERIFIED]` in ROM<br>`[INFERRED]` non-power-cut halt<br>**Rank 7 (Negligible; passes in Observation O1)** |
+| **8** | Heap Headroom Failure in `sub_fc05b3c8_my` | `boot_prototype.c:184-191`<br>ROM `0xFC05B3C8`<br>`PORT25-ROM-HEAP-SETUP` | DryOS heap headroom < 712 KiB | Enters infinite spin loop `b loc_fc05b3d8` at `boot_prototype.c:190`. Does not cut GPIO 0x67 power directly | `[STATIC_VERIFIED]` in source<br>`[INFERRED]` non-power-cut halt<br>**Rank 8 (Negligible; passes in Observation O1)** |
 
 ---
 
@@ -299,8 +319,11 @@ To allow Task T3 to instrument `boot_prototype.c` with LED flash breadcrumbs and
 | `STAGE_BC_PRE_KERNEL_INIT` | `boot_prototype.c:255` | Immediately before `blx sub_fc31b408` (dispatch to DryOS kernel init) | Confirms DryOS memory descriptors populated |
 | `STAGE_BC_STAGE4_ENTRY` | `boot_prototype.c:272` | Entry to `sub_fc05b558_my` immediately after `push {r4, lr}` | Confirms DryOS kernel scheduled and dispatched Initial Task |
 | `STAGE_BC_STAGE5_ENTRY` | `boot_prototype.c:345` | Entry to `sub_fc05b962_my` immediately after `push {r3, lr}` | Confirms Stage 4 driver initialization passed and Stage 5 reached |
+| `STAGE_BC_PRE_MPU_SETUP` | `boot_prototype.c:346` | Immediately before `bl sub_fc05ba68` (`mpuSetup`) | Confirms entry to hardware peripheral / sub-CPU setup (Candidate 2) |
+| `STAGE_BC_POST_MPU_SETUP` | `boot_prototype.c:347` | Immediately after `bl sub_fc05ba68`, before `bl sub_fc079404` | Confirms sub-CPU/MPU setup returned without latch drop (Candidate 2) |
 | `STAGE_BC_PRE_POWER_CHECK` | `boot_prototype.c:348` | Immediately before `bl sub_fc1284ac` in `sub_fc05b962_my` | Confirms execution reached the power-on button check gate |
-| `STAGE_BC_POWER_CHECK_FAIL` | `boot_prototype.c:356` | Inside `loc_fc05b976` (shutdown path) before or after `sub_fc05ba56` | Proves whether default build branched to `sub_fc05ba56` power cut (Candidate 1) |
+| `STAGE_BC_POWER_CHECK_FAIL` | `boot_prototype.c:354` | Immediately before `bl sub_fc05ba56` in default build | Proves native button check evaluated released (`r0 == 0`) and selected power-cut branch BEFORE GPIO 0x67 MMIO write (Candidate 1) |
+| `STAGE_BC_POWER_CUT_HALT` | `boot_prototype.c:356` | At label `loc_fc05b976` immediately after `bl sub_fc05ba56` | Reached only if `sub_fc05ba56` returns to caller without instantaneous power loss, entering post-cut infinite halt loop `b loc_fc05b976` (Candidate 1) |
 | `STAGE_BC_POWER_CHECK_PASS` | `boot_prototype.c:358` | Inside `loc_fc05b978` immediately before `blx sub_fc31b460` | Proves whether button check passed (or opt-in fix branched past power cut) |
 | `STAGE_BC_PRE_CREATE_STARTUP` | `boot_prototype.c:369` | Immediately before `blx sub_fc31bbc4` in `sub_fc05b962_my` | Confirms ARAM heap init passed and ready to create "Startup" task |
 | `STAGE_BC_POST_CREATE_STARTUP` | `boot_prototype.c:371` | Immediately after `blx sub_fc31bbc4` in `sub_fc05b962_my` | Confirms DryOS CreateTask successfully registered "Startup" task |
@@ -310,8 +333,13 @@ To allow Task T3 to instrument `boot_prototype.c` with LED flash breadcrumbs and
 | `STAGE_BC_PRE_WATCHDOG_START` | `boot_prototype.c:408` | Immediately before `bl sub_fc418f2a` in `task_Startup_my` | Confirms execution reached point immediately before watchdog arming |
 | `STAGE_BC_POST_WATCHDOG_START` | `boot_prototype.c:409` | Immediately after `bl sub_fc418f2a` in `task_Startup_my` | Confirms hardware watchdog is actively armed and ticking (Candidate 3) |
 | `STAGE_BC_PRE_PHYSW_CREATE` | `boot_prototype.c:413` | Immediately before `bl sub_fc1283d2` in `task_Startup_my` | Confirms pre-PhySw driver initialization completed |
-| `STAGE_BC_POST_PHYSW_CREATE` | `boot_prototype.c:414` | Immediately after `bl sub_fc1283d2` in `task_Startup_my` | Confirms `task_PhySw` spawned and running (Candidate 4) |
+| `STAGE_BC_POST_PHYSW_CREATE` | `boot_prototype.c:414` | Immediately after `bl sub_fc1283d2` in `task_Startup_my` | Confirms `task_PhySw` spawned and running (Candidate 5) |
 | `STAGE_BC_PRE_FIRMWARE_CONT` | `boot_prototype.c:438` | Immediately before `b.w sub_fc0d0126` in `task_Startup_my` | Confirms CHDK prototype startup complete; handing off to stock firmware |
+
+### Distinction Between `STAGE_BC_POWER_CHECK_FAIL` and `STAGE_BC_POWER_CUT_HALT`
+Crucially, two separate breadcrumb stages are defined around the Candidate 1 power-cut call:
+1. **`STAGE_BC_POWER_CHECK_FAIL` (line 354)** is situated directly after the conditional branch `cbnz r0, loc_fc05b978` falls through, **immediately preceding** `bl sub_fc05ba56`. Because DC-DC power to the SoC has not yet been de-asserted, this breadcrumb will flash reliably if `sub_fc1284ac` returned `0`, proving definitively that execution entered the failure path.
+2. **`STAGE_BC_POWER_CUT_HALT` (line 356)** is situated at label `loc_fc05b976`, **immediately following** `bl sub_fc05ba56`. If the MMIO write to GPIO 0x67 triggers an immediate hardware rail drop, power will extinguish before or during the return from `sub_fc05ba56`, and `STAGE_BC_POWER_CUT_HALT` will never execute. Conversely, if power remains latched until the CPU spins in `loc_fc05b976`, `STAGE_BC_POWER_CUT_HALT` will flash. This allows Task T3 to empirically distinguish instantaneous hardware rail drops from post-call spin loops.
 
 ---
 
@@ -345,7 +373,7 @@ To allow Task T3 to instrument `boot_prototype.c` with LED flash breadcrumbs and
 | `PORT25-ROM-POWERON-CHECK` | `0xFC1284A0` | `0xFC1285DF` | 320 B | `634fd848e765cad5b01737956e6aea9ddd12dbb4413213ec2a9c3d2a421813d4` | `[STATIC_VERIFIED]` `sub_fc1284ac` button check (samples GPIO 0x97, 0x98, 0x88, 0x02) |
 | `PORT25-ROM-PHYSW-LITERALS` | `0xFC128680` | `0xFC12877F` | 256 B | `60db72e096ddc7915f3f0bea545cde955da38224ab8fb06297631462fe8c8572` | `[STATIC_VERIFIED]` `sub_fc12868c` sampling loop, literal `"PhySw"`, `"PhySwDrv.c"` **[NEW READ: 256 B]** |
 | `PORT25-ROM-MPU-CONFIG` | `0xFC135280` | `0xFC1352FF` | 128 B | `3327ae3b2b5508a96aeab70b4076fd83fa199ae9c77d550475bd4effef5f5a5c` | `[STATIC_VERIFIED]` MPU configuration `0xFC135280` called from `sub_fc05ba68` |
-| `PORT25-ROM-WATCHDOG-MODULE` | `0xFC135C00` | `0xFC135E3F` | 576 B | `29a0c9a8b406aa86a8a971d6d0032273fbaa22510c224dfb9742284e643de9cb` | `[STATIC_VERIFIED]` `WatchDog.c`: `WdtInt` (`0xFC135C14`), `StartWDT_FW` (`0xFC135D2C`), `task_WdtReset` |
+| `PORT25-ROM-WATCHDOG-MODULE` | `0xFC135C00` | `0xFC135E3F` | 576 B | `29a0c9a8b406aa86a8a971d6d0032273fbaa22510c224dfb9742284e643de9cb` | `[STATIC_VERIFIED]` `WatchDog.c`: `WdtInt` (`0xFC135C92`), `StartWDT_FW` (`0xFC135D2C`), `task_WdtReset` |
 | `PORT25-ROM-SD1STINIT-VENEER` | `0xFC31B1E0` | `0xFC31B21F` | 64 B | `6122841f084da666089820aacae31c016345c903d8dc7e29f1029e23d5c89bed` | `[STATIC_VERIFIED]` `sub_fc31b1f4` CreateTask veneer spawning "SD1stInit" **[NEW READ: 64 B]** |
 | `PORT25-ROM-KERNEL-INIT-VENEER` | `0xFC31B400` | `0xFC31B47F` | 128 B | `be7ee2c5d2b00286374e2ace906811cc775f0ff2d4c7e16d50855df8d0e589c4` | `[STATIC_VERIFIED]` DryOS kernel init veneer `sub_fc31b408`, memory allocate `sub_fc31b460` |
 | `PORT25-ROM-CREATETASK-VENEER` | `0xFC31BBA0` | `0xFC31BBEF` | 80 B | `59c9adc82ad1ad670ecf7ba0d42665a34f7acf1a10b68ad75874afe1fae77487` | `[STATIC_VERIFIED]` `sub_fc31bbc4` CreateTask veneer spawning "Startup" **[NEW READ: 80 B]** |
@@ -360,7 +388,8 @@ To allow Task T3 to instrument `boot_prototype.c` with LED flash breadcrumbs and
 
 1. **Short-Press Power-Off Mechanism is Fully Localized** `[INFERRED]`:
    - In the unmodified baseline (`G3X_POWERON_FIX=0`), short press powers off at Candidate 1: `sub_fc05b962_my` (`boot_prototype.c:351-354`) -> `sub_fc1284ac` returns `0` -> `sub_fc05ba56` cuts power via GPIO 0x67 (`0xD20B099C`) `[STATIC_VERIFIED: ROM 0xFC05B96C-0xFC05B976, 0xFC05BA56; PORT25-ROM-STARTUP-TASKS]`.
-   - In the opt-in candidate (`G3X_POWERON_FIX=1`), Candidate 1 is bypassed, but Candidate 2 arises: `sub_fc1284ac` still executes and skips `bl sub_fc08ecbc`, leaving `*(0x00009BD0)` zeroed `[STATIC_VERIFIED: ROM 0xFC128504-0xFC12851A; PORT25-ROM-POWERON-CHECK]`.
+   - In the opt-in candidate (`G3X_POWERON_FIX=1`), Candidate 1 is bypassed, leaving Candidate 2 (sub-CPU latch timeout), Candidate 3 (watchdog timeout), and Candidate 4 (unwritten start cause) as key hypotheses to be tested.
 2. **Breadcrumb Placement Plan Ready for Task T3** `[VERIFIED]`:
-   - Table in Section 6 defines all breadcrumb stages, file:line insertion points, and what hypothesis each isolates.
+   - The table in Section 6 defines all breadcrumb stages, file:line insertion points, and what hypothesis each isolates.
+   - Crucially, `STAGE_BC_POWER_CHECK_FAIL` (line 354, pre-call) and `STAGE_BC_POWER_CUT_HALT` (line 356, post-call) allow Task T3 to distinguish whether power is cut immediately inside `sub_fc05ba56` or delayed until the halt loop.
    - Task T3 can insert GPIO 33 LED toggles at these points to observe hardware progress during short-press trials without guessing.

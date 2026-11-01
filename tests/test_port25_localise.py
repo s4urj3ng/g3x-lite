@@ -14,15 +14,16 @@ Verifies:
    - Every candidate in the table and every claim/item carries an epistemic label
      ([VERIFIED], [STATIC_VERIFIED], [INFERRED], [UNKNOWN], or [OWNER-REPORTED]).
    - Every ROM address (0xFC...... and 0xFD......) cited anywhere in the document falls
-     within an approved manifest range.
+     within an approved manifest range [start, start + length).
    - Lists proposed breadcrumb stages in boot_prototype.c with file:line references,
      specifically including:
      * entry to sub_fc05b962_my
      * before/after each remaining power-on check
      * before/after task creation
      * core entry
-3. Scope integrity:
-   - Only permitted files are modified.
+     * pre-call power-check fail and post-call power-cut halt distinction
+3. Strictly Read-Only:
+   - No bootstrap scripts, build steps, or write operations are executed.
 """
 
 from __future__ import annotations
@@ -50,15 +51,6 @@ ROM_PATH = Path(
 VALIDATOR_TOOL = REPO_ROOT / "tools" / "port11c_evidence_validator.py"
 BOOT_PROTOTYPE_C = REPO_ROOT / "chdk-port" / "platform" / "g3x" / "sub" / "110c" / "boot_prototype.c"
 ROM_BASE = 0xFC000000
-
-
-def setUpModule():
-    """Ensure platform bootstrap files exist before running any tests."""
-    platform_cam_h = REPO_ROOT / "chdk-port" / "platform" / "g3x" / "platform_camera.h"
-    if not platform_cam_h.is_file():
-        bootstrap_script = REPO_ROOT / "tools" / "bootstrap_chdk_platform.py"
-        if bootstrap_script.is_file():
-            subprocess.run(["python3", "-B", str(bootstrap_script)], cwd=str(REPO_ROOT), check=True)
 
 
 APPROVED_ENTRIES = {
@@ -223,6 +215,8 @@ NEWLY_READ_ENTRIES = {
     "PORT25-ROM-ARAM-HEAP-INIT",
 }
 
+VALID_LABEL_PATTERN = re.compile(r"\[(?:STATIC_)?VERIFIED\b|\[INFERRED\b|\[UNKNOWN\b")
+
 
 class TestPort25EvidenceManifest(unittest.TestCase):
     """Validates docs/agentbridge/PORT25_EVIDENCE_MANIFEST.json integrity and compliance."""
@@ -346,40 +340,78 @@ class TestPort25LocaliseDocument(unittest.TestCase):
             self.assertIn(lbl, self.content, f"Expected epistemic label '{lbl}' in document")
 
     def test_ranked_candidate_table_present_and_labelled(self):
-        """Document has a ranked candidates table where each candidate has an epistemic label."""
+        """Document has a ranked candidates table where every row has an epistemic label."""
         self.assertIn("Ranked Candidate Summary", self.content)
-        # Verify candidate ranks are present
-        for rank_num in range(1, 6):
+
+        # Locate Section 5 table
+        table_match = re.search(r"## 5\. Ranked Candidate Summary\s+(.*?)(?=\n## |\Z)", self.content, re.DOTALL)
+        self.assertIsNotNone(table_match, "Section '## 5. Ranked Candidate Summary' not found")
+        section_text = table_match.group(1)
+
+        # Extract markdown table rows
+        candidate_rows = []
+        for line in section_text.splitlines():
+            line = line.strip()
+            if line.startswith("|") and not line.startswith("| Rank") and not line.startswith("|:"):
+                candidate_rows.append(line)
+
+        self.assertGreaterEqual(len(candidate_rows), 7, f"Expected at least 7 candidate rows, found {len(candidate_rows)}")
+
+        # Verify candidate ranks 1 to 7 are present
+        for rank_num in range(1, 8):
             self.assertTrue(
-                re.search(rf"\|\s*(?:\*\*)?(?:Rank\s*)?{rank_num}(?:\*\*)?\s*\|", self.content),
-                f"Candidate Rank {rank_num} missing from table",
+                any(re.search(rf"\|\s*(?:\*\*)?(?:Rank\s*)?{rank_num}(?:\*\*)?\s*\|", r) for r in candidate_rows),
+                f"Candidate Rank {rank_num} missing from ranked candidate table",
             )
-        # Check that candidates cover the key mechanisms
-        self.assertIn("sub_fc05ba56", self.content)
-        self.assertIn("sub_fc1284ac", self.content)
-        self.assertIn("sub_fc08ecbc", self.content)
-        self.assertIn("0x00009BD0", self.content)
-        self.assertIn("StartWDT_FW", self.content)
-        self.assertIn("task_PhySw", self.content)
-        self.assertIn("TurnOffE1_FW", self.content)
+
+        # Check key mechanisms are present in the table
+        self.assertTrue(any("sub_fc05ba56" in r for r in candidate_rows), "sub_fc05ba56 candidate row missing")
+        self.assertTrue(any(re.search(r"sub[- ]cpu", r, re.IGNORECASE) for r in candidate_rows), "Sub-CPU candidate row missing")
+        self.assertTrue(any("StartWDT_FW" in r for r in candidate_rows), "StartWDT_FW candidate row missing")
+        self.assertTrue(any("0x00009BD0" in r or "sub_fc08ecbc" in r for r in candidate_rows), "Startup cause candidate row missing")
+        self.assertTrue(any("task_PhySw" in r for r in candidate_rows), "task_PhySw candidate row missing")
+        self.assertTrue(any("TurnOffE1_FW" in r for r in candidate_rows), "TurnOffE1_FW candidate row missing")
+
+        # Verify that EVERY single row contains an epistemic label
+        for idx, row in enumerate(candidate_rows, 1):
+            cols = [c.strip() for c in row.split("|")[1:-1]]
+            rank_label = cols[0] if cols else f"Row {idx}"
+            self.assertTrue(
+                VALID_LABEL_PATTERN.search(row),
+                f"Candidate table {rank_label} lacks an epistemic label ([VERIFIED], [STATIC_VERIFIED], [INFERRED], or [UNKNOWN]):\n{row}",
+            )
+
+    def test_synthetic_unlabelled_candidate_row_fails(self):
+        """Verifies that removing an epistemic label from any row triggers a validation failure."""
+        unlabelled_row = "| **9** | Unlabelled Test Candidate | `boot_prototype.c:100` | Test | Action | Missing label here |"
+        self.assertFalse(
+            bool(VALID_LABEL_PATTERN.search(unlabelled_row)),
+            "VALID_LABEL_PATTERN incorrectly matched an unlabelled candidate row",
+        )
 
     def test_every_cited_rom_address_covered_by_manifest(self):
-        """Every 0xFC...... and 0xFDF2.... address cited in doc falls within an approved manifest range."""
-        scopes = self.manifest.get("authorization_scopes", [])
-        approved_ranges = [
-            (int(r["start_address"], 16), int(r["end_address"], 16), r["label"])
-            for s in scopes
-            for r in s.get("approved_ranges", [])
+        """Every 0xFC..., 0xFD..., and bare fc.../fd... address cited in doc falls within [start, start + length)."""
+        evidence_entries = self.manifest.get("evidence_entries", [])
+        self.assertTrue(len(evidence_entries) > 0, "No evidence entries in manifest")
+
+        # Build [start, start + length) ranges
+        evidence_ranges = [
+            (int(e["start_address"], 16), int(e["start_address"], 16) + int(e["expected_byte_count"]), e["evidence_id"])
+            for e in evidence_entries
         ]
 
-        # Find all 0xFC...... and 0xFD...... addresses in doc
-        all_rom_addrs = set(re.findall(r"\b0x(?:FC[0-9A-Fa-f]{6}|FD[0-9A-Fa-f]{6})\b", self.content))
-        self.assertGreaterEqual(len(all_rom_addrs), 25, "Expected at least 25 ROM addresses cited in doc")
+        # Match hex addresses case-insensitively: 0xfc..., 0xFC..., and fc/fd forms without 0x
+        raw_matches = re.finditer(r"(?i)(?:0x|sub_|loc_|\b)((?:fc|fd)[0-9a-f]{6})\b", self.content)
+        cited_addrs = set()
+        for m in raw_matches:
+            cited_addrs.add("0x" + m.group(1).upper())
+
+        self.assertGreaterEqual(len(cited_addrs), 25, "Expected at least 25 ROM addresses cited in doc")
 
         unapproved_addrs = []
-        for addr_str in sorted(all_rom_addrs):
+        for addr_str in sorted(cited_addrs):
             val = int(addr_str, 16)
-            is_covered = any(start <= val <= end for start, end, _ in approved_ranges)
+            is_covered = any(start <= val < end for start, end, _ in evidence_ranges)
             if not is_covered:
                 unapproved_addrs.append(addr_str)
 
@@ -387,8 +419,20 @@ class TestPort25LocaliseDocument(unittest.TestCase):
             unapproved_addrs,
             [],
             f"The following ROM addresses cited in docs/PORT25_SHORT_PRESS_LOCALISE.md "
-            f"are not covered by any range in PORT25_EVIDENCE_MANIFEST.json: {unapproved_addrs}",
+            f"are not covered by any [start, start + length) range in PORT25_EVIDENCE_MANIFEST.json: {unapproved_addrs}",
         )
+
+    def test_synthetic_uncovered_address_fails(self):
+        """Verifies that an uncovered ROM address like 0xfc000002 fails the address coverage check."""
+        evidence_entries = self.manifest.get("evidence_entries", [])
+        evidence_ranges = [
+            (int(e["start_address"], 16), int(e["start_address"], 16) + int(e["expected_byte_count"]), e["evidence_id"])
+            for e in evidence_entries
+        ]
+
+        uncovered_addr = 0xFC000002
+        is_covered = any(start <= uncovered_addr < end for start, end, _ in evidence_ranges)
+        self.assertFalse(is_covered, "0xFC000002 should not be covered by manifest ranges")
 
     def test_proposed_breadcrumbs_cover_all_acceptance_points(self):
         """Proposed breadcrumbs cover entry to sub_fc05b962_my, power checks, task creation, core entry."""
@@ -411,6 +455,14 @@ class TestPort25LocaliseDocument(unittest.TestCase):
             re.search(r"after.*?power-on check|power-on fix|STAGE_BC_POWER_CHECK_PASS", self.content, re.IGNORECASE),
             "Breadcrumbs must cover after power-on check",
         )
+        # Check for pre-call power-check fail and post-call power-cut halt distinction
+        self.assertIn("STAGE_BC_POWER_CHECK_FAIL", self.content)
+        self.assertIn("STAGE_BC_POWER_CUT_HALT", self.content)
+        self.assertTrue(
+            re.search(r"Distinction Between.*?STAGE_BC_POWER_CHECK_FAIL.*?STAGE_BC_POWER_CUT_HALT", self.content, re.DOTALL),
+            "Doc must explicitly discuss the distinction between STAGE_BC_POWER_CHECK_FAIL and STAGE_BC_POWER_CUT_HALT",
+        )
+
         # Check for before/after task creation
         self.assertTrue(
             re.search(r"before.*?task creation|STAGE_BC_PRE_CREATE_STARTUP", self.content, re.IGNORECASE),
