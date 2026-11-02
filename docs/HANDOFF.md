@@ -2438,23 +2438,23 @@ python3 -B tools/port18_trial_report.py private/port18/trial_report.md --out pri
 
 
 ### PORT-30 Milestone Close-Out: CreateTask Calling Convention & Task Stack Evidence Close (2026-11-02)
-- **Milestone & Status**: PORT-30 (`port-30-createtask-close`); Verdict: **`NO-GO`** for PORT-27 Item (b) / resident candidate gate `[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:11, 305-321 §1, §6.1]`.
+- **Milestone & Status**: PORT-30 (`port-30-createtask-close`); Verdict: **`NO-GO`** for PORT-27 Item (b) / resident candidate gate `[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:11, 305-321 §1 (line 11), §6.1 (lines 305–321)]`.
 - **Milestone Decision Gate & Verdict Details**:
-  - Citing `docs/PORT30_CREATETASK_CLOSE.md:305-321 §6.1` (its GO/NO-GO section): under the mandated decision gate rule, *"The verdict is GO only if the r0, r1, r2 and sp[0] roles and the r2 stack allocation (allocator, size, alignment) are ALL VERIFIED. Otherwise it is NO-GO with an exact, narrower UNKNOWN list (each item with the bounded range that would resolve it, if known)."*
-  - While incoming parameter forwarding, fallback, and TCB storage of `r0` (into `[TCB + 0x24]`), parameter extraction, range checking, and ready-queue enqueuing of `r1` (scheduling priority), argument forwarding and TCB storage of `r2` (into `[TCB + 0x20]`), task entry point `r3` (into `[TCB + 0xC]`), and argument storage of `sp[0]` (into `[TCB + 0x10]`) are certified as `[VERIFIED]`, `r0` task name string semantics and `r2` stack size in bytes are `[INFERRED]`; `r2` callee units/semantics, stack allocator internal identity, buffer alignment, runtime default stack size values on both fallback paths, task-argument delivery to spawned task, and `SleepTask` tick scaling remain `[UNKNOWN]`. Under the fail-closed project gate rule, these remaining UNKNOWNs compel an explicit **`NO-GO`** verdict `[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:310-321 §6.1]`.
+  - Citing `docs/PORT30_CREATETASK_CLOSE.md:305-321 §6.1 (lines 305–321)` (its GO/NO-GO section): under the mandated decision gate rule, *"The verdict is GO only if the r0, r1, r2 and sp[0] roles and the r2 stack allocation (allocator, size, alignment) are ALL VERIFIED. Otherwise it is NO-GO with an exact, narrower UNKNOWN list (each item with the bounded range that would resolve it, if known)."*
+  - While incoming parameter forwarding, fallback, and TCB storage of `r0` (into `[TCB + 0x24]`), parameter extraction, range checking, and ready-queue enqueuing of `r1` (scheduling priority), argument forwarding and TCB storage of `r2` (into `[TCB + 0x20]`), task entry point `r3` (into `[TCB + 0xC]`), and argument storage of `sp[0]` (into `[TCB + 0x10]`) are certified as `[VERIFIED]`, `r0` task name string semantics and `r2` stack size in bytes are `[INFERRED]`; `r2` callee units/semantics, stack allocator internal identity, buffer alignment, runtime default stack size values on both fallback paths, task-argument delivery to spawned task, and `SleepTask` tick scaling remain `[UNKNOWN]`. Under the fail-closed project gate rule, these remaining UNKNOWNs compel an explicit **`NO-GO`** verdict `[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:310-321 §6.1 (lines 310–321)]`.
 - **Candidate & Execution Status**:
-  - No `G3X_RESIDENT=1` candidate was built `[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:11, 305-321 §1, §6.1]`.
-  - Tasks T2 (the resident candidate build) and T3 (the trial plan and recovery procedures) were not run because T1 evidence evaluation resulted in NO-GO, and no candidate exists `[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:11, 305-321 §1, §6.1]`.
-  - Zero code files in `chdk-port/` or `tools/` were modified, and zero binary or build outputs were created `[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:26, 347 §1.1, §7]`.
+  - No `G3X_RESIDENT=1` candidate was built `[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:11, 305-321 §1 (line 11), §6.1 (lines 305–321)]`.
+  - Tasks T2 (the resident candidate build) and T3 (the trial plan and recovery procedures) were not run because T1 evidence evaluation resulted in NO-GO, and no candidate exists `[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:11, 305-321 §1 (line 11), §6.1 (lines 305–321)]`.
+  - Zero code files in `chdk-port/` or `tools/` were modified, and zero binary or build outputs were created `[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:28, 348 §1.1 (line 28), §7 (line 348)]`.
 - **Ranges Read, Byte Counts & Evidence Validation**:
-  - Exactly 7 new ranges were read, totaling **900 new bytes** ($\le 8,192\text{ bytes}$ limit) `[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:22, 69 §1.1, §2]`.
-  - 6 ranges previously read and validated in PORT-29 were re-cited with identical bounds and SHA-256 digests; zero PORT-29 manifest ranges were widened `[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:23, 71 §1.1, §2]`.
-  - Total entries across manifest: 13 entries declaring **2,618 bytes** total ($\le 4,096\text{ bytes}$ scope maximum quota) `[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:24, 70 §1.1, §2]`.
-  - Evidence manifest: `evidence/port30_manifest.json` `[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:9, 34 §1, §1.2]`.
-  - Trusted scopes policy: `evidence/port30_trusted_scopes.json` `[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:10, 34 §1, §1.2]`.
+  - Exactly 7 new ranges were read, totaling **900 new bytes** ($\le 8,192\text{ bytes}$ limit) `[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:23, 70 §1.1 (line 23), §2 (line 70)]`.
+  - 6 ranges previously read and validated in PORT-29 were re-cited with identical bounds and SHA-256 digests; zero PORT-29 manifest ranges were widened `[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:24, 72 §1.1 (line 24), §2 (line 72)]`.
+  - Total entries across manifest: 13 entries declaring **2,618 bytes** total ($\le 4,096\text{ bytes}$ scope maximum quota) `[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:25, 71 §1.1 (line 25), §2 (line 71)]`.
+  - Evidence manifest: `evidence/port30_manifest.json` `[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:9, 33-36 §1 (line 9), §1.2 (lines 33–36)]`.
+  - Trusted scopes policy: `evidence/port30_trusted_scopes.json` `[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:10, 33-36 §1 (line 10), §1.2 (lines 33–36)]`.
   - Validator execution: `python3 -B tools/port11c_evidence_validator.py --manifest evidence/port30_manifest.json --trusted-scopes evidence/port30_trusted_scopes.json`
-  - Validator result: **`VALID (0 errors, 0 warnings)`** (`VALID, 0 errors`) `[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:34-43 §1.2]`.
-- **Table of Every Range Read (from `docs/PORT30_CREATETASK_CLOSE.md:52-71 §2`)**:
+  - Validator result: **`VALID (0 errors, 0 warnings)`** (`VALID, 0 errors`) `[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:38-43 §1.2 (lines 38–43)]`.
+- **Table of Every Range Read (from `docs/PORT30_CREATETASK_CLOSE.md:52-72 §2 (lines 52–72)`)**:
 
 | Range ID | Target Routine / Subsystem | ROM Start | ROM End | File Offset | Length | Status | Running New | SHA-256 Digest | Listing Source in PORT-29 Evidence / HANDOFF |
 |---|---|:---:|:---:|:---:|:---:|:---:|:---:|---|---|
@@ -2474,37 +2474,37 @@ python3 -B tools/port18_trial_report.py private/port18/trial_report.md --out pri
 
 - **CreateTask Item Labels & Epistemic Evaluation**:
   - **`r0` Role (Task Name Pointer)**:
-    - Argument forwarding (`mov r4, r0` at `0xFCEF348C`), fallback when `r0 == 0` (`ldr r4, [r1]` at `0xFCEF34AE` with literal `0x000081CC` at `0xFCEF36A0`), and storage into stack-frame descriptor `desc + 20` (`str.w r8, [sp, #24]` at `0xFCEEF642`) and `[TCB + 0x24]` (`str r0, [r4, #0x24]` at `0xFCEF0274`): **`[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:80-92, 252-254 §3.1, §5]`**.
-    - Semantic role of `r0` as a task name string pointer: **`[INFERRED: docs/PORT30_CREATETASK_CLOSE.md:87-92, 255-257 §3.1, §5]`** (stock startup call site passes `"Startup\0"` at `0xFC05B98E`, but no consumer reading `[TCB + 0x24]` as a C string or established TCB layout cited).
+    - Argument forwarding (`mov r4, r0` at `0xFCEF348C`), fallback when `r0 == 0` (`ldr r4, [r1]` at `0xFCEF34AE` with literal `0x000081CC` at `0xFCEF36A0`), and storage into stack-frame descriptor `desc + 20` (`str.w r8, [sp, #24]` at `0xFCEEF642`) and `[TCB + 0x24]` (`str r0, [r4, #0x24]` at `0xFCEF0274`): **`[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:80-92, 96-97, 259-262 §3.1 (lines 80–92, 96–97), §5 (lines 259–262)]`**.
+    - Semantic role of `r0` as a task name string pointer: **`[INFERRED: docs/PORT30_CREATETASK_CLOSE.md:93-95, 98, 263-265 §3.1 (lines 93–95, 98), §5 (lines 263–265)]`** (stock startup call site passes `"Startup\0"` at `0xFC05B98E`, but no consumer reading `[TCB + 0x24]` as a C string or established TCB layout cited).
   - **`r1` Role (Task Scheduling Priority)**:
-    - Range check ($1 \le r1 \le 32$ else branch to assert handler at `0xFCEF34B4`), storage into descriptor `desc + 25` (`sp + 29`), placement into TCB priority fields `[TCB + 0x8]` and `[TCB + 0x46]`, and consumption by scheduler ready queue (`0xFCEEF458: ldr r0, [r5, #0x8]` and `0xFCEEF464: bl 0xBFE126C4`): **`[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:94-106, 258-260 §3.2, §5]`**.
+    - Range check ($1 \le r1 \le 32$ else branch to assert handler at `0xFCEF34B4`), storage into descriptor `desc + 25` (`sp + 29`), placement into TCB priority fields `[TCB + 0x8]` and `[TCB + 0x46]`, and consumption by scheduler ready queue (`0xFCEEF458: ldr r0, [r5, #0x8]` and `0xFCEEF464: bl 0xBFE126C4`): **`[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:100-111, 266-268 §3.2 (lines 100–111), §5 (lines 266–268)]`**.
   - **`r2` Role (Stack Size)**:
-    - Argument forwarding (`mov r5, r2` at `0xFCEF3492`), non-zero bypass (`cbnz r5` at `0xFCEF34C8`), primary fallback load `*(0x000081D0)` when `r2 == 0` (`ldr r5, [r1, #4]` at `0xFCEF34CA`), secondary fallback load `*(0x811C)` (`ldr r3, [r3]` at `0xFCEEF5E4`), forwarding to dynamic allocator `0xBFE11E62` (`0xFCEF01E0`) and framing routine `0xBFE11E04` (`0xFCEF0204`), and storage into `[TCB + 0x20]` (`str r0, [r4, #0x20]` at `0xFCEF0248`): **`[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:108-124, 261-264 §3.3, §5]`**.
-    - Stack size in bytes: **`[INFERRED: docs/PORT30_CREATETASK_CLOSE.md:125-128, 265-267 §3.3, §5]`** (inferred from role in allocator/framing call and standard OS conventions; exact byte count semantics not proven without reading `0xFCEF08AE`).
-    - `r2` units/semantics (bytes vs other) inside `0xFCEF08AE` / `0xFCEF0850` (not read): **`[UNKNOWN: docs/PORT30_CREATETASK_CLOSE.md:129-130, 268-269 §3.3, §5]`**.
+    - Argument forwarding (`mov r5, r2` at `0xFCEF3492`), non-zero bypass (`cbnz r5` at `0xFCEF34C8`), primary fallback load `*(0x000081D0)` when `r2 == 0` (`ldr r5, [r1, #4]` at `0xFCEF34CA`), secondary fallback load `*(0x811C)` (`ldr r3, [r3]` at `0xFCEEF5E4`), forwarding to dynamic allocator `0xBFE11E62` (`0xFCEF01E0`) and framing routine `0xBFE11E04` (`0xFCEF0204`), and storage into `[TCB + 0x20]` (`str r0, [r4, #0x20]` at `0xFCEF0248`): **`[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:113-124, 269-272 §3.3 (lines 113–124), §5 (lines 269–272)]`**.
+    - Stack size in bytes: **`[INFERRED: docs/PORT30_CREATETASK_CLOSE.md:125, 273-275 §3.3 (line 125), §5 (lines 273–275)]`** (inferred from role in allocator/framing call and standard OS conventions; exact byte count semantics not proven without reading `0xFCEF08AE`).
+    - `r2` units/semantics (bytes vs other) inside `0xFCEF08AE` / `0xFCEF0850` (not read): **`[UNKNOWN: docs/PORT30_CREATETASK_CLOSE.md:126, 276-277 §3.3 (line 126), §5 (lines 276–277)]`**.
   - **`sp[0]` Role (5th Parameter / Context Argument)**:
-    - Retrieval of 5th parameter from caller stack `sp[0]` (`ldr.w r8, [sp, #40]` at `0xFCEF3494`), forwarding through descriptor `desc + 8` (`stmia r0!` at `0xFCEEF624`), and storage into `[TCB + 0x10]` (`str r0, [r4, #0x10]` at `0xFCEF0244`): **`[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:128-140, 272-273 §3.4, §5]`**.
-    - Delivery of this argument to the task entry function by the task dispatcher / scheduler (task-argument delivery): **`[UNKNOWN: docs/PORT30_CREATETASK_CLOSE.md:138-140, 274-275 §3.4, §5]`** (remains open due to consumer/dispatcher gap).
+    - Retrieval of 5th parameter from caller stack `sp[0]` (`ldr.w r8, [sp, #40]` at `0xFCEF3494`), forwarding through descriptor `desc + 8` (`stmia r0!` at `0xFCEEF624`), and storage into `[TCB + 0x10]` (`str r0, [r4, #0x10]` at `0xFCEF0244`): **`[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:128-138, 280-281 §3.4 (lines 128–138), §5 (lines 280–281)]`**.
+    - Delivery of this argument to the task entry function by the task dispatcher / scheduler (task-argument delivery): **`[UNKNOWN: docs/PORT30_CREATETASK_CLOSE.md:137-139, 282-283 §3.4 (lines 137–139), §5 (lines 282–283)]`** (remains open due to consumer/dispatcher gap).
   - **Corroborating `r3` Role (Task Entry Point)**:
-    - Check `r3 != 0` (`cbnz r7` at `0xFCEF34B6`), forwarding through descriptor `desc + 4` (`strd r6, r0, [sp, #4]` at `0xFCEEF61E`), and storage in `[TCB + 0xC]` (`str r0, [r4, #0xC]` at `0xFCEF023E`): **`[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:141-149, 270-271 §3.5, §5]`**.
+    - Check `r3 != 0` (`cbnz r7` at `0xFCEF34B6`), forwarding through descriptor `desc + 4` (`strd r6, r0, [sp, #4]` at `0xFCEEF61E`), and storage in `[TCB + 0xC]` (`str r0, [r4, #0xC]` at `0xFCEF023E`): **`[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:141-148, 278-279 §3.5 (lines 141–148), §5 (lines 278–279)]`**.
   - **`r2` Stack Allocator Identity**:
-    - Dynamic allocation delegation (hardcoded `desc + 12 == 0` causing branch fall-through `cbnz r6` at `0xFCEF01DC` to dynamic allocator `0xBFE11E62` at `0xFCEF01E0`): **`[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:150-162 §3.6]`**.
-    - Allocator implementation / internal identity (inside `0xBFE11E62` / ROM `0xFCEF08AE`, not read): **`[UNKNOWN: docs/PORT30_CREATETASK_CLOSE.md:163-167, 276-278 §3.6, §5]`**.
+    - Dynamic allocation delegation (hardcoded `desc + 12 == 0` causing branch fall-through `cbnz r6` at `0xFCEF01DC` to dynamic allocator `0xBFE11E62` at `0xFCEF01E0`): **`[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:150-178 §3.6 (lines 150–178)]`**.
+    - Allocator implementation / internal identity (inside `0xBFE11E62` / ROM `0xFCEF08AE`, not read): **`[UNKNOWN: docs/PORT30_CREATETASK_CLOSE.md:177-179, 284-286 §3.6 (lines 177–179), §5 (lines 284–286)]`**.
   - **`r2` Stack Size**:
-    - Explicit stack size forwarding and storage (preservation verified): **`[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:169-174, 279-280 §3.7, §5]`**.
-    - Byte semantics: **`[INFERRED: docs/PORT30_CREATETASK_CLOSE.md:175-177, 279-280 §3.7, §5]`**.
-    - Callee units inside `0xFCEF08AE` / `0xFCEF0850`: **`[UNKNOWN: docs/PORT30_CREATETASK_CLOSE.md:178, 279-280 §3.7, §5]`**.
-    - Runtime default stack sizes (`*(0x000081D0)` and `*(0x0000811C)`): **`[UNKNOWN: docs/PORT30_CREATETASK_CLOSE.md:179-183, 281-283 §3.7, §5]`** (ROM initializers at `0xFCE91228` and `0xFCE91174` verified as `0x00000000`; runtime values depend on unlocalised initialization writers).
+    - Explicit stack size forwarding and storage (preservation verified): **`[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:181-184, 199, 287-288 §3.7 (lines 181–184, 199), §5 (lines 287–288)]`**.
+    - Byte semantics: **`[INFERRED: docs/PORT30_CREATETASK_CLOSE.md:185, 199, 273-275 §3.7 (lines 185, 199), §5 (lines 273–275)]`**.
+    - Callee units inside `0xFCEF08AE` / `0xFCEF0850`: **`[UNKNOWN: docs/PORT30_CREATETASK_CLOSE.md:126, 199, 276-277 §3.3 (line 126), §3.7 (line 199), §5 (lines 276–277)]`**.
+    - Runtime default stack sizes (`*(0x000081D0)` and `*(0x0000811C)`): **`[UNKNOWN: docs/PORT30_CREATETASK_CLOSE.md:186-199, 289-291 §3.7 (lines 186–199), §5 (lines 289–291)]`** (ROM initializers at `0xFCE91228` and `0xFCE91174` verified as `0x00000000`; runtime values depend on unlocalised initialization writers).
   - **`r2` Stack Alignment**:
-    - Absence of alignment masking in `CreateTask`, `alloc_task_stack_tcb`, and `0xBFE11746`: **`[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:185-188 §3.8]`**.
-    - Downstream buffer alignment enforced by allocator `0xBFE11E62` and framing routine `0xBFE11E04`: **`[UNKNOWN: docs/PORT30_CREATETASK_CLOSE.md:189-193, 284-286 §3.8, §5]`**.
+    - Absence of alignment masking in `CreateTask`, `alloc_task_stack_tcb`, and `0xBFE11746`: **`[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:201-205, 209 §3.8 (lines 201–205, 209)]`**.
+    - Downstream buffer alignment enforced by allocator `0xBFE11E62` and framing routine `0xBFE11E04`: **`[UNKNOWN: docs/PORT30_CREATETASK_CLOSE.md:206-209, 292-294 §3.8 (lines 206–209), §5 (lines 292–294)]`**.
   - **Additional Evaluated Items**:
-    - `CreateTask` literal pool entry at `0xFCEF36A0`: **`[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:195-197 §3.9]`**.
-    - Downstream Activation Callee 1 TCB lookup `0xFCEF007E`: **`[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:215-220 §3.9]`**.
-    - Downstream Activation Callee 2 Task enqueue `0xFCEEF438`: **`[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:221-226 §3.9]`**.
-    - `SleepTask` Tick Scaling: **`[UNKNOWN: docs/PORT30_CREATETASK_CLOSE.md:198-214, 287-289 §3.9, §5]`** (range ends at `0xFCEF33DF` inside precondition checks; delay units and millisecond tick scaling unread).
+    - `CreateTask` literal pool entry at `0xFCEF36A0`: **`[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:212-214 §3.9 (lines 212–214)]`**.
+    - Downstream Activation Callee 1 TCB lookup `0xFCEF007E`: **`[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:225-229 §3.9 (lines 225–229)]`**.
+    - Downstream Activation Callee 2 Task enqueue `0xFCEEF438`: **`[VERIFIED: docs/PORT30_CREATETASK_CLOSE.md:230-234 §3.9 (lines 230–234)]`**.
+    - `SleepTask` Tick Scaling: **`[UNKNOWN: docs/PORT30_CREATETASK_CLOSE.md:215-224, 295-297 §3.9 (lines 215–224), §5 (lines 295–297)]`** (range ends at `0xFCEF33DF` inside precondition checks; delay units and millisecond tick scaling unread).
 - **Exact Narrower UNKNOWN List & Proposed Bounded Ranges ($\le 4\text{ KiB}$)**:
-  Copied verbatim from `docs/PORT30_CREATETASK_CLOSE.md:323-336 §6.2`:
+  Copied verbatim from `docs/PORT30_CREATETASK_CLOSE.md:323-336 §6.2 (lines 323–336)`:
 
 | # | Item | Target Routine / Variable | Target VMA | Proposed ROM Range | Slice Size | Technical Objective & Justification |
 |:---:|:---:|---|:---:|:---:|:---:|---|
@@ -2518,8 +2518,8 @@ python3 -B tools/port18_trial_report.py private/port18/trial_report.md --out pri
 | **8** | **(d)** | `SleepTask` Delay Units & Millisecond Tick Scaling Body | `0xBFE14994` (ATCM Thumb-2) | `0xFCEF33E0..0xFCEF345F` | 128 B | Continuation of `SleepTask` (`0xBFE14968`) immediately following slice `0xFCEF33A0..0xFCEF33DF` at skip target `0xFCEF33E0` (ATCM `0xBFE14994`). Reading this 128-byte slice inspects the routine body beyond initial precondition checks, verifying delay calculation, tick conversion formula, and timer dispatch. |
 
 - **Owner Action (PORT-30)**:
-  - There is currently **NO camera trial to run** for PORT-30 (nor for PORT-27, PORT-28, or PORT-29) `[VERIFIED: docs/PORT27_OWNER_TRIAL_PLAN.md:17-32; docs/PORT28_PORT27_OUTCOME.md:185; docs/PORT29_CREATETASK_EVIDENCE.md:11, 401-405 §1, §6.1; docs/PORT30_CREATETASK_CLOSE.md:11, 305-321 §1, §6.1]`.
+  - There is currently **NO camera trial to run** for PORT-30 (nor for PORT-27, PORT-28, or PORT-29) `[VERIFIED: docs/PORT27_OWNER_TRIAL_PLAN.md:17-32; docs/PORT28_PORT27_OUTCOME.md:185; docs/PORT29_CREATETASK_EVIDENCE.md:11, 401-405 §1, §6.1; docs/PORT30_CREATETASK_CLOSE.md:11, 305-321 §1 (line 11), §6.1 (lines 305–321)]`.
   - The latest trial candidate and instructions from PORT-24/25 remain the last owner-tested baseline:
     - The owner is **NOT** to run a heartbeat trial or send heartbeat report fields; any stale instruction asking the owner to run a heartbeat trial or send heartbeat report fields is removed and superseded `[VERIFIED: docs/PORT27_OWNER_TRIAL_PLAN.md:17-32; docs/PORT28_PORT27_OUTCOME.md:185]`.
     - The working boot method for owner trials remains the **held press** (Power button held continuously until the LED ladder finishes and Canon stock UI appears) using the PORT-25 combined candidate (`tools/build_candidate_port25_ladder_fix.py --combined`, `candidate_port25/DISKBOOT.BIN` SHA-256 `9ba62067c17d654a3b8995fc6e8c26176321154054a138a465ca66f9ff763a15`, size 124,865 bytes) `[VERIFIED: docs/PORT26_CODE43_RECORD.md:40-44; docs/PORT26_TRIAL_2026-11-02.md:92-96; docs/PORT28_PORT27_OUTCOME.md:91-102]`.
-  - **Next Step**: The owner action is to decide on a future milestone that authorizes the bounded ranges ($\le 4\text{ KiB}$ each) from §6.2 (`docs/PORT30_CREATETASK_CLOSE.md:323-336 §6.2`) to resolve the remaining UNKNOWN elements of Item (b) `[INFERRED: docs/PORT30_CREATETASK_CLOSE.md:323-336 §6.2]`.
+  - **Next Step**: The owner action is to decide on a future milestone that authorizes the bounded ranges ($\le 4\text{ KiB}$ each) from §6.2 (`docs/PORT30_CREATETASK_CLOSE.md:323-336 §6.2 (lines 323–336)`) to resolve the remaining UNKNOWN elements of Item (b) `[INFERRED: docs/PORT30_CREATETASK_CLOSE.md:323-336 §6.2 (lines 323–336)]`.
