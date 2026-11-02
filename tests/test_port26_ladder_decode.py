@@ -58,6 +58,7 @@ from tools.port26_ladder_decode import (
     classify_owner_report,
     decode_ladder_report,
     extract_build_source_pulse_codes,
+    get_canonical_ladder_path,
     is_affirmative_stock_ui,
     is_count_adjacent_to_two_valid_codes,
     is_truthy,
@@ -71,6 +72,7 @@ from tools.port26_ladder_decode import (
     parse_owner_report,
     parse_recognized_boolean,
     safe_open_report,
+    validate_ordered_code_sequence,
     validate_safety_path,
     verify_source_consistency,
 )
@@ -1336,6 +1338,269 @@ class TestPort26LadderDecode(unittest.TestCase):
 
         parsed = json.loads(first_output)
         self.assertEqual(list(parsed.keys()), sorted(list(parsed.keys())))
+
+    def test_owner_report_2026_11_02_fixture(self) -> None:
+        """[PORT-26 T4] Ingests the 2026-11-02 owner short-press report fixture.
+        
+        Verifies:
+        1. Fixture file exists at tests/fixtures/port26/owner_report_2026-11-02_port25_short.json.
+        2. Ingestion classifies as last stage Code 43 (STAGE_BC_POST_PHYSW_CREATE) and Code 44 not reached.
+        3. Both names are extracted from the source-of-truth table, never hard-coded.
+        4. JSON and key=value fixtures decode byte-identically.
+        5. CLI execution matches programmatic classification.
+        """
+        json_fixture_path = REPO_ROOT / "tests" / "fixtures" / "port26" / "owner_report_2026-11-02_port25_short.json"
+        txt_fixture_path = REPO_ROOT / "tests" / "fixtures" / "port26" / "owner_report_2026-11-02_port25_short.txt"
+
+        self.assertTrue(json_fixture_path.is_file(), f"Missing fixture: {json_fixture_path}")
+        self.assertTrue(txt_fixture_path.is_file(), f"Missing fixture: {txt_fixture_path}")
+
+        # Derive expected stage names dynamically from parsed LADDER_STAGE_TABLE
+        expected_code43_sym = LADDER_STAGE_TABLE[43]["stage_symbol"]
+        expected_code44_sym = LADDER_STAGE_TABLE[44]["stage_symbol"]
+        expected_next_stage = NEXT_STAGE_MAP[43]
+        self.assertEqual(expected_next_stage, expected_code44_sym)
+
+        # 1. Classify JSON fixture file
+        res_json = classify_owner_report(json_fixture_path)
+        self.assertEqual(res_json["class"], "CODE_43")
+        self.assertEqual(res_json["last_stage_reached"], expected_code43_sym)
+        self.assertEqual(res_json["next_stage"], expected_next_stage)
+        self.assertIn("Full ordered ladder sequence verified", res_json["notes"])
+        self.assertIn(expected_code43_sym, res_json["notes"])
+        self.assertIn(expected_code44_sym, res_json["notes"])
+
+        # 2. Classify key=value fixture file
+        res_txt = classify_owner_report(txt_fixture_path)
+        self.assertEqual(res_txt["class"], "CODE_43")
+        self.assertEqual(res_txt["last_stage_reached"], expected_code43_sym)
+        self.assertEqual(res_txt["next_stage"], expected_next_stage)
+
+        # 3. Assert JSON and key=value decode_ladder_report outputs are byte-identical
+        out_json_str = decode_ladder_report(json_fixture_path)
+        out_txt_str = decode_ladder_report(txt_fixture_path)
+        self.assertEqual(out_json_str, out_txt_str)
+
+        # 4. Run CLI tool via subprocess
+        cmd = [sys.executable, str(TOOL_PATH), str(json_fixture_path)]
+        sub_res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.assertEqual(sub_res.returncode, 0, f"CLI invocation failed: {sub_res.stderr}")
+        self.assertEqual(sub_res.stdout, out_json_str)
+
+    def test_canonical_ladder_path_derivation(self) -> None:
+        """[PORT-26 T4] Asserts that get_canonical_ladder_path derives paths from table/NEXT_STAGE_MAP."""
+        core_path, loader_path = get_canonical_ladder_path(LADDER_STAGE_TABLE)
+
+        # Loader path must be [1, 2, 3, 4, 5, 6, 7]
+        self.assertEqual(loader_path, [1, 2, 3, 4, 5, 6, 7])
+
+        # Core path must start at 11, end at 44, and contain all 19 normal boot core codes
+        self.assertEqual(core_path[0], 11)
+        self.assertEqual(core_path[-1], 44)
+        expected_core = [11, 12, 13, 14, 15, 21, 22, 23, 24, 25, 26, 31, 32, 33, 34, 35, 41, 42, 43, 44]
+        self.assertEqual(core_path, expected_core)
+
+    def test_full_ordered_code_sequences(self) -> None:
+        """[PORT-26 T4] Tests classification of valid full ordered sequences."""
+        expected_code43_sym = LADDER_STAGE_TABLE[43]["stage_symbol"]
+        expected_code44_sym = LADDER_STAGE_TABLE[44]["stage_symbol"]
+
+        # Full sequence up to Code 43 (loader count 7 prefix)
+        seq_43_loader7 = [7, 11, 12, 13, 14, 15, 21, 22, 23, 24, 25, 26, 31, 32, 33, 34, 35, 41, 42, 43]
+        report_43a = {
+            "diskboot_sha256": self.valid_hash,
+            "press": "short",
+            "pulses": seq_43_loader7,
+            "lcd": "dark",
+            "inspector_status": "not_run",
+        }
+        res_43a = classify_owner_report(report_43a)
+        self.assertEqual(res_43a["class"], "CODE_43")
+        self.assertEqual(res_43a["last_stage_reached"], expected_code43_sym)
+        self.assertEqual(res_43a["next_stage"], expected_code44_sym)
+
+        # Full sequence up to Code 43 (loader steps 1..7 prefix)
+        seq_43_loader1_7 = [1, 2, 3, 4, 5, 6, 7, 11, 12, 13, 14, 15, 21, 22, 23, 24, 25, 26, 31, 32, 33, 34, 35, 41, 42, 43]
+        report_43b = {
+            "diskboot_sha256": self.valid_hash,
+            "press": "short",
+            "pulses": seq_43_loader1_7,
+            "lcd": "dark",
+            "inspector_status": "not_run",
+        }
+        res_43b = classify_owner_report(report_43b)
+        self.assertEqual(res_43b["class"], "CODE_43")
+        self.assertEqual(res_43b["last_stage_reached"], expected_code43_sym)
+        self.assertEqual(res_43b["next_stage"], expected_code44_sym)
+
+        # Full sequence reaching terminal Code 44
+        seq_44 = [7, 11, 12, 13, 14, 15, 21, 22, 23, 24, 25, 26, 31, 32, 33, 34, 35, 41, 42, 43, 44]
+        report_44 = {
+            "diskboot_sha256": self.valid_hash,
+            "press": "short",
+            "pulses": seq_44,
+            "lcd": "dark",
+            "inspector_status": "not_run",
+        }
+        res_44 = classify_owner_report(report_44)
+        self.assertEqual(res_44["class"], "CODE_44")
+        self.assertEqual(res_44["last_stage_reached"], expected_code44_sym)
+        self.assertEqual(res_44["next_stage"], "sub_fc0d0126")
+
+        # Explicit sequence key with matching pulses count
+        report_seq_key = {
+            "diskboot_sha256": self.valid_hash,
+            "press": "short",
+            "pulses": 43,
+            "sequence": seq_43_loader7,
+            "lcd": "dark",
+            "inspector_status": "not_run",
+        }
+        res_seq_key = classify_owner_report(report_seq_key)
+        self.assertEqual(res_seq_key["class"], "CODE_43")
+        self.assertEqual(res_seq_key["last_stage_reached"], expected_code43_sym)
+        self.assertEqual(res_seq_key["next_stage"], expected_code44_sym)
+
+    def test_ordered_sequence_gap_and_non_monotonic_cases(self) -> None:
+        """[PORT-26 T4] Asserts that gapped, non-monotonic, or out-of-table sequences give AMBIGUOUS/UNKNOWN."""
+        # Case 1: Sequence with gap - skips Code 13
+        seq_gap_13 = [7, 11, 12, 14, 15, 21, 22, 23, 24, 25, 26, 31, 32, 33, 34, 35, 41, 42, 43]
+        res_gap_13 = classify_owner_report({
+            "diskboot_sha256": self.valid_hash,
+            "press": "short",
+            "pulses": seq_gap_13,
+            "lcd": "dark",
+            "inspector_status": "not_run",
+        })
+        self.assertEqual(res_gap_13["class"], "AMBIGUOUS")
+        self.assertIsNone(res_gap_13["last_stage_reached"])
+        self.assertIsNone(res_gap_13["next_stage"])
+        self.assertIn("skips expected stage", res_gap_13["notes"])
+
+        # Case 2: Sequence with gap - skips Code 25
+        seq_gap_25 = [7, 11, 12, 13, 14, 15, 21, 22, 23, 24, 26]
+        res_gap_25 = classify_owner_report({
+            "diskboot_sha256": self.valid_hash,
+            "press": "short",
+            "pulses": seq_gap_25,
+            "lcd": "dark",
+            "inspector_status": "not_run",
+        })
+        self.assertEqual(res_gap_25["class"], "AMBIGUOUS")
+        self.assertIsNone(res_gap_25["last_stage_reached"])
+        self.assertIsNone(res_gap_25["next_stage"])
+        self.assertIn("skips expected stage", res_gap_25["notes"])
+
+        # Case 3: Non-monotonic sequence - Code 13 before Code 12
+        seq_non_mono = [7, 11, 13, 12, 14, 15]
+        res_non_mono = classify_owner_report({
+            "diskboot_sha256": self.valid_hash,
+            "press": "short",
+            "pulses": seq_non_mono,
+            "lcd": "dark",
+            "inspector_status": "not_run",
+        })
+        self.assertEqual(res_non_mono["class"], "AMBIGUOUS")
+        self.assertIsNone(res_non_mono["last_stage_reached"])
+        self.assertIsNone(res_non_mono["next_stage"])
+
+        # Case 4: Repeating code - Code 12 repeated
+        seq_repeating = [7, 11, 12, 12, 13, 14, 15]
+        res_repeating = classify_owner_report({
+            "diskboot_sha256": self.valid_hash,
+            "press": "short",
+            "pulses": seq_repeating,
+            "lcd": "dark",
+            "inspector_status": "not_run",
+        })
+        self.assertEqual(res_repeating["class"], "AMBIGUOUS")
+        self.assertIsNone(res_repeating["last_stage_reached"])
+        self.assertIsNone(res_repeating["next_stage"])
+        self.assertIn("not strictly monotonic", res_repeating["notes"])
+
+        # Case 5: Out-of-table invalid code (Code 99)
+        seq_invalid_code = [7, 11, 12, 99, 14, 15]
+        res_invalid_code = classify_owner_report({
+            "diskboot_sha256": self.valid_hash,
+            "press": "short",
+            "pulses": seq_invalid_code,
+            "lcd": "dark",
+            "inspector_status": "not_run",
+        })
+        self.assertEqual(res_invalid_code["class"], "UNKNOWN_CODE")
+        self.assertIsNone(res_invalid_code["last_stage_reached"])
+        self.assertIsNone(res_invalid_code["next_stage"])
+        self.assertIn("does not match any registered code", res_invalid_code["notes"])
+
+        # Case 6: Sequence that does not start with loader count
+        seq_no_loader = [11, 12, 13, 14, 15]
+        res_no_loader = classify_owner_report({
+            "diskboot_sha256": self.valid_hash,
+            "press": "short",
+            "sequence": seq_no_loader,
+            "lcd": "dark",
+            "inspector_status": "not_run",
+        })
+        self.assertEqual(res_no_loader["class"], "AMBIGUOUS")
+        self.assertIsNone(res_no_loader["last_stage_reached"])
+        self.assertIsNone(res_no_loader["next_stage"])
+        self.assertIn("Sequence does not start with initial loader stage", res_no_loader["notes"])
+
+        # Case 7: Conflicting pulses count and sequence terminal code
+        res_conflict_p_seq = classify_owner_report({
+            "diskboot_sha256": self.valid_hash,
+            "press": "short",
+            "pulses": 42,
+            "sequence": [7, 11, 12, 13, 14, 15, 21, 22, 23, 24, 25, 26, 31, 32, 33, 34, 35, 41, 42, 43],
+            "lcd": "dark",
+            "inspector_status": "not_run",
+        })
+        self.assertEqual(res_conflict_p_seq["class"], "AMBIGUOUS")
+        self.assertIsNone(res_conflict_p_seq["last_stage_reached"])
+        self.assertIsNone(res_conflict_p_seq["next_stage"])
+        self.assertIn("conflicts with terminal code of sequence", res_conflict_p_seq["notes"])
+
+    def test_owner_hash_verification_and_mismatch(self) -> None:
+        """[PORT-26 T4] Tests owner hash verification against pinned candidate digest.
+        
+        Verifies:
+        1. Owner reported digest matches EXPECTED_PORT25_COMBINED_DISKBOOT_SHA256 (VERIFIED).
+        2. Any mismatched digest triggers INVALID_CANDIDATE, never silently accepted.
+        """
+        owner_reported_hash = "9ba62067c17d654a3b8995fc6e8c26176321154054a138a465ca66f9ff763a15"
+        self.assertEqual(
+            owner_reported_hash,
+            EXPECTED_PORT25_COMBINED_DISKBOOT_SHA256,
+            "Owner reported hash does not match decoder pinned hash [VERIFIED check failed]",
+        )
+
+        # Valid owner hash produces CODE_43 on full sequence
+        report_valid_hash = {
+            "diskboot_sha256": owner_reported_hash,
+            "press": "short",
+            "pulses": [7, 11, 12, 13, 14, 15, 21, 22, 23, 24, 25, 26, 31, 32, 33, 34, 35, 41, 42, 43],
+            "lcd": "dark",
+            "inspector_status": "not_run",
+        }
+        res_valid = classify_owner_report(report_valid_hash)
+        self.assertEqual(res_valid["class"], "CODE_43")
+
+        # Off-by-one char in hash must produce INVALID_CANDIDATE
+        corrupted_hash = "9ba62067c17d654a3b8995fc6e8c26176321154054a138a465ca66f9ff763a14"
+        report_corrupted = dict(report_valid_hash, diskboot_sha256=corrupted_hash)
+        res_corrupted = classify_owner_report(report_corrupted)
+        self.assertEqual(res_corrupted["class"], "INVALID_CANDIDATE")
+        self.assertIsNone(res_corrupted["last_stage_reached"])
+        self.assertIsNone(res_corrupted["next_stage"])
+        self.assertIn("mismatch", res_corrupted["notes"])
+
+        # Default build hash (94682573...136) on PORT-25 ladder report must also produce INVALID_CANDIDATE
+        default_build_hash = "9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136"
+        report_default_build = dict(report_valid_hash, diskboot_sha256=default_build_hash)
+        res_default_build = classify_owner_report(report_default_build)
+        self.assertEqual(res_default_build["class"], "INVALID_CANDIDATE")
+        self.assertIsNone(res_default_build["last_stage_reached"])
+        self.assertIsNone(res_default_build["next_stage"])
 
 
 if __name__ == "__main__":

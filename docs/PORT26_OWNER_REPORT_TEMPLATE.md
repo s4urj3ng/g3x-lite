@@ -491,6 +491,8 @@ uncertain = false
 notes = Post-PhySw Create (STAGE_BC_POST_PHYSW_CREATE): sub_fc1283d2 returned (does NOT prove task_PhySw ran).
 ```
 
+*(Note: See `docs/PORT26_TRIAL_2026-11-02.md` and `tests/fixtures/port26/owner_report_2026-11-02_port25_short.json` for the worked example from the owner's 2026-11-02 short-press trial ingesting the full sequence terminating at Code 43.)*
+
 #### Worked Example: CODE_44
 ```ini
 # Expected Class: CODE_44

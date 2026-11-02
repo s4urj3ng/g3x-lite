@@ -924,7 +924,11 @@ def parse_pulses_value(val: Any) -> Any:
         if v_lower == "none":
             return "none"
         if v_stripped.startswith("[") and v_stripped.endswith("]"):
-            items = [x.strip() for x in v_stripped[1:-1].split(",") if x.strip()]
+            inner = v_stripped[1:-1].strip()
+            if "," in inner:
+                items = [x.strip() for x in inner.split(",") if x.strip()]
+            else:
+                items = [x.strip() for x in inner.split() if x.strip()]
             parsed_list: List[Any] = []
             for item in items:
                 if re.fullmatch(r"[-+]?[0-9]+", item):
@@ -941,9 +945,46 @@ def parse_pulses_value(val: Any) -> Any:
                 else:
                     parsed_list.append(item)
             return parsed_list
+        if " " in v_stripped and re.match(r"^[-+]?[0-9\s]+$", v_stripped):
+            items = [x.strip() for x in v_stripped.split() if x.strip()]
+            return [int(item) for item in items]
         if re.fullmatch(r"[-+]?[0-9]+", v_stripped):
             return int(v_stripped)
         return v_stripped
+    return val
+
+
+def parse_sequence_value(val: Any) -> Any:
+    """Parses raw sequence input from string, list, or scalar into a resolved sequence list."""
+    if isinstance(val, str):
+        v_stripped = val.strip()
+        if v_stripped.lower() == "none":
+            return "none"
+        if v_stripped.startswith("[") and v_stripped.endswith("]"):
+            v_stripped = v_stripped[1:-1].strip()
+        if "," in v_stripped:
+            items = [x.strip() for x in v_stripped.split(",") if x.strip()]
+        else:
+            items = [x.strip() for x in v_stripped.split() if x.strip()]
+        parsed_list: List[Any] = []
+        for item in items:
+            if re.fullmatch(r"[-+]?[0-9]+", item):
+                parsed_list.append(int(item))
+            else:
+                parsed_list.append(item)
+        return parsed_list
+    elif isinstance(val, list):
+        parsed_list = []
+        for item in val:
+            if isinstance(item, bool):
+                parsed_list.append(item)
+            elif isinstance(item, int):
+                parsed_list.append(item)
+            elif isinstance(item, str) and re.fullmatch(r"[-+]?[0-9]+", item.strip()):
+                parsed_list.append(int(item.strip()))
+            else:
+                parsed_list.append(item)
+        return parsed_list
     return val
 
 
@@ -1486,6 +1527,22 @@ def process_report_pairs(raw_pairs: Sequence[Tuple[Any, Any]]) -> Dict[str, Any]
             else:
                 report["pulses"] = parsed_vals[0]
 
+        elif k in ("sequence", "code_sequence"):
+            parsed_vals = [parse_sequence_value(x) for x in vals]
+            cmp_vals = [tuple(x) if isinstance(x, list) else x for x in parsed_vals]
+            unique_cmp_seq: List[Any] = []
+            for cv in cmp_vals:
+                if cv not in unique_cmp_seq:
+                    unique_cmp_seq.append(cv)
+
+            if len(unique_cmp_seq) > 1:
+                duplicate_conflicts.append(
+                    f"Conflicting duplicate values for key '{k}': {', '.join(repr(x) for x in parsed_vals)}"
+                )
+                report["sequence"] = parsed_vals
+            else:
+                report["sequence"] = parsed_vals[0]
+
         elif k == "press":
             norm_vals = [str(x).strip().lower() for x in vals]
             unique_press = list(dict.fromkeys(norm_vals))
@@ -1643,6 +1700,121 @@ def is_count_adjacent_to_two_valid_codes(
     return (count - 1 in table) and (count + 1 in table)
 
 
+def get_canonical_ladder_path(
+    table: Dict[int, Dict[str, Any]] = LADDER_STAGE_TABLE,
+) -> Tuple[List[int], List[int]]:
+    """Derives the canonical ladder execution paths dynamically from the source-of-truth table.
+
+    Returns:
+      (core_path, loader_path)
+      where core_path starts at Code 11 and follows NEXT_STAGE_MAP stage symbols in table up to Code 44,
+      and loader_path is the ordered loader steps 1..7.
+    """
+    loader_path = sorted([c for c in table if c < 10], key=lambda c: table[c].get("order_index", c))
+    symbol_to_code = {entry["stage_symbol"]: code for code, entry in table.items()}
+
+    core_path: List[int] = []
+    curr_sym = NEXT_STAGE_MAP.get(7)
+    while curr_sym and curr_sym in symbol_to_code:
+        code = symbol_to_code[curr_sym]
+        core_path.append(code)
+        curr_sym = NEXT_STAGE_MAP.get(code)
+
+    return core_path, loader_path
+
+
+def validate_ordered_code_sequence(
+    seq: Any,
+    table: Dict[int, Dict[str, Any]] = LADDER_STAGE_TABLE,
+) -> Tuple[Optional[str], Optional[int], Optional[str]]:
+    """Validates an ordered sequence of ladder checkpoints.
+
+    A full ordered code sequence (loader count plus core codes) must:
+    1. Start with the loader count (Code 7) or the full ordered loader steps [1..7];
+    2. Continue with core ladder codes (Code 11 onward) in strict monotonic execution order;
+    3. Have no skipped codes (no gaps);
+    4. Contain only valid registered codes in the source table.
+
+    Returns:
+      (error_class, terminal_code, error_message)
+      - If valid: (None, terminal_code, None)
+      - If unknown/invalid code: ("UNKNOWN_CODE", None, message)
+      - If gapped, non-monotonic, or invalid progression: ("AMBIGUOUS", None, message)
+    """
+    if isinstance(seq, str):
+        seq = parse_sequence_value(seq)
+
+    if not isinstance(seq, list) or len(seq) == 0:
+        return ("UNKNOWN_CODE", None, "Pulse sequence must be a non-empty list of codes.")
+
+    int_seq: List[int] = []
+    for item in seq:
+        if isinstance(item, bool) or isinstance(item, float):
+            return ("UNKNOWN_CODE", None, f"Invalid non-integer element {item!r} in pulse sequence.")
+        elif isinstance(item, int):
+            int_seq.append(item)
+        elif isinstance(item, str) and re.fullmatch(r"[-+]?[0-9]+", item.strip()):
+            int_seq.append(int(item.strip()))
+        else:
+            return ("UNKNOWN_CODE", None, f"Invalid non-numeric element {item!r} in pulse sequence.")
+
+    for c in int_seq:
+        if c <= 0 or c not in table:
+            return (
+                "UNKNOWN_CODE",
+                None,
+                f"Pulse sequence contains code {c} which does not match any registered code in the PORT-25 ladder stage table.",
+            )
+
+    core_path, loader_path = get_canonical_ladder_path(table)
+
+    # Check loader prefix
+    if int_seq[0] == 7:
+        core_part = int_seq[1:]
+    elif len(int_seq) >= 7 and int_seq[:7] == loader_path:
+        core_part = int_seq[7:]
+    else:
+        return (
+            "AMBIGUOUS",
+            None,
+            f"Sequence does not start with initial loader stage (expected Code 7 or {loader_path}, observed Code {int_seq[0]}).",
+        )
+
+    if len(core_part) == 0:
+        return (
+            "AMBIGUOUS",
+            None,
+            "Sequence does not reach core ladder checkpoints (loader count plus core codes required).",
+        )
+
+    for i, c in enumerate(core_part):
+        prev_code = core_part[i - 1] if i > 0 else 7
+        if i >= len(core_path):
+            return (
+                "AMBIGUOUS",
+                None,
+                f"Sequence extends beyond final ladder stage Code {core_path[-1]} (observed Code {c}).",
+            )
+        exp_code = core_path[i]
+        if c != exp_code:
+            if i > 0 and c <= prev_code:
+                return (
+                    "AMBIGUOUS",
+                    None,
+                    f"Sequence is not strictly monotonic: Code {c} follows Code {prev_code}.",
+                )
+            exp_sym = table[exp_code]["stage_symbol"]
+            act_sym = table.get(c, {}).get("stage_symbol", "UNKNOWN")
+            return (
+                "AMBIGUOUS",
+                None,
+                f"Sequence skips expected stage following Code {prev_code} (expected Code {exp_code} / {exp_sym}, observed Code {c} / {act_sym}).",
+            )
+
+    terminal_code = int_seq[-1]
+    return (None, terminal_code, None)
+
+
 def classify_owner_report(
     input_data: Union[Dict[str, Any], str, Path],
     expected_sha256: str = EXPECTED_PORT25_COMBINED_DISKBOOT_SHA256,
@@ -1727,15 +1899,15 @@ def classify_owner_report(
             ),
         }
 
-    # 3. Pulse Input Validation & Resolution
+    # 3. Pulse / Sequence Input Validation & Resolution
     # - 'none' (case-insensitive, exact) is the ONLY value giving NO_PULSES.
-    # - Accept only real ints, or strings of decimal digits, plus lists of those.
+    # - Accept only real ints, or strings of decimal digits, plus lists of those or ordered sequences.
     # - Missing pulses field, empty value, 'unknown', '?', floats (24.9), bools (True),
     #   negative numbers (-1) or zero (0) map to UNKNOWN_CODE with explanatory notes.
-    if "pulses" not in report:
+    if "pulses" not in report and "sequence" not in report and "code_sequence" not in report:
         note_missing = (
             "Missing 'pulses' field in owner report. Report must supply an integer pulse count, "
-            "a list of integers, or 'none'."
+            "a list of integers, an ordered sequence, or 'none'."
         )
         if held_non_stock_note:
             note_missing += held_non_stock_note
@@ -1748,62 +1920,113 @@ def classify_owner_report(
         }
 
     pulses_raw = report.get("pulses")
+    sequence_raw = report.get("sequence") or report.get("code_sequence")
+
     is_none_pulse = False
     count_resolved: Optional[int] = None
     is_ambiguous_multiple = False
+    ambig_reason: Optional[str] = None
     invalid_input_reason: Optional[str] = None
+    is_sequence = False
+    seq_codes: List[int] = []
 
-    if isinstance(pulses_raw, bool):
-        invalid_input_reason = (
-            f"Invalid boolean value '{pulses_raw}' for pulses (booleans are not valid pulse counts)."
-        )
-    elif isinstance(pulses_raw, float):
-        invalid_input_reason = (
-            f"Invalid non-integer float value '{pulses_raw}' for pulses; "
-            "only integers, decimal digit strings, or 'none' accepted."
-        )
-    elif isinstance(pulses_raw, str):
-        p_str = pulses_raw.strip()
-        if p_str.lower() == "none":
-            is_none_pulse = True
-        elif p_str == "":
-            invalid_input_reason = "Empty 'pulses' value in owner report."
-        elif re.fullmatch(r"[-+]?[0-9]+", p_str):
-            count_resolved = int(p_str)
+    # If sequence is explicitly supplied, validate it first
+    if sequence_raw is not None:
+        seq_err, seq_term, seq_msg = validate_ordered_code_sequence(sequence_raw, table)
+        if seq_err == "UNKNOWN_CODE":
+            invalid_input_reason = seq_msg
+        elif seq_err == "AMBIGUOUS":
+            is_ambiguous_multiple = True
+            ambig_reason = seq_msg
         else:
+            assert seq_term is not None
+            is_sequence = True
+            seq_codes = sequence_raw if isinstance(sequence_raw, list) else parse_sequence_value(sequence_raw)
+            count_resolved = seq_term
+
+    if pulses_raw is not None and invalid_input_reason is None and not is_ambiguous_multiple:
+        if isinstance(pulses_raw, bool):
             invalid_input_reason = (
-                f"Invalid non-numeric or malformed pulse count string '{pulses_raw}' in owner report."
+                f"Invalid boolean value '{pulses_raw}' for pulses (booleans are not valid pulse counts)."
             )
-    elif isinstance(pulses_raw, int):
-        count_resolved = pulses_raw
-    elif isinstance(pulses_raw, list):
-        if len(pulses_raw) == 0:
-            invalid_input_reason = "Empty pulses list in owner report."
-        else:
-            int_list: List[int] = []
-            for item in pulses_raw:
-                if isinstance(item, bool):
-                    invalid_input_reason = f"Invalid boolean element '{item}' inside pulses list."
-                    break
-                elif isinstance(item, float):
-                    invalid_input_reason = f"Invalid float element '{item}' inside pulses list."
-                    break
-                elif isinstance(item, int):
-                    int_list.append(item)
-                elif isinstance(item, str) and re.fullmatch(r"[-+]?[0-9]+", item.strip()):
-                    int_list.append(int(item.strip()))
-                else:
-                    invalid_input_reason = f"Invalid non-numeric element '{item}' inside pulses list."
-                    break
-
-            if invalid_input_reason is None:
-                unique_counts = sorted(list(set(int_list)))
-                if len(unique_counts) == 1:
-                    count_resolved = unique_counts[0]
-                else:
+        elif isinstance(pulses_raw, float):
+            invalid_input_reason = (
+                f"Invalid non-integer float value '{pulses_raw}' for pulses; "
+                "only integers, decimal digit strings, or 'none' accepted."
+            )
+        elif isinstance(pulses_raw, str):
+            p_str = pulses_raw.strip()
+            if p_str.lower() == "none":
+                is_none_pulse = True
+            elif p_str == "":
+                invalid_input_reason = "Empty 'pulses' value in owner report."
+            elif re.fullmatch(r"[-+]?[0-9]+", p_str):
+                p_int = int(p_str)
+                if is_sequence and count_resolved is not None and p_int != count_resolved:
                     is_ambiguous_multiple = True
-    else:
-        invalid_input_reason = f"Unrecognized pulse input type '{type(pulses_raw).__name__}'."
+                    ambig_reason = (
+                        f"Explicit 'pulses' count ({p_int}) conflicts with terminal code "
+                        f"of sequence ({count_resolved})."
+                    )
+                else:
+                    count_resolved = p_int
+            else:
+                invalid_input_reason = (
+                    f"Invalid non-numeric or malformed pulse count string '{pulses_raw}' in owner report."
+                )
+        elif isinstance(pulses_raw, int):
+            if is_sequence and count_resolved is not None and pulses_raw != count_resolved:
+                is_ambiguous_multiple = True
+                ambig_reason = (
+                    f"Explicit 'pulses' count ({pulses_raw}) conflicts with terminal code "
+                    f"of sequence ({count_resolved})."
+                )
+            else:
+                count_resolved = pulses_raw
+        elif isinstance(pulses_raw, list):
+            if len(pulses_raw) == 0:
+                invalid_input_reason = "Empty pulses list in owner report."
+            else:
+                int_list: List[int] = []
+                for item in pulses_raw:
+                    if isinstance(item, bool):
+                        invalid_input_reason = f"Invalid boolean element '{item}' inside pulses list."
+                        break
+                    elif isinstance(item, float):
+                        invalid_input_reason = f"Invalid float element '{item}' inside pulses list."
+                        break
+                    elif isinstance(item, int):
+                        int_list.append(item)
+                    elif isinstance(item, str) and re.fullmatch(r"[-+]?[0-9]+", item.strip()):
+                        int_list.append(int(item.strip()))
+                    else:
+                        invalid_input_reason = f"Invalid non-numeric element '{item}' inside pulses list."
+                        break
+
+                if invalid_input_reason is None:
+                    unique_counts = sorted(list(set(int_list)))
+                    if len(unique_counts) == 1:
+                        p_int = unique_counts[0]
+                        if is_sequence and count_resolved is not None and p_int != count_resolved:
+                            is_ambiguous_multiple = True
+                            ambig_reason = f"Explicit 'pulses' count ({p_int}) conflicts with terminal code of sequence ({count_resolved})."
+                        else:
+                            count_resolved = p_int
+                    else:
+                        if not is_sequence and not is_ambiguous_multiple:
+                            seq_err, seq_term, seq_msg = validate_ordered_code_sequence(int_list, table)
+                            if seq_err == "UNKNOWN_CODE":
+                                invalid_input_reason = seq_msg
+                            elif seq_err == "AMBIGUOUS":
+                                is_ambiguous_multiple = True
+                                ambig_reason = seq_msg
+                            else:
+                                assert seq_term is not None
+                                count_resolved = seq_term
+                                is_sequence = True
+                                seq_codes = int_list
+        else:
+            invalid_input_reason = f"Unrecognized pulse input type '{type(pulses_raw).__name__}'."
 
     # Handle input validation failures
     if invalid_input_reason is not None:
@@ -1821,12 +2044,15 @@ def classify_owner_report(
             "notes": note_inval,
         }
 
-    # Handle Conflicting Multiple Counts
+    # Handle Conflicting Multiple Counts / Sequence Ambiguity
     if is_ambiguous_multiple:
+        reported_val = pulses_raw if pulses_raw is not None else sequence_raw
         note_ambig = (
-            f"Conflicting multiple pulse counts reported: {pulses_raw}. "
+            f"Conflicting multiple pulse counts reported: {reported_val}. "
             "Unable to definitively isolate terminal stage due to conflicting observations."
         )
+        if ambig_reason:
+            note_ambig += f" ({ambig_reason})"
         if held_non_stock_note:
             note_ambig += held_non_stock_note
         return {
@@ -1916,7 +2142,20 @@ def classify_owner_report(
         context = entry.get("context", "")
 
         note_text = f"{purpose} ({context})."
-        if count_resolved == 44:
+        if is_sequence:
+            note_text += (
+                f" Full ordered ladder sequence verified ({len(seq_codes)} checkpoints from loader "
+                f"through Code {count_resolved} / {stage_symbol})."
+            )
+            if count_resolved == 44:
+                note_text += " Handoff continuation branches to sub_fc0d0126 [VERIFIED: boot_prototype.c:436-438]."
+                if lcd_state == LcdState.STOCK_UI:
+                    note_text += " Independent affirmative UI evidence observed: camera booted into stock UI."
+            else:
+                next_code_num = count_resolved + 1 if (count_resolved + 1) in table else None
+                next_code_str = f"Code {next_code_num} ({next_stage})" if next_code_num else next_stage
+                note_text += f" Next unreached stage: {next_code_str}."
+        elif count_resolved == 44:
             note_text += " Handoff continuation branches to sub_fc0d0126 [VERIFIED: boot_prototype.c:436-438]."
             if lcd_state == LcdState.STOCK_UI:
                 note_text += " Independent affirmative UI evidence observed: camera booted into stock UI."
