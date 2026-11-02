@@ -205,3 +205,20 @@ This plan enumerates every code and special class emitted by `tools/port26_ladde
 (b) Execution: Stock Canon firmware boot completed successfully to live shooting/playback GUI under held button press (Outcome O1/O6) `[VERIFIED: tools/port26_ladder_decode.py:1710-1728; docs/PORT24_POWERON_FIX.md:19-24; docs/PORT25_OWNER_TRIAL_PLAN.md:162-173]`.
 (c) Likely power-off/wait point: Camera does not power off; boots fully to stock UI, verifying baseline hardware health and positive control `[VERIFIED: tools/port26_ladder_decode.py:1710-1728; docs/PORT25_OWNER_TRIAL_PLAN.md:162-173]`.
 (d) Follow-up UNKNOWN: needs bounded ROM range / control-flow mapping of short-press release path differences from held-press baseline (docs/PORT25_SHORT_PRESS_LOCALISE.md:21, 55, 250-261).
+
+---
+
+## Owner follow-up (2026-11-02)
+
+Following the 2026-11-02 owner trial of the combined candidate terminating at Code 43 (`STAGE_BC_POST_PHYSW_CREATE`), the owner recorded the following physical hardware observations and control-trial findings:
+
+1. **Short-Press Power State (Post-Code 43)**:
+   - After a short press, once the LED went dark following Code 43, the camera was **FULLY OFF** (not hung) and the LCD never came on `[VERIFIED: owner observation, 2026-11-02]`.
+
+2. **Held-Press Control Trial**:
+   - The stock UI comes up only if the button is held until the LED ladder finishes; releasing earlier ends in the same shutdown `[VERIFIED: owner observation, 2026-11-02]`.
+   - The held run was not captured on video, so its codes are UNKNOWN `[UNKNOWN: unrecorded video capture, 2026-11-02]`.
+
+3. **Inference on Shutdown Mechanism**:
+   - The shutdown depends on the button state near 43->44.
+   - This supports **Candidate 5** (`task_PhySw` sees the release and dispatches a power-off, `docs/PORT25_SHORT_PRESS_LOCALISE.md:250-261`; `docs/PORT25_OWNER_TRIAL_PLAN.md:228-230`) over **Candidate 3** (hardware watchdog timer expiry, `docs/PORT25_SHORT_PRESS_LOCALISE.md:220-231`; `docs/PORT25_OWNER_TRIAL_PLAN.md:227-230`) `[INFERRED: Candidate 5 in docs/PORT25_SHORT_PRESS_LOCALISE.md:250-261; Candidate 3 in docs/PORT25_SHORT_PRESS_LOCALISE.md:220-231]`.

@@ -2277,3 +2277,29 @@ python3 -B tools/port18_trial_report.py private/port18/trial_report.md --out pri
 - **Tooling & Next-Steps Plan**:
   - Automated decoder tool: [tools/port26_ladder_decode.py](../tools/port26_ladder_decode.py) parses and classifies owner trial reports across 29 ladder stage codes and 5 special classes `[VERIFIED: tools/port26_ladder_decode.py:161-561]`.
   - Per-class next-step plan: [docs/PORT26_LADDER_NEXT_STEPS.md](PORT26_LADDER_NEXT_STEPS.md) documents the stage-by-stage execution intervals, power-off points, and next candidate actions for every ladder code `[VERIFIED: docs/PORT26_LADDER_NEXT_STEPS.md:5-207]`.
+
+### Owner priority change (2026-11-02)
+- **Accepted Trial Boot Method**: Boot by holding the power button is the accepted boot method for owner trials `[VERIFIED]` (owner direction, 2026-11-02). Holding the power button until the LED ladder completes bypasses the short-press shutdown and reaches the stock UI (`O1` control state).
+- **Post-PORT-26 Priority Order**: The owner-requested order of development following PORT-26 prioritizes the CHDK GUI track ahead of the short-press fix, sequenced in four steps:
+  1. **Step 1: Resident CHDK task (`spytask` equivalent)**: A resident CHDK task running after the `sub_fc0d0126` handoff (`chdk-port/platform/g3x/sub/110c/boot_prototype.c:438`), with an LED heartbeat as proof-of-life, checked with a held press.
+     - Stock continuation handoff address `0xFC0D0126`: verified (`PORT25-ROM-FIRMWARE-CONT; chdk-port/platform/g3x/sub/110c/boot_prototype.c:438`).
+     - Status LED MMIO `0xD20B0884` (GPIO 33): verified (`docs/PORT20_LED_EVIDENCE.md:23-28`).
+     - DryOS task creation primitive (`CreateTask` / `task_create`) address in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+     - DryOS task exit / sleep primitive addresses (`ExitTask`, `SleepTask`) in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+     - Post-handoff task hook injection site / task dispatcher entry in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+     - CHDK task stack memory allocation range and heap boundary in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+  2. **Step 2: Display**: Bitmap/OSD framebuffer address, palette and dimensions, then a minimal test overlay.
+     - Bitmap/OSD active framebuffer address / pointer in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+     - Bitmap/OSD framebuffer dimensions (width, height, pitch/stride) and pixel format in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+     - Palette buffer address, palette entry format, and color palette hardware registers in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+     - Display update, flush, or screen refresh eventprocs / subroutines in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+  3. **Step 3: Keyboard**: Hook `task_PhySw` / `kbd` processing and ALT toggle, with the short-press fix folded in here.
+     - PORT-26 tasks `p26-t5` and `p26-t6` were deferred to step 3 `[VERIFIED]` (owner direction, 2026-11-02).
+     - Task creation helper `sub_fc1283d2` (`0xFC1283D2`) and `task_PhySw` entry (`0xFC1283AD`, priority 23, stack 2048 B, status RAM `0x00040DAC`): verified (`PORT25-ROM-PHYSW-TASK; docs/PORT25_SHORT_PRESS_LOCALISE.md:250-261`).
+     - `task_PhySw` hook point / keyboard intercept instruction address in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+     - Physical key table, button bitmap mask offsets, and switch descriptors in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+     - Keyboard polling routine (`kbd_read_keys` / `my_kbd_read_keys`) hook address in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+     - Power-button release shutdown dispatch path / `TurnOffE1_FW` edge in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+  4. **Step 4: Standard CHDK GUI / ALT menu**: The standard CHDK GUI/ALT menu running on top of the resident task, display overlay, and keyboard ALT toggle.
+     - CHDK GUI event loop integration and menu navigation dispatch in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+     - OSD / console font tables and character rendering primitives in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
