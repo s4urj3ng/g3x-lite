@@ -1,0 +1,320 @@
+{
+  "manifest_version": "1.0.0",
+  "authorization_scopes": [
+    {
+      "scope_id": "SCOPE-PORT31-CREATETASK-FINAL",
+      "firmware_revision": "GM1.10C",
+      "approved_ranges": [
+        {
+          "start_address": "0xFC31B408",
+          "end_address": "0xFC31B507",
+          "label": "PORT29-ROM-N1 sub_fc31b408 heap alignment & init veneer table (re-cited)"
+        },
+        {
+          "start_address": "0xFCE91170",
+          "end_address": "0xFCE9118F",
+          "label": "PORT30-ROM-INIT-811C ROM initializer for secondary default stack size (*(0x0000811C)) (re-cited)"
+        },
+        {
+          "start_address": "0xFCE91220",
+          "end_address": "0xFCE9123F",
+          "label": "PORT30-ROM-INIT-81D0 ROM initializer for default stack size (*(0x000081D0)) (re-cited)"
+        },
+        {
+          "start_address": "0xFCEEF430",
+          "end_address": "0xFCEEF4AF",
+          "label": "PORT30-ROM-ACTIVATE-CALLEE2 task activation callee 2: task enqueue/activation (0xFCEEF438) (re-cited)"
+        },
+        {
+          "start_address": "0xFCEEF5C0",
+          "end_address": "0xFCEEF7BF",
+          "label": "PORT29-ROM-N3 alloc_task_stack_tcb body (re-cited)"
+        },
+        {
+          "start_address": "0xFCEEF7C0",
+          "end_address": "0xFCEEF9C3",
+          "label": "PORT29-ROM-N4 activate_task task activation helper remainder (re-cited)"
+        },
+        {
+          "start_address": "0xFCEF0070",
+          "end_address": "0xFCEF00EF",
+          "label": "PORT30-ROM-ACTIVATE-CALLEE1 task activation callee 1: TCB descriptor lookup (0xFCEF007E) (re-cited)"
+        },
+        {
+          "start_address": "0xFCEF0180",
+          "end_address": "0xFCEF037F",
+          "label": "PORT30-ROM-ALLOC-TASK kernel task allocator and alignment routine (0xBFE11746 / 0xFCEF0192) (re-cited)"
+        },
+        {
+          "start_address": "0xFCEF0850",
+          "end_address": "0xFCEF097F",
+          "label": "PORT31-ROM-STACK-CALLEES task stack fill (0xBFE11E04) and dynamic stack allocator entry (0xBFE11E62)"
+        },
+        {
+          "start_address": "0xFCEF28B0",
+          "end_address": "0xFCEF29AF",
+          "label": "PORT29-ROM-N5 DebugAssert panic/assert handler veneer table (re-cited)"
+        },
+        {
+          "start_address": "0xFCEF33A0",
+          "end_address": "0xFCEF33DF",
+          "label": "PORT30-ROM-SLEEPTASK reconciled SleepTask body precondition checks (0xBFE14968 / 0xFCEF33B4) (re-cited)"
+        },
+        {
+          "start_address": "0xFCEF33E0",
+          "end_address": "0xFCEF345F",
+          "label": "PORT31-ROM-SLEEPTASK-BODY SleepTask continuation body, delay units & dispatch (0xBFE14994 / 0xFCEF33E0)"
+        },
+        {
+          "start_address": "0xFCEF3488",
+          "end_address": "0xFCEF34F9",
+          "label": "PORT29-ROM-CREATETASK CreateTask body and calling convention (re-cited)"
+        },
+        {
+          "start_address": "0xFCEF36A0",
+          "end_address": "0xFCEF36A3",
+          "label": "PORT30-ROM-CREATETASK-LIT CreateTask literal pool pointer entry at 0xFCEF36A0 (re-cited)"
+        },
+        {
+          "start_address": "0xFCEF3A20",
+          "end_address": "0xFCEF3A5F",
+          "label": "PORT29-ROM-N6 ATCM interrupt disable & restore routines (re-cited)"
+        }
+      ],
+      "max_bytes_total": 4096,
+      "allowed_classifications": [
+        "STATIC_VERIFIED",
+        "INFERRED",
+        "UNKNOWN"
+      ],
+      "description": "PORT-31 GM1.10C final CreateTask calling convention and task stack allocation evidence scope"
+    }
+  ],
+  "evidence_entries": [
+    {
+      "evidence_id": "PORT29-ROM-N1",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC31B408",
+      "end_address": "0xFC31B507",
+      "expected_byte_count": 256,
+      "sha256": "b93e3f48ab31f467e9ee3f4ba907ea3032a3a81cac4fe1ff18a2c0ba138181ce",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT31-CREATETASK-FINAL",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Slice N1: sub_fc31b408 veneer table in primary ROM (re-cited from PORT-29/PORT-30)"
+    },
+    {
+      "evidence_id": "PORT30-ROM-INIT-811C",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFCE91170",
+      "end_address": "0xFCE9118F",
+      "expected_byte_count": 32,
+      "sha256": "66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT31-CREATETASK-FINAL",
+      "classification": "STATIC_VERIFIED",
+      "notes": "ROM initializer word for secondary default stack size (*(0x0000811C) = 0x00000000 at 0xFCE91174 via Copy Loop 3, re-cited from PORT-30)"
+    },
+    {
+      "evidence_id": "PORT30-ROM-INIT-81D0",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFCE91220",
+      "end_address": "0xFCE9123F",
+      "expected_byte_count": 32,
+      "sha256": "e63a1b3b97dd2950c54eae572c9e857e6246e251814c11802a9c687f670eaf6c",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT31-CREATETASK-FINAL",
+      "classification": "STATIC_VERIFIED",
+      "notes": "ROM initializer word for default stack size (*(0x000081D0) = 0x00000000 at 0xFCE91228 via Copy Loop 3, re-cited from PORT-30)"
+    },
+    {
+      "evidence_id": "PORT30-ROM-ACTIVATE-CALLEE2",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFCEEF430",
+      "end_address": "0xFCEEF4AF",
+      "expected_byte_count": 128,
+      "sha256": "0c2fee6daa607075ee78299c3b6005bd021bb46b32a08e9e3f9d8ef38147d386",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT31-CREATETASK-FINAL",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Task activation callee 2: task enqueue/activation routine (ATCM 0xBFE109EC / ROM 0xFCEEF438, re-cited from PORT-30)"
+    },
+    {
+      "evidence_id": "PORT29-ROM-N3",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFCEEF5C0",
+      "end_address": "0xFCEEF7BF",
+      "expected_byte_count": 512,
+      "sha256": "6d5869cf7e64256371fbe1ed693f64125dc0fbccd538ced877cfbb5cfe5fcdd2",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT31-CREATETASK-FINAL",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Slice N3: alloc_task_stack_tcb body (ATCM 0xBFE10B88, re-cited from PORT-29/PORT-30)"
+    },
+    {
+      "evidence_id": "PORT29-ROM-N4",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFCEEF7C0",
+      "end_address": "0xFCEEF9C3",
+      "expected_byte_count": 516,
+      "sha256": "c4603dc40c67f2f563a0e41efddd4f5ac50fbaf64b5c2272263622b424eedabc",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT31-CREATETASK-FINAL",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Slice N4: activate_task task activation helper remainder (0xFCEEF7C0..0xFCEEF9C3, re-cited from PORT-29/PORT-30)"
+    },
+    {
+      "evidence_id": "PORT30-ROM-ACTIVATE-CALLEE1",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFCEF0070",
+      "end_address": "0xFCEF00EF",
+      "expected_byte_count": 128,
+      "sha256": "efb95b96c288b0cb1e153cfba32a660e2dd2bdeac20223bb22eb4a3722cbc7ac",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT31-CREATETASK-FINAL",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Task activation callee 1: TCB descriptor lookup routine (ATCM 0xBFE11632 / ROM 0xFCEF007E, re-cited from PORT-30)"
+    },
+    {
+      "evidence_id": "PORT30-ROM-ALLOC-TASK",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFCEF0180",
+      "end_address": "0xFCEF037F",
+      "expected_byte_count": 512,
+      "sha256": "504cc373cf058c055fa66ae38bd8ad9aa6ccd7c85d31d01e3e33f273692f6405",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT31-CREATETASK-FINAL",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Kernel task allocator and alignment routine (ATCM 0xBFE11746 / ROM 0xFCEF0192, re-cited from PORT-30)"
+    },
+    {
+      "evidence_id": "PORT31-ROM-STACK-CALLEES",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFCEF0850",
+      "end_address": "0xFCEF097F",
+      "expected_byte_count": 304,
+      "sha256": "bca315b0b8b89f7bf2b82cd6847a0b45f640e5bd7bc041122021927359929f49",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT31-CREATETASK-FINAL",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Task stack watermark fill (0xBFE11E04 / 0xFCEF0850) and dynamic stack allocator entry (0xBFE11E62 / 0xFCEF08AE -> pool 0x000403A4 at 0xFCEF089C)"
+    },
+    {
+      "evidence_id": "PORT29-ROM-N5",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFCEF28B0",
+      "end_address": "0xFCEF29AF",
+      "expected_byte_count": 256,
+      "sha256": "93c956e9d994888fc228997a65d0785901a4c23e0921c5e3cf6befa450fb2142",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT31-CREATETASK-FINAL",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Slice N5: DebugAssert entry veneer table (ATCM 0xBFE13E78, re-cited from PORT-29/PORT-30)"
+    },
+    {
+      "evidence_id": "PORT30-ROM-SLEEPTASK",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFCEF33A0",
+      "end_address": "0xFCEF33DF",
+      "expected_byte_count": 64,
+      "sha256": "ee0ef02f81b7f50a81c60d40a752542ff09be03a185eb3d5d69119c4cf0f3c61",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT31-CREATETASK-FINAL",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Reconciled SleepTask body precondition checks (ATCM 0xBFE14968 / ROM 0xFCEF33B4, re-cited from PORT-30)"
+    },
+    {
+      "evidence_id": "PORT31-ROM-SLEEPTASK-BODY",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFCEF33E0",
+      "end_address": "0xFCEF345F",
+      "expected_byte_count": 128,
+      "sha256": "14f91ff60242c5d91e70bfe9ee0964c88f69a46909c6af124842c7f037a6e6c1",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT31-CREATETASK-FINAL",
+      "classification": "STATIC_VERIFIED",
+      "notes": "SleepTask continuation body, delay units & dispatch (ATCM 0xBFE14994 / ROM 0xFCEF33E0..0xFCEF345F)"
+    },
+    {
+      "evidence_id": "PORT29-ROM-CREATETASK",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFCEF3488",
+      "end_address": "0xFCEF34F9",
+      "expected_byte_count": 114,
+      "sha256": "6d7fbecb5f9589cc34994a63ac6cf7e2def132a7c355a789a29ea3cae8c50ddf",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT31-CREATETASK-FINAL",
+      "classification": "STATIC_VERIFIED",
+      "notes": "CreateTask function body and calling convention (ATCM 0xBFE14A3C..0xBFE14AAD, re-cited from PORT-29/PORT-30)"
+    },
+    {
+      "evidence_id": "PORT30-ROM-CREATETASK-LIT",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFCEF36A0",
+      "end_address": "0xFCEF36A3",
+      "expected_byte_count": 4,
+      "sha256": "4a9f5cbccf8b59d7df28cb6af0bd9d7373f1209b30fcfe86786a37ab7f88e1a2",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT31-CREATETASK-FINAL",
+      "classification": "STATIC_VERIFIED",
+      "notes": "CreateTask literal pool pointer entry at 0xFCEF36A0 (holds 32-bit literal pointer 0x000081CC, re-cited from PORT-30)"
+    },
+    {
+      "evidence_id": "PORT29-ROM-N6",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFCEF3A20",
+      "end_address": "0xFCEF3A5F",
+      "expected_byte_count": 64,
+      "sha256": "3bf663507211b96500c59647e3f065cff96d111421ee5a2c867c022536c45969",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT31-CREATETASK-FINAL",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Slice N6: ATCM interrupt disable & restore routines (ATCM 0xBFE14FE6, 0xBFE14FEA, re-cited from PORT-29/PORT-30)"
+    }
+  ]
+}
