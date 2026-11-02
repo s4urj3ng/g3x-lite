@@ -2303,3 +2303,26 @@ python3 -B tools/port18_trial_report.py private/port18/trial_report.md --out pri
   4. **Step 4: Standard CHDK GUI / ALT menu**: The standard CHDK GUI/ALT menu running on top of the resident task, display overlay, and keyboard ALT toggle.
      - CHDK GUI event loop integration and menu navigation dispatch in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
      - OSD / console font tables and character rendering primitives in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+
+### PORT-26 Milestone Close-Out (2026-11-02)
+- **PORT-26 Deliverables**: Milestone PORT-26 completed all triage, decoding, and planning deliverables without modifying runtime boot code `[VERIFIED]`:
+  1. Automated LED ladder decoder tool: [tools/port26_ladder_decode.py](../tools/port26_ladder_decode.py) (and test suite [tests/test_port26_ladder_decode.py](../tests/test_port26_ladder_decode.py)) `[VERIFIED: tools/port26_ladder_decode.py:161-561; tests/test_port26_ladder_decode.py:84-250]`.
+  2. Owner report template: [docs/PORT26_OWNER_REPORT_TEMPLATE.md](PORT26_OWNER_REPORT_TEMPLATE.md) (and tests [tests/test_port26_owner_template.py](../tests/test_port26_owner_template.py)) `[VERIFIED: docs/PORT26_OWNER_REPORT_TEMPLATE.md:20-80; tests/test_port26_owner_template.py:105-125]`.
+  3. Per-class next-steps execution plan: [docs/PORT26_LADDER_NEXT_STEPS.md](PORT26_LADDER_NEXT_STEPS.md) `[VERIFIED: docs/PORT26_LADDER_NEXT_STEPS.md:5-207]`.
+  4. Code 43 owner trial ingest: [docs/PORT26_TRIAL_2026-11-02.md](PORT26_TRIAL_2026-11-02.md) and fixtures tests/fixtures/port26/owner_report_2026-11-02_port25_short.json `[VERIFIED: docs/PORT26_TRIAL_2026-11-02.md:12-90]`.
+  5. Code 43 evidence record and short-press deferral: [docs/PORT26_CODE43_RECORD.md](PORT26_CODE43_RECORD.md) `[VERIFIED: docs/PORT26_CODE43_RECORD.md:12-80]`.
+- **Working Boot Method**: Held press is the owner-accepted working boot method (2026-11-02) `[VERIFIED: owner direction, 2026-11-02; docs/PORT26_CODE43_RECORD.md:40-44; see ### Owner priority change (2026-11-02) above]`.
+- **Next Milestone Order**: The owner-directed sequence prioritizes the CHDK GUI track ahead of the short-press fix (owner instruction, not technical fact) `[VERIFIED: owner direction 2026-11-02, docs/PORT26_CODE43_RECORD.md:59-62]`:
+  1. **Step 1**: resident CHDK task after the sub_fc0d0126 handoff, with an LED heartbeat checked with a held press.
+  2. **Step 2**: display/OSD test overlay.
+  3. **Step 3**: keyboard/task_PhySw hook and ALT toggle, with the short-press fix folded in.
+  4. **Step 4**: CHDK GUI/ALT menu.
+  For technical details, evidence and UNKNOWN ROM ranges see ### Owner priority change (2026-11-02) above and docs/PORT26_CODE43_RECORD.md.
+- **Build Integrity Restatement**:
+  - Default build remains byte-identical: `candidate_port2a/DISKBOOT.BIN` SHA-256 `9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136` (size 118,001 B) `[VERIFIED: docs/PORT19_GO_NOGO.md:31; docs/PORT25_LADDER_FIX_CANDIDATE.md:381]`.
+  - PORT-24 and PORT-25 opt-in build outputs:
+    - PORT-24 opt-in short-press fix (`--poweron-fix`): SHA-256 `faad4d8242fbf6f79a44b10a9956f7eb04de9b65f42221f82a3b69eb024cf056` (118,001 B) `[VERIFIED: docs/PORT24_POWERON_FIX.md:286; docs/PORT25_LADDER_FIX_CANDIDATE.md:382]`.
+    - PORT-24 opt-in breadcrumb ladder: SHA-256 `aa7963de9b6c04c8c5a3077efab12f8383a26db114d5d9b92e320780630abd3c` (118,257 B) `[VERIFIED: docs/PORT24_BREADCRUMB_LADDER.md:517; docs/PORT25_LADDER_FIX_CANDIDATE.md:383]`.
+    - PORT-25 opt-in ladder-only (`--ladder-only`): SHA-256 `45da469f3eb46c4d2aff77a032e5c8bb4eedf8ec8846526853d716d05d2b2f4e` (126,081 B) `[VERIFIED: docs/PORT25_LADDER_FIX_CANDIDATE.md:384]`.
+    - PORT-25 opt-in combined candidate (`--combined`): SHA-256 `9ba62067c17d654a3b8995fc6e8c26176321154054a138a465ca66f9ff763a15` (124,865 B) `[VERIFIED: docs/PORT25_LADDER_FIX_CANDIDATE.md:385]`.
+  - Unchanged in PORT-26: no PORT-26 commit touched `chdk-port/` or the build scripts tools/build_candidate_port2a.py, tools/build_candidate_port24_poweron_fix.py, tools/build_candidate_port24_ladder.py, tools/build_candidate_port25_ladder_fix.py (`git diff 2aea9cb..HEAD -- chdk-port/ tools/build_candidate_port2a.py tools/build_candidate_port24_poweron_fix.py tools/build_candidate_port24_ladder.py tools/build_candidate_port25_ladder_fix.py` and `git log 2aea9cb..HEAD -- chdk-port/ tools/build_candidate_port2a.py tools/build_candidate_port24_poweron_fix.py tools/build_candidate_port24_ladder.py tools/build_candidate_port25_ladder_fix.py` show 0 changes against the PORT-25 merge base `2aea9cb`) `[VERIFIED: git diff 2aea9cb..HEAD -- chdk-port/ tools/build_candidate_port2a.py]`.
