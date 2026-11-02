@@ -15,7 +15,7 @@
 ## 1. Executive Summary & Epistemic Standards
 
 This dossier establishes the structural evidence base for **PORT-27 T2 (Resident Heartbeat)** on the Canon PowerShot G3 X (GM1.10C). It provides static ROM disassembly evidence and empirical hardware trial citations addressing four core technical prerequisites:
-1. **Item (a) — Stock Firmware Heap / System Memory Start & Relocated Core Survival**: Analysis of stock continuation `sub_fc0d0126`, demonstration that stock firmware configures no heap after `sub_fc0d0126`, analysis of where stock firmware sets its heap in `sub_fc05b3c8`, verification of the exact patch point where the `0x003489B4` literal (`[0xFC05B450]`) is loaded and passed, and definition of the raised memory start (`0x00368680`).
+1. **Item (a) — Stock Firmware Heap / System Memory Start & Relocated Core Survival**: Analysis of stock continuation `sub_fc0d0126` establishing that `sub_fc0d0126`'s own instructions set no heap bounds (`[VERIFIED]`) while the behaviour of the ATCM IRQ disable/restore routines is `[INFERRED/UNKNOWN]` (not read; outside PORT-27 policy), analysis of where stock firmware sets its heap in `sub_fc05b3c8`, verification of the exact patch point where the `0x003489B4` literal (`[0xFC05B450]`) is loaded and passed, and definition of the raised memory start (`0x00368680`).
 2. **Item (b) — DryOS Task Creation Entry & Calling Convention**: Identification of `_CreateTask` entry `sub_fc31bbc4` (ARM mode) entered via `blx` from Thumb-2, call-site verified register values at `0xFC05B984..0xFC05B990`, and determination that parameter semantics (specifically stack size parameter `r2`) remain unproven in ROM and reside in ATCM (`0xBFE14A3C`, out of policy), yielding a strict NO-GO verdict for T2.
 3. **Item (c) — Hardware LED Register & Control Values**: Reused strictly from PORT-23 hardware breadcrumbs (MMIO `0xD20B0884`, ON `0x004D0002`, OFF `0x004C0003`) without reading new ROM bytes.
 4. **Item (d) (Optional) — Firmware Sleep / Delay Primitive**: Identification of `SleepTask` veneer `0xFC31BF84` (ARM mode) called via `blx` from `task_WdtReset` at `0xFC135CC6`, millisecond delay parameter in `r0`, and context-free busy-wait loop alternative.
@@ -31,30 +31,43 @@ In accordance with the project charter, all findings in this document are strict
 ## 2. ROM Read Policy Authorization & Prior Range Citations
 
 ### 2.1 Prior Evidence Citations for ROM Slices
-The ROM read policy mandates that every inspection slice must start at an address already cited with evidence in PORT-23/24/25 documentation or manifests, or at a verified branch target inside such a range. All eight examined ranges strictly satisfy this policy:
+The ROM read policy mandates that every inspection slice must start at an address already cited with evidence in PORT-23/24/25 documentation or manifests, or at a verified branch target inside such a range. All eight examined ranges strictly satisfy this policy.
 
+#### Authorization Matrix: Range Start $\to$ Authorizing File:Line $\to$ Literal Text
+| Range Start Address | Evidence ID | Authorizing File:Line | Literal Text Found on Cited Line |
+|:---:|:---|:---|:---|
+| `0xFC05B3C0` | `PORT27-ROM-HEAP-SETUP` | `docs/agentbridge/PORT25_EVIDENCE_MANIFEST.json:14`<br>`docs/agentbridge/PORT25_EVIDENCE_MANIFEST.json:162` | `"start_address": "0xFC05B3C0",`<br>`"start_address": "0xFC05B3C0",` |
+| `0xFC05B8E0` | `PORT27-ROM-STARTUP-TASKS` | `docs/agentbridge/PORT24_EVIDENCE_MANIFEST.json:14`<br>`docs/agentbridge/PORT24_EVIDENCE_MANIFEST.json:152` | `"start_address": "0xFC05B8E0",`<br>`"start_address": "0xFC05B8E0",` |
+| `0xFC0D0080` | `PORT27-ROM-FIRMWARE-CONT` | `docs/agentbridge/PORT24_EVIDENCE_MANIFEST.json:29`<br>`docs/agentbridge/PORT24_EVIDENCE_MANIFEST.json:197` | `"start_address": "0xFC0D0080",`<br>`"start_address": "0xFC0D0080",` |
+| `0xFC135C00` | `PORT27-ROM-WATCHDOG-MODULE`| `docs/agentbridge/PORT23_EVIDENCE_MANIFEST.json:49`<br>`docs/agentbridge/PORT23_EVIDENCE_MANIFEST.json:192` | `"start_address": "0xFC135C00",`<br>`"start_address": "0xFC135C00",` |
+| `0xFC31B8CA` | `PORT27-ROM-RESTORE-IRQ-VENEER` | `firmware/dumps/GM1.10C/PRIMARY.BIN:0xFC0D014C`<br>(branch target in `PORT27-ROM-FIRMWARE-CONT`) | `fc0d014c:   b.w     0xfc31b8ca          ; Tail branch to RestoreInterrupts veneer` |
+| `0xFC31BBA0` | `PORT27-ROM-CREATETASK-VENEER` | `docs/agentbridge/PORT25_EVIDENCE_MANIFEST.json:109`<br>`docs/agentbridge/PORT25_EVIDENCE_MANIFEST.json:447` | `"start_address": "0xFC31BBA0",`<br>`"start_address": "0xFC31BBA0",` |
+| `0xFC31BEE0` | `PORT27-ROM-IRQ-DISABLE` | `docs/agentbridge/PORT24_EVIDENCE_MANIFEST.json:64`<br>`docs/agentbridge/PORT24_EVIDENCE_MANIFEST.json:303` | `"start_address": "0xFC31BEE0",`<br>`"start_address": "0xFC31BEE0",` |
+| `0xFC31BF84` | `PORT27-ROM-SLEEPTASK-VENEER` | `firmware/dumps/GM1.10C/PRIMARY.BIN:0xFC135CC6`<br>(branch target in `PORT27-ROM-WATCHDOG-MODULE`) | `fc135cc6:   blx     0xfc31bf84      ; SleepTask(2000)` |
+
+#### Detailed Evidence Citations per Range:
 1. **`0xFC05B3C0` (`PORT27-ROM-HEAP-SETUP`, 384 B)**:
-   - Allowed Start Address: `0xFC05B3C0` cited in `docs/agentbridge/PORT25_EVIDENCE_MANIFEST.json:34` (`start_address: "0xFC05B3C0"`), line 163 (`evidence_id: "PORT25-ROM-HEAP-SETUP"`).
-   - Documentation: `docs/PORT25_LADDER_FIX_CANDIDATE.md:143, 375`; `docs/PORT25_SHORT_PRESS_LOCALISE.md:394, 406`; `docs/CHDK_PORT2C_EXECUTION_LEDGER.md:48`.
+   - Allowed Start Address: `0xFC05B3C0` cited in `docs/agentbridge/PORT25_EVIDENCE_MANIFEST.json:14` (`"start_address": "0xFC05B3C0",`), line 160 (`"evidence_id": "PORT25-ROM-HEAP-SETUP",`), and line 162 (`"start_address": "0xFC05B3C0",`).
+   - Documentation Citations: `docs/PORT25_SHORT_PRESS_LOCALISE.md:386` (`| `PORT25-ROM-HEAP-SETUP` | `0xFC05B3C0` | `0xFC05B53F` | 384 B |`); `docs/PORT21_RAM_LIFETIME.md:308` (`| `PORT21-ROM-HEAP-SETUP` | `0xFC05B3C0` | `0xFC05B53F` | 384 |`); `docs/CHDK_PORT2C_EXECUTION_LEDGER.md:48` (cites routine `sub_fc05b3c8` at `0xFC05B3C8`).
 2. **`0xFC05B8E0` (`PORT27-ROM-STARTUP-TASKS`, 768 B)**:
-   - Allowed Start Address: `0xFC05B8E0` cited in `docs/agentbridge/PORT24_EVIDENCE_MANIFEST.json:24` (`start_address: "0xFC05B8E0"`), line 162 (`evidence_id: "PORT24-ROM-STARTUP-TASKS"`).
-   - Additional Citations: `docs/agentbridge/PORT25_EVIDENCE_MANIFEST.json:38, 202`; `docs/PORT23_POWER_SUPERVISION.md:44-50, 63, 66`; `docs/PORT24_LOADER_TRACE.md:417`.
+   - Allowed Start Address: `0xFC05B8E0` cited in `docs/agentbridge/PORT24_EVIDENCE_MANIFEST.json:14` (`"start_address": "0xFC05B8E0",`), line 150 (`"evidence_id": "PORT24-ROM-STARTUP-TASKS",`), and line 152 (`"start_address": "0xFC05B8E0",`).
+   - Additional Citations: `docs/agentbridge/PORT25_EVIDENCE_MANIFEST.json:24` (`"start_address": "0xFC05B8E0",`), line 191 (`"evidence_id": "PORT25-ROM-STARTUP-TASKS",`), line 192 (`"start_address": "0xFC05B8E0",`); `docs/PORT24_LOADER_TRACE.md:803` (`| `PORT24-ROM-STARTUP-TASKS` | `0xFC05B8E0` | `0xFC05BBDF` | 768 B |`); `docs/PORT25_SHORT_PRESS_LOCALISE.md:388` (`| `PORT25-ROM-STARTUP-TASKS` | `0xFC05B8E0` | `0xFC05BBDF` | 768 B |`); `docs/PORT23_POWER_SUPERVISION.md:44, 361` (`| `PORT23-ROM-STARTUP-TASKS` | `0xFC05B8E0` | `0xFC05BBDF` | 768 B |`).
 3. **`0xFC0D0080` (`PORT27-ROM-FIRMWARE-CONT`, 448 B)**:
-   - Allowed Start Address: `0xFC0D0080` cited in `docs/agentbridge/PORT24_EVIDENCE_MANIFEST.json:30` (`start_address: "0xFC0D0080"`), line 207 (`evidence_id: "PORT24-ROM-FIRMWARE-CONT"`).
-   - Additional Citations: `docs/agentbridge/PORT25_EVIDENCE_MANIFEST.json:44, 307`; `docs/PORT24_LOADER_TRACE.md:21, 294, 648`; `docs/PORT25_SHORT_PRESS_LOCALISE.md:177, 399`.
+   - Allowed Start Address: `0xFC0D0080` cited in `docs/agentbridge/PORT24_EVIDENCE_MANIFEST.json:29` (`"start_address": "0xFC0D0080",`), line 196 (`"evidence_id": "PORT24-ROM-FIRMWARE-CONT",`), and line 197 (`"start_address": "0xFC0D0080",`).
+   - Additional Citations: `docs/agentbridge/PORT25_EVIDENCE_MANIFEST.json:59` (`"start_address": "0xFC0D0080",`), line 296 (`"evidence_id": "PORT25-ROM-FIRMWARE-CONT",`), line 297 (`"start_address": "0xFC0D0080",`); `docs/PORT24_LOADER_TRACE.md:21, 294, 648, 806` (`| `PORT24-ROM-FIRMWARE-CONT` | `0xFC0D0080` | `0xFC0D023F` | 448 B |`); `docs/PORT25_SHORT_PRESS_LOCALISE.md:177, 395` (`| `PORT25-ROM-FIRMWARE-CONT` | `0xFC0D0080` | `0xFC0D023F` | 448 B |`).
 4. **`0xFC135C00` (`PORT27-ROM-WATCHDOG-MODULE`, 576 B)**:
-   - Allowed Start Address: `0xFC135C00` cited in `docs/agentbridge/PORT23_EVIDENCE_MANIFEST.json:40` (`start_address: "0xFC135C00"`), line 202 (`evidence_id: "PORT23-ROM-WATCHDOG-MODULE"`).
-   - Additional Citations: `docs/agentbridge/PORT24_EVIDENCE_MANIFEST.json:44, 297`; `docs/agentbridge/PORT25_EVIDENCE_MANIFEST.json:52, 412`; `docs/PORT23_POWER_SUPERVISION.md:182`; `docs/PORT24_LOADER_TRACE.md:465`.
+   - Allowed Start Address: `0xFC135C00` cited in `docs/agentbridge/PORT23_EVIDENCE_MANIFEST.json:49` (`"start_address": "0xFC135C00",`), line 191 (`"evidence_id": "PORT23-ROM-WATCHDOG-MODULE",`), and line 192 (`"start_address": "0xFC135C00",`).
+   - Additional Citations: `docs/agentbridge/PORT24_EVIDENCE_MANIFEST.json:59` (`"start_address": "0xFC135C00",`), line 286 (`"evidence_id": "PORT24-ROM-WATCHDOG-MODULE",`), line 287 (`"start_address": "0xFC135C00",`); `docs/agentbridge/PORT25_EVIDENCE_MANIFEST.json:94` (`"start_address": "0xFC135C00",`), line 401 (`"evidence_id": "PORT25-ROM-WATCHDOG-MODULE",`), line 402 (`"start_address": "0xFC135C00",`); `docs/PORT23_POWER_SUPERVISION.md:182, 368` (`| `PORT23-ROM-WATCHDOG-MODULE` | `0xFC135C00` | `0xFC135E3F` | 576 B |`); `docs/PORT24_LOADER_TRACE.md:812` (`| `PORT24-ROM-WATCHDOG-MODULE` | `0xFC135C00` | `0xFC135E3F` | 576 B |`); `docs/PORT25_SHORT_PRESS_LOCALISE.md:402` (`| `PORT25-ROM-WATCHDOG-MODULE` | `0xFC135C00` | `0xFC135E3F` | 576 B |`).
 5. **`0xFC31B8CA` (`PORT27-ROM-RESTORE-IRQ-VENEER`, 16 B)**:
-   - Branch target of instruction `0xFC0D014C: b.w 0xfc31b8ca` verified inside `PORT27-ROM-FIRMWARE-CONT` `[VERIFIED]`.
+   - Branch target of instruction `0xFC0D014C: b.w 0xfc31b8ca` verified inside `PORT27-ROM-FIRMWARE-CONT` (`0xFC0D0080..0xFC0D023F`) `[VERIFIED]`.
 6. **`0xFC31BBA0` (`PORT27-ROM-CREATETASK-VENEER`, 80 B)**:
-   - Allowed Start Address: `0xFC31BBA0` cited in `docs/agentbridge/PORT25_EVIDENCE_MANIFEST.json:80` (`start_address: "0xFC31BBA0"`), line 457 (`evidence_id: "PORT25-ROM-CREATETASK-VENEER"`).
-   - Additional Citations: `docs/agentbridge/PORT24_POWERON_EVIDENCE_MANIFEST.json:72`; `docs/PORT25_SHORT_PRESS_LOCALISE.md:405`.
+   - Allowed Start Address: `0xFC31BBA0` cited in `docs/agentbridge/PORT25_EVIDENCE_MANIFEST.json:109` (`"start_address": "0xFC31BBA0",`), line 445 (`"evidence_id": "PORT25-ROM-CREATETASK-VENEER",`), and line 447 (`"start_address": "0xFC31BBA0",`).
+   - Additional Citations: `docs/PORT25_SHORT_PRESS_LOCALISE.md:405` (`| `PORT25-ROM-CREATETASK-VENEER` | `0xFC31BBA0` | `0xFC31BBEF` | 80 B |`).
 7. **`0xFC31BEE0` (`PORT27-ROM-IRQ-DISABLE`, 96 B)**:
-   - Allowed Start Address: `0xFC31BEE0` cited in `docs/agentbridge/PORT24_EVIDENCE_MANIFEST.json:46` (`start_address: "0xFC31BEE0"`), line 312 (`evidence_id: "PORT24-ROM-IRQ-DISABLE"`).
-   - Additional Citations: `docs/agentbridge/PORT23_EVIDENCE_MANIFEST.json:172`; `docs/PORT23_POWER_SUPERVISION.md:170`.
+   - Allowed Start Address: `0xFC31BEE0` cited in `docs/agentbridge/PORT24_EVIDENCE_MANIFEST.json:64` (`"start_address": "0xFC31BEE0",`), line 301 (`"evidence_id": "PORT24-ROM-IRQ-DISABLE",`), and line 303 (`"start_address": "0xFC31BEE0",`).
+   - Additional Citations: `docs/PORT24_LOADER_TRACE.md:813` (`| `PORT24-ROM-IRQ-DISABLE` | `0xFC31BEE0` | `0xFC31BF3F` | 96 B |`).
 8. **`0xFC31BF84` (`PORT27-ROM-SLEEPTASK-VENEER`, 12 B)**:
-   - Branch target of instruction `0xFC135CC6: blx 0xfc31bf84` verified inside `PORT27-ROM-WATCHDOG-MODULE` `[VERIFIED]`.
+   - Branch target of instruction `0xFC135CC6: blx 0xfc31bf84` verified inside `PORT27-ROM-WATCHDOG-MODULE` (`0xFC135C00..0xFC135E3F`) `[VERIFIED]`.
 
 ### 2.2 Policy Accounting & Ledger Invariance
 All 5 range start addresses (`0xFC05B3C0`, `0xFC05B8E0`, `0xFC0D0080`, `0xFC31BBA0`, `0xFC31BEE0`) are directly cited in PORT-23/24/25 manifests, the two branch targets (`0xFC31B8CA`, `0xFC31BF84`) are verified inside cited ranges, and `0xFC135C00` is cited across all three prior manifests.
@@ -102,10 +115,20 @@ fc31b8d2:   bx      ip                  ; Branch to ATCM 0xBFE14FEB (Thumb-2)
 *(Source: `firmware/dumps/GM1.10C/PRIMARY.BIN:0xFC31B8CA-0xFC31B8D4`; `[VERIFIED: PORT27-ROM-RESTORE-IRQ-VENEER]`)*
 
 #### Functional Assessment of `sub_fc0d0126`
-1. `sub_fc0d0126` decrements a reference counter at `0x00008380` with interrupt protection and returns via `RestoreInterrupts` `[VERIFIED: ROM 0xFC0D0126-0xFC0D014E]`. It pairs functionally with lock function `sub_fc0d0110` (`LMClock_Lock`) `[INFERRED: ROM 0xFC0D0110-0xFC0D0124]`.
-2. In stock firmware, `task_Startup` pops caller registers `{r4, lr}` at `0xFC05B95A` and executes tail branch `0xFC05B95E: b.w sub_fc0d0126` `[VERIFIED: ROM 0xFC05B95A-0xFC05B95E; PORT27-ROM-STARTUP-TASKS]`.
-3. When `sub_fc0d0126` executes `bx lr` via `RestoreInterrupts`, it returns to the DryOS task dispatcher, which terminates `task_Startup` `[INFERRED: docs/CHDK_PORT2B1_CPSR_CONTEXT_AUDIT.md:179]`.
-4. **No Heap or System Memory Boundary is Set Here**: `sub_fc0d0126` modifies only the counter at `0x00008380` and CPU interrupt masks. It configures no memory descriptors, allocates no memory, and sets no system boundaries `[VERIFIED]`.
+1. **Inspected Instructions in `sub_fc0d0126`**: Within approved slice `PORT27-ROM-FIRMWARE-CONT`, `sub_fc0d0126`'s own instructions (`0xFC0D0126`..`0xFC0D014E`) execute:
+   - `0xFC0D0128: blx 0xfc31befc` calling the ARM interrupt disable veneer `sub_fc31befc` (`[VERIFIED: PORT27-ROM-FIRMWARE-CONT]`).
+   - Decrement of the clock lock counter at `0x00008380` (`[VERIFIED: ROM 0xFC0D012C-0xFC0D0144; PORT27-ROM-FIRMWARE-CONT]`). It pairs functionally with lock function `sub_fc0d0110` (`LMClock_Lock`) `[INFERRED: ROM 0xFC0D0110-0xFC0D0124]`.
+   - Register restore `{r4, r5, r6, lr}` via `ldmia.w sp!, ...` at `0xFC0D0148` (`[VERIFIED: PORT27-ROM-FIRMWARE-CONT]`).
+   - `0xFC0D014C: b.w 0xfc31b8ca` tail branch to RestoreInterrupts veneer `sub_fc31b8ca` (`[VERIFIED: PORT27-ROM-FIRMWARE-CONT]`).
+2. **Inspected Veneers**:
+   - The veneer at `0xFC31BEFC` loads `pc` with target vector `0xBFE14FE7` via ARM instruction `ldr pc, [pc, #-4]` (`[VERIFIED: ROM 0xFC31BEFC; PORT27-ROM-IRQ-DISABLE]`).
+   - The veneer at `0xFC31B8CA` loads `ip` with `0xBFE14FEB` and executes `bx ip` (`[VERIFIED: ROM 0xFC31B8CA-0xFC31B8D2; PORT27-ROM-RESTORE-IRQ-VENEER]`).
+3. **ATCM Destination Routines (Unread / Outside Policy)**:
+   - Slices read in PORT-27 contain only the veneers, not the ATCM implementations.
+   - The full behaviour of the ATCM IRQ disable and restore routines (`0xBFE14FE7` and `0xBFE14FEB`)—including their full effects, whether they return via `bx lr` to the DryOS task dispatcher to terminate `task_Startup`, and confirming whether the path through them performs any heap or memory-start operations—is **`[INFERRED/UNKNOWN: not read; outside PORT-27 policy]`**.
+4. **Item (a) Boundary Assessment**:
+   - **`sub_fc0d0126`'s own instructions set no heap bounds (VERIFIED); the behaviour of the ATCM IRQ disable/restore routines is INFERRED/UNKNOWN (not read; outside PORT-27 policy)**.
+   - Specifically, `sub_fc0d0126`'s own instruction stream modifies only the reference counter at `0x00008380` and calls the veneers; it configures no memory descriptors, allocates no memory, and sets no system boundaries `[VERIFIED]`.
 
 ---
 
@@ -273,7 +296,7 @@ Everything beyond the raw register values and entry address `r3` is **not proven
 1. **`r0` Parameter Role (Task Name Pointer)**:
    - *What the call site proves*: `r0` is passed the address `0xFC05B9A0` pointing to `"Startup\0"` `[VERIFIED]`.
    - *What the call site does NOT prove*: That `r0` is strictly required to be a valid name string, whether the string is copied or referenced by pointer, or whether a NULL pointer is tolerated.
-   - *Classification*: **`[INFERRED: DryOS CHDK platform convention; e.g. chdk-port/platform/g3x/sub/110c/boot_prototype.c:286]`**.
+   - *Classification*: **`[INFERRED: DryOS CHDK platform convention; e.g. chdk-port/platform/g3x/sub/110c/boot_prototype.c:369]`**.
 2. **`r1` Parameter Meaning (Task Priority)**:
    - *What the call site proves*: Value `25` (`0x19`) is passed in `r1` `[VERIFIED]`.
    - *What the call site does NOT prove*: That `r1` represents scheduling priority, the valid priority integer range (e.g., 1..32 vs 0..255), or whether lower numbers indicate higher priority.
@@ -520,7 +543,7 @@ In `docs/PORT25_LADDER_FIX_CANDIDATE.md:144-154`, the timing model reproduces th
 
 | Item | Technical Focus | Concrete Values & Verified Facts | Epistemic Status | Manifest Entry / Citation | Next Step |
 |:---:|:---|:---|:---:|:---|:---:|
-| **(a)** | Stock heap / memory start after `sub_fc0d0126` | `sub_fc0d0126` decrements `[0x00008380]` and executes `bx lr` via `sub_fc31b8ca`; sets **NO heap or memory boundaries**; stock heap is set in `sub_fc05b3c8` | `VERIFIED` | `PORT27-ROM-FIRMWARE-CONT` (`0xFC0D0080`), `PORT27-ROM-RESTORE-IRQ-VENEER` (`0xFC31B8CA`), `PORT27-ROM-HEAP-SETUP` (`0xFC05B3C0`) | **enough to build** |
+| **(a)** | Stock heap / memory start after `sub_fc0d0126` | `sub_fc0d0126`'s own instructions set no heap bounds (VERIFIED); the behaviour of the ATCM IRQ disable/restore routines is INFERRED/UNKNOWN (not read; outside PORT-27 policy); stock heap is set in `sub_fc05b3c8` | `VERIFIED` (sub_fc0d0126 instructions, veneer encodings, heap setup) / `INFERRED/UNKNOWN` (ATCM routines behaviour) | `PORT27-ROM-FIRMWARE-CONT` (`0xFC0D0080`), `PORT27-ROM-RESTORE-IRQ-VENEER` (`0xFC31B8CA`), `PORT27-ROM-HEAP-SETUP` (`0xFC05B3C0`) | **enough to build** |
 | **(a)** | Exact patch point for memory start in `sub_fc05b3c8` | Literal `0x003489B4` at `[0xFC05B450]` loaded into `r4` at `0xFC05B3CA`, stored to `sp[0x08]` at `0xFC05B3FC`, subtracted from `0x00600014` at `0xFC05B402` into `r2` and stored to `sp[0x0C]` at `0xFC05B404`; heap-start alignment requirement is unproven; hook in `boot_prototype.c:24, 177-178, 212-215` overrides `r4` with `new_sa = 0x00368680` (arithmetically 64-byte aligned) | `VERIFIED` (patch point, descriptor stores, `new_sa`) / `UNKNOWN` (heap-start alignment requirement) | `PORT27-ROM-HEAP-SETUP` (`0xFC05B3C0`), `chdk-port/platform/g3x/sub/110c/boot_prototype.c:24, 177-178, 212-215`, `docs/PORT25_LADDER_FIX_CANDIDATE.md:391` | **enough to build** |
 | **(a)** | Relocated core survival | Relocated core (`0x003489B4`..`0x00368680`, candidate `candidate_main.bin` 123,424 B, `_end = 0x00368680`; baseline `candidate_main.bin` 116,816 B, `_end = 0x00366CB0`). Stock non-survival is unconfirmed by specific overwrite; exclusion by shifting heap start past `_end` to `0x00368680` is verified; runtime survival is inferred (rules out heap pool 1 allocations, does not rule out DMA/MMIO); raised start yields 2.70 MiB surplus headroom above 712 KiB limit | `VERIFIED` (exclusion boundary, sizes, literals) / `INFERRED` (stock non-survival, runtime survival, headroom derivation) / `UNKNOWN` (other RAM users) | `docs/PORT25_LADDER_FIX_CANDIDATE.md:388, 391`, `docs/PORT23_LED_BREADCRUMBS.md:25-26`, `docs/PORT21_RAM_LIFETIME.md:37-47`, `PORT27-ROM-HEAP-SETUP` | **enough to build** |
 | **(b)** | Task-creation entry (`CreateTask`) | `sub_fc31bbc4` at `0xFC31BBC4` (ARM mode `ldr pc, [pc, #-4]` -> ATCM `0xBFE14A3D` Thumb-2); entered via `blx 0xfc31bbc4` from Thumb-2 at `0xFC05B990` | `VERIFIED` | `PORT27-ROM-CREATETASK-VENEER` (`0xFC31BBA0`), `PORT27-ROM-STARTUP-TASKS` (`0xFC05B8E0`) | **enough to build** (entry point only) |
@@ -536,13 +559,13 @@ All ranges read for PORT-27 are recorded in [PORT27_EVIDENCE_MANIFEST.json](file
 
 | Entry ID | ROM Start | ROM End | Length (B) | Running Total (B) | SHA-256 | Provenance & Purpose |
 |:---|:---:|:---:|:---:|:---:|:---|:---|
-| `PORT27-ROM-HEAP-SETUP` | `0xFC05B3C0` | `0xFC05B53F` | 384 | 384 | `68e60a1c4ffdf3ce29c97120aac275f1758df3726f8f5829a23e33b73c6908d6` | Stock heap init `sub_fc05b3c8`, base `0x003489B4`, headroom check `0x000B1FEC` (allowed start address `0xFC05B3C0` cited in `PORT25_EVIDENCE_MANIFEST.json:34`) |
-| `PORT27-ROM-STARTUP-TASKS` | `0xFC05B8E0` | `0xFC05BBDF` | 768 | 1,152 | `749dd4f383eec258850e14f1488b853c7902156f106a4924d54788f47fa35e0e` | `task_Startup`, `StartDiskboot`, `b.w sub_fc0d0126`, and `CreateTask` call site in `sub_fc05b962` (allowed start address `0xFC05B8E0` cited in `PORT24_EVIDENCE_MANIFEST.json:24`) |
-| `PORT27-ROM-FIRMWARE-CONT` | `0xFC0D0080` | `0xFC0D023F` | 448 | 1,600 | `33d2fae4ed8c9c228ea6cc8f3304a26b96f8a4fb6d9d3bdc37cd056e7833456e` | `sub_fc0d0126` (`LMClock_Unlock`), decrement `[0x00008380]`, assert, and tail branch (allowed start address `0xFC0D0080` cited in `PORT24_EVIDENCE_MANIFEST.json:30`) |
-| `PORT27-ROM-WATCHDOG-MODULE`| `0xFC135C00` | `0xFC135E3F` | 576 | 2,176 | `29a0c9a8b406aa86a8a971d6d0032273fbaa22510c224dfb9742284e643de9cb` | `task_WdtReset` calling `SleepTask(2000)` via `blx 0xfc31bf84` at `0xFC135CC6` (allowed start address `0xFC135C00` cited in `PORT23_EVIDENCE_MANIFEST.json:40`) |
+| `PORT27-ROM-HEAP-SETUP` | `0xFC05B3C0` | `0xFC05B53F` | 384 | 384 | `68e60a1c4ffdf3ce29c97120aac275f1758df3726f8f5829a23e33b73c6908d6` | Stock heap init `sub_fc05b3c8`, base `0x003489B4`, headroom check `0x000B1FEC` (allowed start address `0xFC05B3C0` cited in `PORT25_EVIDENCE_MANIFEST.json:14, 162`) |
+| `PORT27-ROM-STARTUP-TASKS` | `0xFC05B8E0` | `0xFC05BBDF` | 768 | 1,152 | `749dd4f383eec258850e14f1488b853c7902156f106a4924d54788f47fa35e0e` | `task_Startup`, `StartDiskboot`, `b.w sub_fc0d0126`, and `CreateTask` call site in `sub_fc05b962` (allowed start address `0xFC05B8E0` cited in `PORT24_EVIDENCE_MANIFEST.json:14, 152`) |
+| `PORT27-ROM-FIRMWARE-CONT` | `0xFC0D0080` | `0xFC0D023F` | 448 | 1,600 | `33d2fae4ed8c9c228ea6cc8f3304a26b96f8a4fb6d9d3bdc37cd056e7833456e` | `sub_fc0d0126`'s own instructions set no heap bounds; decrement `[0x00008380]`, assert, and tail branch (allowed start address `0xFC0D0080` cited in `PORT24_EVIDENCE_MANIFEST.json:29, 197`) |
+| `PORT27-ROM-WATCHDOG-MODULE`| `0xFC135C00` | `0xFC135E3F` | 576 | 2,176 | `29a0c9a8b406aa86a8a971d6d0032273fbaa22510c224dfb9742284e643de9cb` | `task_WdtReset` calling `SleepTask(2000)` via `blx 0xfc31bf84` at `0xFC135CC6` (allowed start address `0xFC135C00` cited in `PORT23_EVIDENCE_MANIFEST.json:49, 192`) |
 | `PORT27-ROM-RESTORE-IRQ-VENEER`| `0xFC31B8CA`| `0xFC31B8D9`| 16 | 2,192 | `c50fd6df693d4724d6ec4ac070967f674bab9c0448f1ca6c27dc480b8922a6e1` | `RestoreInterrupts` veneer `sub_fc31b8ca` (branch target verified from `0xFC0D014C` in `PORT27-ROM-FIRMWARE-CONT`) |
-| `PORT27-ROM-CREATETASK-VENEER`| `0xFC31BBA0`| `0xFC31BBEF`| 80 | 2,272 | `59c9adc82ad1ad670ecf7ba0d42665a34f7acf1a10b68ad75874afe1fae77487` | `CreateTask` ARM veneer `sub_fc31bbc4` loading `0xBFE14A3D` (allowed start address `0xFC31BBA0` cited in `PORT25_EVIDENCE_MANIFEST.json:80`) |
-| `PORT27-ROM-IRQ-DISABLE` | `0xFC31BEE0` | `0xFC31BF3F` | 96 | 2,368 | `a15cb37e666e3349c0453b294d1283d99ae116214f36fc69671cdc3131db7826` | `DisableInterrupts` ARM veneer `sub_fc31befc` (allowed start address `0xFC31BEE0` cited in `PORT24_EVIDENCE_MANIFEST.json:46`) |
+| `PORT27-ROM-CREATETASK-VENEER`| `0xFC31BBA0`| `0xFC31BBEF`| 80 | 2,272 | `59c9adc82ad1ad670ecf7ba0d42665a34f7acf1a10b68ad75874afe1fae77487` | `CreateTask` ARM veneer `sub_fc31bbc4` loading `0xBFE14A3D` (allowed start address `0xFC31BBA0` cited in `PORT25_EVIDENCE_MANIFEST.json:109, 447`) |
+| `PORT27-ROM-IRQ-DISABLE` | `0xFC31BEE0` | `0xFC31BF3F` | 96 | 2,368 | `a15cb37e666e3349c0453b294d1283d99ae116214f36fc69671cdc3131db7826` | `DisableInterrupts` ARM veneer `sub_fc31befc` (allowed start address `0xFC31BEE0` cited in `PORT24_EVIDENCE_MANIFEST.json:64, 303`) |
 | `PORT27-ROM-SLEEPTASK-VENEER`| `0xFC31BF84` | `0xFC31BF8F` | 12 | 2,380 | `462ba50005667f6192185cf76e0af698e0419e9d2fc481fd474ff862cb84d6e8` | `SleepTask` ARM veneer `0xFC31BF84` loading `0xBFE14969` (branch target verified from `0xFC135CC6` in `PORT27-ROM-WATCHDOG-MODULE`) |
 
 ---
@@ -558,7 +581,7 @@ All ranges read for PORT-27 are recorded in [PORT27_EVIDENCE_MANIFEST.json](file
 > Detailed justification by prerequisite item:
 > 
 > - **Item (a) (Heap Start & Core Survival)**: Sufficient for implementation (`enough to build`):
->   - Verified that stock continuation `sub_fc0d0126` configures no heap or memory boundaries `[VERIFIED]`.
+>   - `sub_fc0d0126`'s own instructions set no heap bounds (`[VERIFIED]`); the behaviour of the ATCM IRQ disable/restore routines is `[INFERRED/UNKNOWN]` (not read; outside PORT-27 policy).
 >   - Verified that stock firmware sets its heap in `sub_fc05b3c8`, with exact patch point verified: literal `0x003489B4` at `[0xFC05B450]` is loaded into register `r4` at `0xFC05B3CA`, stored to descriptor slot `sp[0x08]` at `0xFC05B3FC`, and subtracted from `0x00600014` at `0xFC05B402` to compute pool size into `r2` stored to `sp[0x0C]` at `0xFC05B404` `[VERIFIED]`.
 >   - Heap-start alignment requirement is unproven in ROM `[UNKNOWN]`, though candidate raised start `new_sa = 0x00368680` is strictly 64-byte aligned as an arithmetic fact.
 >   - Relocated core region (`candidate_main.bin` 123,424 B, `_end = 0x00368680`) is strictly excluded from stock DryOS heap allocations by overriding `r4` with `new_sa = 0x00368680` `[VERIFIED exclusion: boot_prototype.c:24, 177-178, 212-215; PORT21_RAM_LIFETIME.md:40-41]`, with 2.70 MiB of surplus headroom above the ROM limit. Runtime survival is `[INFERRED]` (protects against heap allocations; does not rule out unverified physical DMA buffers or hardware MMIO).

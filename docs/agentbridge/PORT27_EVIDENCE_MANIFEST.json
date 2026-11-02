@@ -69,7 +69,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT27-RESIDENT-EVIDENCE",
       "classification": "STATIC_VERIFIED",
-      "notes": "Stock DryOS heap init sub_fc05b3c8 (0xFC05B3C8): literal [0xFC05B450]=0x003489B4 (heap base loaded into r4 at 0xFC05B3CA, stored to sp[0x08] at 0xFC05B3FC), [0xFC05B474]=0x00600014 (sub-pool boundary, pool size calculated into r2 at 0xFC05B402 and stored to sp[0x0C] at 0xFC05B404), [0xFC05B454]=0x006CE000 (heap limit), [0xFC05B458]=0x000B1FEC (minimum headroom check at 0xFC05B3D4). Allowed start address 0xFC05B3C0 cited in prior manifest PORT25_EVIDENCE_MANIFEST.json:34 (PORT25-ROM-HEAP-SETUP). Documentation citations: docs/PORT25_LADDER_FIX_CANDIDATE.md:143, 375; docs/CHDK_PORT2C_EXECUTION_LEDGER.md:48."
+      "notes": "Stock DryOS heap init sub_fc05b3c8 (0xFC05B3C8): literal [0xFC05B450]=0x003489B4 (heap base loaded into r4 at 0xFC05B3CA, stored to sp[0x08] at 0xFC05B3FC), [0xFC05B474]=0x00600014 (sub-pool boundary, pool size calculated into r2 at 0xFC05B402 and stored to sp[0x0C] at 0xFC05B404), [0xFC05B454]=0x006CE000 (heap limit), [0xFC05B458]=0x000B1FEC (minimum headroom check at 0xFC05B3D4). Allowed start address 0xFC05B3C0 cited in prior manifest PORT25_EVIDENCE_MANIFEST.json:14 (approved_ranges start_address) and line 162 (PORT25-ROM-HEAP-SETUP start_address). Documentation citations: docs/PORT25_SHORT_PRESS_LOCALISE.md:386; docs/PORT21_RAM_LIFETIME.md:308."
     },
     {
       "evidence_id": "PORT27-ROM-STARTUP-TASKS",
@@ -84,7 +84,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT27-RESIDENT-EVIDENCE",
       "classification": "STATIC_VERIFIED",
-      "notes": "Stock task_Startup (0xFC05B8FC) with StartDiskboot call (0xFC05B90E) and tail branch b.w sub_fc0d0126 (0xFC05B95E); sub_fc05b962 (0xFC05B962) setting up arguments at 0xFC05B984..0xFC05B98E (sp[0]=0, r3=[0xFC05B99C]=0xFC05B8FD, r2=0, r1=25, r0=0xFC05B9A0 'Startup') and invoking CreateTask veneer sub_fc31bbc4 via blx at 0xFC05B990. Allowed start address 0xFC05B8E0 cited in prior manifest PORT24_EVIDENCE_MANIFEST.json:24 (PORT24-ROM-STARTUP-TASKS). Additional citations: PORT25_EVIDENCE_MANIFEST.json:38, 202; docs/PORT23_POWER_SUPERVISION.md:44-50, 63, 66; docs/PORT24_LOADER_TRACE.md:417."
+      "notes": "Stock task_Startup (0xFC05B8FC) with StartDiskboot call (0xFC05B90E) and tail branch b.w sub_fc0d0126 (0xFC05B95E); sub_fc05b962 (0xFC05B962) setting up arguments at 0xFC05B984..0xFC05B98E (sp[0]=0, r3=[0xFC05B99C]=0xFC05B8FD, r2=0, r1=25, r0=0xFC05B9A0 'Startup') and invoking CreateTask veneer sub_fc31bbc4 via blx at 0xFC05B990. Allowed start address 0xFC05B8E0 cited in prior manifest PORT24_EVIDENCE_MANIFEST.json:14 (approved_ranges start_address) and line 152 (PORT24-ROM-STARTUP-TASKS start_address). Additional citations: PORT25_EVIDENCE_MANIFEST.json:24, 192; docs/PORT23_POWER_SUPERVISION.md:44, 361; docs/PORT24_LOADER_TRACE.md:803; docs/PORT25_SHORT_PRESS_LOCALISE.md:388."
     },
     {
       "evidence_id": "PORT27-ROM-FIRMWARE-CONT",
@@ -99,7 +99,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT27-RESIDENT-EVIDENCE",
       "classification": "STATIC_VERIFIED",
-      "notes": "Stock continuation sub_fc0d0126 (0xFC0D0126..0xFC0D014E): disables IRQ via blx sub_fc31befc at 0xFC0D0128, decrements clock lock counter at 0x00008380, and tail branches via b.w 0xfc31b8ca at 0xFC0D014C to RestoreInterrupts (setting no heap or memory boundaries). Allowed start address 0xFC0D0080 cited in prior manifest PORT24_EVIDENCE_MANIFEST.json:30 (PORT24-ROM-FIRMWARE-CONT). Additional citations: PORT25_EVIDENCE_MANIFEST.json:44, 307; docs/PORT24_LOADER_TRACE.md:21, 294, 648; docs/PORT25_SHORT_PRESS_LOCALISE.md:177, 399."
+      "notes": "Stock continuation sub_fc0d0126 (0xFC0D0126..0xFC0D014E): sub_fc0d0126's own instructions set no heap bounds (VERIFIED); calls blx sub_fc31befc at 0xFC0D0128, decrements clock lock counter at 0x00008380, and tail branches via b.w 0xfc31b8ca at 0xFC0D014C to RestoreInterrupts veneer; behaviour of ATCM IRQ disable/restore routines is INFERRED/UNKNOWN (not read; outside PORT-27 policy). Allowed start address 0xFC0D0080 cited in prior manifest PORT24_EVIDENCE_MANIFEST.json:29 (approved_ranges start_address) and line 197 (PORT24-ROM-FIRMWARE-CONT start_address). Additional citations: PORT25_EVIDENCE_MANIFEST.json:59, 297; docs/PORT24_LOADER_TRACE.md:21, 294, 648, 806; docs/PORT25_SHORT_PRESS_LOCALISE.md:177, 395."
     },
     {
       "evidence_id": "PORT27-ROM-WATCHDOG-MODULE",
@@ -114,7 +114,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT27-RESIDENT-EVIDENCE",
       "classification": "STATIC_VERIFIED",
-      "notes": "WatchDog.c module 0xFC135C00..0xFC135E3F: task_WdtReset at 0xFC135CB0 calling SleepTask(2000) via blx 0xfc31bf84 at 0xFC135CC6 with r0=2000 (0x7D0) to service watchdog timer. Prior citations: PORT23_EVIDENCE_MANIFEST.json:40, 202; PORT24_EVIDENCE_MANIFEST.json:44, 287, 297; PORT25_EVIDENCE_MANIFEST.json:52, 402, 412; docs/PORT23_POWER_SUPERVISION.md:182; docs/PORT24_LOADER_TRACE.md:465; docs/PORT25_SHORT_PRESS_LOCALISE.md:402."
+      "notes": "WatchDog.c module 0xFC135C00..0xFC135E3F: task_WdtReset at 0xFC135CB0 calling SleepTask(2000) via blx 0xfc31bf84 at 0xFC135CC6 with r0=2000 (0x7D0) to service watchdog timer. Allowed start address 0xFC135C00 cited in prior manifest PORT23_EVIDENCE_MANIFEST.json:49 (approved_ranges start_address) and line 192 (PORT23-ROM-WATCHDOG-MODULE start_address). Additional citations: PORT24_EVIDENCE_MANIFEST.json:59, 287; PORT25_EVIDENCE_MANIFEST.json:94, 402; docs/PORT23_POWER_SUPERVISION.md:182, 368; docs/PORT24_LOADER_TRACE.md:812; docs/PORT25_SHORT_PRESS_LOCALISE.md:402."
     },
     {
       "evidence_id": "PORT27-ROM-RESTORE-IRQ-VENEER",
@@ -129,7 +129,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT27-RESIDENT-EVIDENCE",
       "classification": "STATIC_VERIFIED",
-      "notes": "Thumb-2 RestoreInterrupts veneer sub_fc31b8ca at 0xFC31B8CA: branch target verified inside PORT27-ROM-FIRMWARE-CONT from instruction b.w 0xfc31b8ca at 0xFC0D014C. Loads ip=0xBFE14FEB and executes bx ip to enter ATCM interrupt restore routine returning via bx lr."
+      "notes": "Thumb-2 RestoreInterrupts veneer sub_fc31b8ca at 0xFC31B8CA: branch target verified inside PORT27-ROM-FIRMWARE-CONT from instruction b.w 0xfc31b8ca at 0xFC0D014C. Loads ip=0xBFE14FEB and executes bx ip to enter ATCM 0xBFE14FEB; slice covers only the veneer instruction encoding and target literal; full effects, return via bx lr, and absence of heap/memory operations in ATCM destination routine are INFERRED/UNKNOWN (not read; outside PORT-27 policy)."
     },
     {
       "evidence_id": "PORT27-ROM-CREATETASK-VENEER",
@@ -144,7 +144,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT27-RESIDENT-EVIDENCE",
       "classification": "STATIC_VERIFIED",
-      "notes": "DryOS CreateTask veneer sub_fc31bbc4 at 0xFC31BBC4: ARM instruction ldr pc, [pc, #-4] (0xE51FF004) loading target vector 0xBFE14A3D from 0xFC31BBC8 (bit 0=1 specifying Thumb-2 mode at ATCM 0xBFE14A3C). Allowed start address 0xFC31BBA0 cited in prior manifest PORT25_EVIDENCE_MANIFEST.json:80 (PORT25-ROM-CREATETASK-VENEER). Additional citations: PORT24_POWERON_EVIDENCE_MANIFEST.json:72; docs/PORT25_SHORT_PRESS_LOCALISE.md:405."
+      "notes": "DryOS CreateTask veneer sub_fc31bbc4 at 0xFC31BBC4: ARM instruction ldr pc, [pc, #-4] (0xE51FF004) loading target vector 0xBFE14A3D from 0xFC31BBC8 (bit 0=1 specifying Thumb-2 mode at ATCM 0xBFE14A3C). Allowed start address 0xFC31BBA0 cited in prior manifest PORT25_EVIDENCE_MANIFEST.json:109 (approved_ranges start_address) and line 447 (PORT25-ROM-CREATETASK-VENEER start_address). Additional citation: docs/PORT25_SHORT_PRESS_LOCALISE.md:405."
     },
     {
       "evidence_id": "PORT27-ROM-IRQ-DISABLE",
@@ -159,7 +159,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT27-RESIDENT-EVIDENCE",
       "classification": "STATIC_VERIFIED",
-      "notes": "ARM-mode interrupt disable veneer sub_fc31befc at 0xFC31BEFC: callee of sub_fc0d0126 at 0xFC0D0128 (blx 0xfc31befc); ARM instruction ldr pc, [pc, #-4] loading 0xBFE14FE7. Allowed start address 0xFC31BEE0 cited in prior manifest PORT24_EVIDENCE_MANIFEST.json:46 (PORT24-ROM-IRQ-DISABLE). Additional citations: PORT23_EVIDENCE_MANIFEST.json:172; docs/PORT23_POWER_SUPERVISION.md:170."
+      "notes": "ARM-mode interrupt disable veneer sub_fc31befc at 0xFC31BEFC: callee of sub_fc0d0126 at 0xFC0D0128 (blx 0xfc31befc); ARM instruction ldr pc, [pc, #-4] loading target vector 0xBFE14FE7 from 0xFC31BF00. Allowed start address 0xFC31BEE0 cited in prior manifest PORT24_EVIDENCE_MANIFEST.json:64 (approved_ranges start_address) and line 303 (PORT24-ROM-IRQ-DISABLE start_address); docs/PORT24_LOADER_TRACE.md:813. Slice covers only veneer instructions and target literals; full effects and behaviour of ATCM destination routine are INFERRED/UNKNOWN (not read; outside PORT-27 policy)."
     },
     {
       "evidence_id": "PORT27-ROM-SLEEPTASK-VENEER",
