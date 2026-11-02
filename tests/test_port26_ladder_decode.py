@@ -52,6 +52,8 @@ from tools.port26_ladder_decode import (
     NEXT_STAGE_MAP,
     STOCK_UI_LCD_ALLOWLIST,
     VALID_CLASSES,
+    CountConfidence,
+    LcdState,
     SafetyViolationError,
     classify_owner_report,
     decode_ladder_report,
@@ -59,11 +61,14 @@ from tools.port26_ladder_decode import (
     is_affirmative_stock_ui,
     is_count_adjacent_to_two_valid_codes,
     is_truthy,
+    normalize_count_confidence,
+    normalize_lcd_state,
     parse_expected_diskboot_sha256,
     parse_header_pulse_digits,
     parse_ladder_table_from_build_source,
     parse_ladder_table_from_source,
     parse_owner_report,
+    safe_open_report,
     validate_safety_path,
     verify_source_consistency,
 )
@@ -676,13 +681,15 @@ class TestPort26LadderDecode(unittest.TestCase):
 
     def test_stock_ui_detection_regressions(self) -> None:
         """[P2 Regression] Affirmative Stock-UI detection:
-        - lcd='reached stock UI' leads to CONTROL_HELD_O1 in both JSON and key=value formats.
-        - 'did not reach stock UI', 'never reached stock ui', and 'stock ui not shown' do NOT.
-        - a short press with 'reached stock UI' does NOT give CONTROL_HELD_O1 (gives CODE_44).
+        - Exact allowlist strings map to LcdState.STOCK_UI and yield CONTROL_HELD_O1 when press='held'.
+        - Reviewer strings and hedging/questioning phrases map to LcdState.UNKNOWN and NEVER yield CONTROL_HELD_O1:
+          'maybe reached stock UI', 'unknown whether stock UI appeared', 'waiting for stock UI',
+          'not stock UI', 'stock UI?', 'possibly stock ui'.
+        - Held press with pulses=24 and hedging LCD yields CODE_24 with note 'lcd state not affirmatively stock UI'.
+        - A short press with 'reached stock UI' does NOT give CONTROL_HELD_O1 (gives CODE_44 on pulses=44).
         - lcd='dark' with inspector_status=WITNESS_INVALID gives no CONTROL_HELD_O1.
-        - a valid held + stock_ui report still gives CONTROL_HELD_O1.
         """
-        # 1. Affirmative free text 'reached stock UI' leads to CONTROL_HELD_O1 in JSON and key=value
+        # 1. Affirmative allowlist strings lead to CONTROL_HELD_O1 in JSON and key=value
         json_affirmative = (
             f'{{"diskboot_sha256": "{self.valid_hash}", "press": "held", '
             f'"pulses": 44, "lcd": "reached stock UI", "inspector_status": "none"}}'
@@ -704,25 +711,64 @@ class TestPort26LadderDecode(unittest.TestCase):
         self.assertEqual(res_kv["last_stage_reached"], "STOCK_UI")
         self.assertIsNone(res_kv["next_stage"])
 
-        # 2. Negative phrases must NOT trigger CONTROL_HELD_O1 (give CODE_44 on pulses=44)
-        negated_phrases = [
+        # 2. Reviewer specified test strings + hedging/negation phrases that must NEVER yield CONTROL_HELD_O1:
+        reviewer_non_affirmative = [
+            "maybe reached stock UI",
+            "unknown whether stock UI appeared",
+            "waiting for stock UI",
+            "not stock UI",
+            "stock UI?",
+            "possibly stock ui",
             "did not reach stock UI",
             "never reached stock ui",
             "stock ui not shown",
             "stock ui didn't show",
             "stock UI failed",
         ]
-        for phrase in negated_phrases:
-            with self.subTest(negated_phrase=phrase):
+        for phrase in reviewer_non_affirmative:
+            with self.subTest(reviewer_phrase=phrase):
+                self.assertEqual(
+                    normalize_lcd_state(phrase),
+                    LcdState.UNKNOWN,
+                    f"Phrase {phrase!r} should normalize to LcdState.UNKNOWN",
+                )
+                self.assertFalse(is_affirmative_stock_ui(phrase))
+
+                # Held press with pulses=24 must yield CODE_24, never CONTROL_HELD_O1
                 res_neg = classify_owner_report({
+                    "diskboot_sha256": self.valid_hash,
+                    "press": "held",
+                    "pulses": 24,
+                    "lcd": phrase,
+                    "inspector_status": "none",
+                })
+                self.assertEqual(res_neg["class"], "CODE_24", f"Failed for phrase: {phrase}")
+                self.assertNotEqual(res_neg["class"], "CONTROL_HELD_O1")
+                self.assertIn("lcd state not affirmatively stock UI", res_neg["notes"])
+
+                # Held press with pulses=44 must yield CODE_44, never CONTROL_HELD_O1
+                res_neg_44 = classify_owner_report({
                     "diskboot_sha256": self.valid_hash,
                     "press": "held",
                     "pulses": 44,
                     "lcd": phrase,
                     "inspector_status": "none",
                 })
-                self.assertEqual(res_neg["class"], "CODE_44", f"Failed for phrase: {phrase}")
-                self.assertNotEqual(res_neg["class"], "CONTROL_HELD_O1")
+                self.assertEqual(res_neg_44["class"], "CODE_44", f"Failed for phrase: {phrase}")
+                self.assertNotEqual(res_neg_44["class"], "CONTROL_HELD_O1")
+                self.assertIn("lcd state not affirmatively stock UI", res_neg_44["notes"])
+
+                # Held press with pulses='unknown' must yield UNKNOWN_CODE, never CONTROL_HELD_O1
+                res_unknown = classify_owner_report({
+                    "diskboot_sha256": self.valid_hash,
+                    "press": "held",
+                    "pulses": "unknown",
+                    "lcd": phrase,
+                    "inspector_status": "none",
+                })
+                self.assertEqual(res_unknown["class"], "UNKNOWN_CODE")
+                self.assertNotEqual(res_unknown["class"], "CONTROL_HELD_O1")
+                self.assertIn("lcd state not affirmatively stock UI", res_unknown["notes"])
 
         # 3. Short press with 'reached stock UI' does NOT give CONTROL_HELD_O1 (gives CODE_44)
         res_short = classify_owner_report({
@@ -851,79 +897,96 @@ class TestPort26LadderDecode(unittest.TestCase):
                 self.assertIn("Safety violation", proc.stderr)
 
     def test_path_safety_symlink_regressions(self) -> None:
-        """[P1 Regression] Path safety symlink tests:
-        (a) tmp report.json symlink pointing to a file named PRIMARY.BIN is refused.
-        (b) tmp symlink pointing to a file with .bin extension is refused.
-        (c) refusal happens before any file read (proven by mocking builtins.open).
+        """[P1 Regression] Path safety symlink and refusal bypass tests:
+        (a) tmp 'report.json ' symlink (trailing whitespace) pointing to PRIMARY.BIN is refused.
+        (b) tmp 'x.json' symlink pointing to a.bin is refused.
+        (c) a name with trailing whitespace is refused.
+        (d) 'PRIMARY.json' is refused.
+        (e) parent component with PRIMARY* name is refused.
+        Assert builtins.open is NEVER called for any of these (empty placeholders, no ROM bytes).
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
             primary_file = tmp_path / "PRIMARY.BIN"
-            primary_file.write_text("sample content", encoding="utf-8")
+            primary_file.write_text("", encoding="utf-8")  # empty placeholder, no ROM bytes
 
-            bin_file = tmp_path / "sample.bin"
-            bin_file.write_text("sample bin", encoding="utf-8")
+            bin_file = tmp_path / "a.bin"
+            bin_file.write_text("", encoding="utf-8")  # empty placeholder, no ROM bytes
 
-            # Symlink (a): report.json -> PRIMARY.BIN
-            symlink_a = tmp_path / "report_a.json"
-            os.symlink(primary_file, symlink_a)
+            # Case 1: 'report.json ' symlink (trailing space in name) -> PRIMARY.BIN
+            symlink_trailing_space = tmp_path / "report.json "
+            os.symlink(primary_file, symlink_trailing_space)
 
-            # Symlink (b): report_b.json -> sample.bin
-            symlink_b = tmp_path / "report_b.json"
-            os.symlink(bin_file, symlink_b)
+            # Case 2: 'x.json' symlink -> a.bin
+            symlink_x = tmp_path / "x.json"
+            os.symlink(bin_file, symlink_x)
 
-            # Test (a): symlink to PRIMARY.BIN is refused
-            with self.assertRaises(SafetyViolationError):
-                validate_safety_path(symlink_a)
-            with self.assertRaises(SafetyViolationError):
-                parse_owner_report(symlink_a)
-            with self.assertRaises(SafetyViolationError):
-                decode_ladder_report(symlink_a)
+            # Case 3: name with trailing whitespace
+            trailing_whitespace_file = tmp_path / "trailing_report.json "
 
-            # Test (b): symlink to .bin file is refused
-            with self.assertRaises(SafetyViolationError):
-                validate_safety_path(symlink_b)
-            with self.assertRaises(SafetyViolationError):
-                parse_owner_report(symlink_b)
-            with self.assertRaises(SafetyViolationError):
-                decode_ladder_report(symlink_b)
+            # Case 4: PRIMARY.json
+            primary_json = tmp_path / "PRIMARY.json"
+            primary_json.write_text("", encoding="utf-8")
 
-            # Test parent component symlink
-            sub_dir = tmp_path / "subdir"
-            sub_dir.mkdir()
-            nested_file = sub_dir / "valid_report.json"
-            nested_file.write_text('{"diskboot_sha256": "x"}', encoding="utf-8")
-            dir_symlink = tmp_path / "dir_link"
-            os.symlink(sub_dir, dir_symlink)
-            symlink_in_dir = dir_symlink / "valid_report.json"
+            # Case 5: parent component with PRIMARY* name
+            primary_dir = tmp_path / "PRIMARY_DIR"
+            primary_dir.mkdir()
+            nested_in_primary = primary_dir / "report.json"
+            nested_in_primary.write_text("", encoding="utf-8")
 
-            with self.assertRaises(SafetyViolationError):
-                validate_safety_path(symlink_in_dir)
-            with self.assertRaises(SafetyViolationError):
-                parse_owner_report(symlink_in_dir)
+            forbidden_targets = [
+                ("report.json _to_PRIMARY.BIN", symlink_trailing_space),
+                ("x.json_to_a.bin", symlink_x),
+                ("trailing_whitespace_name", trailing_whitespace_file),
+                ("PRIMARY.json", primary_json),
+                ("parent_component_PRIMARY_DIR", nested_in_primary),
+            ]
 
-            # Test (c): prove refusal happens before any open() by patching builtins.open
+            for case_name, target in forbidden_targets:
+                with self.subTest(case=case_name):
+                    # Verify both Path and str forms raise SafetyViolationError
+                    with self.assertRaises(SafetyViolationError):
+                        validate_safety_path(target)
+                    with self.assertRaises(SafetyViolationError):
+                        validate_safety_path(str(target))
+
+                    with self.assertRaises(SafetyViolationError):
+                        safe_open_report(target)
+                    with self.assertRaises(SafetyViolationError):
+                        safe_open_report(str(target))
+
+                    with self.assertRaises(SafetyViolationError):
+                        parse_owner_report(target)
+                    with self.assertRaises(SafetyViolationError):
+                        parse_owner_report(str(target))
+
+                    with self.assertRaises(SafetyViolationError):
+                        decode_ladder_report(target)
+                    with self.assertRaises(SafetyViolationError):
+                        decode_ladder_report(str(target))
+
+            # Prove refusal happens before any open() by patching builtins.open
             with patch("builtins.open") as mock_open:
-                mock_open.side_effect = AssertionError("open() was called on a forbidden symlink path!")
-                with self.assertRaises(SafetyViolationError):
-                    validate_safety_path(symlink_a)
-                with self.assertRaises(SafetyViolationError):
-                    validate_safety_path(symlink_b)
-                with self.assertRaises(SafetyViolationError):
-                    validate_safety_path(symlink_in_dir)
-                with self.assertRaises(SafetyViolationError):
-                    parse_owner_report(symlink_a)
-                with self.assertRaises(SafetyViolationError):
-                    parse_owner_report(symlink_b)
-                with self.assertRaises(SafetyViolationError):
-                    parse_owner_report(symlink_in_dir)
-                with self.assertRaises(SafetyViolationError):
-                    decode_ladder_report(symlink_a)
-                with self.assertRaises(SafetyViolationError):
-                    decode_ladder_report(symlink_b)
-                with self.assertRaises(SafetyViolationError):
-                    decode_ladder_report(symlink_in_dir)
-                # Ensure builtins.open was never called
+                mock_open.side_effect = AssertionError("builtins.open() was called on a forbidden path!")
+                for case_name, target in forbidden_targets:
+                    with self.subTest(mock_open_case=case_name):
+                        with self.assertRaises(SafetyViolationError):
+                            validate_safety_path(target)
+                        with self.assertRaises(SafetyViolationError):
+                            validate_safety_path(str(target))
+                        with self.assertRaises(SafetyViolationError):
+                            safe_open_report(target)
+                        with self.assertRaises(SafetyViolationError):
+                            safe_open_report(str(target))
+                        with self.assertRaises(SafetyViolationError):
+                            parse_owner_report(target)
+                        with self.assertRaises(SafetyViolationError):
+                            parse_owner_report(str(target))
+                        with self.assertRaises(SafetyViolationError):
+                            decode_ladder_report(target)
+                        with self.assertRaises(SafetyViolationError):
+                            decode_ladder_report(str(target))
+                # Ensure builtins.open was NEVER called across all tests
                 mock_open.assert_not_called()
 
     def test_both_input_formats(self) -> None:

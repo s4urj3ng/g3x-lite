@@ -59,14 +59,17 @@ Code Range & Classes:
 
 Stock-UI Detection Rules (CONTROL_HELD_O1):
 - Requires press == 'held'.
-- Accepts exact normalized LCD values from the documented allow-list:
-  'stock_ui', 'stock ui', 'live_view', 'live view', 'shooting', 'canon_ui', 'canon ui', 'menu'.
-- Also accepts clear affirmative free text that contains an affirmative stock-UI phrase:
-  'stock ui', 'stock UI reached', 'reached stock UI', 'live view', 'canon ui',
-  'shooting screen', 'menu shown',
-  provided that no negation token appears ('not', 'no', 'never', "didn't", 'did not', 'without', 'failed', "n't")
-  and no dark/off/blank/black word appears.
-- Word-boundary tokenisation (\\b), not raw substring matching, is strictly enforced.
+- LCD status is normalised to a closed enum: LcdState {stock_ui, off, backlight_off, on_no_ui, unknown}.
+- Only exact, case-insensitive matches against this small, documented allowlist map to stock_ui:
+  'stock_ui', 'stock ui', 'reached stock ui', 'stock ui reached', 'stock ui shown',
+  'live_view', 'live view', 'shooting', 'shooting screen', 'canon_ui', 'canon ui',
+  'menu', 'menu shown'.
+- Any other text, including hedging, questioning, or negation words
+  (e.g., 'maybe reached stock UI', 'unknown whether stock UI appeared', 'waiting for stock UI',
+  'not stock UI', 'stock UI?', 'possibly stock ui') maps to LcdState.UNKNOWN.
+- CONTROL_HELD_O1 requires press == 'held' AND lcd == 'stock_ui'.
+- A held press with lcd not affirmatively stock UI (including unknown) yields an explicit note
+  ('lcd state not affirmatively stock UI'), never CONTROL_HELD_O1.
 - inspector_status alone (e.g. WITNESS_INVALID) never implies stock UI.
 - A short press with affirmative stock-UI text does NOT yield CONTROL_HELD_O1 (held press is strictly required).
 
@@ -84,10 +87,10 @@ Code 44 Next Stage Rules:
   and is recorded in notes, never in next_stage.
 
 Off-By-One Uncertainty Rule (AMBIGUOUS Classification):
-- Evaluated using explicit fields first:
+- Evaluated using closed enum CountConfidence {exact, uncertain, unknown} from explicit fields first:
+  * 'count_confidence': exact|certain|confident|high|sure -> exact (False); uncertain|approx|approximate|unsure|maybe|low -> uncertain (True)
   * 'uncertain': true|false
   * 'uncertainty': true|false
-  * 'count_confidence': 'exact' -> False, 'uncertain' -> True
 - If no explicit field is present, free-text in 'notes' is checked clause-by-clause
   (clauses split by ';', '.', ',', '!', '?', newline).
   An affirmative uncertainty phrase ('unsure', 'uncertain', 'uncertainty', 'maybe', 'approx', '+/-1',
@@ -104,9 +107,12 @@ Off-By-One Uncertainty Rule (AMBIGUOUS Classification):
 
 Phase 0 Path Safety Governance:
 - Pure Python standard library only.
-- Refuses any path where os.path.islink() is true on the path itself or on any component.
-- Resolves paths with os.path.realpath and applies .bin/.rom/.BIN and PRIMARY* checks
-  case-insensitively to both supplied path and resolved path.
+- Strict single entry-point safe_open_report(path) -> text:
+  (a) Refuses any path whose string representation differs from path.strip(), or that contains NUL or control characters;
+  (b) Refuses if the given name OR os.path.realpath(path) has a basename starting with PRIMARY
+      (case-insensitive) or a suffix of .bin/.rom (case-insensitive, after any trailing dots or spaces);
+  (c) Opens the realpath value that was checked in (b), never the original argument.
+- No other code path calls open() on a report path.
 - All safety checks execute before any open(). All files opened in text mode.
 - Reads no ROM or binary files.
 """
@@ -115,6 +121,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+from enum import Enum
 import json
 import os
 import re
@@ -546,24 +553,79 @@ VALID_CLASSES: Set[str] = {
 STOCK_UI_LCD_ALLOWLIST: Set[str] = {
     "stock_ui",
     "stock ui",
+    "reached stock ui",
+    "stock ui reached",
+    "stock ui shown",
     "live_view",
     "live view",
     "shooting",
+    "shooting screen",
     "canon_ui",
     "canon ui",
     "menu",
+    "menu shown",
 }
 
-NEGATION_PATTERNS = re.compile(
-    r"\b(never|not|no|without|failed|did\s+not|didnt)\b|\b\w*n['’]t\b",
-    re.IGNORECASE,
-)
-DARK_PATTERNS = re.compile(r"\b(dark|off|blank|black)\b", re.IGNORECASE)
 
-AFFIRMATIVE_STOCK_UI_PATTERN = re.compile(
-    r"\b(stock[\s_-]+ui|live[\s_-]+view|canon[\s_-]+ui|shooting[\s_-]+screen|shooting|menu[\s_-]+shown|menu)\b",
-    re.IGNORECASE,
-)
+class LcdState(str, Enum):
+    """Closed enum for normalized LCD display states."""
+    STOCK_UI = "stock_ui"
+    OFF = "off"
+    BACKLIGHT_OFF = "backlight_off"
+    ON_NO_UI = "on_no_ui"
+    UNKNOWN = "unknown"
+
+
+def normalize_lcd_state(lcd_val: Any) -> LcdState:
+    """Normalises raw LCD status into a closed LcdState enum.
+
+    Only exact, case-insensitive matches against the documented allowlist
+    map to LcdState.STOCK_UI. Any other text, including anything with hedging,
+    questioning, or negation words, maps to LcdState.UNKNOWN.
+    """
+    if lcd_val is None:
+        return LcdState.UNKNOWN
+    clean = re.sub(r"\s+", " ", str(lcd_val).strip().lower())
+    if not clean:
+        return LcdState.UNKNOWN
+    if clean in STOCK_UI_LCD_ALLOWLIST:
+        return LcdState.STOCK_UI
+    if clean in ("off", "dark", "black", "blank"):
+        return LcdState.OFF
+    if clean in ("backlight_off", "backlight off"):
+        return LcdState.BACKLIGHT_OFF
+    if clean in ("on_no_ui", "on no ui", "on_without_ui", "backlight_on", "backlight on"):
+        return LcdState.ON_NO_UI
+    return LcdState.UNKNOWN
+
+
+def is_affirmative_stock_ui(lcd_str: str) -> bool:
+    """Explicit affirmative check for stock user interface on the LCD.
+
+    Returns True if and only if normalize_lcd_state(lcd_str) == LcdState.STOCK_UI.
+    No free-text regex heuristics are used.
+    """
+    return normalize_lcd_state(lcd_str) == LcdState.STOCK_UI
+
+
+class CountConfidence(str, Enum):
+    """Closed enum for explicit count confidence levels."""
+    EXACT = "exact"
+    UNCERTAIN = "uncertain"
+    UNKNOWN = "unknown"
+
+
+def normalize_count_confidence(conf_val: Any) -> CountConfidence:
+    """Normalises explicit count confidence into a closed CountConfidence enum."""
+    if conf_val is None:
+        return CountConfidence.UNKNOWN
+    clean = re.sub(r"\s+", " ", str(conf_val).strip().lower())
+    if clean in ("exact", "certain", "confident", "high", "sure"):
+        return CountConfidence.EXACT
+    if clean in ("uncertain", "approx", "approximate", "unsure", "maybe", "low"):
+        return CountConfidence.UNCERTAIN
+    return CountConfidence.UNKNOWN
+
 
 UNCERTAINTY_WORDS = re.compile(
     r"\b(unsure|uncertain|uncertainty|maybe|approx|approximate|approximately|might\s+have\s+been|could\s+have\s+been)\b|\+\s*/\s*-\s*1|\+-\s*1",
@@ -580,81 +642,97 @@ class SafetyViolationError(ValueError):
     pass
 
 
-def is_forbidden_file_name(name: str) -> bool:
-    """Checks if a file name or extension violates Phase 0 safety rules (case-insensitive)."""
-    name_upper = name.upper()
-    name_lower = name.lower()
-    if name_lower.endswith((".bin", ".rom")):
+def is_forbidden_file_name(name: Union[str, Path]) -> bool:
+    """Checks if a file name or path violates Phase 0 safety rules (case-insensitive).
+
+    Refuses if the basename starts with PRIMARY (case-insensitive) or if
+    the basename/suffix ends in .bin or .rom (case-insensitive, after any trailing dots or spaces).
+    """
+    name_str = os.fspath(name) if not isinstance(name, str) else name
+    base = os.path.basename(name_str)
+    if base.upper().startswith("PRIMARY"):
         return True
-    if name_upper.startswith("PRIMARY"):
+    clean_base = base.rstrip(". ")
+    clean_name = name_str.rstrip(". ")
+    if clean_base.lower().endswith((".bin", ".rom")) or clean_name.lower().endswith((".bin", ".rom")):
         return True
     return False
 
 
-def validate_safety_path(path: Union[str, Path]) -> Path:
-    """Enforces Phase 0 read-only safety rules on input file paths.
-    
-    Refuses:
-    1. Any path where os.path.islink() is true on the path itself or on any component.
-    2. Any path whose supplied name or resolved name ends in .bin, .rom (case-insensitive)
-       or whose basename starts with PRIMARY*.
-    
-    All checks are performed before any file open().
+def validate_safety_path(path: Union[str, Path]) -> str:
+    """Enforces Phase 0 read-only safety rules on input file paths without normalising:
+
+    (a) Refuses any path whose string representation differs from path.strip(), or that
+        contains NUL or control characters.
+    (b) Refuses if the given name OR os.path.realpath(path) has a basename starting with PRIMARY
+        (case-insensitive) or a suffix of .bin/.rom (case-insensitive, after any trailing dots or spaces).
+
+    Returns the checked realpath string.
     """
-    p_str = str(path).strip()
-    p = Path(p_str)
+    path_str = os.fspath(path) if not isinstance(path, str) else path
 
-    # 1. Check supplied path name / extension
-    if is_forbidden_file_name(p.name):
+    # (a) Refuse whitespace alteration or control characters
+    if path_str != path_str.strip():
         raise SafetyViolationError(
-            f"Safety violation: forbidden access to file '{path}'"
+            f"Safety violation: refused path with leading or trailing whitespace: {path_str!r}"
+        )
+    if any(ord(c) < 32 or ord(c) == 127 for c in path_str):
+        raise SafetyViolationError(
+            f"Safety violation: refused path containing control characters or NUL: {path_str!r}"
         )
 
-    # 2. Check if os.path.islink() is true on the path itself or on any component
-    if os.path.islink(p_str):
+    # (b) Check given name
+    if is_forbidden_file_name(path_str):
         raise SafetyViolationError(
-            f"Safety violation: refused symlink path '{path}'"
+            f"Safety violation: forbidden access to file '{path_str}'"
         )
 
-    for parent in p.parents:
-        if os.path.islink(str(parent)):
-            raise SafetyViolationError(
-                f"Safety violation: refused symlink path component '{parent}' in '{path}'"
-            )
-
+    # Check os.path.realpath
     try:
-        p_abs = Path(os.path.abspath(p_str))
-        if os.path.islink(str(p_abs)):
-            raise SafetyViolationError(
-                f"Safety violation: refused symlink absolute path '{p_abs}'"
-            )
-        for parent in p_abs.parents:
-            if os.path.islink(str(parent)):
-                raise SafetyViolationError(
-                    f"Safety violation: refused symlink absolute component '{parent}' in '{path}'"
-                )
-    except OSError:
-        pass
+        real_p = os.path.realpath(path_str)
+    except OSError as err:
+        raise SafetyViolationError(f"Safety violation: cannot resolve path '{path_str}': {err}")
 
-    # 3. Resolve path with os.path.realpath and apply checks to resolved path
-    try:
-        resolved_str = os.path.realpath(p_str)
-        resolved_p = Path(resolved_str)
-        if is_forbidden_file_name(resolved_p.name):
-            raise SafetyViolationError(
-                f"Safety violation: resolved path '{resolved_str}' violates safety rules"
-            )
-        for parent in resolved_p.parents:
-            if is_forbidden_file_name(parent.name):
-                raise SafetyViolationError(
-                    f"Safety violation: resolved component '{parent.name}' in '{resolved_str}' violates safety rules"
-                )
-    except SafetyViolationError:
-        raise
-    except OSError:
-        pass
+    if is_forbidden_file_name(real_p):
+        raise SafetyViolationError(
+            f"Safety violation: resolved path '{real_p}' violates safety rules"
+        )
 
-    return p
+    # Check parent components of real_p
+    p_real = Path(real_p)
+    for parent in p_real.parents:
+        if is_forbidden_file_name(parent.name):
+            raise SafetyViolationError(
+                f"Safety violation: resolved parent component '{parent.name}' in '{real_p}' violates safety rules"
+            )
+
+    return real_p
+
+
+def safe_open_report(path: Union[str, Path]) -> str:
+    """Safely opens and reads an owner trial report text file.
+
+    Enforces Phase 0 read-only safety rules on the exact string given, with no stripping or normalising:
+    (a) Refuses any path whose string differs from path.strip(), or that contains NUL or control characters;
+    (b) Refuses if the given name OR os.path.realpath(path) has a basename starting with PRIMARY
+        (case-insensitive) or a suffix of .bin/.rom (case-insensitive, after any trailing dots or spaces);
+    (c) Opens the realpath value that was checked in (b), never the original argument.
+
+    No other code path may call open() on a report path.
+    Refuses any binary content containing NUL bytes.
+    """
+    real_path = validate_safety_path(path)
+    if not os.path.exists(real_path):
+        raise FileNotFoundError(f"Report file not found: {path}")
+    if not os.path.isfile(real_path):
+        raise SafetyViolationError(f"Safety violation: '{real_path}' is not a regular file")
+
+    with open(real_path, "r", encoding="utf-8") as f:
+        text = f.read()
+
+    if "\x00" in text:
+        raise SafetyViolationError(f"Safety violation: refused binary content in '{real_path}'")
+    return text
 
 
 def is_truthy(val: Any) -> bool:
@@ -673,41 +751,6 @@ def is_truthy(val: Any) -> bool:
         if v in ("false", "no", "0", "f", "n", "", "none", "null"):
             return False
     return False
-
-
-def is_affirmative_stock_ui(lcd_str: str) -> bool:
-    """Explicit affirmative check for stock user interface on the LCD.
-    
-    Rule & Governance:
-    - Rejects any string containing negation words using word-boundary tokenisation:
-      'not', 'no', 'never', "didn't", 'did not', 'without', 'failed', "n't".
-    - Rejects any string containing dark / off / blank / black words using word boundaries.
-    - Accepts exact normalized values from the documented allow-list:
-      'stock_ui', 'stock ui', 'live_view', 'live view', 'shooting', 'canon_ui', 'canon ui', 'menu'.
-    - Also accepts clear affirmative free text that contains an affirmative stock-UI phrase
-      (for example 'stock ui', 'stock UI reached', 'reached stock UI', 'live view', 'canon ui',
-      'shooting screen', 'menu shown'), provided no negation token or dark/off/blank word appears.
-    - Uses word-boundary tokenisation (\\b), never raw substring matching.
-    """
-    if not lcd_str:
-        return False
-
-    raw = lcd_str.strip()
-
-    if NEGATION_PATTERNS.search(raw):
-        return False
-    if DARK_PATTERNS.search(raw):
-        return False
-
-    norm = re.sub(r"\s+", " ", raw.lower())
-    if norm in STOCK_UI_LCD_ALLOWLIST:
-        return True
-
-    norm_underscore = norm.replace(" ", "_").replace("-", "_")
-    if norm_underscore in STOCK_UI_LCD_ALLOWLIST:
-        return True
-
-    return bool(AFFIRMATIVE_STOCK_UI_PATTERN.search(raw))
 
 
 def has_affirmative_uncertainty_in_text(text: str) -> bool:
@@ -1252,43 +1295,36 @@ def parse_owner_report(input_data: Union[str, Path, Dict[str, Any]]) -> Dict[str
     raw_text: str = ""
 
     if isinstance(input_data, Path):
-        validate_safety_path(input_data)
-        if not input_data.is_file():
-            raise FileNotFoundError(f"Report file not found: {input_data}")
-        with open(input_data, "r", encoding="utf-8") as f:
-            raw_text = f.read()
-        if "\x00" in raw_text:
-            raise SafetyViolationError(f"Safety violation: refused binary content in {input_data}")
+        raw_text = safe_open_report(input_data)
     elif isinstance(input_data, str):
-        p_str = input_data.strip()
-        # Enforce safety check if string looks like a file name or path
-        try:
-            cand = Path(p_str)
-            if is_forbidden_file_name(cand.name):
-                validate_safety_path(cand)
-        except SafetyViolationError:
-            raise
-        except (ValueError, OSError):
-            pass
+        raw_str = input_data
+        is_inline_json = False
+        stripped = raw_str.strip()
+        if stripped.startswith("{") and stripped.endswith("}"):
+            try:
+                parsed_json = json.loads(stripped)
+                if isinstance(parsed_json, dict):
+                    is_inline_json = True
+            except json.JSONDecodeError:
+                pass
 
-        # Check if input is a path on disk or has path separators
-        is_path = False
-        if not ("\n" in p_str or (p_str.startswith("{") and p_str.endswith("}"))):
-            if os.path.islink(p_str) or os.path.exists(p_str) or "/" in p_str or "\\" in p_str:
-                is_path = True
+        is_inline_kv = ("\n" in raw_str and ("=" in raw_str or ":" in raw_str))
 
-        if is_path:
-            validate_safety_path(p_str)
-            cand_p = Path(p_str)
-            if cand_p.is_file():
-                with open(cand_p, "r", encoding="utf-8") as f:
-                    raw_text = f.read()
-                if "\x00" in raw_text:
-                    raise SafetyViolationError(f"Safety violation: refused binary content in {cand_p}")
+        if not is_inline_json and not is_inline_kv:
+            # Treated as a path: delegate entirely to safe_open_report
+            if is_forbidden_file_name(raw_str):
+                safe_open_report(raw_str)
+            elif raw_str != raw_str.strip() or any(ord(c) < 32 or ord(c) == 127 for c in raw_str):
+                if "=" not in raw_str and ":" not in raw_str:
+                    safe_open_report(raw_str)
+                else:
+                    raw_text = raw_str
+            elif os.path.exists(raw_str) or os.path.islink(raw_str) or "/" in raw_str or "\\" in raw_str:
+                raw_text = safe_open_report(raw_str)
             else:
-                raw_text = p_str
+                raw_text = raw_str
         else:
-            raw_text = p_str
+            raw_text = raw_str
 
     # Strip surrounding whitespace before deciding between JSON and key=value
     raw_text = raw_text.strip()
@@ -1388,9 +1424,15 @@ def classify_owner_report(
 
     reported_sha256 = str(report.get("diskboot_sha256", "")).strip().lower()
     press = str(report.get("press", "short")).strip().lower()
-    lcd = str(report.get("lcd", "")).strip().lower()
+    raw_lcd = report.get("lcd", "")
+    lcd_state = normalize_lcd_state(raw_lcd)
     inspector_status = str(report.get("inspector_status", "")).strip().lower()
     notes_in = str(report.get("notes", "")).strip()
+
+    # Explicit note when held press does not reach stock UI affirmatively
+    held_non_stock_note = ""
+    if press == "held" and lcd_state != LcdState.STOCK_UI:
+        held_non_stock_note = " (Note: press was held, but lcd state not affirmatively stock UI)."
 
     # 1. Gate Check: Candidate DISKBOOT SHA-256 Verification
     # Citation: docs/PORT25_LADDER_FIX_CANDIDATE.md:385
@@ -1410,9 +1452,7 @@ def classify_owner_report(
     # Condition: Held button press that affirmatively booted into the stock UI.
     # Citations: docs/PORT24_POWERON_FIX.md:19-24, docs/PORT25_SHORT_PRESS_LOCALISE.md:21, 55,
     #            docs/PORT25_OWNER_TRIAL_PLAN.md:162-173
-    reached_stock_ui = is_affirmative_stock_ui(lcd)
-
-    if press == "held" and reached_stock_ui:
+    if press == "held" and lcd_state == LcdState.STOCK_UI:
         evidence_held = (
             "docs/PORT24_POWERON_FIX.md:19-24; docs/PORT25_SHORT_PRESS_LOCALISE.md:21, 55; "
             "docs/PORT25_OWNER_TRIAL_PLAN.md:162-173"
@@ -1434,15 +1474,18 @@ def classify_owner_report(
     # - Missing pulses field, empty value, 'unknown', '?', floats (24.9), bools (True),
     #   negative numbers (-1) or zero (0) map to UNKNOWN_CODE with explanatory notes.
     if "pulses" not in report:
+        note_missing = (
+            "Missing 'pulses' field in owner report. Report must supply an integer pulse count, "
+            "a list of integers, or 'none'."
+        )
+        if held_non_stock_note:
+            note_missing += held_non_stock_note
         return {
             "class": "UNKNOWN_CODE",
             "last_stage_reached": None,
             "next_stage": None,
             "evidence": "docs/PORT25_LADDER_FIX_CANDIDATE.md:326-354",
-            "notes": (
-                "Missing 'pulses' field in owner report. Report must supply an integer pulse count, "
-                "a list of integers, or 'none'."
-            ),
+            "notes": note_missing,
         }
 
     pulses_raw = report.get("pulses")
@@ -1505,57 +1548,69 @@ def classify_owner_report(
 
     # Handle input validation failures
     if invalid_input_reason is not None:
+        note_inval = (
+            f"Pulse input validation failure: {invalid_input_reason} "
+            "Accepted formats: integer, decimal digit string, list of integers, or 'none'."
+        )
+        if held_non_stock_note:
+            note_inval += held_non_stock_note
         return {
             "class": "UNKNOWN_CODE",
             "last_stage_reached": None,
             "next_stage": None,
             "evidence": "docs/PORT25_LADDER_FIX_CANDIDATE.md:326-354",
-            "notes": (
-                f"Pulse input validation failure: {invalid_input_reason} "
-                "Accepted formats: integer, decimal digit string, list of integers, or 'none'."
-            ),
+            "notes": note_inval,
         }
 
     # Handle Conflicting Multiple Counts
     if is_ambiguous_multiple:
+        note_ambig = (
+            f"Conflicting multiple pulse counts reported: {pulses_raw}. "
+            "Unable to definitively isolate terminal stage due to conflicting observations."
+        )
+        if held_non_stock_note:
+            note_ambig += held_non_stock_note
         return {
             "class": "AMBIGUOUS",
             "last_stage_reached": None,
             "next_stage": None,
             "evidence": "docs/PORT25_OWNER_TRIAL_PLAN.md:155-161; docs/PORT25_LADDER_FIX_CANDIDATE.md:265, 274",
-            "notes": (
-                f"Conflicting multiple pulse counts reported: {pulses_raw}. "
-                "Unable to definitively isolate terminal stage due to conflicting observations."
-            ),
+            "notes": note_ambig,
         }
 
     # Handle NO_PULSES (exact case-insensitive 'none')
     if is_none_pulse:
+        note_none = (
+            "Zero pulses observed (camera dark from start). Camera remained unpowered, "
+            "StartDiskboot did not execute loader (card lock / VBR issue), or loader stalled "
+            "in check_compat() before Step 1 pulse (docs/PORT25_OWNER_TRIAL_PLAN.md:201)."
+        )
+        if held_non_stock_note:
+            note_none += held_non_stock_note
         return {
             "class": "NO_PULSES",
             "last_stage_reached": None,
             "next_stage": "STAGE_LOADER_AFTER_PROLOGUE",
             "evidence": "docs/PORT25_OWNER_TRIAL_PLAN.md:201; docs/PORT25_LADDER_FIX_CANDIDATE.md:328",
-            "notes": (
-                "Zero pulses observed (camera dark from start). Camera remained unpowered, "
-                "StartDiskboot did not execute loader (card lock / VBR issue), or loader stalled "
-                "in check_compat() before Step 1 pulse (docs/PORT25_OWNER_TRIAL_PLAN.md:201)."
-            ),
+            "notes": note_none,
         }
 
     assert count_resolved is not None
 
     # Handle non-positive integer counts (<= 0)
     if count_resolved <= 0:
+        note_np = (
+            f"Pulse count {count_resolved} does not match any registered code in the PORT-25 "
+            "ladder stage table (valid codes: 1..7, 11..15, 21..26, 28..29, 31..35, 41..44)."
+        )
+        if held_non_stock_note:
+            note_np += held_non_stock_note
         return {
             "class": "UNKNOWN_CODE",
             "last_stage_reached": None,
             "next_stage": None,
             "evidence": "docs/PORT25_LADDER_FIX_CANDIDATE.md:326-354",
-            "notes": (
-                f"Pulse count {count_resolved} does not match any registered code in the PORT-25 "
-                "ladder stage table (valid codes: 1..7, 11..15, 21..26, 28..29, 31..35, 41..44)."
-            ),
+            "notes": note_np,
         }
 
     # 4. Check Off-By-One Uncertainty Rule
@@ -1564,14 +1619,11 @@ def classify_owner_report(
     confidence_val = report.get("count_confidence")
 
     uncertainty_flagged = False
-    if confidence_val is not None:
-        c_str = str(confidence_val).strip().lower()
-        if c_str in ("uncertain", "approx", "approximate", "unsure", "maybe", "low"):
-            uncertainty_flagged = True
-        elif c_str in ("exact", "certain", "confident", "high", "sure"):
-            uncertainty_flagged = False
-        else:
-            uncertainty_flagged = has_affirmative_uncertainty_in_text(c_str)
+    norm_conf = normalize_count_confidence(confidence_val)
+    if norm_conf == CountConfidence.UNCERTAIN:
+        uncertainty_flagged = True
+    elif norm_conf == CountConfidence.EXACT:
+        uncertainty_flagged = False
     elif uncertain_val is not None or uncertainty_val is not None:
         if is_truthy(uncertain_val) or is_truthy(uncertainty_val):
             uncertainty_flagged = True
@@ -1585,16 +1637,19 @@ def classify_owner_report(
     if uncertainty_flagged and is_count_adjacent_to_two_valid_codes(count_resolved, table):
         prev_sym = table[count_resolved - 1]["stage_symbol"]
         next_sym = table[count_resolved + 1]["stage_symbol"]
+        note_adj = (
+            f"Owner flagged uncertainty on pulse count {count_resolved}, which is adjacent to two valid "
+            f"codes ({count_resolved - 1}: {prev_sym}, {count_resolved + 1}: {next_sym}). "
+            "Classified as AMBIGUOUS under the off-by-one uncertainty rule."
+        )
+        if held_non_stock_note:
+            note_adj += held_non_stock_note
         return {
             "class": "AMBIGUOUS",
             "last_stage_reached": None,
             "next_stage": None,
             "evidence": "docs/PORT25_OWNER_TRIAL_PLAN.md:155-161; docs/PORT25_LADDER_FIX_CANDIDATE.md:265, 274",
-            "notes": (
-                f"Owner flagged uncertainty on pulse count {count_resolved}, which is adjacent to two valid "
-                f"codes ({count_resolved - 1}: {prev_sym}, {count_resolved + 1}: {next_sym}). "
-                "Classified as AMBIGUOUS under the off-by-one uncertainty rule."
-            ),
+            "notes": note_adj,
         }
 
     # 5. Check In-Table Code (emits only the 29 registered codes)
@@ -1610,11 +1665,14 @@ def classify_owner_report(
         note_text = f"{purpose} ({context})."
         if count_resolved == 44:
             note_text += " Handoff continuation branches to sub_fc0d0126 [VERIFIED: boot_prototype.c:436-438]."
-            if reached_stock_ui:
+            if lcd_state == LcdState.STOCK_UI:
                 note_text += " Independent affirmative UI evidence observed: camera booted into stock UI."
 
         if uncertainty_flagged:
             note_text += " (Note: owner flagged uncertainty, but count is not adjacent to two valid codes)."
+
+        if held_non_stock_note:
+            note_text += held_non_stock_note
 
         return {
             "class": f"CODE_{count_resolved}",
@@ -1625,15 +1683,18 @@ def classify_owner_report(
         }
 
     # 6. Out-of-Table Code (all in-range gaps within 1..44 and out-of-range counts map here)
+    note_oot = (
+        f"Pulse count {count_resolved} does not match any registered code in the PORT-25 "
+        "ladder stage table (valid codes: 1..7, 11..15, 21..26, 28..29, 31..35, 41..44)."
+    )
+    if held_non_stock_note:
+        note_oot += held_non_stock_note
     return {
         "class": "UNKNOWN_CODE",
         "last_stage_reached": None,
         "next_stage": None,
         "evidence": "docs/PORT25_LADDER_FIX_CANDIDATE.md:326-354",
-        "notes": (
-            f"Pulse count {count_resolved} does not match any registered code in the PORT-25 "
-            "ladder stage table (valid codes: 1..7, 11..15, 21..26, 28..29, 31..35, 41..44)."
-        ),
+        "notes": note_oot,
     }
 
 
