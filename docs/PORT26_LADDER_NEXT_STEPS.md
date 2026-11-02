@@ -160,15 +160,15 @@ This plan enumerates every code and special class emitted by `tools/port26_ladde
 
 ### Code 42: STAGE_BC_PRE_PHYSW_CREATE (`CODE_42`)
 (a) Stage reached -> next stage: `STAGE_BC_PRE_PHYSW_CREATE` -> `STAGE_BC_POST_PHYSW_CREATE` `[VERIFIED: tools/build_candidate_port25_ladder_fix.py:125; chdk-port/platform/g3x/sub/110c/boot_prototype.c:413]`.
-(b) Execution: `boot_prototype.c:413`: execution of `bl sub_fc1283d2` (`PORT25-ROM-PHYSW-TASK`), which spawns `task_PhySw` (`0xFC1283AD`, priority 23, stack 2048 B, `PORT25-ROM-PHYSW-TASK; PORT25-ROM-PHYSW-LITERALS`) `[VERIFIED: boot_prototype.c:413]`.
+(b) Execution: `boot_prototype.c:413`: execution of `bl sub_fc1283d2` (`PORT25-ROM-PHYSW-TASK`), which inspects existing task state and conditionally creates `task_PhySw` (`0xFC1283AD`, priority 23, stack 2048 B, `PORT25-ROM-PHYSW-TASK; PORT25-ROM-PHYSW-LITERALS; docs/PORT25_SHORT_PRESS_LOCALISE.md:355-358`) `[STATIC_VERIFIED: PORT25-ROM-PHYSW-TASK; docs/PORT25_SHORT_PRESS_LOCALISE.md:355-358]`.
 (c) Likely power-off/wait point: Hang in `sub_fc1283d2` task creator, watchdog timeout (Candidate 3 / Rank 3, `docs/PORT25_SHORT_PRESS_LOCALISE.md:220-231`), or PMIC latch timeout (Candidate 2 / Rank 4, lines 200-216) `[UNKNOWN]`.
 (d) Follow-up UNKNOWN: needs bounded ROM range / control-flow mapping of task_PhySw spawner sub_fc1283d2 at 0xFC1283D2 (PORT25-ROM-PHYSW-TASK; docs/PORT25_SHORT_PRESS_LOCALISE.md:169-171, 355-358).
 
 ### Code 43: STAGE_BC_POST_PHYSW_CREATE (`CODE_43`)
-(a) Stage reached -> next stage: `STAGE_BC_POST_PHYSW_CREATE` -> `STAGE_BC_PRE_FIRMWARE_CONT` `[VERIFIED: tools/build_candidate_port25_ladder_fix.py:125-126; chdk-port/platform/g3x/sub/110c/boot_prototype.c:413-438]`.
-(b) Execution: `boot_prototype.c:422-436`: driver initialization calls: `bl sub_fc2a75f6`, `bl sub_fc0d0488`, `bl sub_fc127f24`, `bl sub_fc0bb76e`, `bl sub_fc0d02de`, `bl sub_fc0bb9cc`, `bl sub_fc0bb72a`, `bl sub_fc05bce0`, `bl sub_fc33319a`, `bl sub_fc0bb6fe`, and continuation witness write `bl witness_record_continuation` (line 434) `[VERIFIED: boot_prototype.c:422-436]`.
-(c) Likely power-off/wait point: Physical button release event detected and handled by newly running `task_PhySw` polling loop (Candidate 5 / Rank 5, `docs/PORT25_SHORT_PRESS_LOCALISE.md:250-261; PORT25-ROM-PHYSW-TASK; PORT25-ROM-PHYSW-LITERALS`), or watchdog timeout (Candidate 3 / Rank 3, lines 220-231). Shutdown edge from button release is unmapped (lines 269-272) `[UNKNOWN]`.
-(d) Follow-up UNKNOWN: needs bounded ROM range / control-flow mapping of the sub_fc1283d2 / task_PhySw power-button release path (docs/PORT25_SHORT_PRESS_LOCALISE.md:250-261, 269-272; PORT25-ROM-PHYSW-TASK).
+(a) Stage reached -> next stage: `STAGE_BC_POST_PHYSW_CREATE` -> `STAGE_BC_PRE_FIRMWARE_CONT` `[VERIFIED: tools/build_candidate_port25_ladder_fix.py:125-126; chdk-port/platform/g3x/sub/110c/boot_prototype.c:413-438]`. VERIFIED: the `sub_fc1283d2` helper returned, because Code 43 is emitted after it `[VERIFIED: tools/build_candidate_port25_ladder_fix.py:125; chdk-port/platform/g3x/sub/110c/boot_prototype.c:413]`.
+(b) Execution: `boot_prototype.c:422-436`: driver initialization calls: `bl sub_fc2a75f6`, `bl sub_fc0d0488`, `bl sub_fc127f24`, `bl sub_fc0bb76e`, `bl sub_fc0d02de`, `bl sub_fc0bb9cc`, `bl sub_fc0bb72a`, `bl sub_fc05bce0`, `bl sub_fc33319a`, `bl sub_fc0bb6fe`, and continuation witness write `bl witness_record_continuation` (line 434) `[VERIFIED: boot_prototype.c:422-436]`. UNKNOWN: whether `task_PhySw` was created `[UNKNOWN: docs/PORT25_SHORT_PRESS_LOCALISE.md:355-358]`.
+(c) Likely power-off/wait point: UNKNOWN: whether `task_PhySw` ran or sent any event `[UNKNOWN: docs/PORT25_SHORT_PRESS_LOCALISE.md:355-358]`. Any link to the power-button release can be at most INFERRED, citing the owner's 2026-11-02 report (Candidate 5 / Rank 5, `docs/PORT25_SHORT_PRESS_LOCALISE.md:250-261`) `[INFERRED: owner observation, 2026-11-02]`. Driver initialization stall or watchdog timeout (Candidate 3 / Rank 3, lines 220-231) are also possible `[UNKNOWN]`. The shutdown edge from button release remains unmapped (`docs/PORT25_SHORT_PRESS_LOCALISE.md:269-272`) `[UNKNOWN]`.
+(d) Follow-up UNKNOWN: needs bounded ROM range / control-flow mapping of the sub_fc1283d2 / task_PhySw power-button release path (PORT25_SHORT_PRESS_LOCALISE.md:269-272).
 
 ### Code 44: STAGE_BC_PRE_FIRMWARE_CONT (`CODE_44`)
 (a) Stage reached -> next stage: `STAGE_BC_PRE_FIRMWARE_CONT` -> `sub_fc0d0126` `[VERIFIED: tools/build_candidate_port25_ladder_fix.py:126; chdk-port/platform/g3x/sub/110c/boot_prototype.c:437-438; tools/port26_ladder_decode.py:550]`.
@@ -189,10 +189,10 @@ This plan enumerates every code and special class emitted by `tools/port26_ladde
 (d) Follow-up UNKNOWN: needs re-capture or owner report correction of unregistered pulse count (tools/port26_ladder_decode.py:1869-1885; docs/PORT25_LADDER_FIX_CANDIDATE.md:326-354).
 
 ### AMBIGUOUS (`AMBIGUOUS`)
-(a) Stage reached -> next stage: Indeterminate stage; candidate stages are listed but none is chosen because multiple conflicting counts were reported or off-by-one uncertainty was flagged `[VERIFIED: tools/port26_ladder_decode.py:558, 1680-1694, 1887-1906; docs/PORT25_OWNER_TRIAL_PLAN.md:155-161]`.
-(b) Execution: Execution reached one of two or more adjacent ladder checkpoints, but conflicting report entries or owner uncertainty prevent definitive resolution `[UNKNOWN: tools/port26_ladder_decode.py:1680-1694, 1887-1906]`.
-(c) Likely power-off/wait point: Observation ambiguity or conflicting trial report keys across adjacent pulse intervals `[UNKNOWN: tools/port26_ladder_decode.py:1680-1694, 1887-1906]`.
-(d) Follow-up UNKNOWN: needs re-capture or disambiguation of conflicting owner observations (docs/PORT25_OWNER_TRIAL_PLAN.md:155-161; docs/PORT25_LADDER_FIX_CANDIDATE.md:265, 274).
+(a) Stage reached -> next stage: Indeterminate stage; `tools/port26_ladder_decode.py:1680-1694` returns `AMBIGUOUS` for ANY conflicting duplicate key, before the candidate check `[VERIFIED: tools/port26_ladder_decode.py:1680-1694]`. In that case the decoder confirms neither a valid candidate identity nor any stage `[VERIFIED: tools/port26_ladder_decode.py:1680-1694]`.
+(b) Execution: Execution progress is UNKNOWN unless valid pulse observations alone identify candidate stages `[UNKNOWN: tools/port26_ladder_decode.py:1680-1694]`.
+(c) Likely power-off/wait point: Power-off or wait point is UNKNOWN because conflicting duplicate keys in the report prevent candidate verification and stage identification `[UNKNOWN: tools/port26_ladder_decode.py:1680-1694]`.
+(d) Follow-up UNKNOWN: needs a re-submitted owner report without conflicting keys.
 
 ### INVALID_CANDIDATE (`INVALID_CANDIDATE`)
 (a) Stage reached -> next stage: No stage claim at all; stage information is unavailable because reported DISKBOOT SHA-256 does not match expected combined-candidate digest (`9ba62067...3a15`) `[VERIFIED: tools/port26_ladder_decode.py:559, 1696-1708; docs/PORT25_LADDER_FIX_CANDIDATE.md:385; docs/PORT25_OWNER_TRIAL_PLAN.md:30, 81]`.
