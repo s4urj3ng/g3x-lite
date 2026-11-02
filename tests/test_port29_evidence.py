@@ -271,6 +271,20 @@ class TestPort29Evidence(unittest.TestCase):
         self.assertIn("0xFC0BD0D2", content)
         self.assertIn("0xFC0BD0CC", content)
 
+        # Secondary default stack size (*(0x811C)) verification
+        self.assertIn("0xFCEEF9B0", content)
+        self.assertIn("0x0000811C", content)
+        self.assertIn("*(0x811C)", content)
+        self.assertTrue(
+            any("*(0x811C)" in line and "UNKNOWN" in line for line in content.splitlines()),
+            "Expected an UNKNOWN label for *(0x811C) in docs/PORT29_CREATETASK_EVIDENCE.md",
+        )
+        sec_6_2_start = content.find("## 6.2 The Exact Remaining UNKNOWN List")
+        self.assertNotEqual(sec_6_2_start, -1, "Section 6.2 not found in doc")
+        section_6_2 = content[sec_6_2_start:]
+        self.assertIn("0x811C", section_6_2)
+        self.assertIn("UNKNOWN: writer of 0x811C not localised", section_6_2)
+
     def test_cross_doc_citations_accuracy(self) -> None:
         """Verify that cross-doc citations in PORT29 doc point to exact lines containing address and mnemonic."""
         doc_content = EVIDENCE_DOC_PATH.read_text(encoding="utf-8")
