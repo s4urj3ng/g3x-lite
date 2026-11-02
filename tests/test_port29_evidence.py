@@ -3,12 +3,13 @@
 
 Verifies:
 1. evidence/port29_manifest.json and evidence/port29_trusted_scopes.json exist.
-2. port11c_evidence_validator.py validates the manifest against trusted scopes with 0 errors.
-3. Every range in the manifest is <= 4 KiB (4,096 bytes).
-4. Every range in the manifest falls inside the authorized list from PORT-27 / PORT-28.
-5. Slices match exact byte hashes against PRIMARY.BIN (with manifest safety gate prior to seek/read).
-6. PORT-29 artifacts contain no binary or ROM blobs, and no forbidden binaries/build outputs are tracked in git.
-7. docs/PORT29_CREATETASK_EVIDENCE.md contains required tables, citations, and verdict.
+2. port11c_evidence_validator.py validates the manifest against trusted scopes with 0 errors (no --allow-overlap).
+3. No two manifest ranges overlap.
+4. Every range in the manifest is <= 4 KiB (4,096 bytes).
+5. Every range in the manifest falls inside the authorized list from PORT-27 / PORT-28.
+6. Slices match exact byte hashes against PRIMARY.BIN (with manifest safety gate prior to seek/read).
+7. PORT-29 artifacts contain no binary or ROM blobs, and no forbidden binaries/build outputs are tracked in git.
+8. docs/PORT29_CREATETASK_EVIDENCE.md contains required tables, citations, and verdict.
 """
 
 import fnmatch
@@ -25,11 +26,23 @@ EVIDENCE_DOC_PATH = PROJECT_ROOT / "docs" / "PORT29_CREATETASK_EVIDENCE.md"
 ROM_PATH = PROJECT_ROOT / "firmware" / "dumps" / "GM1.10C" / "PRIMARY.BIN"
 ROM_BASE = 0xFC000000
 
-# Exact authorized slices from docs/PORT27_RESIDENT_CANDIDATE.md §3 and docs/PORT28_PORT27_OUTCOME.md §4.2-4.3
+# Exact authorized outer ranges from docs/PORT27_RESIDENT_CANDIDATE.md §3 and docs/PORT28_PORT27_OUTCOME.md §4.2-4.3
 AUTHORIZED_RANGES = {
     "PORT29-ROM-N1": (0xFC31B408, 0xFC31B507, 256),
     "PORT29-ROM-N3": (0xFCEEF5C0, 0xFCEEF7BF, 512),
-    "PORT29-ROM-N4": (0xFCEEF760, 0xFCEEF9C3, 612),
+    "PORT29-ROM-N4": (0xFCEEF760, 0xFCEEF9C3, 612),  # Full authorized window in PORT27/PORT28
+    "PORT29-ROM-N5": (0xFCEF28B0, 0xFCEF29AF, 256),
+    "PORT29-ROM-CREATETASK": (0xFCEF3488, 0xFCEF34F9, 114),
+    "PORT29-ROM-N6": (0xFCEF3A20, 0xFCEF3A5F, 64),
+}
+
+# Exact non-overlapping entries declared in evidence/port29_manifest.json
+# Note: N4 authorized start is 0xFCEEF760; narrowed to 0xFCEEF7C0..0xFCEEF9C3 (516 B) to eliminate
+# overlap with N3 (0xFCEEF760..0xFCEEF7BF, 96 B). Overlapping prefix bytes are hashed under N3.
+EXPECTED_MANIFEST_ENTRIES = {
+    "PORT29-ROM-N1": (0xFC31B408, 0xFC31B507, 256),
+    "PORT29-ROM-N3": (0xFCEEF5C0, 0xFCEEF7BF, 512),
+    "PORT29-ROM-N4": (0xFCEEF7C0, 0xFCEEF9C3, 516),
     "PORT29-ROM-N5": (0xFCEF28B0, 0xFCEF29AF, 256),
     "PORT29-ROM-CREATETASK": (0xFCEF3488, 0xFCEF34F9, 114),
     "PORT29-ROM-N6": (0xFCEF3A20, 0xFCEF3A5F, 64),
@@ -46,7 +59,7 @@ class TestPort29Evidence(unittest.TestCase):
         self.assertTrue(EVIDENCE_DOC_PATH.is_file(), f"Missing evidence doc at {EVIDENCE_DOC_PATH}")
 
     def test_validator_execution(self) -> None:
-        """Verify port11c_evidence_validator.py reports VALID with 0 errors."""
+        """Verify port11c_evidence_validator.py reports VALID with 0 errors without --allow-overlap."""
         validator_script = PROJECT_ROOT / "tools" / "port11c_evidence_validator.py"
         self.assertTrue(validator_script.is_file())
 
@@ -58,12 +71,30 @@ class TestPort29Evidence(unittest.TestCase):
             str(MANIFEST_PATH),
             "--trusted-scopes",
             str(SCOPES_PATH),
-            "--allow-overlap",
         ]
         proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.assertEqual(proc.returncode, 0, f"Validator failed with exit {proc.returncode}: {proc.stderr}")
-        self.assertIn("Result: VALID (0 errors", proc.stdout)
+        self.assertIn("Result: VALID (0 errors, 0 warnings)", proc.stdout)
         self.assertIn("Trust Level: EXTERNAL_POLICY_CONSISTENCY_CHECKED", proc.stdout)
+
+    def test_no_overlapping_manifest_ranges(self) -> None:
+        """Verify that no two manifest entries overlap in address range."""
+        with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+        ranges = []
+        for entry in manifest.get("evidence_entries", []):
+            start = int(entry["start_address"], 16)
+            end = int(entry["end_address"], 16)
+            ranges.append((start, end, entry["evidence_id"]))
+        ranges.sort()
+        for i in range(len(ranges) - 1):
+            s1, e1, id1 = ranges[i]
+            s2, e2, id2 = ranges[i + 1]
+            self.assertLessEqual(
+                e1,
+                s2 - 1,
+                f"Overlap detected between {id1} (0x{s1:08X}..0x{e1:08X}) and {id2} (0x{s2:08X}..0x{e2:08X})",
+            )
 
     def _validate_manifest_safety(self, manifest_path: Path) -> dict:
         """Validate every manifest entry against authorized list and 4 KiB limit before any ROM read."""
@@ -76,6 +107,7 @@ class TestPort29Evidence(unittest.TestCase):
         total_bytes = 0
         for entry in entries:
             eid = entry.get("evidence_id")
+            self.assertIn(eid, EXPECTED_MANIFEST_ENTRIES, f"Unexpected evidence entry: {eid}")
             self.assertIn(eid, AUTHORIZED_RANGES, f"Unauthorized evidence entry: {eid}")
 
             start = int(entry["start_address"], 16)
@@ -86,7 +118,13 @@ class TestPort29Evidence(unittest.TestCase):
             self.assertEqual(byte_count, span, f"{eid}: span {span} != byte_count {byte_count}")
             self.assertLessEqual(byte_count, 4096, f"{eid}: byte count {byte_count} exceeds 4 KiB")
 
-            exp_start, exp_end, exp_count = AUTHORIZED_RANGES[eid]
+            # Check that range falls completely inside the authorized window from PORT27/PORT28
+            auth_start, auth_end, _ = AUTHORIZED_RANGES[eid]
+            self.assertGreaterEqual(start, auth_start, f"{eid}: start {hex(start)} < authorized {hex(auth_start)}")
+            self.assertLessEqual(end, auth_end, f"{eid}: end {hex(end)} > authorized {hex(auth_end)}")
+
+            # Check exact expected non-overlapping manifest parameters
+            exp_start, exp_end, exp_count = EXPECTED_MANIFEST_ENTRIES[eid]
             self.assertEqual(start, exp_start, f"{eid}: start {hex(start)} != {hex(exp_start)}")
             self.assertEqual(end, exp_end, f"{eid}: end {hex(end)} != {hex(exp_end)}")
             self.assertEqual(byte_count, exp_count, f"{eid}: count {byte_count} != {exp_count}")
@@ -188,6 +226,7 @@ class TestPort29Evidence(unittest.TestCase):
         self.assertIn("0xFCEF3488", content)
         self.assertIn("0xFCEEF5C0", content)
         self.assertIn("0xFCEEF760", content)
+        self.assertIn("0xFCEEF7C0", content)
         self.assertIn("r0", content)
         self.assertIn("r1", content)
         self.assertIn("r2", content)
@@ -202,6 +241,9 @@ class TestPort29Evidence(unittest.TestCase):
             content,
         )
         self.assertIn("Result: VALID (0 errors, 0 warnings)", content)
+
+        # No --allow-overlap should be present in the doc
+        self.assertNotIn("--allow-overlap", content)
 
         # Verdict check
         self.assertIn("Verdict", content)
