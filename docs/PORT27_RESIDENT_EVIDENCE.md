@@ -293,57 +293,147 @@ Everything beyond the raw register values and entry address `r3` is **not proven
 6. **ISR and Execution Context Constraints**:
    - *What the call site proves*: `sub_fc05b962` executes from a normal thread context during boot with interrupts enabled `[VERIFIED]`.
    - *What the call site does NOT prove*: Whether `CreateTask` can be called from interrupt handlers, before scheduler initialization, or with interrupts disabled.
-   - *Classification*: **`[UNKNOWN: requires inspecting function implementation at 0xBFE14A3C]`** (inferred from general OS architecture that task creation is prohibited in ISR context).
+   - *Classification*: **`[UNKNOWN: not proven by ROM call site alone]`**.
 
 ---
 
-### 4.4 Missing Ranges & Policy Authorization Analysis
+### 4.4 Reconciliation with Existing Tracked Repository Evidence (`docs/PORT11A_GM110C_ROM_EVIDENCE.md:98-186`)
 
-To resolve each of the **`[UNKNOWN]`** classifications above:
-- **Target Routine**: The actual task creation implementation resides at ATCM address **`0xBFE14A3C`** (Thumb-2 routine in tightly coupled memory).
-- **Exact Range Required**: Disassembly of `0xBFE14A3C..0xBFE14B80` (approx. 256 bytes) and any helper allocators it calls.
-- **Milestone ROM Policy Assessment**:
-  - The milestone read policy mandates:
-    > *"read only from firmware/dumps/GM1.10C/PRIMARY.BIN. Every range must start at an address already cited with evidence in the PORT-23/24/25 docs or manifests... No full-ROM scans or pattern searches."*
-  - Address `0xBFE14A3C` is in **ATCM RAM** (`0xBFE00000`), NOT in `PRIMARY.BIN` (mapped base `0xFC000000`).
-  - `0xBFE14A3C` is not an address cited with evidence in PORT-23/24/25 manifests or docs.
-  - Inspecting the ROM payload that populates ATCM during boot would require locating the bootloader ATCM copy loop in ROM, which requires full-ROM pattern scanning or reading uncited ranges, both of which are strictly forbidden by project safety rules.
-  - Therefore, the exact range required to verify the `CreateTask` implementation and argument semantics is **strictly out of policy** for this milestone.
+While the call site in `sub_fc05b962` does not prove argument semantics on its own authority, the codebase already tracks comprehensive primary evidence in [`docs/PORT11A_GM110C_ROM_EVIDENCE.md`](PORT11A_GM110C_ROM_EVIDENCE.md). That document establishes the exact ROM-to-ATCM mapping and provides an instruction-by-instruction disassembly of the complete `CreateTask` function body.
+
+#### 4.4.1 ATCM-to-ROM Copy Loop and Relocation Formula
+During early boot (`0xFC020040..0xFC020052`), stock GM1.10C firmware executes an explicit copy loop that populates the ARM Cortex-R4 ATCM from high ROM (`docs/PORT11A_GM110C_ROM_EVIDENCE.md:98-118`, Slice `S1A`):
+- **Source ROM Span**: `0xFCEEF24C..0xFCEF5E67` (`6,919` 32-bit words = `27,676` bytes, file offset `0x00EEF24C..0x00EF5E67`).
+- **Destination ATCM Span**: `0xBFE10800..0xBFE1741B` (`[0xBFE10800, 0xBFE1741C)`).
+- **Exact Linear Mapping Formula**:
+  $$\text{ROM\_VMA} = 0\text{xFCEEF24C} + (\text{VMA} - 0\text{xBFE10800}), \qquad \text{File\_Offset} = \text{ROM\_VMA} - 0\text{xFC000000}$$
+- Applying this formula to the `CreateTask` instruction address `0xBFE14A3C`:
+  $$\text{ROM\_VMA} = 0\text{xFCEEF24C} + (0\text{xBFE14A3C} - 0\text{xBFE10800}) = 0\text{xFCEEF24C} + 0\text{x423C} = \mathbf{0\text{xFCEF3488}} \quad (\text{File Offset } \mathbf{0\text{x00EF3488}})$$
+  (`docs/PORT11A_GM110C_ROM_EVIDENCE.md:118`).
+
+#### 4.4.2 Reconciled `CreateTask` Parameter Properties and Epistemic Labels
+In `docs/PORT11A_GM110C_ROM_EVIDENCE.md:129-188` (Slice `S1C`, `556` bytes at ROM `0xFCEF3488..0xFCEF36B3`), the full `CreateTask` body (`0xBFE14A3C..0xBFE14AAD`, `114` bytes, ROM `0xFCEF3488..0xFCEF34F9`) and its literal pool (`0xBFE14C54..0xBFE14C67`, ROM `0xFCEF36A0..0xFCEF36B3`) are verified instruction-by-instruction. Each property is reconciled below, strictly maintaining PORT11A's epistemic classifications without upgrading to `VERIFIED` on PORT-27's own authority:
+
+1. **`r0` (Task Name Pointer)**:
+   - *Tracked Body Disassembly*:
+     - `0xBFE14A40` (ROM `0xFCEF348C`): `mov r4, r0` saves the pointer passed in `r0` into `r4` (`STATIC_VERIFIED` instruction in `docs/PORT11A_GM110C_ROM_EVIDENCE.md:136`; role `name pointer [INFERRED: per docs/PORT11A_GM110C_ROM_EVIDENCE.md:136]`).
+     - `0xBFE14A60` (ROM `0xFCEF34AC`): `cbnz r4, 0xBFE14A64` tests if `r4 != 0`.
+     - `0xBFE14A62` (ROM `0xFCEF34AE`): `ldr r4, [r1]` substitutes the default name pointer from `*(uint32_t *)0x000081CC` (`[r1]`, where `r1 = [0xBFE14C54] = 0x000081CC` loaded at `0xBFE14A5E`) if `r4 == 0` (`STATIC_VERIFIED` in `docs/PORT11A_GM110C_ROM_EVIDENCE.md:150-151`).
+     - `0xBFE14A88` (ROM `0xFCEF34D4`): `str r4, [sp, #8]` forwards the resolved name pointer to the internal task allocator.
+   - *Status*: **`[INFERRED: per docs/PORT11A_GM110C_ROM_EVIDENCE.md:136]`**.
+
+2. **`r1` (Task Priority)**:
+   - *Tracked Body Disassembly*:
+     - `0xBFE14A44` (ROM `0xFCEF3490`): `mov r6, r1` copies `r1` to `r6` (`STATIC_VERIFIED` instruction in `docs/PORT11A_GM110C_ROM_EVIDENCE.md:138`; role `priority [INFERRED: per docs/PORT11A_GM110C_ROM_EVIDENCE.md:138]`).
+     - `0xBFE14A64..0xBFE14A68` (ROM `0xFCEF34B0..0xFCEF34B4`): `subs r0, r6, #1`; `cmp r0, #0x20`; `bhs 0xBFE14A6C` enforces the valid priority range $1 \le r6 \le 32$ (`0x20`) (`STATIC_VERIFIED` in `docs/PORT11A_GM110C_ROM_EVIDENCE.md:152-154`). If `r6 == 0` or `r6 > 32`, execution branches to assertion setup (`0xBFE14A6C: movs r2, #0xa0`) and returns error code `3` (`0xBFE14A76: movs r0, #3`).
+     - `0xBFE14A8A` (ROM `0xFCEF34D6`): `strd r6, r2, [sp]` passes `r6` (priority) at `[sp]` and `0` at `[sp, #4]` to the internal task allocator.
+   - *Status*: **`[INFERRED: per docs/PORT11A_GM110C_ROM_EVIDENCE.md:138, 152-154]`**.
+
+3. **`r2` (Stack Size & Default Substitution when `r2 == 0`)**:
+   - *Tracked Body Disassembly*:
+     - `0xBFE14A46` (ROM `0xFCEF3492`): `mov r5, r2` copies `r2` to `r5` (`STATIC_VERIFIED` instruction in `docs/PORT11A_GM110C_ROM_EVIDENCE.md:139`; role `stack_size [INFERRED: per docs/PORT11A_GM110C_ROM_EVIDENCE.md:139]`).
+     - `0xBFE14A7C` (ROM `0xFCEF34C8`): `cbnz r5, 0xBFE14A80` tests if `r5 != 0`. If non-zero, the caller-specified stack size in `r5` is preserved.
+     - `0xBFE14A7E` (ROM `0xFCEF34CA`): `ldr r5, [r1, #4]` loads `r5 = *(uint32_t *)0x000081D0` (`[r1, #4]`, where `r1 = 0x000081CC` loaded at `0xBFE14A5E`) (`STATIC_VERIFIED` in `docs/PORT11A_GM110C_ROM_EVIDENCE.md:162-163`). This explicitly establishes the default stack size substitution when `r2 == 0`.
+     - `0xBFE14A86` (ROM `0xFCEF34D2`): `mov r3, r5` passes the resolved stack size in `r3` to the internal allocator.
+   - *Status*: Parameter role is `stack_size [INFERRED: per docs/PORT11A_GM110C_ROM_EVIDENCE.md:139]`. The default stack size substitution logic when `r2 == 0` is a `STATIC_VERIFIED` instruction sequence in `docs/PORT11A_GM110C_ROM_EVIDENCE.md:162-163`, with its role as `default stack size [INFERRED: per docs/PORT11A_GM110C_ROM_EVIDENCE.md:162-163]`.
+
+4. **`r3` (Entry Function Pointer & Thumb Bit)**:
+   - *Tracked Body Disassembly*:
+     - `0xBFE14A4C` (ROM `0xFCEF3498`): `mov r7, r3` copies `r3` to `r7` (`STATIC_VERIFIED` instruction in `docs/PORT11A_GM110C_ROM_EVIDENCE.md:141`; role `entry [INFERRED: per docs/PORT11A_GM110C_ROM_EVIDENCE.md:141]`).
+     - `0xBFE14A6A` (ROM `0xFCEF34B6`): `cbnz r7, 0xBFE14A7C` checks that `r7` is non-null (`STATIC_VERIFIED` in `docs/PORT11A_GM110C_ROM_EVIDENCE.md:155`). If NULL (`0`), it falls through to assertion setup and returns error code `3`.
+     - `0xBFE14A84` (ROM `0xFCEF34D0`): `mov r0, r7` passes the entry pointer in `r0` to the internal allocator.
+     - *Thumb Interworking Requirement*: Both stock call sites pass Thumb entry function pointers with bit 0 set (`r3 = 0xFC0BD071` for `task_InitFileModules` at `0xFC0BD070` in `docs/PORT11A_GM110C_ROM_EVIDENCE.md:223-224`; `r3 = 0xFC05B8FD` for `task_Startup` at `0xFC05B8FC` in `PORT27-ROM-STARTUP-TASKS`).
+   - *Status*: Parameter role is `entry [INFERRED: per docs/PORT11A_GM110C_ROM_EVIDENCE.md:141, 155]`. The entry point function address and Thumb bit 0 = 1 requirement are `STATIC_VERIFIED` across all stock call sites.
+
+5. **`sp[0x00]` (Caller's Fifth Stacked Argument)**:
+   - *Tracked Body Disassembly*:
+     - `0xBFE14A3C` (ROM `0xFCEF3488`): `push.w {r1, r2, r3, r4, r5, r6, r7, r8, sb, lr}` pushes 10 32-bit registers (`40` bytes = `0x28` B) onto the stack (`STATIC_VERIFIED` in `docs/PORT11A_GM110C_ROM_EVIDENCE.md:135`).
+     - `0xBFE14A48` (ROM `0xFCEF3494`): `ldr.w r8, [sp, #0x28]` loads the caller's stacked 5th argument (`sp_entry + 0x00`) across the 40-byte stack frame into `r8` (`STATIC_VERIFIED` in `docs/PORT11A_GM110C_ROM_EVIDENCE.md:140`).
+     - `0xBFE14A82` (ROM `0xFCEF34CE`): `mov r1, r8` forwards the 5th argument in `r1` to the internal allocator.
+   - *Status*: Instruction sequence loading the stacked 5th argument is `STATIC_VERIFIED` in `docs/PORT11A_GM110C_ROM_EVIDENCE.md:140`; role as user context parameter is `[INFERRED: per docs/PORT11A_GM110C_ROM_EVIDENCE.md:140, 165]`.
+
+6. **Return Value & Error Transformation**:
+   - *Tracked Body Disassembly*:
+     - Epilogue at `0xBFE14A78` (ROM `0xFCEF34C4`): `pop.w {r1, r2, r3, r4, r5, r6, r7, r8, sb, pc}` restores saved registers and returns (`STATIC_VERIFIED` in `docs/PORT11A_GM110C_ROM_EVIDENCE.md:161`).
+     - Parameter validation error: If priority is out of range or entry is NULL, returns `r0 = 3` (`0xBFE14A76: movs r0, #3`) (`STATIC_VERIFIED` in `docs/PORT11A_GM110C_ROM_EVIDENCE.md:160`).
+     - Internal allocator failure: At `0xBFE14A8E`, `bl 0xBFE10B88` invokes the internal allocator; at `0xBFE14A92..0xBFE14A96`, `mov r4, r0; adds r0, r0, #1; bne 0xBFE14AA4` tests if `r0 == -1` (`0xFFFFFFFF`). If `-1`, triggers `blx 0xBFE13E78` (`DebugAssert`) at `0xBFE14A9C` and returns error code `5` (`0xBFE14AA0: movs r0, #5`) (`STATIC_VERIFIED` in `docs/PORT11A_GM110C_ROM_EVIDENCE.md:170-177`).
+     - Success transformation: If `r0 != -1`, calls activation helper `bl 0xBFE10D14` at `0xBFE14AA6`, executes `lsls r0, r4, #1` at `0xBFE14AAA` (transforming the allocator handle to `handle << 1`), and branches to the epilogue at `0xBFE14AAC: b 0xBFE14A78` (`STATIC_VERIFIED` in `docs/PORT11A_GM110C_ROM_EVIDENCE.md:180-182`).
+   - *Status*: Instruction sequence is `STATIC_VERIFIED` in `docs/PORT11A_GM110C_ROM_EVIDENCE.md:160-182`; return value transformation semantics are `[INFERRED: per docs/PORT11A_GM110C_ROM_EVIDENCE.md:171-182]`.
+
+7. **Calling Context & ISR Execution Constraints**:
+   - *Tracked Body Disassembly*:
+     - `0xBFE14A42` (ROM `0xFCEF348E`): `ldr r0, [pc, #0x214]` loads literal pointer `[0xBFE14C58] = 0x00008160` (`STATIC_VERIFIED` in `docs/PORT11A_GM110C_ROM_EVIDENCE.md:137`).
+     - `0xBFE14A4E` (ROM `0xFCEF349A`): `ldr r0, [r0]` dereferences `*(uint32_t *)0x00008160` (`STATIC_VERIFIED` in `docs/PORT11A_GM110C_ROM_EVIDENCE.md:142`).
+     - `0xBFE14A50..0xBFE14A52` (ROM `0xFCEF349C..0xFCEF349E`): `cmp r0, #0; ble 0xBFE14A5E` checks if the context word is $\le 0$ (`STATIC_VERIFIED` in `docs/PORT11A_GM110C_ROM_EVIDENCE.md:143-144`).
+     - If $> 0$ (indicating ISR or forbidden execution context), lines `0xBFE14A54..0xBFE14A5A` load line number `0x98` (152), filename `"KerTask.c"` (`0xBFE14C5C`), and call `blx 0xBFE13E78` (`DebugAssert`) (`STATIC_VERIFIED` in `docs/PORT11A_GM110C_ROM_EVIDENCE.md:145-148`).
+   - *Status*: The context guard instruction sequence is `STATIC_VERIFIED` in `docs/PORT11A_GM110C_ROM_EVIDENCE.md:142-148`; interpretation of `0x00008160` as the context/ISR state word is `[INFERRED: per docs/PORT11A_GM110C_ROM_EVIDENCE.md:142-144]`.
 
 ---
 
-### 4.5 Task-Creation Template for T2 & Strict GO / NO-GO Dependency Evaluation
+### 4.5 Separation of Tracked Documentation vs. Milestone ROM Policy Bounds
+
+In accordance with AgentBridge review protocol, two distinct categories of evidence must be kept strictly separated:
+1. **Facts Reused from Existing Tracked Repository Documentation**:
+   The facts documented in [`docs/PORT11A_GM110C_ROM_EVIDENCE.md:98-186`](PORT11A_GM110C_ROM_EVIDENCE.md#L98-L186) are already tracked in the repository and require **no new ROM reads**. They carry forward PORT11A's epistemic classifications (`STATIC_VERIFIED` instruction bodies, `INFERRED` parameter roles and semantic interpretations).
+2. **Facts Requiring New ROM Reads & Unverified Helpers**:
+   The start address of the `CreateTask` body (`ROM 0xFCEF3488`) was not cited in PORT-23, PORT-24, or PORT-25 documentation or evidence manifests. Under the PORT-27 milestone read policy, reading `0xFCEF3488` or any uncited address is strictly prohibited. Therefore, no ROM read at `0xFCEF3488` is conducted in this milestone.
+
+#### Unverified Internal Helpers Inside the `CreateTask` Body
+`CreateTask` delegates core operating system functionality to three internal callees whose function bodies reside outside Slice `S1C` and are left unverified by PORT11A (`docs/PORT11A_GM110C_ROM_EVIDENCE.md:148, 170, 180, 409`; `docs/PORT14_Q_U4_08.md:183-185, 210-211`):
+1. **Internal Task Allocator / Initializer (`0xBFE10B88`)**:
+   - *ATCM Target*: `0xBFE10B88` (invoked via `bl 0xBFE10B88` at `0xBFE14A8E`, `docs/PORT11A_GM110C_ROM_EVIDENCE.md:170`).
+   - *Exact ROM Start Address*: **`0xFCEEF5D4`** (file offset `0x00EEF5D4`, derived via linear formula: $0\text{xFCEEF24C} + (0\text{xBFE10B88} - 0\text{xBFE10800}) = 0\text{xFCEEF24C} + 0\text{x388} = 0\text{xFCEEF5D4}$).
+   - *Length*: Span in ATCM up to the subsequent helper `0xBFE10D14` is 396 bytes (`0x18C` B); exact function length is unverified.
+   - *Status*: **`UNKNOWN: needs authorised read (outside PORT-27 policy)`** (`docs/PORT11A_GM110C_ROM_EVIDENCE.md:170`; `docs/PORT13_NEXT_QUESTIONS.md:162`; `docs/PORT14_Q_U4_08.md:183, 210`).
+2. **Internal Activation Helper (`0xBFE10D14`)**:
+   - *ATCM Target*: `0xBFE10D14` (invoked via `bl 0xBFE10D14` at `0xBFE14AA6`, `docs/PORT11A_GM110C_ROM_EVIDENCE.md:180`).
+   - *Exact ROM Start Address*: **`0xFCEEF760`** (file offset `0x00EEF760`, derived via linear formula: $0\text{xFCEEF24C} + (0\text{xBFE10D14} - 0\text{xBFE10800}) = 0\text{xFCEEF24C} + 0\text{x514} = 0\text{xFCEEF760}$).
+   - *Length*: Span in ATCM up to kernel initialization at `0xBFE10F78` is 612 bytes (`0x264` B); exact function length is unverified.
+   - *Status*: **`UNKNOWN: needs authorised read (outside PORT-27 policy)`** (`docs/PORT11A_GM110C_ROM_EVIDENCE.md:180`; `docs/PORT14_Q_U4_08.md:184, 211`).
+3. **Debug Assertion / Panic Handler (`0xBFE13E78`, `DebugAssert [INFERRED]`)**:
+   - *ATCM Target*: `0xBFE13E78` (invoked via `blx 0xBFE13E78` at `0xBFE14A5A`, `0xBFE14A72`, `0xBFE14A9C`, `docs/PORT11A_GM110C_ROM_EVIDENCE.md:148, 159, 176`).
+   - *Exact ROM Start Address*: **`0xFCEF28C4`** (file offset `0x00EF28C4`, derived via linear formula: $0\text{xFCEEF24C} + (0\text{xBFE13E78} - 0\text{xBFE10800}) = 0\text{xFCEEF24C} + 0\text{x3678} = 0\text{xFCEF28C4}$).
+   - *Length*: Exact function length is unverified.
+   - *Status*: **`UNKNOWN: needs authorised read (outside PORT-27 policy)`** (`docs/PORT11A_GM110C_ROM_EVIDENCE.md:148, 409`).
+
+#### Clarification on ROM Policy Boundaries
+No full-ROM scan or pattern search is required to locate the ATCM copy loop or `CreateTask` implementation in ROM. The ATCM copy loop in early boot (`0xFC020040..0xFC020052`) and the high ROM source span (`0xFCEEF24C..0xFCEF5E67`) are already verified and tracked in [`docs/PORT11A_GM110C_ROM_EVIDENCE.md:98-118`](PORT11A_GM110C_ROM_EVIDENCE.md#L98-L118). The restriction preventing inspection of these helpers in PORT-27 is strictly a milestone policy boundary: start addresses `0xFCEEF5D4`, `0xFCEEF760`, and `0xFCEF28C4` were not cited in the PORT-23/24/25 evidence baselines and therefore cannot be read without owner authorization in an expanded milestone policy.
+
+---
+
+### 4.6 Task-Creation Template for T2 & Strict GO / NO-GO Dependency Evaluation
 
 If T2 attempts to spawn a resident heartbeat task by copying the verified call site pattern:
 
 ```armasm
     movs    r3, #0
-    str     r3, [sp, #0]        ; arg5: passed value 0 [VERIFIED literal; UNKNOWN meaning]
-    ldr     r3, =task_heartbeat ; arg4: task entry function (Thumb bit 0 = 1) [VERIFIED role]
-    movs    r2, #0              ; arg3: passed value 0 [VERIFIED literal; UNKNOWN meaning, INFERRED default stack]
-    movs    r1, #25             ; arg2: passed value 25 (0x19) [VERIFIED literal; INFERRED priority]
-    ldr     r0, =name_string    ; arg1: string pointer [VERIFIED literal type; INFERRED role as task name]
-    blx     sub_fc31bbc4        ; Invoke DryOS CreateTask veneer (ARM) [VERIFIED]
+    str     r3, [sp, #0]        ; arg5: passed value 0 [STATIC_VERIFIED call-site literal; INFERRED user context per PORT11A:140]
+    ldr     r3, =task_heartbeat ; arg4: task entry function (Thumb bit 0 = 1) [VERIFIED call-site role; INFERRED per PORT11A:141]
+    movs    r2, #0              ; arg3: passed value 0 [STATIC_VERIFIED call-site literal; INFERRED default stack per PORT11A:139, 162-163]
+    movs    r1, #25             ; arg2: passed value 25 (0x19) [STATIC_VERIFIED call-site literal; INFERRED priority per PORT11A:138]
+    ldr     r0, =name_string    ; arg1: string pointer [STATIC_VERIFIED call-site literal type; INFERRED name per PORT11A:136]
+    blx     sub_fc31bbc4        ; Invoke DryOS CreateTask veneer (ARM) [VERIFIED: ROM 0xFC31BBC4]
 ```
 
 #### Exact Arguments T2 Would Pass and Their Epistemic Labels:
-1. `r0`: Pointer to ASCII name string (e.g. `0xFC05B9A0` `"Startup\0"` or a static buffer `"Heartbeat\0"`) — `[VERIFIED call-site literal type; INFERRED role as task name]`.
-2. `r1`: `25` (`0x19`) — `[VERIFIED call-site literal value; INFERRED role as priority]`.
-3. `r2`: `0` — `[VERIFIED call-site literal value; UNKNOWN role / meaning; INFERRED default stack selector]`.
-4. `r3`: `task_heartbeat | 1` — `[VERIFIED role as task entry point with Thumb bit set]`.
-5. `sp[0x00]`: `0` — `[VERIFIED call-site literal value; UNKNOWN role / meaning; INFERRED user context argument]`.
+1. `r0`: Pointer to ASCII name string (e.g. `0xFC05B9A0` `"Startup\0"` or a static buffer `"Heartbeat\0"`) — `[VERIFIED call-site literal type; INFERRED role as task name per docs/PORT11A_GM110C_ROM_EVIDENCE.md:136]`.
+2. `r1`: `25` (`0x19`) — `[VERIFIED call-site literal value; INFERRED role as priority per docs/PORT11A_GM110C_ROM_EVIDENCE.md:138, 152-154]`.
+3. `r2`: `0` — `[VERIFIED call-site literal value; INFERRED role as stack size and default stack size selector per docs/PORT11A_GM110C_ROM_EVIDENCE.md:139, 162-163]`.
+4. `r3`: `task_heartbeat | 1` — `[VERIFIED call-site role as task entry point with Thumb bit set; INFERRED parameter role per docs/PORT11A_GM110C_ROM_EVIDENCE.md:141, 155]`.
+5. `sp[0x00]`: `0` — `[VERIFIED call-site literal value; INFERRED role as user context parameter per docs/PORT11A_GM110C_ROM_EVIDENCE.md:140, 165]`.
 
 #### Application of the Strict GO Rule:
 The reviewer policy states:
 > *"GO is allowed only if T2 can create its task by copying the VERIFIED call-site pattern exactly, changing only values whose role is VERIFIED. State the exact arguments T2 would pass and give each one a label. If any argument T2 depends on (for example the stack size or the meaning of r2) is only INFERRED, the verdict is NO-GO, and the summary must list the exact UNKNOWN ranges."*
 
 - **Evaluation**:
-  - In the template above, T2 changes `r3` (whose role is `[VERIFIED]` as the task entry point) and possibly `r0` (whose role is `[INFERRED]`).
-  - However, in order for `task_heartbeat` to run safely without corrupting memory or triggering a kernel panic, T2 strictly depends on `r2 = 0` successfully assigning a valid, adequate execution stack to the new task.
-  - Because the meaning of `r2` and whether `0` allocates a default stack are strictly **`[INFERRED / UNKNOWN]`**, T2 depends on an unverified argument. If `r2 = 0` actually denotes zero stack allocation or relies on pre-allocated stack structures configured elsewhere, the task would crash immediately upon execution.
-  - Therefore, because T2 depends on the unverified meaning of `r2` (stack size), the task creation prerequisite cannot be certified as fully VERIFIED under the strict rule.
+  - In the template above, T2 changes `r3` (whose role is `[VERIFIED]` as the task entry point) and `r0` (whose role is `[INFERRED]`).
+  - However, in order for `task_heartbeat` to run safely without corrupting memory or triggering a kernel panic, T2 strictly depends on `r2 = 0` successfully assigning an adequate execution stack from the internal allocator `0xBFE10B88`.
+  - While `docs/PORT11A_GM110C_ROM_EVIDENCE.md:162-163` proves the instruction sequence substituting `*(0x000081D0)` when `r2 == 0`, its semantic role remains **`[INFERRED: per docs/PORT11A_GM110C_ROM_EVIDENCE.md:139, 162-163]`** and cannot be upgraded to `VERIFIED` on PORT-27's own authority.
+  - Crucially, the internal allocator `0xBFE10B88` at ROM `0xFCEEF5D4` that actually handles stack and TCB allocation remains **`[UNKNOWN: needs authorised read (outside PORT-27 policy)]`**.
+  - Therefore, because T2 depends on the `INFERRED` parameter role of `r2` and the unverified allocator `0xBFE10B88`, the task creation prerequisite cannot be certified as fully VERIFIED under the strict rule.
 
-**Next step**: UNKNOWN: exact range still needed (ATCM implementation at `0xBFE14A3C`, which is currently out of policy)
+**Next step**: UNKNOWN: exact ranges still needed (`0xFCEEF5D4`, `0xFCEEF760`, `0xFCEF28C4` for internal helpers, and authorized read of `0xFCEF3488..0xFCEF34F9` for CreateTask body)
 
 ---
 
@@ -387,16 +477,17 @@ Reused strictly from verified PORT-23 physical hardware trial breadcrumbs (`docs
 ### 6.2 Verified Call-Site Register Setup & Context Constraints
 - **ROM Call Site**: In watchdog servicing task `task_WdtReset` (`0xFC135CB0`..`0xFC135CD0` in `PORT27-ROM-WATCHDOG-MODULE`), lines `0xFC135CBC`..`0xFC135CC6` set up a 2-second periodic sleep:
   ```armasm
-  fc135cbc:   movw    r6, #2000       ; 0x7D0 (2000 ms)
+  fc135cbc:   movw    r6, #2000       ; 0x7D0 (passed literal value 2000)
   fc135cc0:   str     r0, [r1, #0]
   fc135cc2:   str     r4, [r5, #4]
-  fc135cc4:   mov     r0, r6          ; Parameter r0 = 2000 ms
+  fc135cc4:   mov     r0, r6          ; Parameter r0 = 2000
   fc135cc6:   blx     0xfc31bf84      ; SleepTask(2000)
   ```
   *(Source: `firmware/dumps/GM1.10C/PRIMARY.BIN:0xFC135CBC-0xFC135CC6`; `[VERIFIED: PORT27-ROM-WATCHDOG-MODULE]`)*
-- **Calling Convention**:
+- **Calling Convention & Verification Status**:
   - `blx 0xfc31bf84` from Thumb-2 state (Thumb-2 encoding `f1e6 e95e`) switches to ARM mode `[VERIFIED: ROM 0xFC135CC6]`.
-  - `r0`: Sleep duration in milliseconds `[VERIFIED: ROM 0xFC135CBC, 0xFC135CC4]`.
+  - `r0`: Literal integer `2000` (`0x7D0`) is passed in `r0` `[VERIFIED: ROM 0xFC135CBC, 0xFC135CC4]`.
+  - Argument Semantics & Units: That `2000` denotes a sleep duration in milliseconds is `[INFERRED: standard DryOS watchdog reset interval conventions; docs/UI001_CLAUDE_REVIEW.md:21]`, as the ROM call site instructions prove only the literal value 2000.
 - **Interrupt Context Guard**:
   - In DryOS kernel architecture, blocking sleep primitives are strictly prohibited inside interrupt handlers or before multitasking is initialized, triggering a kernel panic if invoked from non-task context `[INFERRED: DryOS kernel architecture; docs/CHDK_PORT0E_CLAUDE_REVIEW.md:23]`.
 
@@ -409,9 +500,17 @@ When delaying execution in early boot or with interrupts disabled (where `SleepT
 1:  subs    r0, r0, #1
     bne     1b
 ```
-In `docs/PORT25_LADDER_FIX_CANDIDATE.md:417`, constant `0x00100000` is verified as:
-- Nominal: $\approx 20.97\text{ ms}$ (at 100 MHz Cortex-R4 dual-issue) `[INFERRED]`.
-- Conservative Slow Bound: $\le 50.0\text{ ms}$ (at 42 MHz unpipelined worst-case) `[INFERRED]`.
+In `docs/PORT25_LADDER_FIX_CANDIDATE.md:144-154`, the timing model reproduces the following assumptions and calibration bounds:
+- **Clock Assumptions**:
+  - DIGIC 6 Cortex-R4 CPU core clock running at nominal ~150–250 MHz (`[INFERRED: docs/PORT20_LED_CANDIDATE.md:177]`).
+  - Loop body `subs r0, r0, #1; bne` executes in 2–3 CPU cycles per iteration on ARMv7-R pipeline (`[INFERRED]`).
+  - Slow conservative calibration bound is modeled at 66.6 MHz unmultiplied PLL reference clock (`[INFERRED: docs/PORT25_LADDER_FIX_CANDIDATE.md:149]`).
+- **Loop Constant `0x00100000` (1,048,576 iterations)**:
+  - Fast bound estimate (200 MHz, 3 cycles): ~15.73 ms `[INFERRED: docs/PORT25_LADDER_FIX_CANDIDATE.md:152]`.
+  - Nominal bound estimate (150 MHz, 3 cycles): **20.97 ms** `[INFERRED: docs/PORT25_LADDER_FIX_CANDIDATE.md:153]`.
+  - Slow bound estimate (66.6 MHz reference clock): **50.0 ms** `[INFERRED: docs/PORT25_LADDER_FIX_CANDIDATE.md:154]`.
+- **Timing Model Qualification**:
+  - The 50.0 ms figure is a nominal / slow-bound model estimate under uninterrupted CPU execution; it is **NOT** an upper bound or worst-case elapsed wall-clock time, because hardware interrupts, cache effects, and RTOS task preemption can stretch elapsed loop execution time without limit `[INFERRED]`.
 
 **Next step**: enough to build
 
@@ -425,9 +524,9 @@ In `docs/PORT25_LADDER_FIX_CANDIDATE.md:417`, constant `0x00100000` is verified 
 | **(a)** | Exact patch point for memory start in `sub_fc05b3c8` | Literal `0x003489B4` at `[0xFC05B450]` loaded into `r4` at `0xFC05B3CA`, stored to `sp[0x08]` at `0xFC05B3FC`, subtracted from `0x00600014` at `0xFC05B402` into `r2` and stored to `sp[0x0C]` at `0xFC05B404`; heap-start alignment requirement is unproven; hook in `boot_prototype.c:24, 177-178, 212-215` overrides `r4` with `new_sa = 0x00368680` (arithmetically 64-byte aligned) | `VERIFIED` (patch point, descriptor stores, `new_sa`) / `UNKNOWN` (heap-start alignment requirement) | `PORT27-ROM-HEAP-SETUP` (`0xFC05B3C0`), `chdk-port/platform/g3x/sub/110c/boot_prototype.c:24, 177-178, 212-215`, `docs/PORT25_LADDER_FIX_CANDIDATE.md:391` | **enough to build** |
 | **(a)** | Relocated core survival | Relocated core (`0x003489B4`..`0x00368680`, candidate `candidate_main.bin` 123,424 B, `_end = 0x00368680`; baseline `candidate_main.bin` 116,816 B, `_end = 0x00366CB0`). Stock non-survival is unconfirmed by specific overwrite; exclusion by shifting heap start past `_end` to `0x00368680` is verified; runtime survival is inferred (rules out heap pool 1 allocations, does not rule out DMA/MMIO); raised start yields 2.70 MiB surplus headroom above 712 KiB limit | `VERIFIED` (exclusion boundary, sizes, literals) / `INFERRED` (stock non-survival, runtime survival, headroom derivation) / `UNKNOWN` (other RAM users) | `docs/PORT25_LADDER_FIX_CANDIDATE.md:388, 391`, `docs/PORT23_LED_BREADCRUMBS.md:25-26`, `docs/PORT21_RAM_LIFETIME.md:37-47`, `PORT27-ROM-HEAP-SETUP` | **enough to build** |
 | **(b)** | Task-creation entry (`CreateTask`) | `sub_fc31bbc4` at `0xFC31BBC4` (ARM mode `ldr pc, [pc, #-4]` -> ATCM `0xBFE14A3D` Thumb-2); entered via `blx 0xfc31bbc4` from Thumb-2 at `0xFC05B990` | `VERIFIED` | `PORT27-ROM-CREATETASK-VENEER` (`0xFC31BBA0`), `PORT27-ROM-STARTUP-TASKS` (`0xFC05B8E0`) | **enough to build** (entry point only) |
-| **(b)** | Task-creation calling convention & argument meanings | Call site `0xFC05B984..0xFC05B990` proves passed values (`r0=0xFC05B9A0`, `r1=25`, `r2=0`, `r3=0xFC05B8FD`, `sp[0]=0`) and `r3` entry role; argument meanings (`r1`=priority, `r2`=stack size / default stack selector, `sp[0]`=context), return-value semantics, and context constraints are unproven in ROM; requires ATCM routine `0xBFE14A3C` (out of policy) | `VERIFIED` (passed values, `r3` entry role) / `INFERRED` (`r0` name role, `r1` priority role) / `UNKNOWN` (`r2` stack size role & default stack behavior, `sp[0]` context role, return-value semantics, context constraints) | `PORT27-ROM-STARTUP-TASKS` (`0xFC05B8E0`), `PORT27-ROM-CREATETASK-VENEER` (`0xFC31BBA0`) | **UNKNOWN: exact range still needed** (ATCM implementation at `0xBFE14A3C`, which is currently out of policy) |
+| **(b)** | Task-creation calling convention & argument meanings | Call site `0xFC05B984..0xFC05B990` proves passed values (`r0=0xFC05B9A0`, `r1=25`, `r2=0`, `r3=0xFC05B8FD`, `sp[0]=0`); PORT11A documents body at ATCM `0xBFE14A3C..0xBFE14AAD` (ROM `0xFCEF3488..0xFCEF34F9`) including default stack size substitution from `*(0x000081D0)` when `r2=0`, priority range check $1 \le r6 \le 32$, and return value `handle << 1`; parameter roles remain `INFERRED` per `docs/PORT11A_GM110C_ROM_EVIDENCE.md:136-165`; internal callees `0xBFE10B88` (`0xFCEEF5D4`), `0xBFE10D14` (`0xFCEEF760`), and `0xBFE13E78` (`0xFCEF28C4`) are outside PORT-27 read policy and remain `UNKNOWN` | `VERIFIED` (call site values, entry `r3`, veneer) / `INFERRED` (`r0` name, `r1` priority, `r2` stack size & default substitution, `sp[0]` 5th arg, return value semantics per PORT11A) / `UNKNOWN` (internal callees `0xFCEEF5D4`, `0xFCEEF760`, `0xFCEF28C4`) | `PORT27-ROM-STARTUP-TASKS` (`0xFC05B8E0`), `PORT27-ROM-CREATETASK-VENEER` (`0xFC31BBA0`), `docs/PORT11A_GM110C_ROM_EVIDENCE.md:98-186` | **UNKNOWN: exact ranges still needed** (`0xFCEEF5D4`, `0xFCEEF760`, `0xFCEF28C4` for internal helpers, and authorized read of `0xFCEF3488..0xFCEF34F9` for CreateTask body) |
 | **(c)** | LED register & on/off values | MMIO: `0xD20B0884`; ON: `0x004D0002`; OFF: `0x004C0003` (Rear green LED; reused from PORT-23 hardware trial without new ROM reads) | `VERIFIED` | `docs/PORT23_LED_BREADCRUMBS.md:6-7` (Hardware trial 2026-11-01) | **enough to build** |
-| **(d)** | Firmware sleep / delay primitive | `SleepTask` veneer `0xFC31BF84` (ARM mode -> ATCM `0xBFE14969` Thumb-2); called via `blx 0xfc31bf84` from `task_WdtReset` (`0xFC135CC6`) with `r0`=ms delay; task context only; busy-wait loop with `0x00100000` ($\approx 21-50\text{ ms}$) for any context | `VERIFIED` (veneer, call site) / `INFERRED` (ISR guard, loop timing) | `PORT27-ROM-WATCHDOG-MODULE` (`0xFC135C00`), `PORT27-ROM-SLEEPTASK-VENEER` (`0xFC31BF84`), `docs/PORT25_LADDER_FIX_CANDIDATE.md:417` | **enough to build** |
+| **(d)** | Firmware sleep / delay primitive | `SleepTask` veneer `0xFC31BF84` (ARM mode -> ATCM `0xBFE14969` Thumb-2); called via `blx 0xfc31bf84` from `task_WdtReset` (`0xFC135CC6`) with literal `r0=2000` (`[VERIFIED]`; role as ms delay `[INFERRED]`); task context only `[INFERRED]`; busy-wait loop with `0x00100000` (nominal ~21 ms, slow bound ~50 ms under uninterrupted timing model at `docs/PORT25_LADDER_FIX_CANDIDATE.md:144-154`; interrupts/preemption can stretch elapsed time without limit) `[INFERRED]` | `VERIFIED` (veneer, call site `r0=2000`) / `INFERRED` (delay units/semantics, ISR guard, loop timing model) | `PORT27-ROM-WATCHDOG-MODULE` (`0xFC135C00`), `PORT27-ROM-SLEEPTASK-VENEER` (`0xFC31BF84`), `docs/PORT25_LADDER_FIX_CANDIDATE.md:144-154` | **enough to build** |
 
 ---
 
@@ -464,17 +563,23 @@ All ranges read for PORT-27 are recorded in [PORT27_EVIDENCE_MANIFEST.json](file
 >   - Heap-start alignment requirement is unproven in ROM `[UNKNOWN]`, though candidate raised start `new_sa = 0x00368680` is strictly 64-byte aligned as an arithmetic fact.
 >   - Relocated core region (`candidate_main.bin` 123,424 B, `_end = 0x00368680`) is strictly excluded from stock DryOS heap allocations by overriding `r4` with `new_sa = 0x00368680` `[VERIFIED exclusion: boot_prototype.c:24, 177-178, 212-215; PORT21_RAM_LIFETIME.md:40-41]`, with 2.70 MiB of surplus headroom above the ROM limit. Runtime survival is `[INFERRED]` (protects against heap allocations; does not rule out unverified physical DMA buffers or hardware MMIO).
 > 
-> - **Item (b) (Task Creation Entry & Calling Convention)**: **FAILS STRICT VERIFICATION** (`UNKNOWN: exact range still needed`):
+> - **Item (b) (Task Creation Entry & Calling Convention)**: **FAILS STRICT VERIFICATION** (`UNKNOWN: exact ranges still needed`):
 >   - The task creation entry veneer `sub_fc31bbc4` (ARM mode `0xE51FF004` at `0xFC31BBC4`, loading target vector `0xBFE14A3D` for Thumb-2 execution at `0xBFE14A3C`) is `[VERIFIED]`.
 >   - The call site values at `0xFC05B984..0xFC05B990` (`r0=0xFC05B9A0`, `r1=25`, `r2=0`, `r3=0xFC05B8FD`, `sp[0]=0`) and the entry point role of `r3` are `[VERIFIED]`.
->   - However, the calling convention semantics remain unproven by ROM evidence: the roles of `r1` (priority), `r2` (stack size and default stack assignment), and `sp[0]` (user context) are `[INFERRED / UNKNOWN]`, and return-value semantics are `[UNKNOWN]` because the call site immediately clobbers `r0` with 0 at `0xFC05B994`.
->   - If T2 creates a resident heartbeat task using the verified call-site template (`r0`=name string, `r1=25`, `r2=0`, `r3=task_heartbeat|1`, `sp[0]=0`), T2 strictly depends on `r2 = 0` successfully assigning a valid, adequate execution stack. Because the role of `r2` and whether `0` assigns a default stack are only **`[INFERRED / UNKNOWN]`**, T2 depends on an unverified argument.
->   - The exact range required to resolve this uncertainty is the ATCM task creation implementation at **`0xBFE14A3C`** (approx. 256 bytes). This range resides in ATCM RAM, is not cited in PORT-23/24/25 documentation, and cannot be inspected under the milestone ROM read policy without out-of-policy pattern scanning.
+>   - When reconciled with tracked repository evidence (`docs/PORT11A_GM110C_ROM_EVIDENCE.md:98-186`), the complete `CreateTask` body at ATCM `0xBFE14A3C..0xBFE14AAD` (ROM `0xFCEF3488..0xFCEF34F9`) verifies the instruction logic substituting `*(0x000081D0)` when `r2 == 0`, priority range check $1 \le r6 \le 32$, and return value `handle << 1`.
+>   - However, parameter roles (`r0` name pointer, `r1` priority, `r2` stack size, `sp[0]` user context) carry forward PORT11A's epistemic status as `[INFERRED: per docs/PORT11A_GM110C_ROM_EVIDENCE.md:136-165]` and cannot be upgraded to `VERIFIED` on PORT-27's own authority.
+>   - Furthermore, `CreateTask` delegates execution to internal callees whose bodies are outside Slice `S1C` and remain unverified: internal allocator `0xBFE10B88` at ROM `0xFCEEF5D4` (`UNKNOWN`), activation helper `0xBFE10D14` at ROM `0xFCEEF760` (`UNKNOWN`), and assertion handler `0xBFE13E78` at ROM `0xFCEF28C4` (`UNKNOWN`).
+>   - If T2 creates a resident heartbeat task using the verified call-site template (`r0`=name string, `r1=25`, `r2=0`, `r3=task_heartbeat|1`, `sp[0]=0`), T2 strictly depends on `r2 = 0` successfully assigning a valid, adequate execution stack from internal allocator `0xBFE10B88`. Because the role of `r2` is `[INFERRED]` and `0xBFE10B88` is `[UNKNOWN]`, T2 depends on unverified prerequisites.
+>   - The exact ranges required to resolve these uncertainties are:
+>     1. ROM `0xFCEEF5D4` (ATCM `0xBFE10B88`, internal allocator, span up to 396 B) — `UNKNOWN: needs authorised read (outside PORT-27 policy)`
+>     2. ROM `0xFCEEF760` (ATCM `0xBFE10D14`, internal activation helper, span up to 612 B) — `UNKNOWN: needs authorised read (outside PORT-27 policy)`
+>     3. ROM `0xFCEF28C4` (ATCM `0xBFE13E78`, assertion handler) — `UNKNOWN: needs authorised read (outside PORT-27 policy)`
+>     4. ROM `0xFCEF3488..0xFCEF34F9` (114 B, `CreateTask` body in Slice `S1C`) — requires authorized read under an updated milestone read policy
 > 
 > - **Item (c) (Hardware LED)**: **VERIFIED** (`enough to build`):
 >   - MMIO `0xD20B0884`, ON `0x004D0002`, OFF `0x004C0003` reused from PORT-23 hardware trial breadcrumbs `[VERIFIED]`.
 > 
-> - **Item (d) (Firmware Sleep)**: **VERIFIED** (`enough to build`):
->   - Veneer `0xFC31BF84` with millisecond delay in `r0`, plus context-free busy-wait loop alternative `[VERIFIED / INFERRED]`.
+> - **Item (d) (Firmware Sleep)**: **VERIFIED** entry / call site (`enough to build`):
+>   - Veneer `0xFC31BF84` loading `0xBFE14969` and call site literal `r0 = 2000` (`0xFC135CC6`) are `[VERIFIED: PORT27-ROM-WATCHDOG-MODULE; PORT27-ROM-SLEEPTASK-VENEER]`. Parameter semantics (millisecond delay unit) and task-only execution constraints are `[INFERRED]`. Context-free busy-wait loop (`0x00100000` yielding nominal ~20.97 ms, slow bound ~50.0 ms under the uninterrupted timing model in `docs/PORT25_LADDER_FIX_CANDIDATE.md:144-154`, where interrupts or preemption can stretch duration) provides a robust alternative `[INFERRED]`.
 > 
 > Because Item (b) calling convention semantics cannot be certified as VERIFIED within the milestone ROM read policy, the final verdict for PORT-27 T2 is strictly **NO-GO**.
