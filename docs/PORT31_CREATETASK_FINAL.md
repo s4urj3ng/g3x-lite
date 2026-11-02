@@ -1,26 +1,13 @@
 # PORT-31 T1: Final Bounded CreateTask Evidence Read, Manifest & GO/NO-GO Verdict
 
-- **Target Camera**: Canon PowerShot G3 X (Firmware **GM1.10C**, Platform ID `0x32A8` = 12968) `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:7; docs/CHDK_PORT1C1_CRITICAL_AUDIT.md:3]`
-- **Milestone / Task**: PORT-31 T1 (`p31-t1-createtask-final-evidence`)
-- **Primary Source**: `firmware/dumps/GM1.10C/PRIMARY.BIN` (offline host analysis; 33,554,432 bytes; base `0xFC000000`) `[VERIFIED]`
-- **Baseline Context**: [`docs/PORT30_CREATETASK_CLOSE.md:323-336`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-31-createtask-final-p31-t1-createtask-final-evidence/docs/PORT30_CREATETASK_CLOSE.md#L323-L336) (§6.2 Remaining UNKNOWN List), [`docs/HANDOFF.md:2506-2519`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-31-createtask-final-p31-t1-createtask-final-evidence/docs/HANDOFF.md#L2506-L2519), [`evidence/port30_manifest.json`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-31-createtask-final-p31-t1-createtask-final-evidence/evidence/port30_manifest.json), [`evidence/port30_trusted_scopes.json`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-31-createtask-final-p31-t1-createtask-final-evidence/evidence/port30_trusted_scopes.json), [`AGENTS.md`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-31-createtask-final-p31-t1-createtask-final-evidence/AGENTS.md), [`docs/SAFETY.md`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-31-createtask-final-p31-t1-createtask-final-evidence/docs/SAFETY.md)
-- **Output Artifacts**:
-  - [`docs/PORT31_CREATETASK_FINAL.md`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-31-createtask-final-p31-t1-createtask-final-evidence/docs/PORT31_CREATETASK_FINAL.md)
-  - [`evidence/port31_manifest.json`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-31-createtask-final-p31-t1-createtask-final-evidence/evidence/port31_manifest.json)
-  - [`evidence/port31_trusted_scopes.json`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-31-createtask-final-p31-t1-createtask-final-evidence/evidence/port31_trusted_scopes.json)
-  - [`docs/HANDOFF.md`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-31-createtask-final-p31-t1-createtask-final-evidence/docs/HANDOFF.md)
-- **Verdict**: **`NO-GO`** (Item (b) / resident candidate gate closed: `r1` priority role, `r2` forwarding/TCB storage, `r2` parameter role as byte count, `r0` forwarding/fallback/storage, `r3` entry point, `sp[0]` retrieval/storage, and heap allocation delegation to pool `0x000403A4` are `[VERIFIED]`; `r0` task name string semantics is `[INFERRED]`; `sp[0]` task-argument delivery to spawned task entry function, `r2` internal heap allocator implementation, `r2` runtime default stack size values, and `r2` stack buffer and SP alignment remain `[UNKNOWN]`)
-
----
-
 ## 1. Table of Every PORT-30 Remaining-UNKNOWN Item
 
-The table below catalogs every item from the PORT-30 remaining-UNKNOWN list ([`docs/PORT30_CREATETASK_CLOSE.md:323-336`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-31-createtask-final-p31-t1-createtask-final-evidence/docs/PORT30_CREATETASK_CLOSE.md#L323-L336) §6.2 and [`docs/HANDOFF.md:2506-2519`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-31-createtask-final-p31-t1-createtask-final-evidence/docs/HANDOFF.md#L2506-L2519)), its listed range (start and length), read status (`READ`, `RE-CITED`, or `SKIPPED` plus the reason), and the running total of newly read bytes.
+The table below catalogs every item from the PORT-30 remaining-UNKNOWN list ([`docs/PORT30_CREATETASK_CLOSE.md:323-336`](PORT30_CREATETASK_CLOSE.md#62-exact-narrower-unknown-list--bounded-proposals-le-4text-kib) §6.2 and [`docs/HANDOFF.md:2506-2519`](HANDOFF.md#port-30-createtask-line-narrower-unknown-list)), its listed range (start and length), read status (`READ`, `RE-CITED`, or `SKIPPED` plus the reason), and the running total of newly read bytes.
 
-| # | Item Description | Listed ROM Range | Listed Start | Listed Length | Status (READ / RE-CITED / SKIPPED with reason) | New Bytes Running Total |
+| # | Item Description | Listed ROM Range | Listed Start | Listed Length | Status (READ / RE-CITED with source / SKIPPED with reason) | New Bytes Running Total |
 |:---:|---|:---:|:---:|:---:|---|:---:|
-| **1** | Dynamic Stack Allocator Callee Entry (`0xBFE11E62`) | `0xFCEF0880..0xFCEF097F` | `0xFCEF0880` | 256 B | **`READ`** (Encompassed within contiguous 304-byte slice `PORT31-ROM-STACK-CALLEES` `0xFCEF0850..0xFCEF097F`, which spans Items 1 & 2 per Row 3) | 304 B |
-| **2** | Task Stack Frame Setup & Watermark Routine (`0xBFE11E04`) | `0xFCEF0850..0xFCEF088F` | `0xFCEF0850` | 64 B | **`READ`** (Encompassed within contiguous 304-byte slice `PORT31-ROM-STACK-CALLEES` `0xFCEF0850..0xFCEF097F`, which spans Items 1 & 2 per Row 3) | 304 B |
+| **1** | Dynamic Stack Allocator Callee Entry (`0xBFE11E62`) | `0xFCEF0880..0xFCEF097F` | `0xFCEF0880` | 256 B | **`READ`** (Encompassed within contiguous 304-byte slice `PORT31-ROM-STACK-CALLEES` `0xFCEF0850..0xFCEF097F`, which spans Items 1–3) | 304 B |
+| **2** | Task Stack Frame Setup & Watermark Routine (`0xBFE11E04`) | `0xFCEF0850..0xFCEF088F` | `0xFCEF0850` | 64 B | **`READ`** (Encompassed within contiguous 304-byte slice `PORT31-ROM-STACK-CALLEES` `0xFCEF0850..0xFCEF097F`, which spans Items 1–3) | 304 B |
 | **3** | `r2` Units/Semantics inside `0xFCEF08AE` / `0xFCEF0850` | `0xFCEF0850..0xFCEF097F` (spanned by items 1 & 2) | `0xFCEF0850` | 304 B | **`READ`** (`PORT31-ROM-STACK-CALLEES`, `0xFCEF0850..0xFCEF097F`, 304 B; SHA-256 `bca315b0b8b89f7bf2b82cd6847a0b45f640e5bd7bc041122021927359929f49`) | 304 B |
 | **4** | Task Name String Consumer / TCB Layout (`r0` Name Semantics) | `range not yet identified` | Unbounded | Unbounded | **`SKIPPED`** (Unclear / no exact bounds; range not identified in any committed doc; item marked `UNKNOWN`) | 304 B |
 | **5** | Task Dispatcher / Context Delivery Consumer (`sp[0]` Delivery) | `UNKNOWN-location` | Unbounded | Unbounded | **`SKIPPED`** (Unclear / no exact bounds; UNKNOWN-location; item marked `UNKNOWN`) | 304 B |
@@ -35,9 +22,23 @@ The table below catalogs every item from the PORT-30 remaining-UNKNOWN list ([`d
 
 ---
 
+### Metadata & Session Context
+- **Target Camera**: Canon PowerShot G3 X (Firmware **GM1.10C**, Platform ID `0x32A8` = 12968) `[VERIFIED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:7; docs/CHDK_PORT1C1_CRITICAL_AUDIT.md:3]`
+- **Milestone / Task**: PORT-31 T1 (`p31-t1-createtask-final-evidence`)
+- **Primary Source**: `firmware/dumps/GM1.10C/PRIMARY.BIN` (offline host analysis; 33,554,432 bytes; base `0xFC000000`) `[VERIFIED]`
+- **Baseline Context**: [`docs/PORT30_CREATETASK_CLOSE.md:323-336`](PORT30_CREATETASK_CLOSE.md#62-exact-narrower-unknown-list--bounded-proposals-le-4text-kib) (§6.2 Remaining UNKNOWN List), [`docs/HANDOFF.md:2506-2519`](HANDOFF.md#port-30-createtask-line-narrower-unknown-list), [`evidence/port30_manifest.json`](../evidence/port30_manifest.json), [`evidence/port30_trusted_scopes.json`](../evidence/port30_trusted_scopes.json), [`AGENTS.md`](../AGENTS.md), [`docs/SAFETY.md`](SAFETY.md)
+- **Output Artifacts**:
+  - [`docs/PORT31_CREATETASK_FINAL.md`](PORT31_CREATETASK_FINAL.md)
+  - [`evidence/port31_manifest.json`](../evidence/port31_manifest.json)
+  - [`evidence/port31_trusted_scopes.json`](../evidence/port31_trusted_scopes.json)
+  - [`docs/HANDOFF.md`](HANDOFF.md)
+- **Verdict Summary**: **`NO-GO`** (Item (b) / resident candidate gate closed: `r1` priority role, `r2` forwarding/TCB storage, `r2` parameter role as byte count, `r0` forwarding/fallback/storage, `r3` entry point, `sp[0]` retrieval/storage, and heap allocation delegation to pool `0x000403A4` are `[VERIFIED]`; `r0` task name string semantics is `[INFERRED]`; `sp[0]` task-argument delivery to spawned task entry function, `r2` internal heap allocator implementation, `r2` runtime default stack size values, `r2` stack buffer and SP alignment, and `SleepTask` delay units and tick conversion remain `[UNKNOWN]`)
+
+---
+
 ## 2. Evidence Manifest Catalog & Validator Verification
 
-The machine-readable evidence manifest [`evidence/port31_manifest.json`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-31-createtask-final-p31-t1-createtask-final-evidence/evidence/port31_manifest.json) catalogs all 15 ranges (13 re-cited, 2 newly read) verified against [`evidence/port31_trusted_scopes.json`](file:///var/lib/agentbridge/worktrees/g3x-lite/port-31-createtask-final-p31-t1-createtask-final-evidence/evidence/port31_trusted_scopes.json):
+The machine-readable evidence manifest [`evidence/port31_manifest.json`](../evidence/port31_manifest.json) catalogs all 15 ranges (13 re-cited, 2 newly read) verified against [`evidence/port31_trusted_scopes.json`](../evidence/port31_trusted_scopes.json):
 
 | Range ID | Target Routine / Subsystem | ROM Start | ROM End | File Offset | Length | Status | SHA-256 Digest |
 |---|---|:---:|:---:|:---:|:---:|:---:|---|
@@ -74,14 +75,14 @@ Result: VALID (0 errors, 0 warnings)
 
 ---
 
-## 3. Evaluation of Each CreateTask Item (Sections 3.1–3.7)
+## 3. Evaluation of Each CreateTask Item (Sections 3.1–3.8)
 
-This section evaluates the seven required items: the roles of `r0`, `r1`, `r2`, and `sp[0]`, followed by the `r2` stack allocator, size, and alignment. All ARM Thumb and Thumb-2 instructions cite explicit 16-bit halfwords in `0xHHHH` notation.
+This section evaluates the seven required items: the roles of `r0`, `r1`, `r2`, and `sp[0]`, followed by the `r2` stack allocator, size, and alignment, concluding with the evaluated `SleepTask` body item. All ARM Thumb and Thumb-2 instructions cite explicit 16-bit halfwords in `0xHHHH` notation.
 
 ### 3.1 Role of `r0` (Task Name Pointer)
 - **Label**:
   - Argument forwarding, fallback when `r0 == 0`, and storage into `[TCB + 0x24]`: **`[VERIFIED]`**.
-  - Semantic role of `r0` as a null-terminated C string task name: **`[INFERRED]`**.
+  - Semantic role of `r0` as a null-terminated C string task name: **`[INFERRED]`** (provenance: `HISTORICAL_CHDK`).
 - **Citations & Step-by-Step Disassembly Reasoning**:
   - `0xFCEF348C` (`0x4604`): `mov r4, r0` preserves incoming `r0` parameter `[VERIFIED: PORT29-ROM-CREATETASK]`.
   - `0xFCEF34AC` (`0xB904`): `cbnz r4, 0xbfe14a64` checks if caller passed non-zero pointer `[VERIFIED: PORT29-ROM-CREATETASK]`.
@@ -94,7 +95,7 @@ This section evaluates the seven required items: the roles of `r0`, `r1`, `r2`, 
 - **Epistemic Justification for `[INFERRED]`**:
   - The cited ROM instructions treat `r0` purely as an opaque 32-bit word, copying it from `desc + 20` into `[TCB + 0x24]`.
   - The stock startup call site at `0xFC05B98E` (`docs/PORT27_RESIDENT_EVIDENCE.md:268, 278`) passes a pointer to the ASCII string `"Startup\0"` in `r0`.
-  - However, no consumer routine that reads `[TCB + 0x24]` as a null-terminated C string (e.g. logging, `DebugAssert`, task list formatting) was read in ROM (Row 4 was SKIPPED due to lack of an identified bounded range). Therefore, treating `r0` semantically as a string pointer remains `[INFERRED]` (provenance: `HISTORICAL_CHDK` and stock call-site data).
+  - However, no consumer routine that reads `[TCB + 0x24]` as a null-terminated C string (e.g. logging, `DebugAssert`, task list formatting) was read in ROM (Row 4 was SKIPPED due to lack of an identified bounded range). Therefore, treating `r0` semantically as a string pointer remains `[INFERRED]` (provenance: `HISTORICAL_CHDK` and stock call-site data) and cannot be certified as `[VERIFIED]`.
 
 ### 3.2 Role of `r1` (Task Scheduling Priority)
 - **Label**: **`[VERIFIED]`**.
@@ -198,15 +199,19 @@ This section evaluates the seven required items: the roles of `r0`, `r1`, `r2`, 
 - **Citations & Step-by-Step Disassembly Reasoning**:
   - `CreateTask` (`0xFCEF3488..0xFCEF34F9`): Static audit confirms zero bitwise masking instructions (`bic`, `and`) applied to `r2` `[VERIFIED: PORT29-ROM-CREATETASK]`.
   - `alloc_task_stack_tcb` (`0xFCEEF5D4..0xFCEEF672`): Static audit confirms zero alignment masking instructions applied to requested size in `r3` `[VERIFIED: PORT29-ROM-N3]`.
-  - `alloc_task` (`0xFCEF0180..0xFCEF037F`): Static audit confirms zero alignment masking instructions applied to size in `r1` or buffer pointer in `r6` `[VERIFIED: PORT30-ROM-ALLOC-TASK]`.
+  - `alloc_task` (`0xFCEF0180..0xFCEF037F`): Static audit confirms covered call-site instructions in `PORT30-ROM-ALLOC-TASK`—including `0xFCEF01E0` (`bl 0xBFE11E62`), `0xFCEF0204` (`bl 0xBFE11E04`), and subsequent task setup call sites `0xFCEF0210..0xFCEF0228` (such as `0xFCEF0220: bl 0xBFE13DDC` / ROM `0xFCEF2794`)—apply zero alignment masking or SP adjustment to size in `r1` or buffer pointer in `r6` `[VERIFIED: PORT30-ROM-ALLOC-TASK]`.
   - `0xBFE11E04` (`0xFCEF0850..0xFCEF0870`): Static audit confirms `lsrs r1, r1, #2` truncates the bottom 2 bits to enforce 4-byte word counting for watermark filling, but applies zero alignment adjustments to buffer pointer `r0` `[VERIFIED: PORT31-ROM-STACK-CALLEES]`.
-  - Dynamic heap allocator callee `0xBFE1452E` (ROM `0xFCEF2F7A`) and downstream stack frame setup routines (`0xFCEF0210..0xFCEF0228`) lie outside authorized read slices.
+  - **Separation of Covered Call-Site Instructions vs Unread Callee Bodies**:
+    - The call-site instructions at `0xFCEF0210..0xFCEF0228` ARE covered within the re-cited range `PORT30-ROM-ALLOC-TASK` (`0xFCEF0180..0xFCEF037F`). Static audit confirms zero alignment masking instructions in this covered code.
+    - However, the external *callee bodies* invoked from `alloc_task`—namely dynamic heap allocator `0xBFE1452E` (ROM `0xFCEF2F7A`) and downstream helper callees invoked from `0xFCEF0210..0xFCEF0228` (such as ROM `0xFCEF2794`)—were NOT read because they lie outside authorized read slices.
 - **Epistemic Justification for `[UNKNOWN]`**:
-  - Absence of alignment masking in `CreateTask`, `alloc_task_stack_tcb`, `alloc_task`, and `0xBFE11E04` is verified.
-  - However, whether dynamic heap allocator `0xBFE1452E` returns 4-byte or 8-byte aligned memory buffers, and whether downstream context setup routines enforce 8-byte initial stack pointer alignment (AAPCS compliance), cannot be verified without reading those unread routines. Therefore, stack alignment remains **`[UNKNOWN]`**.
+  - Absence of alignment masking in covered instructions (`CreateTask`, `alloc_task_stack_tcb`, `alloc_task`, and `0xBFE11E04`) is verified.
+  - However, whether dynamic heap allocator `0xBFE1452E` returns 4-byte or 8-byte aligned memory buffers, and whether downstream context setup callees enforce 8-byte initial stack pointer alignment (AAPCS compliance), cannot be verified without reading those external callee bodies. Therefore, stack alignment remains **`[UNKNOWN]`**.
 
 ### 3.8 Additional Evaluated Item: `SleepTask` Delay Units & Dispatch
-- **Label**: Routine entry, precondition checks, zero-delay bypass, and timer dispatch: **`[VERIFIED]`**.
+- **Label**:
+  - Routine entry, precondition checks, zero-delay bypass, unchanged delay forwarding (`mov r1, r4`), and timer dispatch call sites (`bl 0xBFE15014` / `0xFCEF3A60` and `bl 0xBFE10DA6` / `0xFCEEF7F2`): **`[VERIFIED]`**.
+  - Delay units (milliseconds vs ticks) and any downstream tick conversion inside callee `0xFCEF3A60`: **`[UNKNOWN]`**.
 - **Citations & Step-by-Step Disassembly Reasoning**:
   - Reconciled entry at `0xFCEF33B4` (`0xB51C: push {r2, r3, r4, lr}`, `0x4604: mov r4, r0`) preserves incoming delay in `r4` `[VERIFIED: PORT30-ROM-SLEEPTASK]`.
   - Precondition checks skip assertion panics to `0xFCEF33CC` and `0xFCEF33E0` `[VERIFIED: PORT30-ROM-SLEEPTASK]`.
@@ -221,11 +226,43 @@ This section evaluates the seven required items: the roles of `r0`, `r1`, `r2`, 
       - `0xFCEF33EE` (`0xF7FC 0xFA00`): `bl 0xBFE10DA6` (ROM `0xFCEEF7F2`) invokes task sleep/yield routine `[VERIFIED]`.
       - `0xFCEF33F2` (`0xE7F6`): `b 0xBFE14996` branches to epilogue (`movs r0, #0`, `pop {r2, r3, r4, pc}`) `[VERIFIED]`.
   - Next function starts at `0xFCEF33F4` (`0x481A: ldr r0, [pc, #104]`, `0xB510: push {r4, lr}`).
-- **Conclusion**: `SleepTask` forwards caller delay directly in `r1` without arithmetic tick scaling.
+- **Epistemic Justification for `[UNKNOWN]`**:
+  - The evidence proves only that `SleepTask` forwards its delay parameter unchanged in `r1` (`mov r1, r4`).
+  - Delay units (milliseconds vs ticks) and any downstream tick conversion formula are NOT established, because the timer configuration callee `0xBFE15014` at ROM `0xFCEF3A60` was not read (lies outside authorized read slices). Therefore, delay units and tick conversion remain **`[UNKNOWN]`**.
 
 ---
 
-## 4. Final GO/NO-GO Verdict
+## CreateTask line: STOP RECORD
+
+### Formal Closure Statement
+> [!IMPORTANT]
+> **The `CreateTask` / `G3X_RESIDENT` line is CLOSED for this firmware (PowerShot G3 X GM1.10C) unless the project owner explicitly opens it again.**
+>
+> Four consecutive research and evidence milestones (PORT-27, PORT-28, PORT-29, PORT-30, and PORT-31) have rigorously investigated stock GM1.10C firmware ROM. While incoming register forwarding and TCB storage are proven (`r0` forwarding/storage `[VERIFIED]`, `r0` task name string semantics `[INFERRED]`, `r1` priority $1 \le r1 \le 32$ `[VERIFIED]`, `r2` stack size in bytes `[VERIFIED]`, `r3` entry function `[VERIFIED]`, `sp[0]` retrieval/storage `[VERIFIED]`, and heap pool delegation to `0x000403A4` `[VERIFIED]`), critical elements including `sp[0]` context delivery to the spawned task `[UNKNOWN]`, `r2` heap allocator implementation `[UNKNOWN]`, runtime default stack sizes `[UNKNOWN]`, stack/SP alignment `[UNKNOWN]`, and `SleepTask` delay units and tick conversion `[UNKNOWN]` cannot be closed within bounded ROM inspection quotas without unconstrained scans or owner-directed trial redesign. No resident candidate (`G3X_RESIDENT=1`) will be constructed.
+
+### Final Exact UNKNOWN List
+1. **`r0` Task Name String Semantics**:
+   - *Reason it could not be closed*: The cited ROM instructions only store `r0` as an opaque 32-bit word into `[TCB + 0x24]`. Role as a C-string is inferred from the startup caller passing `"Startup\0"`. Proving string semantics requires verifying an established TCB layout or reading a consumer routine that reads `[TCB + 0x24]` as a C string.
+   - *Range / evidence needed*: Range not yet identified in committed documentation (unbounded); requires locating and reading a consumer routine (logging, task list, or `DebugAssert` formatter) that reads `[TCB + 0x24]` as a null-terminated string.
+2. **`sp[0]` Task-Argument Delivery to Spawned Task**:
+   - *Reason it could not be closed*: Storage of `sp[0]` into `[TCB + 0x10]` is verified, but the downstream task dispatcher / context-switch code that restores `[TCB + 0x10]` into `r0` upon task launch is not localised in ROM (`UNKNOWN-location`).
+   - *Range / evidence needed*: Unbounded / `UNKNOWN-location`; requires locating and reading the task context switch / dispatcher routine downstream of task scheduling.
+3. **`r2` Stack Allocator Internal Implementation**:
+   - *Reason it could not be closed*: Callee wrapper `0xBFE11E62` delegates dynamic allocation to kernel heap routine `0xBFE1452E` (ROM `0xFCEF2F7A`) for heap pool `0x000403A4`, which lies outside authorized read slices.
+   - *Range / evidence needed*: Reading kernel heap allocator routine `0xBFE1452E` (ROM `0xFCEF2F7A`, $\le 256$ B).
+4. **`r2` Runtime Default Stack Size**:
+   - *Reason it could not be closed*: ROM initializers for `*(0x000081D0)` and `*(0x0000811C)` are `0x00000000`, and runtime initialization writers are unlocalised in ROM (`UNKNOWN-location`).
+   - *Range / evidence needed*: Unbounded / `UNKNOWN-location`; requires locating and reading the initialization routines that write default stack sizes into RAM addresses `0x000081D0` and `0x0000811C`.
+5. **`r2` Stack Buffer & Initial Stack Pointer Alignment**:
+   - *Reason it could not be closed*: Covered call-site instructions in `PORT30-ROM-ALLOC-TASK` (`0xFCEF0180..0xFCEF037F`, including call sites at `0xFCEF01E0`, `0xFCEF0204`, and `0xFCEF0210..0xFCEF0228`) contain no alignment masking or SP adjustment. However, external callee bodies—dynamic heap allocator `0xBFE1452E` (ROM `0xFCEF2F7A`) and downstream helper callees invoked from `0xFCEF0210..0xFCEF0228` (such as ROM `0xFCEF2794`)—were not read because they lie outside authorized read slices.
+   - *Range / evidence needed*: Reading kernel heap allocator `0xBFE1452E` (ROM `0xFCEF2F7A`, $\le 256$ B) and downstream callee bodies (e.g. ROM `0xFCEF2794`, which has no exact bounds established in committed docs) to inspect buffer allocation alignment and initial SP framing.
+6. **`SleepTask` Delay Units & Downstream Tick Conversion**:
+   - *Reason it could not be closed*: The covered instructions in `PORT31-ROM-SLEEPTASK-BODY` (`0xFCEF33E0..0xFCEF345F`) prove only that `SleepTask` forwards its incoming delay argument unchanged (`mov r1, r4`) to timer configuration callee `0xBFE15014` at ROM `0xFCEF3A60`. Delay units (milliseconds vs ticks) and any downstream tick conversion formula are NOT established because callee `0xFCEF3A60` was not read.
+   - *Range / evidence needed*: Reading timer configuration callee `0xBFE15014` at ROM `0xFCEF3A60`. The range start is `0xFCEF3A60`, but the routine body has no exact bounds established in committed documentation (length is unlocalised / unbounded without reading the callee epilogue).
+
+---
+
+## Verdict: NO-GO
 
 Under the project decision rule mandated by the task specification:
 > *"The document ends with a GO/NO-GO verdict. GO only if all seven items are VERIFIED. If the verdict is NO-GO, add a 'CreateTask line: STOP RECORD' section to docs/PORT31_CREATETASK_FINAL.md."*
@@ -233,38 +270,13 @@ Under the project decision rule mandated by the task specification:
 > [!WARNING]
 > **Final Verdict for PORT-31 T1**: **`NO-GO`**
 >
-> While incoming parameter forwarding, fallback, and TCB storage of `r0` (into `[TCB + 0x24]`), parameter extraction, range checking, and ready-queue enqueuing of `r1` (scheduling priority), argument forwarding, TCB storage, and byte-count semantics of `r2` (stack size in bytes), task entry point `r3` (into `[TCB + 0xC]`), argument storage of `sp[0]` (into `[TCB + 0x10]`), and dynamic allocation delegation to heap pool `0x000403A4` are certified as **`[VERIFIED]`**, five elements required for GO cannot be verified:
+> While incoming parameter forwarding and TCB storage of `r0` (into `[TCB + 0x24]`), parameter extraction, range checking, and ready-queue enqueuing of `r1` (scheduling priority), argument forwarding, TCB storage, and byte-count semantics of `r2` (stack size in bytes), task entry point `r3` (into `[TCB + 0xC]`), argument storage of `sp[0]` (into `[TCB + 0x10]`), and dynamic allocation delegation to heap pool `0x000403A4` are certified as **`[VERIFIED]`**, five required items cannot be verified:
 > 1. **`r0` Task Name String Semantics**: Cited ROM instructions treat `r0` purely as an opaque 32-bit word. That `r0` represents a null-terminated C string is **`[INFERRED]`** from stock call-site data; no consumer reading `[TCB + 0x24]` as a C string was read in ROM.
 > 2. **`sp[0]` Task-Argument Delivery**: Storage into `[TCB + 0x10]` is verified, but downstream task dispatcher delivery of this argument to the task entry function remains **`[UNKNOWN]`**.
 > 3. **`r2` Stack Allocator Internal Implementation**: Dynamic delegation to heap pool `0x000403A4` is verified, but internal heap allocator routine `0xBFE1452E` (ROM `0xFCEF2F7A`) lies outside authorized read slices and remains **`[UNKNOWN]`**.
 > 4. **`r2` Runtime Default Stack Size**: ROM initializers for `*(0x000081D0)` and `*(0x0000811C)` are `0x00000000` (zero). Runtime default values depend on unlocalised initialization writers and remain **`[UNKNOWN]`**.
-> 5. **`r2` Stack Buffer & Initial SP Alignment**: Buffer alignment returned by allocator `0xBFE1452E` and initial stack pointer alignment in downstream context setup remain outside read slices and remain **`[UNKNOWN]`**.
+> 5. **`r2` Stack Buffer & Initial SP Alignment**: Buffer alignment returned by allocator `0xBFE1452E` and initial stack pointer alignment in downstream context setup remain unverified because the external callee bodies lie outside authorized read slices and remain **`[UNKNOWN]`**.
 >
-> Under the fail-closed project gate rule, these remaining UNKNOWNs compel an explicit **`NO-GO`** verdict.
-
----
-
-## 5. CreateTask line: STOP RECORD
-
-### 5.1 Formal Closure Statement
-> [!IMPORTANT]
-> **The `CreateTask` / `G3X_RESIDENT` line is CLOSED for this firmware (PowerShot G3 X GM1.10C) unless the project owner explicitly opens it again.**
+> Additionally, unresolved PORT-30 item **`SleepTask` Delay Units & Downstream Tick Conversion** remains **`[UNKNOWN]`** because timer configuration callee `0xFCEF3A60` was not read.
 >
-> Four consecutive research and evidence milestones (PORT-27, PORT-28, PORT-29, PORT-30, and PORT-31) have rigorously investigated stock GM1.10C firmware ROM. While the calling convention (`r0` name/identifier, `r1` priority $1 \le r1 \le 32$, `r2` stack size in bytes, `r3` entry function, `sp[0]` context argument) and heap pool delegation (`0x000403A4`) are proven, the remaining gaps cannot be closed within bounded ROM inspection quotas without unconstrained scans or owner-directed trial redesign. No resident candidate (`G3X_RESIDENT=1`) will be constructed.
-
-### 5.2 Final Exact UNKNOWN List
-1. **`r0` Task Name String Semantics**:
-   - *Reason it could not be closed*: The cited ROM instructions only store `r0` as an opaque 32-bit word into `[TCB + 0x24]`. Role as a C-string is inferred from the startup caller passing `"Startup\0"`. Proving string semantics requires verifying an established TCB layout or reading a consumer routine that reads `[TCB + 0x24]` as a C string.
-   - *Range / evidence needed*: Identifying and reading a consumer routine (logging, task list, or `DebugAssert` formatter) that reads `[TCB + 0x24]` as a null-terminated string.
-2. **`sp[0]` Task-Argument Delivery to Spawned Task**:
-   - *Reason it could not be closed*: Storage of `sp[0]` into `[TCB + 0x10]` is verified, but the downstream task dispatcher / context-switch code that restores `[TCB + 0x10]` into `r0` upon task launch is not localised in ROM (`UNKNOWN-location`).
-   - *Range / evidence needed*: Locating and reading the task context switch / dispatcher routine downstream of task scheduling.
-3. **`r2` Stack Allocator Internal Implementation**:
-   - *Reason it could not be closed*: Callee wrapper `0xBFE11E62` delegates dynamic allocation to kernel heap routine `0xBFE1452E` (ROM `0xFCEF2F7A`) for heap pool `0x000403A4`, which lies outside authorized read slices.
-   - *Range / evidence needed*: Reading kernel heap allocator routine `0xBFE1452E` (ROM `0xFCEF2F7A`, $\le 256$ B).
-4. **`r2` Runtime Default Stack Size**:
-   - *Reason it could not be closed*: ROM initializers for `*(0x000081D0)` and `*(0x0000811C)` are `0x00000000`, and runtime initialization writers are unlocalised in ROM (`UNKNOWN-location`).
-   - *Range / evidence needed*: Locating and reading the initialization routines that write default stack sizes into RAM addresses `0x000081D0` and `0x0000811C`.
-5. **`r2` Stack Buffer & Initial Stack Pointer Alignment**:
-   - *Reason it could not be closed*: Dynamic allocator `0xBFE11E62` forwards size unmodified to heap routine `0xBFE1452E` (ROM `0xFCEF2F7A`), and downstream stack framing routines (`0xFCEF0210..0xFCEF0228` / `0xBFE13E00`) are outside read slices.
-   - *Range / evidence needed*: Reading heap allocator `0xBFE1452E` (ROM `0xFCEF2F7A`) and stack framing routines to verify buffer and SP alignment.
+> Under the fail-closed project gate rule, these remaining non-VERIFIED elements compel an explicit **`NO-GO`** verdict.
