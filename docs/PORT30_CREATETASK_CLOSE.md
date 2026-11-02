@@ -8,7 +8,7 @@
   - `docs/PORT30_CREATETASK_CLOSE.md`
   - `evidence/port30_manifest.json`
   - `evidence/port30_trusted_scopes.json`
-- **Verdict**: **`NO-GO`** (Parameter roles `r0`, `r1`, `r2`, and storage of `sp[0]` into `[TCB + 0x10]` are `[VERIFIED]`; stack allocator internal identity, buffer alignment, runtime default stack size values on both fallback paths, task-argument delivery to spawned task, and `SleepTask` tick scaling remain `[UNKNOWN]`)
+- **Verdict**: **`NO-GO`** (Parameter roles `r0` and `r1`, forwarding and storage of `r2` and `sp[0]` into `[TCB + 0x10]` are `[VERIFIED]`; `r2` stack size in bytes is `[INFERRED]`; `r2` callee units/semantics, stack allocator internal identity, buffer alignment, runtime default stack size values on both fallback paths, task-argument delivery to spawned task, and `SleepTask` tick scaling remain `[UNKNOWN]`)
 
 ---
 
@@ -103,7 +103,7 @@ This section evaluates each item left open or classified as `[INFERRED]` / `[UNK
   - `0xFCEEF458` (`0x68A8`): `ldr r0, [r5, #0x8]` reads `[TCB + 0x8]` in downstream activation callee `0xBFE109EC` (`PORT30-ROM-ACTIVATE-CALLEE2`), using it to index the scheduling ready-queue array and calling enqueue routine `0xFCEEF464: bl 0xBFE126C4` `[VERIFIED]`.
 - **Verdict**: **`[VERIFIED]`**. The range check ($1 \le r1 \le 32$), storage into descriptor `desc + 25`, placement into TCB priority fields `[TCB + 0x8]` and `[TCB + 0x46]`, and consumption by the scheduler ready queue are verified in ROM.
 
-### 3.3 Role of `r2`: Task Stack Size in Bytes `[VERIFIED]`
+### 3.3 Role of `r2`: Argument Forwarding & Storage `[VERIFIED]` / Stack Size in Bytes `[INFERRED]` / Callee Units `[UNKNOWN]`
 - **Citations & Disassembly Reasoning**:
   - `0xFCEF3492` (`0x4615`): `mov r5, r2` preserves incoming `r2` `[VERIFIED: PORT29-ROM-CREATETASK]`.
   - `0xFCEF34C8` (`0xB905`): `cbnz r5, 0xbfe14a80` preserves caller's explicit value if `r2 != 0` `[VERIFIED: PORT29-ROM-CREATETASK]`.
@@ -113,7 +113,10 @@ This section evaluates each item left open or classified as `[INFERRED]` / `[UNK
   - `0xFCEF01DE` (`0x6929`): `ldr r1, [r5, #0x10]` loads `[desc + 16]` in `0xBFE11746` (`PORT30-ROM-ALLOC-TASK`), passing it directly in `r1` to dynamic allocator callee `0xBFE11E62` (`0xFCEF01E0: bl 0xBFE11E62`) `[VERIFIED: PORT30-ROM-ALLOC-TASK]`.
   - `0xFCEF0202` (`0x6929`): `ldr r1, [r5, #0x10]` loads `[desc + 16]` and passes it in `r1` to stack framing helper `0xBFE11E04` (`0xFCEF0204: bl 0xBFE11E04`) `[VERIFIED: PORT30-ROM-ALLOC-TASK]`.
   - `0xFCEF0246` (`0x6928`): `ldr r0, [r5, #0x10]` loads `[desc + 16]` and `0xFCEF0248` (`0x6220`: `str r0, [r4, #0x20]`) stores it directly into `[TCB + 0x20]` `[VERIFIED: PORT30-ROM-ALLOC-TASK]`.
-- **Verdict**: **`[VERIFIED]`**. Argument forwarding, primary and secondary fallback loads, forwarding to dynamic allocator `0xBFE11E62` and framing routine `0xBFE11E04`, and storage in `[TCB + 0x20]` are verified in ROM.
+- **Verdict & Epistemic Breakdown**:
+  - **`r2` is forwarded to the allocator/framing call and stored**: **`[VERIFIED]`**. The cited instructions establish that incoming `r2` (or its default fallback if `r2 == 0`) is forwarded to `alloc_task_stack_tcb` (`desc + 16`), passed in `r1` to dynamic allocator call `0xBFE11E62` (ROM `0xFCEF08AE`) and framing routine `0xBFE11E04` (ROM `0xFCEF0850`), and stored into `[TCB + 0x20]`.
+  - **`r2` is the stack size in bytes**: **`[INFERRED]`**. Reasoning: In DRYOS / VxWorks conventions on Canon DIGIC platforms, task creation accepts stack size in bytes at parameter position 3 (`r2`), and stock callers pass standard byte quantities (e.g. `0x2000`, `0x4000`). The value is passed directly to the dynamic buffer allocator and framing helper. However, because neither the allocator (`0xBFE11E62` / ROM `0xFCEF08AE`) nor the framing helper (`0xBFE11E04` / ROM `0xFCEF0850`) was read, the cited instructions establish only that `r2` is forwarded and stored, not that it is a byte count.
+  - **`r2` units/semantics (bytes vs other) inside `0xFCEF08AE` / `0xFCEF0850` (not read)**: **`[UNKNOWN]`**. Whether the callee treats the value as raw byte count, 4-byte words, or applies internal scaling/rounding requires reading `0xFCEF08AE` / `0xFCEF0850`.
 
 ### 3.4 Role of `sp[0]`: Task Entry Context Argument Storage `[VERIFIED]` / Task-Argument Delivery `[UNKNOWN]`
 - **Citations & Disassembly Reasoning**:
@@ -168,10 +171,11 @@ This section evaluates each item left open or classified as `[INFERRED]` / `[UNK
   - Delegation to dynamic allocator `0xBFE11E62` (ROM `0xFCEF08AE`) with `r1 = stack_size` and dynamic flag `0x80` recorded in `[TCB + 0x4A]`: **`[VERIFIED]`**.
   - Internal identity and heap mechanism of allocator `0xBFE11E62`: **`[UNKNOWN]`**.
 
-### 3.7 The `r2` Stack Size: Explicit Size `[VERIFIED]` / Runtime Default Size `[UNKNOWN]`
+### 3.7 The `r2` Stack Size: Explicit Size Forwarding `[VERIFIED]` / Byte Semantics `[INFERRED]` / Runtime Default Size `[UNKNOWN]`
 - **Explicit Size (`r2 != 0`)**:
-  - The caller-supplied positive integer is preserved in `r5` (`0xFCEF3492: mov r5, r2`), bypassed past fallback logic (`0xFCEF34C8: cbnz r5`), forwarded to `alloc_task_stack_tcb` and stored in `desc + 16`, passed in `r1` to dynamic allocator `0xBFE11E62` (`0xFCEF01DE..0xFCEF01E0`) and framing routine `0xBFE11E04` (`0xFCEF0202..0xFCEF0204`), and recorded in `[TCB + 0x20]` (`0xFCEF0248: str r0, [r4, #0x20]`).
-  - Status: **`[VERIFIED]`**.
+  - The caller-supplied integer is preserved in `r5` (`0xFCEF3492: mov r5, r2`), bypassed past fallback logic (`0xFCEF34C8: cbnz r5`), forwarded to `alloc_task_stack_tcb` and stored in `desc + 16`, passed in `r1` to dynamic allocator `0xBFE11E62` (`0xFCEF01DE..0xFCEF01E0`) and framing routine `0xBFE11E04` (`0xFCEF0202..0xFCEF0204`), and recorded in `[TCB + 0x20]` (`0xFCEF0248: str r0, [r4, #0x20]`).
+  - Forwarding and storage status: **`[VERIFIED]`**.
+  - Byte count semantics: **`[INFERRED]`** (reasoning: role in allocator/framing calls and OS conventions; not directly verified inside unread callee).
 - **Default Size (`r2 == 0`)**:
   - **Primary Fallback (`*(0x000081D0)`)**:
     - Instruction `0xFCEF34CA` (`0x684D`: `ldr r5, [r1, #4]`) dereferences `*(0x000081D0)` (where `r1 = 0x000081CC` is verified in `PORT30-ROM-CREATETASK-LIT`) `[VERIFIED]`.
@@ -180,12 +184,12 @@ This section evaluates each item left open or classified as `[INFERRED]` / `[UNK
     - Those runtime writers are unread in ROM and their addresses are not evidenced in any committed doc (`UNKNOWN-location`).
     - Status: **`[UNKNOWN]`**.
   - **Secondary Fallback (`*(0x0000811C)`)**:
-    - In `alloc_task_stack_tcb`, when `r3 == 0` (due to primary default yielding zero), instruction `0xFCEEF5E2` (`0x4BF3`: `ldr r3, [pc, #972]`) loads literal `0x0000811C` at `0xFCEEF9B0` and `0xFCEEF5E4` (`0x681B`: `ldr r3, [r3]`) dereferences `*(0x0000811C)` `[VERIFIED]`.
+    - In `alloc_task_stack_tcb`, when `r3 == 0` (due to primary default yielding zero), instruction `0xFCEEF5E2` (`0x4BF3`: `ldr r3, [pc, #972]`) loads literal `0x0000811C` at `0xFCEEF9B0` and `0xFCEEF5E4` (`0x681B`: `ldr r3, [r3]`) loads secondary fallback `*(0x811C)` `[VERIFIED]`.
     - Range `PORT30-ROM-INIT-811C` (`0xFCE91170..0xFCE9118F`, 32 B) contains the ROM source word copied to RAM `0x0000811C` via early boot Copy Loop 3. ROM address $0\text{xFCE91058} + (0\text{x811C} - 0\text{x8000}) = \mathbf{0\text{xFCE91174}}$ holds 32-bit word **`0x00000000`** (SHA-256 `66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925`) `[VERIFIED]`.
     - Because the initial boot value is `0x00000000`, the runtime value at `*(0x0000811C)` depends entirely on runtime writers modifying `0x811C`.
     - Those runtime writers are unread in ROM and unlocalised (`UNKNOWN-location`).
     - Status: **`[UNKNOWN]`**.
-- **Verdict**: Explicit stack size is **`[VERIFIED]`**; runtime default stack size on both fallback paths is **`[UNKNOWN]`**.
+- **Verdict**: Explicit stack size forwarding and storage is **`[VERIFIED]`**; stack size byte semantics is **`[INFERRED]`**; runtime default stack size on both fallback paths and callee units/semantics inside `0xFCEF08AE` / `0xFCEF0850` remain **`[UNKNOWN]`**.
 
 ### 3.8 The `r2` Stack Alignment `[UNKNOWN]`
 - **Audit of Read Routines**:
@@ -205,11 +209,11 @@ This section evaluates each item left open or classified as `[INFERRED]` / `[UNK
   - Range `PORT30-ROM-SLEEPTASK` (`0xFCEF33A0..0xFCEF33DF`, 64 B, SHA-256 `ee0ef02f81b7f50a81c60d40a752542ff09be03a185eb3d5d69119c4cf0f3c61`).
   - Entry point is `0xFCEF33B4` (VMA `0xBFE14968`): `push {r2, r3, r4, lr}` (`0xB51C`), `mov r4, r0` (`0x4604`), preserving incoming delay argument in `r4`. Preceding bytes `0xFCEF33A0..0xFCEF33B2` are the epilogue of the previous function (`bx lr` at `0xFCEF33B2: 0x4770`) `[VERIFIED]`.
   - Instruction sequence inside read slice:
-    - `0xFCEF33B8..0xFCEF33BC`: `ldr r0, [pc, #0xA4]`, `ldr r0, [r0]`, `cmp r0, #0` tests kernel state variable.
-    - `0xFCEF33BE`: `ble 0xBFE1498C` branches to panic `DebugAssert` (`0xFCEF33C8: bl ...`).
-    - `0xFCEF33CC..0xFCEF33D0`: `ldr r0, [pc, #0xA0]`, `ldr r0, [r0]`, `cmp r0, #0` tests second kernel state variable.
-    - `0xFCEF33D2`: `ble 0xBFE149A0` branches to panic `DebugAssert` (`0xFCEF33DC: bl ...`).
-  - The authorized 64-byte slice ends at `0xFCEF33DF`, which is still inside these initial precondition checks. It does not contain the timer programming, delay calculation, tick conversion, or sleep dispatch logic.
+    - `0xFCEF33B8..0xFCEF33BC`: `ldr r0, [pc, #0xA4]` (`0x4829`), `ldr r0, [r0]` (`0x6800`), `cmp r0, #0` (`0x2800`) tests first kernel state variable.
+    - `0xFCEF33BE` (`0xDD05`: `ble +10`): the branch target is ROM `0xFCEF33CC` / ATCM `0xBFE14980`. When taken, this branch **skips** the first assertion failure call. If not taken, execution falls through into the panic `DebugAssert` invocation at `0xFCEF33C0..0xFCEF33CA` (`0xFCEF33C8: bl 0xBFE13E78`).
+    - `0xFCEF33CC..0xFCEF33D0`: at branch target ROM `0xFCEF33CC` / ATCM `0xBFE14980`, `ldr r0, [pc, #0xA0]` (`0x4828`), `ldr r0, [r0]` (`0x6800`), `cmp r0, #0` (`0x2800`) tests second kernel state variable.
+    - `0xFCEF33D2` (`0xDD05`: `ble +10`): the branch target is ROM `0xFCEF33E0` / ATCM `0xBFE14994`. When taken, this branch **skips** the second assertion failure call. If not taken, execution falls through into the panic `DebugAssert` invocation at `0xFCEF33D4..0xFCEF33DE` (`0xFCEF33DC: bl 0xBFE13E78`).
+  - The branch target `0xFCEF33E0` (ATCM `0xBFE14994`) is exactly one byte past the read range end (`0xFCEF33DF`), so the code at that target is unread/UNKNOWN. The authorized 64-byte slice ends at `0xFCEF33DF`, which covers only routine entry and these precondition checks. It does not contain the timer programming, delay calculation, tick conversion, or sleep dispatch logic.
   - Status: Routine entry and argument preservation in `r4` are **`[VERIFIED]`**; delay units and millisecond tick scaling remain **`[UNKNOWN]`** (requires reading beyond `0xFCEF33DF`).
 - **Item 7: Downstream Activation Callee 1: TCB Lookup (`0xFCEF007E`)**:
   - Range `PORT30-ROM-ACTIVATE-CALLEE1` (`0xFCEF0070..0xFCEF00EF`, 128 B, SHA-256 `efb95b96c288b0cb1e153cfba32a660e2dd2bdeac20223bb22eb4a3722cbc7ac`).
@@ -251,10 +255,15 @@ r0 (Task Name Pointer)   [INFERRED]                   [VERIFIED] Loaded from des
 r1 (Scheduling Priority) [INFERRED]                   [VERIFIED] Range check (1 <= r1 <= 32); stored
                                                       to [TCB, #0x8] and [TCB, #0x46] at 0xFCEF022E..
                                                       0xFCEF0234; consumed by scheduler at 0xFCEEF458.
-r2 (Task Stack Size)     [INFERRED]                   [VERIFIED] Forwarded as r1 to dynamic allocator
+r2 (Forwarding & Storage)[INFERRED]                   [VERIFIED] Forwarded as r1 to dynamic allocator
                                                       0xBFE11E62 at 0xFCEF01DE..0xFCEF01E0 and framing
                                                       routine 0xBFE11E04 at 0xFCEF0202..0xFCEF0204;
                                                       stored to [TCB, #0x20] at 0xFCEF0246..0xFCEF0248.
+r2 (Stack Size in Bytes) [INFERRED]                   [INFERRED] Inferred from role in allocator/framing
+                                                      call and standard OS conventions; exact byte count
+                                                      semantics not proven without reading 0xFCEF08AE.
+r2 Units/Semantics       [UNKNOWN]                    [UNKNOWN] Units/semantics (bytes vs other) inside
+                                                      0xFCEF08AE / 0xFCEF0850 (not read) remain unverified.
 r3 (Task Entry Point)    [INFERRED]                   [VERIFIED] Check r3 != 0; stored to [TCB, #0xC]
                                                       at 0xFCEF023C..0xFCEF023E.
 sp[0] (Context Storage)  [INFERRED]                   [VERIFIED] Loaded from caller stack [sp, #0x28];
@@ -264,7 +273,8 @@ sp[0] (Task Delivery)    [UNKNOWN]                    [UNKNOWN] No dispatcher/sc
 Stack Allocator Identity [INFERRED]                   [UNKNOWN] desc+12 is hardcoded to 0; 0xBFE11746
                                                       delegates dynamic allocation to 0xBFE11E62
                                                       (ROM 0xFCEF08AE); internal allocator unread.
-Stack Size (Explicit)    [VERIFIED]                   [VERIFIED] Preserved and passed to allocator.
+Stack Size (Explicit)    [VERIFIED]                   [VERIFIED] Forwarded and stored (preservation verified;
+                                                      byte semantics inferred; callee units unknown).
 Stack Size (Default)     [UNKNOWN]                    [UNKNOWN] ROM initializers at 0xFCE91228 (81D0)
                                                       and 0xFCE91174 (811C) verified as 0x00000000;
                                                       runtime values depend on unlocalised writers.
@@ -272,7 +282,8 @@ Stack Alignment          [UNKNOWN]                    [UNKNOWN] No alignment mas
                                                       alloc_task_stack_tcb, or 0xBFE11746; alignment
                                                       enforced downstream by 0xBFE11E62/0xBFE11E04 unread.
 SleepTask Tick Scaling   [UNKNOWN]                    [UNKNOWN] Range ends at 0xFCEF33DF inside
-                                                      precondition checks; tick scaling unread.
+                                                      precondition checks (skips to 0xFCEF33CC and
+                                                      0xFCEF33E0); tick scaling unread.
 ========================================================================================================
 ```
 
@@ -288,11 +299,12 @@ Under the strict project decision rule mandated by the task specification:
 > [!WARNING]
 > **Final Verdict for PORT-30 T1**: **`NO-GO`**
 >
-> While incoming parameter extraction for `r0` (name string pointer), `r1` (scheduling priority), `r2` (stack size in bytes), and `sp[0]` (storage into `[TCB + 0x10]`), as well as task entry point `r3`, are certified as **`[VERIFIED]`**, the remaining elements required for GO are not fully verified:
-> 1. **Stack Allocator Internal Identity & Alignment**: `CreateTask` callers unconditionally pass `desc + 12 == 0`, causing `0xBFE11746` to fall through `cbnz r6` (`0xFCEF01DC`) and invoke dynamic allocator `0xBFE11E62` (`ROM 0xFCEF08AE`). However, routine `0xBFE11E62` and downstream framing helper `0xBFE11E04` (`ROM 0xFCEF0850`) lie outside the read slices. Their heap mechanism, allocation pool, and buffer alignment enforcement (4-byte vs 8-byte) remain **`[UNKNOWN]`**.
-> 2. **Runtime Default Stack Size**: The ROM initializers for both fallback paths (`*(0x000081D0)` and `*(0x0000811C)`) were read and verified as `0x00000000` (zero). Their runtime values depend on initialization writers whose ROM locations are unevidenced and remain **`[UNKNOWN]`**.
-> 3. **Task-Argument Delivery to Spawned Task**: Storage of `sp[0]` into `[TCB + 0x10]` is verified, but no execution-time dispatcher or context-switch consumer has been read delivering that value to the spawned task function, leaving delivery **`[UNKNOWN]`**.
-> 4. **`SleepTask` Tick Scaling**: Read slice `0xFCEF33A0..0xFCEF33DF` ends inside precondition checks, leaving delay units and millisecond tick scaling **`[UNKNOWN]`**.
+> While incoming parameter extraction for `r0` (name string pointer), `r1` (scheduling priority), argument forwarding and TCB storage of `r2` and `sp[0]` (into `[TCB + 0x10]`), as well as task entry point `r3`, are certified as **`[VERIFIED]`**, the remaining elements required for GO are not fully verified:
+> 1. **`r2` Stack Size Semantics & Callee Units**: The cited instructions establish only that `r2` is forwarded to the allocator/framing calls and stored into `[TCB + 0x20]`. That `r2` represents a stack size in bytes is **`[INFERRED]`** from OS conventions and callee parameter roles. Neither the allocator (`0xBFE11E62` / ROM `0xFCEF08AE`) nor the framing helper (`0xBFE11E04` / ROM `0xFCEF0850`) was read, leaving `r2` units/semantics (bytes vs other) inside `0xFCEF08AE` / `0xFCEF0850` **`[UNKNOWN]`**.
+> 2. **Stack Allocator Internal Identity & Alignment**: `CreateTask` callers unconditionally pass `desc + 12 == 0`, causing `0xBFE11746` to fall through `cbnz r6` (`0xFCEF01DC`) and invoke dynamic allocator `0xBFE11E62` (`ROM 0xFCEF08AE`). However, routine `0xBFE11E62` and downstream framing helper `0xBFE11E04` (`ROM 0xFCEF0850`) lie outside the read slices. Their heap mechanism, allocation pool, and buffer alignment enforcement (4-byte vs 8-byte) remain **`[UNKNOWN]`**.
+> 3. **Runtime Default Stack Size**: The ROM initializers for both fallback paths (`*(0x000081D0)` and `*(0x0000811C)`) were read and verified as `0x00000000` (zero). Their runtime values depend on initialization writers whose ROM locations are unevidenced and remain **`[UNKNOWN]`**.
+> 4. **Task-Argument Delivery to Spawned Task**: Storage of `sp[0]` into `[TCB + 0x10]` is verified, but no execution-time dispatcher or context-switch consumer has been read delivering that value to the spawned task function, leaving delivery **`[UNKNOWN]`**.
+> 5. **`SleepTask` Tick Scaling**: Read slice `0xFCEF33A0..0xFCEF33DF` ends inside precondition checks (branching to `0xFCEF33E0` just beyond the range end), leaving delay units and millisecond tick scaling **`[UNKNOWN]`**.
 >
 > Under the fail-closed project gate rule, these remaining UNKNOWNs compel an explicit **`NO-GO`** verdict.
 
@@ -302,12 +314,13 @@ The remaining uncertainties are now narrowed to the following concrete items:
 
 | # | Item | Target Routine / Variable | Target VMA | Proposed ROM Range | Slice Size | Technical Objective & Justification |
 |:---:|:---:|---|:---:|:---:|:---:|---|
-| **1** | **(b)** | Dynamic Stack Allocator Callee Entry (`0xBFE11E62`) | `0xBFE11E62` (ATCM Thumb-2) | `0xFCEF0880..0xFCEF097F` | 256 B | Invoked by `0xBFE11746` at `0xFCEF01E0` (`bl 0xBFE11E62`) with `r1 = stack_size` when `desc + 12 == 0`. Mapped via Copy Loop 1 formula $\text{ROM} = 0\text{xFCEEF24C} + (0\text{xBFE11E62} - 0\text{xBFE10800}) = \mathbf{0\text{xFCEF08AE}}$ (entry veneer at `0xFCEF089C..0xFCEF08AF`). Reading this 256-byte slice ($\le 4\text{ KiB}$) inspects the dynamic allocator entry, verifies how `stack_size` is handled, and determines whether buffer alignment is enforced or delegated to a secondary sub-allocator (e.g. `0xFCEF2F7A` / `0xBFE1452E`). Note: bounds of any downstream sub-allocator body remain UNKNOWN until this entry is inspected. |
-| **2** | **(b)** | Task Stack Frame Setup & Initialization Routine (`0xBFE11E04`) | `0xBFE11E04` (ATCM Thumb-2) | `0xFCEF0850..0xFCEF088F` | 64 B | Invoked by `0xBFE11746` at `0xFCEF0204` (`bl 0xBFE11E04`) with `r0 = stack_buffer` (returned from `0xBFE11E62`) and `r1 = stack_size`. Mapped via formula $\text{ROM} = 0\text{xFCEEF24C} + (0\text{xBFE11E04} - 0\text{xBFE10800}) = \mathbf{0\text{xFCEF0850}}$. Reading this bounded 64-byte slice inspects initial stack framing, verifying whether the initial stack pointer is adjusted or aligned (4-byte vs 8-byte) within the allocated buffer. |
-| **3** | **(b)** | Task Dispatcher / Context Delivery Consumer (`sp[0]` Delivery) | Downstream scheduler / dispatcher | `UNKNOWN-location` | Unbounded | Storage into `[TCB + 0x10]` is verified, but downstream task dispatcher that activates the task and proves delivery of `[TCB + 0x10]` to `r0` at task entry point is not localized in read slices. Requires an owner-authorized bounded search. |
-| **4** | **(b)** | Runtime Writer for Primary Default Stack Size (`*(0x000081D0)`) | `0x000081D0` (Low RAM destination) | `UNKNOWN-location` | Unbounded | ROM initializer at `0xFCE91228` is verified as `0x00000000`. Resolving the runtime default stack size requires locating the routine that stores the default stack size into `0x000081D0` during kernel startup. Unevidenced in committed documentation; requires an owner-authorized bounded search in a future milestone. |
-| **5** | **(b)** | Runtime Writer for Secondary Default Stack Size (`*(0x0000811C)`) | `0x0000811C` (Low RAM destination) | `UNKNOWN-location` | Unbounded | ROM initializer at `0xFCE91174` is verified as `0x00000000`. Resolving the secondary default stack size requires locating the routine that stores into `0x0000811C`. Unevidenced in committed documentation; requires an owner-authorized bounded search in a future milestone. |
-| **6** | **(d)** | `SleepTask` Delay Units & Millisecond Tick Scaling Body | `0xBFE14994` (ATCM Thumb-2) | `0xFCEF33E0..0xFCEF345F` | 128 B | Continuation of `SleepTask` (`0xBFE14968`) immediately following slice `0xFCEF33A0..0xFCEF33DF`. Reading this 128-byte slice inspects the routine body beyond initial precondition checks, verifying delay calculation, tick conversion formula, and timer dispatch. |
+| **1** | **(b)** | Dynamic Stack Allocator Callee Entry (`0xBFE11E62`) | `0xBFE11E62` (ATCM Thumb-2) | `0xFCEF0880..0xFCEF097F` | 256 B | Invoked by `0xBFE11746` at `0xFCEF01E0` (`bl 0xBFE11E62`) with `r1 = stack_size` when `desc + 12 == 0`. Mapped via Copy Loop 1 formula $\text{ROM} = 0\text{xFCEEF24C} + (0\text{xBFE11E62} - 0\text{xBFE10800}) = \mathbf{0\text{xFCEF08AE}}$. The cited call establishes only the target `0xFCEF08AE` (ATCM `0xBFE11E62`). Everything downstream of this target (allocator identity, internal behaviour, returned-buffer alignment) is UNKNOWN without speculation. Reading this bounded 256-byte slice ($\le 4\text{ KiB}$) inspects the target entry to determine allocator identity, handling of requested size, and buffer alignment. |
+| **2** | **(b)** | Task Stack Frame Setup & Initialization Routine (`0xBFE11E04`) | `0xBFE11E04` (ATCM Thumb-2) | `0xFCEF0850..0xFCEF088F` | 64 B | Invoked by `0xBFE11746` at `0xFCEF0204` (`bl 0xBFE11E04`) with `r0 = stack_buffer` (returned from `0xBFE11E62`) and `r1 = stack_size`. Mapped via formula $\text{ROM} = 0\text{xFCEEF24C} + (0\text{xBFE11E04} - 0\text{xBFE10800}) = \mathbf{0\text{xFCEF0850}}$. Reading this bounded 64-byte slice inspects initial stack framing, verifying whether `r1` units are treated as bytes vs other, and whether the initial stack pointer is adjusted or aligned (4-byte vs 8-byte) within the allocated buffer. |
+| **3** | **(b)** | `r2` Units/Semantics (bytes vs other) inside `0xFCEF08AE` / `0xFCEF0850` (not read) | `0xBFE11E62` / `0xBFE11E04` | `0xFCEF0850..0xFCEF097F` (spanned by items 1 & 2) | 304 B total | Cited calls at `0xFCEF01E0` and `0xFCEF0204` forward `r2` in `r1`. Neither `0xFCEF08AE` nor `0xFCEF0850` was read, so whether `r1` represents a byte count, word count, or other scaled unit is UNKNOWN. Inspecting proposed ranges `0xFCEF0850..0xFCEF088F` and `0xFCEF0880..0xFCEF097F` resolves the callee arithmetic and unit interpretation. |
+| **4** | **(b)** | Task Dispatcher / Context Delivery Consumer (`sp[0]` Delivery) | Downstream scheduler / dispatcher | `UNKNOWN-location` | Unbounded | Storage into `[TCB + 0x10]` is verified, but downstream task dispatcher that activates the task and proves delivery of `[TCB + 0x10]` to `r0` at task entry point is not localized in read slices. Requires an owner-authorized bounded search. |
+| **5** | **(b)** | Runtime Writer for Primary Default Stack Size (`*(0x000081D0)`) | `0x000081D0` (Low RAM destination) | `UNKNOWN-location` | Unbounded | ROM initializer at `0xFCE91228` is verified as `0x00000000`. Resolving the runtime default stack size requires locating the routine that stores the default stack size into `0x000081D0` during kernel startup. Unevidenced in committed documentation; requires an owner-authorized bounded search in a future milestone. |
+| **6** | **(b)** | Runtime Writer for Secondary Default Stack Size (`*(0x0000811C)`) | `0x0000811C` (Low RAM destination) | `UNKNOWN-location` | Unbounded | ROM initializer at `0xFCE91174` is verified as `0x00000000`. Resolving the secondary default stack size requires locating the routine that stores into `0x0000811C`. Unevidenced in committed documentation; requires an owner-authorized bounded search in a future milestone. |
+| **7** | **(d)** | `SleepTask` Delay Units & Millisecond Tick Scaling Body | `0xBFE14994` (ATCM Thumb-2) | `0xFCEF33E0..0xFCEF345F` | 128 B | Continuation of `SleepTask` (`0xBFE14968`) immediately following slice `0xFCEF33A0..0xFCEF33DF` at skip target `0xFCEF33E0` (ATCM `0xBFE14994`). Reading this 128-byte slice inspects the routine body beyond initial precondition checks, verifying delay calculation, tick conversion formula, and timer dispatch. |
 
 ---
 
@@ -318,5 +331,5 @@ The remaining uncertainties are now narrowed to the following concrete items:
 - [x] **Listed ranges that were unclear, had no exact bounds or exceeded 4 KiB are recorded as UNKNOWN with a reason and were not read**: Confirmed in §4 (writers of `0x81D0` and `0x811C` marked `UNKNOWN-location`; downstream dispatcher marked `UNKNOWN-location`; RAM users item marked unread due to >4 KiB size and unbounded ROM location).
 - [x] **The PORT-30 manifest and trusted-scopes files exist, and `python3 -B tools/port11c_evidence_validator.py` on them reports VALID with 0 errors. The command and output are quoted in the doc**: Confirmed in §1.2.
 - [x] **Each PORT-29 UNKNOWN item (`r0`, `r1`, `r2`, `sp[0]` roles; `r2` stack allocator, size, alignment; any others listed) has a VERIFIED/INFERRED/UNKNOWN label with an exact address plus instruction words or disassembly reasoning**: Confirmed in §3.1–§3.9.
-- [x] **The doc ends with an explicit GO or NO-GO verdict. GO only if all of the `r0`/`r1`/`r2`/`sp[0]` roles and the `r2` stack allocator/size/alignment are VERIFIED. On NO-GO, an exact narrower UNKNOWN list is given**: Confirmed in §6.1 (`NO-GO`) and §6.2 (narrower UNKNOWN list covering dynamic allocator callee `0xBFE11E62`, framing routine `0xBFE11E04`, dispatcher gap, unlocalised default stack size writers, and `SleepTask` tick scaling).
+- [x] **The doc ends with an explicit GO or NO-GO verdict. GO only if all of the `r0`/`r1`/`r2`/`sp[0]` roles and the `r2` stack allocator/size/alignment are VERIFIED. On NO-GO, an exact narrower UNKNOWN list is given**: Confirmed in §6.1 (`NO-GO`) and §6.2 (narrower UNKNOWN list covering dynamic allocator callee `0xBFE11E62`, framing routine `0xBFE11E04`, `r2` callee units/semantics, dispatcher gap, unlocalised default stack size writers, and `SleepTask` tick scaling).
 - [x] **No ROM bytes, binaries or build outputs are committed, and no files outside the allowed paths are changed**: Confirmed. Only allowed files modified/created.
