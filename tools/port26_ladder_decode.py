@@ -6,36 +6,123 @@ Task: p26-t1-ladder-decode
 Milestone: PORT-26 (Ladder Ingest & Short-Press Triage)
 
 Single Source of Truth & Citations:
-- Pulse-Code Table:
-  - docs/PORT25_LADDER_FIX_CANDIDATE.md:328-354 (Stage-Code Table, Codes 1..7, 11..15, 21..26, 31..35, 41..44)
-  - docs/PORT25_LADDER_FIX_CANDIDATE.md:358-359 (Codes 28 and 29: Fail path when G3X_POWERON_FIX=0)
+- p25-t3b Build Source Emit Sites:
+  - chdk-port/platform/g3x/sub/110c/loader_main_breadcrumb.c:43-154:
+    Loader ladder emit checkpoints for Steps 1..7:
+    * Line 44: Step 1 (after_prologue -> STAGE_LOADER_AFTER_PROLOGUE)
+    * Line 98: Step 2 (after_copy -> STAGE_LOADER_AFTER_COPY)
+    * Line 115: Step 3 (before_dcache -> STAGE_LOADER_BEFORE_DCACHE)
+    * Line 126: Step 4 (after_dcache -> STAGE_LOADER_AFTER_DCACHE)
+    * Line 131: Step 5 (before_icache -> STAGE_LOADER_BEFORE_ICACHE)
+    * Line 143: Step 6 (after_icache -> STAGE_LOADER_AFTER_ICACHE)
+    * Line 151: Step 7 (before_bx -> STAGE_LOADER_BEFORE_BX)
+  - tools/build_candidate_port25_ladder_fix.py:90-128:
+    generate_boot_prototype_ladder_c() stage injection replacements injecting
+    22 CORE_LADDER_PULSE_xx macro calls into boot_prototype.c:
+    * Lines 110-114: Codes 11, 12, 13, 14, 15 (Core Group 1: Pre-Kernel & Trampoline)
+    * Lines 115-119: Codes 21, 22, 23, 24, 25, 26 (Core Group 2: Startup Creation & Power Checks)
+    * Lines 101-102: Codes 28, 29 (Native Power-Cut Failure Path for G3X_POWERON_FIX=0)
+    * Lines 120-124: Codes 31, 32, 33, 34, 35 (Core Group 3: task_Startup_my Pre-Watchdog)
+    * Lines 124-126: Codes 41, 42, 43, 44 (Core Group 4: task_Startup_my Post-Watchdog Arming)
+  - chdk-port/platform/g3x/sub/110c/led_breadcrumb.h:217-266:
+    Macro definitions for framed two-digit LED pulse sequences:
+    #define CORE_LADDER_PULSE_<XY> CORE_LADDER_FRAME(X, Y)
+- Architectural Specification & Canonical Symbol Mapping:
+  - docs/PORT25_LADDER_FIX_CANDIDATE.md:328-354 (Section 5 Stage-Code Table, Codes 1..7, 11..15, 21..26, 31..35, 41..44)
+  - docs/PORT25_LADDER_FIX_CANDIDATE.md:358-359 (Section 5.1 Native Power-Cut Failure Path, Codes 28 and 29)
   - docs/PORT25_SHORT_PRESS_LOCALISE.md:328-351 (Proposed Breadcrumb Placement in boot_prototype.c)
   - docs/PORT25_OWNER_TRIAL_PLAN.md:199-233 (Owner Reading Table: Mapping LED Codes to Stages and T2 Candidates)
-  - chdk-port/platform/g3x/sub/110c/boot_prototype.c:88-442 (CHDK boot prototype stages)
-  - chdk-port/platform/g3x/sub/110c/loader_main_breadcrumb.c:45-152 (Loader ladder pulse checkpoints, Steps 1..7)
-  - chdk-port/platform/g3x/sub/110c/led_breadcrumb.h:217-266 (CORE_LADDER_PULSE_xx macro definitions)
-  - tools/build_candidate_port25_ladder_fix.py:73-132 (generate_boot_prototype_ladder_c stage injection)
 - Expected Combined Candidate DISKBOOT SHA-256:
   - docs/PORT25_LADDER_FIX_CANDIDATE.md:385 ("9ba62067c17d654a3b8995fc6e8c26176321154054a138a465ca66f9ff763a15")
   - docs/PORT25_OWNER_TRIAL_PLAN.md:30, 51, 81 (Expected candidate size: 124,865 bytes)
 
-Off-By-One Uncertainty Rule Definition:
-  An integer count C is considered adjacent to two valid codes if and only if both
-  (C - 1) and (C + 1) are members of the set of valid table codes. When the owner report
-  flags uncertainty (via uncertain/uncertainty field or uncertainty notation in pulses/notes)
-  AND count C is adjacent to two valid codes ((C - 1) in CODES and (C + 1) in CODES),
-  the reading cannot be definitively attributed to a single execution stage without ambiguity
-  and is classified as AMBIGUOUS. Conversely, if uncertainty is flagged on a count that has
-  at most one adjacent valid code (e.g. boundary codes 1, 7, 11, 15, 21, 26, 28, 29, 31, 35, 41, 44),
-  or if uncertainty is not flagged, the off-by-one ambiguity rule does not trigger.
+Machine-Readable Pulse Table Status & Extraction:
+- [VERIFIED: chdk-port/platform/g3x/sub/110c/loader_main_breadcrumb.c:43-154]:
+  Loader ladder emit sites define Steps 1..7 directly before/after cache operations and relocation.
+- [VERIFIED: tools/build_candidate_port25_ladder_fix.py:90-128]:
+  Build script generate_boot_prototype_ladder_c() injects exactly 22 CORE_LADDER_PULSE_xx macros into boot_prototype.c.
+- [VERIFIED: chdk-port/platform/g3x/sub/110c/led_breadcrumb.h:217-266]:
+  Header defines framed timing macros CORE_LADDER_FRAME(tens, units).
+- [VERIFIED: docs/PORT25_LADDER_FIX_CANDIDATE.md:328-359]:
+  The specification provides the authoritative machine-parseable table mapping pulse counts to stage symbols.
+- [UNKNOWN / INFERRED]:
+  In the C firmware / build source, there is no standalone C lookup table (such as a `const char* stage_names[]` array)
+  pairing integer pulse counts directly to string stage names. Instead, pulse counts are embedded as discrete macro
+  injection calls in tools/build_candidate_port25_ladder_fix.py and step comments in loader_main_breadcrumb.c.
+  The decoder provides extract_build_source_pulse_codes() to parse emit sites directly from the build source,
+  and tests assert that every pulse count in the doc appears as an active LED-ladder emit site in the p25-t3b build source,
+  and that the union of build source emit counts exactly equals the 29 codes of LADDER_STAGE_TABLE.
 
-Classification Categories:
-- CODE_<N>: Valid in-table code count N.
-- NO_PULSES: Zero pulses or 'none' reported.
-- UNKNOWN_CODE: Pulse counts that are not in the table.
-- AMBIGUOUS: Conflicting multiple counts, or a count adjacent to two valid codes with flagged uncertainty.
-- INVALID_CANDIDATE: DISKBOOT SHA-256 does not match the expected combined candidate digest.
-- CONTROL_HELD_O1: Held button press that boots into the stock user interface (positive control).
+Code Range & Classes:
+- Valid Table Code Classes (exactly 29 codes):
+  * Loader (7 codes): CODE_1, CODE_2, CODE_3, CODE_4, CODE_5, CODE_6, CODE_7
+  * Core Group 1 (5 codes): CODE_11, CODE_12, CODE_13, CODE_14, CODE_15
+  * Core Group 2 (6 codes): CODE_21, CODE_22, CODE_23, CODE_24, CODE_25, CODE_26
+  * Native Power-Cut Fail Path (2 codes): CODE_28, CODE_29
+  * Core Group 3 (5 codes): CODE_31, CODE_32, CODE_33, CODE_34, CODE_35
+  * Core Group 4 (4 codes): CODE_41, CODE_42, CODE_43, CODE_44
+- In-Range Gaps within 1..44 (15 gap counts):
+  8, 9, 10, 16, 17, 18, 19, 20, 27, 30, 36, 37, 38, 39, 40.
+  Every in-range gap count maps to UNKNOWN_CODE (with the sole exception of count 27 when flagged uncertain,
+  which maps to AMBIGUOUS because both 26 and 28 are valid table codes).
+- Out-of-Range Counts:
+  Any integer count < 1 or > 44 maps to UNKNOWN_CODE.
+- Special Trial Classes:
+  * NO_PULSES: Zero pulses observed ('none', 0, null, or empty string).
+  * UNKNOWN_CODE: Pulse counts not registered in the 29-code table.
+  * AMBIGUOUS: Conflicting multiple counts reported, or a count adjacent to two valid codes with owner uncertainty.
+  * INVALID_CANDIDATE: Candidate DISKBOOT SHA-256 does not match the expected combined-candidate digest.
+  * CONTROL_HELD_O1: Held button press that boots into the stock user interface (positive control).
+
+Off-By-One Uncertainty Rule (AMBIGUOUS Classification):
+- Purpose:
+  Human observation of LED flashes is subject to perceptual ambiguity or blink-counting errors.
+  When an owner flags uncertainty in a trial report, an off-by-one count could represent either of
+  two adjacent stages. To avoid false triage, the reading must be classified as AMBIGUOUS.
+- When it applies:
+  The rule triggers IF AND ONLY IF:
+  1. The owner trial report explicitly flags uncertainty (see spelling variants below); AND
+  2. The reported pulse count C is adjacent to TWO valid codes in the source table:
+     both (C - 1) in LADDER_STAGE_TABLE and (C + 1) in LADDER_STAGE_TABLE.
+  When both conditions hold, the trial outcome is classified as `AMBIGUOUS`.
+- Which neighbours count:
+  Only immediate integer predecessor (C - 1) and successor (C + 1) that are valid members of
+  the 29-code `LADDER_STAGE_TABLE`.
+  * Counts with two valid neighbours:
+    - Loader: 2, 3, 4, 5, 6 (1 and 7 have only one neighbour in the table).
+    - Core Group 1: 12, 13, 14 (11 and 15 have only one neighbour in the table).
+    - Core Group 2: 22, 23, 24, 25 (21 and 26 have only one neighbour in the table).
+    - Core Group 3: 32, 33, 34 (31 and 35 have only one neighbour in the table).
+    - Core Group 4: 42, 43 (41 and 44 have only one neighbour in the table).
+    - In-range gap 27: (26 in table and 28 in table). If count 27 is reported with uncertainty,
+      it triggers AMBIGUOUS.
+  * Counts with at most one valid neighbour (boundary codes & isolated gaps):
+    - Boundary codes: 1, 7, 11, 15, 21, 26, 28, 29, 31, 35, 41, 44.
+    - Isolated in-range gaps: 8, 9, 10, 16, 17, 18, 19, 20, 30, 36, 37, 38, 39, 40.
+    For these counts, the off-by-one rule does NOT trigger AMBIGUOUS even if uncertainty is flagged;
+    they are classified as their valid code (with an explanatory note) or UNKNOWN_CODE.
+- Owner Uncertainty Flag Spelling:
+  The decoder recognizes uncertainty indications in both JSON and key=value formats:
+  1. JSON Format:
+     - Top-level boolean or truthy string field:
+       `"uncertain": true` (or `"true"`, `"yes"`, `"1"`)
+       `"uncertainty": true` (or `"true"`, `"yes"`, `"1"`)
+     - Inline pulse annotation:
+       `"pulses": "24 (uncertain)"` or `"pulses": "24?"`
+     - Descriptive notes field:
+       `"notes": "... uncertain ..."` (case-insensitive substring)
+     Note: explicit negative values (`"uncertain": false`, `"uncertain": "false"`, `"uncertain": 0`)
+     are recognized as FALSE and do NOT trigger uncertainty.
+  2. Simple Key=Value Text Format:
+     - Field line:
+       `uncertain = true` (or `yes`, `1`)
+       `uncertainty = true` (or `yes`, `1`)
+     - Inline pulse annotation:
+       `pulses = 24 (uncertain)` or `pulses = 24?`
+     - Descriptive notes line:
+       `notes = count uncertain due to rapid blinking`
+     Note: explicit negative lines (`uncertain = false`, `uncertain = no`, `uncertain = 0`)
+     are recognized as FALSE.
 
 Phase 0 Safety Governance:
 - Pure Python standard library only.
@@ -62,8 +149,12 @@ EXPECTED_PORT25_COMBINED_DISKBOOT_SHA256 = (
 )
 EXPECTED_PORT25_COMBINED_DISKBOOT_SIZE = 124865
 
-# Comprehensive ladder stage-code table
+# Comprehensive ladder stage-code table (exactly 29 codes)
 # Primary source: docs/PORT25_LADDER_FIX_CANDIDATE.md:328-354, 358-359
+# Build sources:
+#   - chdk-port/platform/g3x/sub/110c/loader_main_breadcrumb.c:43-154 (Codes 1..7)
+#   - tools/build_candidate_port25_ladder_fix.py:90-128 (Codes 11..15, 21..26, 28..29, 31..35, 41..44)
+#   - chdk-port/platform/g3x/sub/110c/led_breadcrumb.h:217-266 (CORE_LADDER_PULSE_xx macro definitions)
 LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
     # Loader stages (1-7)
     1: {
@@ -368,7 +459,7 @@ NEXT_STAGE_MAP: Dict[int, Optional[str]] = {
     44: "STOCK_BOOT_SUCCESS",
 }
 
-# All valid trial classification categories
+# All valid trial classification categories: exactly 29 CODE_<N> classes plus 5 special categories
 VALID_CLASSES: Set[str] = {
     *(f"CODE_{c}" for c in LADDER_STAGE_TABLE),
     "NO_PULSES",
@@ -409,6 +500,92 @@ def validate_safety_path(path: Union[str, Path]) -> Path:
     return p
 
 
+def is_truthy(val: Any) -> bool:
+    """Evaluates whether a value represents boolean True.
+    
+    Correctly recognizes explicit boolean False, and strings like 'false', '0', 'no', 'none', 'null' as False.
+    """
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return val != 0
+    if isinstance(val, str):
+        v = val.strip().lower()
+        if v in ("true", "yes", "1", "t", "y"):
+            return True
+        if v in ("false", "no", "0", "f", "n", "", "none", "null"):
+            return False
+    return False
+
+
+def extract_build_source_pulse_codes(
+    repo_root: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Extracts pulse codes and emit sites directly from the p25-t3b build source files.
+    
+    Citations:
+      - Loader steps (1..7): chdk-port/platform/g3x/sub/110c/loader_main_breadcrumb.c:43-154
+      - Macro injections (22 codes): tools/build_candidate_port25_ladder_fix.py:90-128
+      - Framed timing macro defs: chdk-port/platform/g3x/sub/110c/led_breadcrumb.h:217-266
+    """
+    if repo_root is None:
+        repo_root = REPO_ROOT
+
+    loader_path = repo_root / "chdk-port" / "platform" / "g3x" / "sub" / "110c" / "loader_main_breadcrumb.c"
+    build_script_path = repo_root / "tools" / "build_candidate_port25_ladder_fix.py"
+    header_path = repo_root / "chdk-port" / "platform" / "g3x" / "sub" / "110c" / "led_breadcrumb.h"
+
+    validate_safety_path(loader_path)
+    validate_safety_path(build_script_path)
+    validate_safety_path(header_path)
+
+    # 1. Parse loader ladder step checkpoints from loader_main_breadcrumb.c:43-154
+    with open(loader_path, "r", encoding="utf-8") as f:
+        loader_content = f.read()
+
+    loader_steps: Dict[int, str] = {}
+    blocks = re.findall(r"#if defined\(LED_LADDER\)(.*?)(?:#endif|#else)", loader_content, re.DOTALL)
+    for b in blocks:
+        m = re.search(r"//\s*Step\s*(\d+):\s*([a-zA-Z0-9_]+)", b)
+        if m:
+            step_num = int(m.group(1))
+            step_name = m.group(2).upper()
+            loader_steps[step_num] = f"STAGE_LOADER_{step_name}"
+
+    # 2. Parse core injected pulse macros in tools/build_candidate_port25_ladder_fix.py:90-128
+    with open(build_script_path, "r", encoding="utf-8") as f:
+        build_content = f.read()
+
+    core_injected_codes: List[int] = []
+    m_func = re.search(r"def generate_boot_prototype_ladder_c\(\).*?return src", build_content, re.DOTALL)
+    if m_func:
+        func_body = m_func.group(0)
+        core_injected_codes = sorted(set(int(x) for x in re.findall(r"CORE_LADDER_PULSE_(\d+)", func_body)))
+    else:
+        core_injected_codes = sorted(set(int(x) for x in re.findall(r"CORE_LADDER_PULSE_(\d+)", build_content)))
+
+    # 3. Parse header framed pulse macro definitions in led_breadcrumb.h:217-266
+    with open(header_path, "r", encoding="utf-8") as f:
+        header_content = f.read()
+
+    header_macro_codes: List[int] = sorted(set(
+        int(m.group(1))
+        for m in re.finditer(
+            r"#define\s+(?:CORE|CHILD)_LADDER_PULSE_(\d+)\s+CORE_LADDER_FRAME\((\d+),\s*(\d+)\)",
+            header_content,
+        )
+    ))
+
+    all_emitted_codes = sorted(set(list(loader_steps.keys()) + core_injected_codes))
+
+    return {
+        "loader_steps": loader_steps,
+        "core_injected_codes": core_injected_codes,
+        "header_macro_codes": header_macro_codes,
+        "all_emitted_codes": all_emitted_codes,
+    }
+
+
 def parse_ladder_table_from_source(
     doc_path: Optional[Path] = None,
 ) -> Dict[int, Dict[str, Any]]:
@@ -441,7 +618,6 @@ def parse_ladder_table_from_source(
         timing_state = m.group(5).strip()
         purpose = m.group(6).strip()
 
-        # Find line number in file
         line_num = content[:m.start()].count("\n") + 1
 
         parsed_table[code] = {
@@ -481,6 +657,39 @@ def parse_ladder_table_from_source(
     return parsed_table
 
 
+def parse_ladder_table_from_build_source(
+    repo_root: Optional[Path] = None,
+) -> Dict[int, Dict[str, Any]]:
+    """Validates and extracts the stage table combining build source emit sites and doc stage symbols.
+    
+    Verifies that the p25-t3b build source emit sites exactly match the specification table.
+    """
+    if repo_root is None:
+        repo_root = REPO_ROOT
+
+    doc_path = repo_root / "docs" / "PORT25_LADDER_FIX_CANDIDATE.md"
+    doc_table = parse_ladder_table_from_source(doc_path)
+
+    build_info = extract_build_source_pulse_codes(repo_root)
+    emitted_codes = set(build_info["all_emitted_codes"])
+
+    if emitted_codes != set(doc_table.keys()):
+        raise ValueError(
+            f"Build source emit codes mismatch with doc table: "
+            f"build={sorted(emitted_codes)}, doc={sorted(doc_table.keys())}"
+        )
+
+    # Cross-verify loader stage symbols
+    for step_num, stage_sym in build_info["loader_steps"].items():
+        if doc_table[step_num]["stage_symbol"] != stage_sym:
+            raise ValueError(
+                f"Loader stage symbol mismatch for code {step_num}: "
+                f"build={stage_sym}, doc={doc_table[step_num]['stage_symbol']}"
+            )
+
+    return doc_table
+
+
 def parse_expected_diskboot_sha256(doc_path: Optional[Path] = None) -> str:
     """Parses the expected PORT-25 combined candidate SHA-256 from docs/PORT25_LADDER_FIX_CANDIDATE.md:385."""
     if doc_path is None:
@@ -511,7 +720,8 @@ def parse_owner_report(input_data: Union[str, Path, Dict[str, Any]]) -> Dict[str
       - pulses: integer, list of integers, or 'none'
       - lcd: string
       - inspector_status: string
-      - uncertain / notes: optional flags for ambiguity detection
+      - uncertain / uncertainty: optional flags for ambiguity detection
+      - notes: optional notes
     """
     if isinstance(input_data, dict):
         return dict(input_data)
@@ -603,7 +813,7 @@ def parse_owner_report(input_data: Union[str, Path, Dict[str, Any]]) -> Dict[str
                     else:
                         report[key] = val
         elif key in ("uncertain", "uncertainty"):
-            report["uncertain"] = val.lower() in ("true", "yes", "1")
+            report["uncertain"] = is_truthy(val)
         elif key == "diskboot_sha256":
             report[key] = val.lower()
         elif key == "press":
@@ -619,7 +829,8 @@ def is_count_adjacent_to_two_valid_codes(
     table: Dict[int, Dict[str, Any]] = LADDER_STAGE_TABLE,
 ) -> bool:
     """Evaluates the off-by-one adjacency rule:
-    Returns True if and only if BOTH (count - 1) and (count + 1) are valid codes in table.
+    Returns True if and only if BOTH immediate neighbours (count - 1) and (count + 1)
+    are registered codes in the source table.
     """
     return (count - 1 in table) and (count + 1 in table)
 
@@ -632,7 +843,7 @@ def classify_owner_report(
     """Classifies an owner trial report into a deterministic outcome structure.
     
     Returns a dict with:
-      - class: string
+      - class: string (CODE_<N>, NO_PULSES, UNKNOWN_CODE, AMBIGUOUS, INVALID_CANDIDATE, CONTROL_HELD_O1)
       - last_stage_reached: string or None
       - next_stage: string or None
       - evidence: string citation
@@ -695,7 +906,7 @@ def classify_owner_report(
     # 3. Canonicalize pulses
     # Pulses can be:
     # - 'none' / None / 0 -> NO_PULSES
-    # - list of ints -> single count or AMBIGUOUS (conflicting counts)
+    # - list of ints -> single count or AMBIGUOUS (conflicting multiple counts)
     # - int -> single count
     count_resolved: Optional[int] = None
     is_ambiguous_multiple = False
@@ -703,7 +914,6 @@ def classify_owner_report(
     if pulses_raw in ("none", "null", "NONE", None, "", 0, "0"):
         count_resolved = None
     elif isinstance(pulses_raw, list):
-        # Filter integers
         int_list: List[int] = []
         for x in pulses_raw:
             try:
@@ -726,7 +936,7 @@ def classify_owner_report(
             try:
                 count_resolved = int(pulses_raw.strip())
             except ValueError:
-                # Try finding integer in string
+                # Try finding integer in string (e.g. '24 (uncertain)')
                 m_int = re.search(r"\b(\d+)\b", pulses_raw)
                 if m_int:
                     count_resolved = int(m_int.group(1))
@@ -763,13 +973,25 @@ def classify_owner_report(
     # 4. Check Off-By-One Uncertainty Rule
     # "AMBIGUOUS for conflicting multiple counts, or a count adjacent to two valid codes
     #  when the owner flags uncertainty (an off-by-one rule; define it explicitly and document it)"
-    uncertainty_flagged = (
-        bool(report.get("uncertain"))
-        or bool(report.get("uncertainty"))
-        or "uncertain" in notes_in.lower()
-        or "uncertain" in str(pulses_raw).lower()
-        or "?" in str(pulses_raw)
+    uncertain_val = report.get("uncertain")
+    uncertainty_val = report.get("uncertainty")
+
+    explicit_uncertain = is_truthy(uncertain_val) or is_truthy(uncertainty_val)
+    explicit_not_uncertain = (
+        (uncertain_val is not None and not is_truthy(uncertain_val))
+        or (uncertainty_val is not None and not is_truthy(uncertainty_val))
     )
+
+    if explicit_uncertain:
+        uncertainty_flagged = True
+    elif explicit_not_uncertain:
+        uncertainty_flagged = False
+    else:
+        uncertainty_flagged = (
+            "uncertain" in notes_in.lower()
+            or "uncertain" in str(pulses_raw).lower()
+            or "?" in str(pulses_raw)
+        )
 
     if uncertainty_flagged and is_count_adjacent_to_two_valid_codes(count_resolved, table):
         prev_sym = table[count_resolved - 1]["stage_symbol"]
@@ -786,7 +1008,7 @@ def classify_owner_report(
             ),
         }
 
-    # 5. Check In-Table Code
+    # 5. Check In-Table Code (emits only the 29 registered codes)
     if count_resolved in table:
         entry = table[count_resolved]
         stage_symbol = entry["stage_symbol"]
@@ -808,7 +1030,7 @@ def classify_owner_report(
             "notes": note_text,
         }
 
-    # 6. Out-of-Table Code
+    # 6. Out-of-Table Code (all in-range gaps within 1..44 and out-of-range counts map here)
     return {
         "class": "UNKNOWN_CODE",
         "last_stage_reached": None,

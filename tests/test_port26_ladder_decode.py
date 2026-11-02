@@ -8,14 +8,19 @@ Task: p26-t1-ladder-decode
 Coverage Requirements:
 1. Every table code in LADDER_STAGE_TABLE (29 codes: 1..7, 11..15, 21..26, 28..29, 31..35, 41..44).
 2. 'none' / zero pulses -> NO_PULSES.
-3. Out-of-table counts -> UNKNOWN_CODE.
+3. Out-of-table counts and all in-range gaps within 1..44 -> UNKNOWN_CODE.
 4. Off-by-one ambiguity (conflicting multiple counts, count adjacent to two valid codes with uncertainty).
-5. Wrong candidate hash -> INVALID_CANDIDATE.
-6. Held-press control reaching stock UI -> CONTROL_HELD_O1.
-7. Refusal of forbidden paths (.bin, .rom, PRIMARY*).
-8. Both input formats (JSON and key=value text) producing byte-identical outputs.
-9. Table-equals-source consistency test verifying runtime parsing matches in-tool table.
-10. Deterministic byte-identical JSON outputs.
+5. Comprehensive owner-uncertainty flag spelling variants in both JSON and key=value formats.
+6. Wrong candidate hash -> INVALID_CANDIDATE.
+7. Held-press control reaching stock UI -> CONTROL_HELD_O1.
+8. Refusal of forbidden paths (.bin, .rom, PRIMARY*).
+9. Both input formats (JSON and key=value text) producing byte-identical outputs.
+10. Single source of truth consistency:
+    - Runtime parsing of docs/PORT25_LADDER_FIX_CANDIDATE.md matches in-tool table.
+    - Runtime extraction of p25-t3b build source emit sites (loader_main_breadcrumb.c,
+      build_candidate_port25_ladder_fix.py, led_breadcrumb.h) asserts every pulse count in the doc
+      appears as an LED-ladder emit site in the source, and both doc and source agree on all 29 codes.
+11. Deterministic byte-identical JSON outputs.
 """
 
 from __future__ import annotations
@@ -43,8 +48,11 @@ from tools.port26_ladder_decode import (
     SafetyViolationError,
     classify_owner_report,
     decode_ladder_report,
+    extract_build_source_pulse_codes,
     is_count_adjacent_to_two_valid_codes,
+    is_truthy,
     parse_expected_diskboot_sha256,
+    parse_ladder_table_from_build_source,
     parse_ladder_table_from_source,
     parse_owner_report,
     validate_safety_path,
@@ -57,8 +65,8 @@ class TestPort26LadderDecode(unittest.TestCase):
     def setUp(self) -> None:
         self.valid_hash = EXPECTED_PORT25_COMBINED_DISKBOOT_SHA256
 
-    def test_table_equals_source_consistency(self) -> None:
-        """Asserts that in-tool LADDER_STAGE_TABLE equals the runtime-parsed source table."""
+    def test_table_equals_doc_consistency(self) -> None:
+        """Asserts that in-tool LADDER_STAGE_TABLE equals the runtime-parsed doc table."""
         doc_path = REPO_ROOT / "docs" / "PORT25_LADDER_FIX_CANDIDATE.md"
         self.assertTrue(doc_path.is_file(), f"Missing candidate doc: {doc_path}")
 
@@ -66,8 +74,9 @@ class TestPort26LadderDecode(unittest.TestCase):
         self.assertEqual(
             set(parsed_table.keys()),
             set(LADDER_STAGE_TABLE.keys()),
-            "Mismatch in registered code sets between source and in-tool table",
+            "Mismatch in registered code sets between doc and in-tool table",
         )
+        self.assertEqual(len(parsed_table), 29, "Expected exactly 29 codes in doc table")
 
         for code, expected_entry in LADDER_STAGE_TABLE.items():
             parsed_entry = parsed_table[code]
@@ -100,6 +109,67 @@ class TestPort26LadderDecode(unittest.TestCase):
             "Parsed candidate SHA-256 does not match pinned constant",
         )
 
+    def test_table_equals_build_source_consistency(self) -> None:
+        """Asserts that every pulse count in the doc appears as an LED-ladder emit site in the build source.
+        
+        Build sources:
+          - Loader emit sites: chdk-port/platform/g3x/sub/110c/loader_main_breadcrumb.c:43-154
+          - Core injection sites: tools/build_candidate_port25_ladder_fix.py:90-128
+          - Framed timing macro defs: chdk-port/platform/g3x/sub/110c/led_breadcrumb.h:217-266
+        """
+        build_info = extract_build_source_pulse_codes(REPO_ROOT)
+
+        # 1. Loader steps: Steps 1..7 must match exactly
+        expected_loader_steps = {
+            1: "STAGE_LOADER_AFTER_PROLOGUE",
+            2: "STAGE_LOADER_AFTER_COPY",
+            3: "STAGE_LOADER_BEFORE_DCACHE",
+            4: "STAGE_LOADER_AFTER_DCACHE",
+            5: "STAGE_LOADER_BEFORE_ICACHE",
+            6: "STAGE_LOADER_AFTER_ICACHE",
+            7: "STAGE_LOADER_BEFORE_BX",
+        }
+        self.assertEqual(
+            build_info["loader_steps"],
+            expected_loader_steps,
+            "Mismatch in loader ladder steps extracted from loader_main_breadcrumb.c",
+        )
+
+        # 2. Core injected codes: exactly 22 codes in tools/build_candidate_port25_ladder_fix.py
+        expected_core_codes = [
+            11, 12, 13, 14, 15,
+            21, 22, 23, 24, 25, 26,
+            28, 29,
+            31, 32, 33, 34, 35,
+            41, 42, 43, 44,
+        ]
+        self.assertEqual(
+            build_info["core_injected_codes"],
+            expected_core_codes,
+            "Mismatch in core injected codes extracted from build_candidate_port25_ladder_fix.py",
+        )
+
+        # 3. Macro definitions in led_breadcrumb.h must include all core codes
+        for code in expected_core_codes:
+            self.assertIn(
+                code,
+                build_info["header_macro_codes"],
+                f"Missing CORE_LADDER_PULSE_{code} definition in led_breadcrumb.h",
+            )
+
+        # 4. Total emitted codes from build source must equal exactly the 29 table codes
+        self.assertEqual(len(build_info["all_emitted_codes"]), 29)
+        self.assertEqual(
+            set(build_info["all_emitted_codes"]),
+            set(LADDER_STAGE_TABLE.keys()),
+            "Mismatch between build source emit codes and LADDER_STAGE_TABLE codes",
+        )
+
+        # 5. Full combined verification via parse_ladder_table_from_build_source()
+        combined_table = parse_ladder_table_from_build_source(REPO_ROOT)
+        self.assertEqual(len(combined_table), 29)
+        self.assertEqual(set(combined_table.keys()), set(LADDER_STAGE_TABLE.keys()))
+
     def test_every_table_code(self) -> None:
         """Covers every single registered code in the table across loader and core stages."""
         self.assertEqual(len(LADDER_STAGE_TABLE), 29, "Expected exactly 29 registered codes")
@@ -122,6 +192,34 @@ class TestPort26LadderDecode(unittest.TestCase):
                 self.assertTrue(len(res["notes"]) > 0)
                 self.assertIn(res["class"], VALID_CLASSES)
 
+    def test_in_range_gap_codes(self) -> None:
+        """Covers all in-range gaps within 1..44 and out-of-range counts mapping to UNKNOWN_CODE.
+        
+        Inside 1..44, the 15 gap values are:
+          8, 9, 10, 16, 17, 18, 19, 20, 27, 30, 36, 37, 38, 39, 40.
+        All must map to UNKNOWN_CODE when uncertainty is not flagged.
+        """
+        in_range_gaps = [8, 9, 10, 16, 17, 18, 19, 20, 27, 30, 36, 37, 38, 39, 40]
+        out_of_range_counts = [-5, -1, 45, 50, 99, 120]
+
+        all_unknown_counts = in_range_gaps + out_of_range_counts
+
+        for count in all_unknown_counts:
+            with self.subTest(count=count):
+                report = {
+                    "diskboot_sha256": self.valid_hash,
+                    "press": "short",
+                    "pulses": count,
+                    "lcd": "dark",
+                    "inspector_status": "none",
+                    "uncertain": False,
+                }
+                res = classify_owner_report(report)
+                self.assertEqual(res["class"], "UNKNOWN_CODE")
+                self.assertIsNone(res["last_stage_reached"])
+                self.assertIsNone(res["next_stage"])
+                self.assertIn(f"Pulse count {count} does not match", res["notes"])
+
     def test_none_pulses(self) -> None:
         """Covers 'none' pulse variations mapping to NO_PULSES."""
         none_variations = ["none", "NONE", "null", "", 0, "0", []]
@@ -140,24 +238,6 @@ class TestPort26LadderDecode(unittest.TestCase):
                 self.assertEqual(res["next_stage"], "STAGE_LOADER_AFTER_PROLOGUE")
                 self.assertIn("Zero pulses", res["notes"])
                 self.assertIn("docs/PORT25_OWNER_TRIAL_PLAN.md:201", res["evidence"])
-
-    def test_out_of_table_counts(self) -> None:
-        """Covers pulse counts that are not in the table mapping to UNKNOWN_CODE."""
-        out_of_table = [8, 9, 10, 16, 17, 18, 19, 20, 30, 36, 37, 40, 45, 50, 99]
-        for count in out_of_table:
-            with self.subTest(count=count):
-                report = {
-                    "diskboot_sha256": self.valid_hash,
-                    "press": "short",
-                    "pulses": count,
-                    "lcd": "dark",
-                    "inspector_status": "none",
-                }
-                res = classify_owner_report(report)
-                self.assertEqual(res["class"], "UNKNOWN_CODE")
-                self.assertIsNone(res["last_stage_reached"])
-                self.assertIsNone(res["next_stage"])
-                self.assertIn(f"Pulse count {count} does not match", res["notes"])
 
     def test_off_by_one_ambiguity_conflicting_multiple(self) -> None:
         """Covers AMBIGUOUS classification when conflicting multiple counts are reported."""
@@ -202,16 +282,18 @@ class TestPort26LadderDecode(unittest.TestCase):
         self.assertTrue(is_count_adjacent_to_two_valid_codes(23))
         # Count 24 has 23 and 25 in table -> adjacent to two valid codes
         self.assertTrue(is_count_adjacent_to_two_valid_codes(24))
-        # Count 27 (out-of-table) has 26 and 28 in table -> adjacent to two valid codes
+        # Count 27 (out-of-table gap) has 26 and 28 in table -> adjacent to two valid codes
         self.assertTrue(is_count_adjacent_to_two_valid_codes(27))
-        # Count 11 has 10 (not in table) and 12 (in table) -> only ONE neighbor
+        # Count 11 has 10 (gap) and 12 (in table) -> only ONE neighbor
         self.assertFalse(is_count_adjacent_to_two_valid_codes(11))
-        # Count 7 has 6 (in table) and 8 (not in table) -> only ONE neighbor
+        # Count 7 has 6 (in table) and 8 (gap) -> only ONE neighbor
         self.assertFalse(is_count_adjacent_to_two_valid_codes(7))
-        # Count 1 has 0 (not in table) and 2 (in table) -> only ONE neighbor
+        # Count 1 has 0 (gap) and 2 (in table) -> only ONE neighbor
         self.assertFalse(is_count_adjacent_to_two_valid_codes(1))
-        # Count 44 has 43 (in table) and 45 (not in table) -> only ONE neighbor
+        # Count 44 has 43 (in table) and 45 (out) -> only ONE neighbor
         self.assertFalse(is_count_adjacent_to_two_valid_codes(44))
+        # Count 8 has 7 (in table) and 9 (gap) -> only ONE neighbor
+        self.assertFalse(is_count_adjacent_to_two_valid_codes(8))
 
         # 1. Count 23 with uncertainty flagged -> AMBIGUOUS
         res1 = classify_owner_report({
@@ -237,7 +319,7 @@ class TestPort26LadderDecode(unittest.TestCase):
         })
         self.assertEqual(res2["class"], "AMBIGUOUS")
 
-        # 3. Out-of-table Count 27 with uncertainty -> AMBIGUOUS (adjacent to 26 and 28)
+        # 3. In-range gap 27 with uncertainty -> AMBIGUOUS (adjacent to 26 and 28)
         res3 = classify_owner_report({
             "diskboot_sha256": self.valid_hash,
             "press": "short",
@@ -259,7 +341,7 @@ class TestPort26LadderDecode(unittest.TestCase):
         })
         self.assertEqual(res4["class"], "CODE_23")
 
-        # 5. Out-of-table Count 27 WITHOUT uncertainty -> UNKNOWN_CODE
+        # 5. In-range gap 27 WITHOUT uncertainty -> UNKNOWN_CODE
         res5 = classify_owner_report({
             "diskboot_sha256": self.valid_hash,
             "press": "short",
@@ -270,7 +352,7 @@ class TestPort26LadderDecode(unittest.TestCase):
         })
         self.assertEqual(res5["class"], "UNKNOWN_CODE")
 
-        # 6. Count 11 with uncertainty -> NOT ambiguous under off-by-one rule (10 is not in table)
+        # 6. Boundary count 11 with uncertainty -> NOT ambiguous under off-by-one rule (10 is a gap)
         res6 = classify_owner_report({
             "diskboot_sha256": self.valid_hash,
             "press": "short",
@@ -281,6 +363,99 @@ class TestPort26LadderDecode(unittest.TestCase):
         })
         self.assertEqual(res6["class"], "CODE_11")
         self.assertEqual(res6["last_stage_reached"], "STAGE_BC_CORE_ENTRY")
+
+        # 7. Boundary count 1 with uncertainty -> NOT ambiguous (0 is not in table)
+        res7 = classify_owner_report({
+            "diskboot_sha256": self.valid_hash,
+            "press": "short",
+            "pulses": 1,
+            "uncertain": True,
+            "lcd": "dark",
+            "inspector_status": "none",
+        })
+        self.assertEqual(res7["class"], "CODE_1")
+
+        # 8. Boundary count 44 with uncertainty -> NOT ambiguous (45 is not in table)
+        res8 = classify_owner_report({
+            "diskboot_sha256": self.valid_hash,
+            "press": "short",
+            "pulses": 44,
+            "uncertain": True,
+            "lcd": "dark",
+            "inspector_status": "none",
+        })
+        self.assertEqual(res8["class"], "CODE_44")
+
+        # 9. Isolated gap 8 with uncertainty -> UNKNOWN_CODE (9 is a gap, only 7 is valid)
+        res9 = classify_owner_report({
+            "diskboot_sha256": self.valid_hash,
+            "press": "short",
+            "pulses": 8,
+            "uncertain": True,
+            "lcd": "dark",
+            "inspector_status": "none",
+        })
+        self.assertEqual(res9["class"], "UNKNOWN_CODE")
+
+    def test_owner_uncertainty_spelling_variants(self) -> None:
+        """Covers all spelling variants of the owner uncertainty flag in JSON and key=value."""
+        # 1. JSON variants that must trigger uncertainty on adjacent code 24:
+        json_uncertain_variants = [
+            '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "uncertain": true, "lcd": "dark", "inspector_status": "none"}',
+            '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "uncertain": "true", "lcd": "dark", "inspector_status": "none"}',
+            '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "uncertainty": true, "lcd": "dark", "inspector_status": "none"}',
+            '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "uncertainty": "yes", "lcd": "dark", "inspector_status": "none"}',
+            '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "uncertain": 1, "lcd": "dark", "inspector_status": "none"}',
+            '{"diskboot_sha256": "%s", "press": "short", "pulses": "24 (uncertain)", "lcd": "dark", "inspector_status": "none"}',
+            '{"diskboot_sha256": "%s", "press": "short", "pulses": "24?", "lcd": "dark", "inspector_status": "none"}',
+            '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "notes": "pulse count uncertain", "lcd": "dark", "inspector_status": "none"}',
+        ]
+        for tmpl in json_uncertain_variants:
+            raw = tmpl % self.valid_hash
+            with self.subTest(json_tmpl=tmpl[:45]):
+                res = classify_owner_report(raw)
+                self.assertEqual(res["class"], "AMBIGUOUS", f"Failed for template: {tmpl}")
+
+        # 2. JSON negative variants that must NOT trigger uncertainty:
+        json_not_uncertain = [
+            '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "uncertain": false, "lcd": "dark", "inspector_status": "none"}',
+            '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "uncertain": "false", "lcd": "dark", "inspector_status": "none"}',
+            '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "uncertain": 0, "lcd": "dark", "inspector_status": "none"}',
+            '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "uncertainty": false, "lcd": "dark", "inspector_status": "none"}',
+        ]
+        for tmpl in json_not_uncertain:
+            raw = tmpl % self.valid_hash
+            with self.subTest(json_neg=tmpl[:45]):
+                res = classify_owner_report(raw)
+                self.assertEqual(res["class"], "CODE_24", f"Should be CODE_24 for: {tmpl}")
+
+        # 3. Key=Value variants that must trigger uncertainty on code 24:
+        kv_uncertain_variants = [
+            f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24\nuncertain = true\n",
+            f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24\nuncertain = yes\n",
+            f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24\nuncertain = 1\n",
+            f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24\nuncertainty = true\n",
+            f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24\nuncertainty = yes\n",
+            f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24 (uncertain)\n",
+            f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24?\n",
+            f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24\nnotes = count was uncertain\n",
+        ]
+        for kv in kv_uncertain_variants:
+            with self.subTest(kv_raw=kv.splitlines()[-1]):
+                res = classify_owner_report(kv)
+                self.assertEqual(res["class"], "AMBIGUOUS", f"Failed for KV: {kv!r}")
+
+        # 4. Key=Value negative variants that must NOT trigger uncertainty:
+        kv_not_uncertain = [
+            f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24\nuncertain = false\n",
+            f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24\nuncertain = no\n",
+            f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24\nuncertain = 0\n",
+            f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24\nuncertainty = false\n",
+        ]
+        for kv in kv_not_uncertain:
+            with self.subTest(kv_neg=kv.splitlines()[-1]):
+                res = classify_owner_report(kv)
+                self.assertEqual(res["class"], "CODE_24", f"Should be CODE_24 for: {kv!r}")
 
     def test_wrong_candidate_hash(self) -> None:
         """Covers INVALID_CANDIDATE when candidate SHA-256 does not match."""
