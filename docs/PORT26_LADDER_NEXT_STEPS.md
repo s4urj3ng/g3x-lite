@@ -4,7 +4,7 @@ This plan enumerates every code and special class emitted by `tools/port26_ladde
 
 ### Code 1: STAGE_LOADER_AFTER_PROLOGUE (`CODE_1`)
 (a) Stage reached -> next stage: `STAGE_LOADER_AFTER_PROLOGUE` -> `STAGE_LOADER_AFTER_COPY` `[VERIFIED: tools/build_candidate_port25_ladder_fix.py:67, 337-340; chdk-port/platform/g3x/sub/110c/loader_main_breadcrumb.c:45]`. `boot_prototype.c` not yet entered.
-(b) Execution: `loader_main_breadcrumb.c:54-96`: pointer setup, `core_copy(src, dst, word_len)` relocating candidate core (123,424 B, derived from `blob_chdk_core_size` at `loader_main_breadcrumb.c:57-61; docs/PORT25_LADDER_FIX_CANDIDATE.md:387-389`) to `0x003489B4`, and witness write to `0x0035F7A0` `[VERIFIED: loader_main_breadcrumb.c:54-96]`.
+(b) Execution: `loader_main_breadcrumb.c:54-96`: pointer setup, `core_copy(src, dst, word_len)` relocating candidate core (123,424 B, derived from `blob_chdk_core_size` at `loader_main_breadcrumb.c:57-61; docs/PORT25_LADDER_FIX_CANDIDATE.md:387-389`) to `0x003489B4`, and witness write to `0x00361170` passed via `BOOT_WITNESS_ADDR` `[VERIFIED: loader_main_breadcrumb.c:54-96; tools/build_candidate_port25_ladder_fix.py:384; docs/PORT25_LADDER_FIX_CANDIDATE.md:387-391]`.
 (c) Likely power-off/wait point: Autonomous PMIC latch timeout (Candidate 2 / Rank 4, `docs/PORT25_SHORT_PRESS_LOCALISE.md:200-216`) `[UNKNOWN: external microcontroller firmware]`, or RAM relocation stall `[UNKNOWN]`.
 (d) Next candidate change: [INFERRED] Add finer LED breadcrumb immediately before core_copy() (chdk-port/platform/g3x/sub/110c/loader_main_breadcrumb.c:61; docs/PORT23_LED_BREADCRUMBS.md:46).
 
@@ -82,7 +82,7 @@ This plan enumerates every code and special class emitted by `tools/port26_ladde
 
 ### Code 22: STAGE_BC_PRE_MPU_SETUP (`CODE_22`)
 (a) Stage reached -> next stage: `STAGE_BC_PRE_MPU_SETUP` -> `STAGE_BC_POST_MPU_SETUP` `[VERIFIED: tools/build_candidate_port25_ladder_fix.py:116; chdk-port/platform/g3x/sub/110c/boot_prototype.c:346]`.
-(b) Execution: `boot_prototype.c:346`: call `bl sub_fc05ba68` (`PORT25-ROM-STARTUP-TASKS`), executing `pxSetup` (`0xFC05BA6E`), `dhcpc_setup` (`0xFC05BA82`), and MPU configuration `mpuSetup` (`0xFC135280`, `PORT25-ROM-MPU-CONFIG`) `[VERIFIED: boot_prototype.c:346; PORT25-ROM-STARTUP-TASKS]`.
+(b) Execution: `boot_prototype.c:346`: call `bl sub_fc05ba68` (`PORT25-ROM-STARTUP-TASKS`), executing `pxSetup` (return-check site at `0xFC05BA6E`), `dhcpc_setup` (return-check site at `0xFC05BA82`), and MPU configuration `mpuSetup` (`0xFC135280`, `PORT25-ROM-MPU-CONFIG`) `[VERIFIED: boot_prototype.c:346; docs/PORT25_SHORT_PRESS_LOCALISE.md:284-285; PORT25-ROM-STARTUP-TASKS]`.
 (c) Likely power-off/wait point: Setup failure in `pxSetup` or `dhcpc_setup` branching to `sub_fc05ba8e` (Candidate 7 / Rank 7, `docs/PORT25_SHORT_PRESS_LOCALISE.md:282-286; PORT25-ROM-STARTUP-TASKS`), or PMIC latch timeout (Candidate 2 / Rank 4, lines 200-216) `[UNKNOWN]`.
 (d) Follow-up UNKNOWN: needs bounded ROM range / control-flow mapping of Stage 5 error handler sub_fc05ba8e at 0xFC05BA8E (PORT25-ROM-STARTUP-TASKS; docs/PORT25_SHORT_PRESS_LOCALISE.md:133-136, 284-286).
 
@@ -117,9 +117,9 @@ This plan enumerates every code and special class emitted by `tools/port26_ladde
 (d) Next candidate change: [VERIFIED] Enable G3X_POWERON_FIX=1 to bypass sub_fc05ba56 power-cut branch (chdk-port/platform/g3x/sub/110c/boot_prototype.c:348-355; docs/PORT24_POWERON_FIX.md:19-24; docs/PORT25_SHORT_PRESS_LOCALISE.md:152-155).
 
 ### Code 29: STAGE_BC_HALT_SHUTDOWN (`CODE_29`)
-(a) Stage reached -> next stage: `STAGE_BC_HALT_SHUTDOWN` -> None `[VERIFIED: tools/build_candidate_port25_ladder_fix.py:102; chdk-port/platform/g3x/sub/110c/boot_prototype.c:356-358; tools/port26_ladder_decode.py:541]`.
-(b) Execution: `boot_prototype.c:357`: infinite branch loop `b loc_fc05b976` waiting for hardware power collapse following GPIO 0x67 de-assertion `[VERIFIED: boot_prototype.c:357]`.
-(c) Likely power-off/wait point: Post-cut spin loop following GPIO 0x67 power cut (Candidate 1 / Rank 1, `docs/PORT25_SHORT_PRESS_LOCALISE.md:194-197, 368; PORT25-ROM-STARTUP-TASKS`) `[VERIFIED: boot_prototype.c:356-358; docs/PORT25_SHORT_PRESS_LOCALISE.md:194-197, 368]`.
+(a) Stage reached -> next stage: `STAGE_BC_HALT_SHUTDOWN` -> None `[VERIFIED: tools/build_candidate_port25_ladder_fix.py:102-103; chdk-port/platform/g3x/sub/110c/boot_prototype.c:356-358; tools/port26_ladder_decode.py:541]`.
+(b) Execution: In the generated candidate, `CORE_LADDER_PULSE_29` sits after `loc_fc05b976` and branches back to that label (`tools/build_candidate_port25_ladder_fix.py:102-103; boot_prototype.c:356-358`). The interval is this breadcrumb emission/timing loop repeating for as long as hardware power holds `[VERIFIED: tools/build_candidate_port25_ladder_fix.py:102-103]`; the observable consequence is a repeating Code 29 pulse sequence until power collapse `[INFERRED: tools/build_candidate_port25_ladder_fix.py:102-103; docs/PORT25_SHORT_PRESS_LOCALISE.md:194-197]`.
+(c) Likely power-off/wait point: Breadcrumb emission/timing loop following GPIO 0x67 power cut (Candidate 1 / Rank 1, `docs/PORT25_SHORT_PRESS_LOCALISE.md:194-197, 368; PORT25-ROM-STARTUP-TASKS`) `[VERIFIED: boot_prototype.c:356-358; tools/build_candidate_port25_ladder_fix.py:102-103; docs/PORT25_SHORT_PRESS_LOCALISE.md:194-197, 368]`.
 (d) Next candidate change: [VERIFIED] Enable G3X_POWERON_FIX=1 to branch directly to loc_fc05b978 and bypass halt loop (chdk-port/platform/g3x/sub/110c/boot_prototype.c:348-355; docs/PORT24_POWERON_FIX.md:19-24; docs/PORT25_SHORT_PRESS_LOCALISE.md:152-155).
 
 ### Code 31: STAGE_BC_STARTUP_ENTRY (`CODE_31`)
@@ -177,13 +177,13 @@ This plan enumerates every code and special class emitted by `tools/port26_ladde
 (d) Follow-up UNKNOWN: needs bounded ROM range / control-flow mapping of stock continuation sub_fc0d0126 reachability to TurnOffE1_FW (PORT25-ROM-FIRMWARE-CONT; docs/PORT25_SHORT_PRESS_LOCALISE.md:269-272).
 
 ### NO_PULSES (`NO_PULSES`)
-(a) Stage reached -> next stage: No stage reached; stage information is unavailable because zero optical pulses or flashes were observed (`pulse_count == 0` or `'none'`) `[VERIFIED: tools/port26_ladder_decode.py:556, 1840-1865; docs/PORT25_OWNER_TRIAL_PLAN.md:201; docs/PORT25_LADDER_FIX_CANDIDATE.md:328]`.
-(b) Execution: Bootloader dancingbits decode, bootdisk MBR/VBR check, or pre-loader initialization prior to the first ladder pulse at `loader_main_breadcrumb.c:45` `[INFERRED: loader_main_breadcrumb.c:45; tools/port26_ladder_decode.py:1840-1865]`.
-(c) Likely power-off/wait point: Power collapse before first breadcrumb macro, dancingbits decode rejection, bootdisk VBR misconfiguration, or battery depletion `[UNKNOWN: tools/port26_ladder_decode.py:1845; docs/PORT25_OWNER_TRIAL_PLAN.md:201]`.
-(d) Follow-up UNKNOWN: needs re-capture or bounded ROM range / control-flow mapping of pre-loader boot stages (docs/PORT25_OWNER_TRIAL_PLAN.md:201; docs/PORT25_LADDER_FIX_CANDIDATE.md:328).
+(a) Stage reached -> next stage: `UNKNOWN (no LED evidence)` -> `UNKNOWN (no LED evidence)`. No checkpoint was observed optically; only the literal `'none'` maps to `NO_PULSES` (numeric `0` maps to `UNKNOWN_CODE`), and boot progress is UNKNOWN `[VERIFIED: tools/port26_ladder_decode.py:1840-1865, 1869-1885; docs/PORT25_OWNER_TRIAL_PLAN.md:201; docs/PORT25_LADDER_FIX_CANDIDATE.md:328]`.
+(b) Execution: No checkpoint was observed optically and boot progress is UNKNOWN; no LED evidence recorded in trial table `[UNKNOWN: tools/port26_ladder_decode.py:1840-1865]`.
+(c) Likely power-off/wait point: Power-off or wait point is UNKNOWN due to absence of optical observations (Candidate 2 / Rank 4 autonomous PMIC timeout, or pre-loader failure) `[UNKNOWN: tools/port26_ladder_decode.py:1840-1865; docs/PORT25_OWNER_TRIAL_PLAN.md:201; docs/PORT25_SHORT_PRESS_LOCALISE.md:200-216]`.
+(d) Follow-up UNKNOWN: needs bounded ROM range / control-flow mapping of pre-loader boot stages or video re-capture with verified camera alignment (tools/port26_ladder_decode.py:1840-1865; docs/PORT25_OWNER_TRIAL_PLAN.md:201; docs/PORT25_LADDER_FIX_CANDIDATE.md:328).
 
 ### UNKNOWN_CODE (`UNKNOWN_CODE`)
-(a) Stage reached -> next stage: Unregistered code; stage information is unavailable because the reported pulse count does not match any valid ladder code in `LADDER_STAGE_TABLE` (valid: 1..7, 11..15, 21..26, 28..29, 31..35, 41..44) `[VERIFIED: tools/port26_ladder_decode.py:557, 1869-1885; docs/PORT25_LADDER_FIX_CANDIDATE.md:326-354]`.
+(a) Stage reached -> next stage: Unregistered code; stage information is unavailable because the reported pulse count does not match any valid ladder code in `LADDER_STAGE_TABLE` (valid: 1..7, 11..15, 21..26, 28..29, 31..35, 41..44) or is a numeric non-positive integer (`<= 0`) `[VERIFIED: tools/port26_ladder_decode.py:557, 1869-1885; docs/PORT25_LADDER_FIX_CANDIDATE.md:326-354]`.
 (b) Execution: Pulse observation does not correlate with any registered ladder checkpoint in candidate loader or core `[UNKNOWN: tools/port26_ladder_decode.py:1869-1885]`.
 (c) Likely power-off/wait point: Optical count error, spurious hardware LED activity, or unmapped firmware interrupt handler `[UNKNOWN: tools/port26_ladder_decode.py:1869-1885]`.
 (d) Follow-up UNKNOWN: needs re-capture or owner report correction of unregistered pulse count (tools/port26_ladder_decode.py:1869-1885; docs/PORT25_LADDER_FIX_CANDIDATE.md:326-354).
