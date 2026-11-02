@@ -1,0 +1,180 @@
+{
+  "manifest_version": "1.0.0",
+  "authorization_scopes": [
+    {
+      "scope_id": "SCOPE-PORT27-RESIDENT-EVIDENCE",
+      "firmware_revision": "GM1.10C",
+      "approved_ranges": [
+        {
+          "start_address": "0xFC05B3C0",
+          "end_address": "0xFC05B53F",
+          "label": "PORT27-ROM-HEAP-SETUP"
+        },
+        {
+          "start_address": "0xFC05B8E0",
+          "end_address": "0xFC05BBDF",
+          "label": "PORT27-ROM-STARTUP-TASKS"
+        },
+        {
+          "start_address": "0xFC0D0080",
+          "end_address": "0xFC0D023F",
+          "label": "PORT27-ROM-FIRMWARE-CONT"
+        },
+        {
+          "start_address": "0xFC135C00",
+          "end_address": "0xFC135E3F",
+          "label": "PORT27-ROM-WATCHDOG-MODULE"
+        },
+        {
+          "start_address": "0xFC31B8CA",
+          "end_address": "0xFC31B8D9",
+          "label": "PORT27-ROM-RESTORE-IRQ-VENEER"
+        },
+        {
+          "start_address": "0xFC31BBA0",
+          "end_address": "0xFC31BBEF",
+          "label": "PORT27-ROM-CREATETASK-VENEER"
+        },
+        {
+          "start_address": "0xFC31BEE0",
+          "end_address": "0xFC31BF3F",
+          "label": "PORT27-ROM-IRQ-DISABLE"
+        },
+        {
+          "start_address": "0xFC31BF84",
+          "end_address": "0xFC31BF8F",
+          "label": "PORT27-ROM-SLEEPTASK-VENEER"
+        }
+      ],
+      "max_bytes_total": 24576,
+      "allowed_classifications": [
+        "STATIC_VERIFIED",
+        "INFERRED",
+        "UNKNOWN"
+      ],
+      "description": "PORT-27 GM1.10C resident heap/memory-start, task-creation, and LED evidence scope (budget: at most 4 KiB per read, 24 KiB total)"
+    }
+  ],
+  "evidence_entries": [
+    {
+      "evidence_id": "PORT27-ROM-HEAP-SETUP",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC05B3C0",
+      "end_address": "0xFC05B53F",
+      "expected_byte_count": 384,
+      "sha256": "68e60a1c4ffdf3ce29c97120aac275f1758df3726f8f5829a23e33b73c6908d6",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT27-RESIDENT-EVIDENCE",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Stock DryOS heap configuration in sub_fc05b3c8 (0xFC05B3C8): literal [0xFC05B450]=0x003489B4 (heap base), [0xFC05B474]=0x00600014 (sub-pool boundary), [0xFC05B454]=0x006CE000 (ARAM limit), [0xFC05B458]=0x000B1FEC (minimum headroom)"
+    },
+    {
+      "evidence_id": "PORT27-ROM-STARTUP-TASKS",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC05B8E0",
+      "end_address": "0xFC05BBDF",
+      "expected_byte_count": 768,
+      "sha256": "749dd4f383eec258850e14f1488b853c7902156f106a4924d54788f47fa35e0e",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT27-RESIDENT-EVIDENCE",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Stock task_Startup (0xFC05B8FC) with StartDiskboot call (0xFC05B90E) and tail branch b.w sub_fc0d0126 (0xFC05B95E); sub_fc05b962 spawning task Startup via DryOS CreateTask veneer sub_fc31bbc4 (0xFC05B990) and initializing ARAM heap (0xFC05B980)"
+    },
+    {
+      "evidence_id": "PORT27-ROM-FIRMWARE-CONT",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC0D0080",
+      "end_address": "0xFC0D023F",
+      "expected_byte_count": 448,
+      "sha256": "33d2fae4ed8c9c228ea6cc8f3304a26b96f8a4fb6d9d3bdc37cd056e7833456e",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT27-RESIDENT-EVIDENCE",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Stock continuation function sub_fc0d0126 (0xFC0D0126..0xFC0D014E): disables IRQ via blx sub_fc31befc, decrements clock lock counter at 0x00008380, and tail branches via b.w 0xfc31b8ca to RestoreInterrupts (setting no heap or memory boundaries)"
+    },
+    {
+      "evidence_id": "PORT27-ROM-WATCHDOG-MODULE",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC135C00",
+      "end_address": "0xFC135E3F",
+      "expected_byte_count": 576,
+      "sha256": "29a0c9a8b406aa86a8a971d6d0032273fbaa22510c224dfb9742284e643de9cb",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT27-RESIDENT-EVIDENCE",
+      "classification": "STATIC_VERIFIED",
+      "notes": "WatchDog.c module 0xFC135C00..0xFC135E3F: task_WdtReset at 0xFC135CB0 calling SleepTask(2000) via blx 0xfc31bf84 at 0xFC135CC6 to service watchdog at MMIO 0xD20A0004"
+    },
+    {
+      "evidence_id": "PORT27-ROM-RESTORE-IRQ-VENEER",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC31B8CA",
+      "end_address": "0xFC31B8D9",
+      "expected_byte_count": 16,
+      "sha256": "c50fd6df693d4724d6ec4ac070967f674bab9c0448f1ca6c27dc480b8922a6e1",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT27-RESIDENT-EVIDENCE",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Thumb-2 RestoreInterrupts veneer sub_fc31b8ca at 0xFC31B8CA (branch target from 0xFC0D014C): loads ip=0xBFE14FEB and bx ip (ATCM IRQ restore routine returning via bx lr)"
+    },
+    {
+      "evidence_id": "PORT27-ROM-CREATETASK-VENEER",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC31BBA0",
+      "end_address": "0xFC31BBEF",
+      "expected_byte_count": 80,
+      "sha256": "59c9adc82ad1ad670ecf7ba0d42665a34f7acf1a10b68ad75874afe1fae77487",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT27-RESIDENT-EVIDENCE",
+      "classification": "STATIC_VERIFIED",
+      "notes": "DryOS CreateTask veneer sub_fc31bbc4 at 0xFC31BBC4: ARM instruction ldr pc, [pc, #-4] loading ATCM Thumb entry 0xBFE14A3D"
+    },
+    {
+      "evidence_id": "PORT27-ROM-IRQ-DISABLE",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC31BEE0",
+      "end_address": "0xFC31BF3F",
+      "expected_byte_count": 96,
+      "sha256": "a15cb37e666e3349c0453b294d1283d99ae116214f36fc69671cdc3131db7826",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT27-RESIDENT-EVIDENCE",
+      "classification": "STATIC_VERIFIED",
+      "notes": "ARM-mode interrupt disable veneer sub_fc31befc at 0xFC31BEFC (callee of sub_fc0d0126 at 0xFC0D0128): ldr pc, [pc, #-4] loading 0xBFE14FE7 (ATCM interrupt disable routine)"
+    },
+    {
+      "evidence_id": "PORT27-ROM-SLEEPTASK-VENEER",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC31BF84",
+      "end_address": "0xFC31BF8F",
+      "expected_byte_count": 12,
+      "sha256": "462ba50005667f6192185cf76e0af698e0419e9d2fc481fd474ff862cb84d6e8",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT27-RESIDENT-EVIDENCE",
+      "classification": "STATIC_VERIFIED",
+      "notes": "ARM-mode SleepTask veneer at 0xFC31BF84 (branch target from 0xFC135CC6): ldr pc, [pc, #-4] loading ATCM Thumb entry 0xBFE14969"
+    }
+  ]
+}
