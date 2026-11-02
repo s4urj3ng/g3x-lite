@@ -1,0 +1,44 @@
+{
+  "policy_version": "1.0.0",
+  "policy_authority": "UNVERIFIED_EXTERNAL_POLICY (External consistency check fixture only; out-of-band owner approval required)",
+  "authorization_scopes": [
+    {
+      "scope_id": "SCOPE-PORT29-CREATETASK-EVIDENCE",
+      "firmware_revision": "GM1.10C",
+      "approved_ranges": [
+        {
+          "start_address": "0xFC31B408",
+          "end_address": "0xFC31B507",
+          "label": "PORT29-ROM-N1 sub_fc31b408 heap alignment & init veneer table"
+        },
+        {
+          "start_address": "0xFCEEF5C0",
+          "end_address": "0xFCEEF7BF",
+          "label": "PORT29-ROM-N3 alloc_task_stack_tcb body"
+        },
+        {
+          "start_address": "0xFCEF28B0",
+          "end_address": "0xFCEF29AF",
+          "label": "PORT29-ROM-N5 DebugAssert panic/assert handler veneer table"
+        },
+        {
+          "start_address": "0xFCEF3488",
+          "end_address": "0xFCEF34F9",
+          "label": "PORT29-ROM-CREATETASK CreateTask body and calling convention"
+        },
+        {
+          "start_address": "0xFCEF3A20",
+          "end_address": "0xFCEF3A5F",
+          "label": "PORT29-ROM-N6 ATCM interrupt disable & restore routines"
+        }
+      ],
+      "max_bytes_total": 4096,
+      "allowed_classifications": [
+        "STATIC_VERIFIED",
+        "INFERRED",
+        "UNKNOWN"
+      ],
+      "description": "PORT-29 GM1.10C CreateTask calling convention and task stack allocation authorized scope"
+    }
+  ]
+}

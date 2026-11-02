@@ -1,0 +1,120 @@
+{
+  "manifest_version": "1.0.0",
+  "authorization_scopes": [
+    {
+      "scope_id": "SCOPE-PORT29-CREATETASK-EVIDENCE",
+      "firmware_revision": "GM1.10C",
+      "approved_ranges": [
+        {
+          "start_address": "0xFC31B408",
+          "end_address": "0xFC31B507",
+          "label": "PORT29-ROM-N1 sub_fc31b408 heap alignment & init veneer table"
+        },
+        {
+          "start_address": "0xFCEEF5C0",
+          "end_address": "0xFCEEF7BF",
+          "label": "PORT29-ROM-N3 alloc_task_stack_tcb body"
+        },
+        {
+          "start_address": "0xFCEF28B0",
+          "end_address": "0xFCEF29AF",
+          "label": "PORT29-ROM-N5 DebugAssert panic/assert handler veneer table"
+        },
+        {
+          "start_address": "0xFCEF3488",
+          "end_address": "0xFCEF34F9",
+          "label": "PORT29-ROM-CREATETASK CreateTask body and calling convention"
+        },
+        {
+          "start_address": "0xFCEF3A20",
+          "end_address": "0xFCEF3A5F",
+          "label": "PORT29-ROM-N6 ATCM interrupt disable & restore routines"
+        }
+      ],
+      "max_bytes_total": 4096,
+      "allowed_classifications": [
+        "STATIC_VERIFIED",
+        "INFERRED",
+        "UNKNOWN"
+      ],
+      "description": "PORT-29 GM1.10C CreateTask calling convention and task stack allocation authorized scope"
+    }
+  ],
+  "evidence_entries": [
+    {
+      "evidence_id": "PORT29-ROM-N1",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC31B408",
+      "end_address": "0xFC31B507",
+      "expected_byte_count": 256,
+      "sha256": "b93e3f48ab31f467e9ee3f4ba907ea3032a3a81cac4fe1ff18a2c0ba138181ce",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT29-CREATETASK-EVIDENCE",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Slice N1: sub_fc31b408 veneer table in primary ROM"
+    },
+    {
+      "evidence_id": "PORT29-ROM-N3",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFCEEF5C0",
+      "end_address": "0xFCEEF7BF",
+      "expected_byte_count": 512,
+      "sha256": "6d5869cf7e64256371fbe1ed693f64125dc0fbccd538ced877cfbb5cfe5fcdd2",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT29-CREATETASK-EVIDENCE",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Slice N3: alloc_task_stack_tcb body (ATCM 0xBFE10B88)"
+    },
+    {
+      "evidence_id": "PORT29-ROM-N5",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFCEF28B0",
+      "end_address": "0xFCEF29AF",
+      "expected_byte_count": 256,
+      "sha256": "93c956e9d994888fc228997a65d0785901a4c23e0921c5e3cf6befa450fb2142",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT29-CREATETASK-EVIDENCE",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Slice N5: DebugAssert entry veneer table (ATCM 0xBFE13E78)"
+    },
+    {
+      "evidence_id": "PORT29-ROM-CREATETASK",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFCEF3488",
+      "end_address": "0xFCEF34F9",
+      "expected_byte_count": 114,
+      "sha256": "6d7fbecb5f9589cc34994a63ac6cf7e2def132a7c355a789a29ea3cae8c50ddf",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT29-CREATETASK-EVIDENCE",
+      "classification": "STATIC_VERIFIED",
+      "notes": "CreateTask function body and calling convention (ATCM 0xBFE14A3C..0xBFE14AAD)"
+    },
+    {
+      "evidence_id": "PORT29-ROM-N6",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFCEF3A20",
+      "end_address": "0xFCEF3A5F",
+      "expected_byte_count": 64,
+      "sha256": "3bf663507211b96500c59647e3f065cff96d111421ee5a2c867c022536c45969",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT29-CREATETASK-EVIDENCE",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Slice N6: ATCM interrupt disable & restore routines (ATCM 0xBFE14FE6, 0xBFE14FEA)"
+    }
+  ]
+}
