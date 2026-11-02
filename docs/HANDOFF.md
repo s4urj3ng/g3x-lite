@@ -2272,7 +2272,7 @@ python3 -B tools/port18_trial_report.py private/port18/trial_report.md --out pri
 ### PORT-26 — Ladder Ingest & Short-Press Triage (2026-11-02)
 - **PORT-25 Merge State**: PR #98, merge commit `2aea9cb`, head `78e4249982` `[VERIFIED: git log 2aea9cb; git log 78e4249982]`.
 - **Owner Combined Candidate Trial (2026-11-02)**: The owner ran the PORT-25 combined-candidate short-press trial on 2026-11-02 (DISKBOOT `9ba62067c17d654a3b8995fc6e8c26176321154054a138a465ca66f9ff763a15`, size 124,865 B). Result: terminal Code 43 (`STAGE_BC_POST_PHYSW_CREATE`) with the camera fully off; the held press reaches the stock UI (`O1` control). Mark this VERIFIED (owner observation, 2026-11-02) `[VERIFIED] (owner observation, 2026-11-02)`.
-- **Trial Ingest Tasks**: Ingest of this result is handled by `p26-t4-code43-ingest` and `p26-t7-owner-priority-record` `[VERIFIED]`.
+- **Trial Ingest Tasks**: Ingest of this result is handled by `p26-t4-code43-ingest` and `p26-t7-owner-priority-record` `[VERIFIED] (AgentBridge milestone PORT-26 task list, 2026-11-02)`.
 - **Owner Priority Direction**: The owner's 2026-11-02 priority puts the CHDK GUI track ahead of the short-press fix `[VERIFIED] (owner priority, 2026-11-02)`.
 - **Tooling & Next-Steps Plan**:
   - Automated decoder tool: [tools/port26_ladder_decode.py](../tools/port26_ladder_decode.py) parses and classifies owner trial reports across 29 ladder stage codes and 5 special classes `[VERIFIED: tools/port26_ladder_decode.py:161-561]`.
