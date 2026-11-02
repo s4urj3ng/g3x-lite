@@ -264,6 +264,64 @@ class TestPort29Evidence(unittest.TestCase):
         self.assertNotIn("never reads or modifies r1", content)
         self.assertNotIn("no access to r1", content)
 
+        # Call-site corrections
+        self.assertIn("Startup", content)
+        self.assertNotIn("init_task", content)
+        self.assertIn("0xFC05B98E", content)
+        self.assertIn("0xFC0BD0D2", content)
+        self.assertIn("0xFC0BD0CC", content)
+
+    def test_cross_doc_citations_accuracy(self) -> None:
+        """Verify that cross-doc citations in PORT29 doc point to exact lines containing address and mnemonic."""
+        doc_content = EVIDENCE_DOC_PATH.read_text(encoding="utf-8")
+
+        # Explicit table of cross-doc citations:
+        # (rel_doc_path, line_no, expected_address, expected_mnemonic_or_value)
+        cross_doc_table = [
+            # 5 Startup call-site items in docs/PORT27_RESIDENT_EVIDENCE.md lines 263-268
+            ("docs/PORT27_RESIDENT_EVIDENCE.md", 263, "fc05b984", "movs    r3, #0"),
+            ("docs/PORT27_RESIDENT_EVIDENCE.md", 264, "fc05b986", "str     r3, [sp, #0]"),
+            ("docs/PORT27_RESIDENT_EVIDENCE.md", 266, "fc05b98a", "movs    r2, #0"),
+            ("docs/PORT27_RESIDENT_EVIDENCE.md", 267, "fc05b98c", "movs    r1, #25"),
+            ("docs/PORT27_RESIDENT_EVIDENCE.md", 268, "fc05b98e", "add     r0, pc, #16"),
+            # InitFileModules call-site items in docs/PORT11A_GM110C_ROM_EVIDENCE.md lines 223, 226
+            ("docs/PORT11A_GM110C_ROM_EVIDENCE.md", 223, "0xFC0BD0CC", "ldr r3, [pc, #0xd8]"),
+            ("docs/PORT11A_GM110C_ROM_EVIDENCE.md", 226, "0xFC0BD0D2", "movw r2, #0x1000"),
+            # Other cited cross-doc items
+            ("docs/PORT11A_GM110C_ROM_EVIDENCE.md", 149, "0xFCEF34AA", "ldr r1, [pc, #0x1f4]"),
+            ("docs/PORT11A_GM110C_ROM_EVIDENCE.md", 163, "0xFCEF34CA", "ldr r5, [r1, #4]"),
+            ("docs/PORT11A_GM110C_ROM_EVIDENCE.md", 185, "0xFCEF36A0", "0x000081CC"),
+            ("docs/PORT11A_GM110C_ROM_EVIDENCE.md", 187, "0xFCEF36A8", "KerTask.c"),
+            ("docs/CHDK_PORT1A_STARTUP_TRACE.md", 213, "0xFC020054", "0xFCE91058"),
+        ]
+
+        for rel_path, line_no, exp_addr, exp_val in cross_doc_table:
+            doc_file = PROJECT_ROOT / rel_path
+            self.assertTrue(doc_file.is_file(), f"Cited doc does not exist: {doc_file}")
+            lines = doc_file.read_text(encoding="utf-8").splitlines()
+            self.assertLess(line_no - 1, len(lines), f"{rel_path} has fewer than {line_no} lines")
+            cited_line = lines[line_no - 1]
+            self.assertIn(
+                exp_addr.lower(),
+                cited_line.lower(),
+                f"Address {exp_addr} not found on line {line_no} of {rel_path}: {cited_line}",
+            )
+            self.assertIn(
+                exp_val.lower(),
+                cited_line.lower(),
+                f"Mnemonic/value {exp_val} not found on line {line_no} of {rel_path}: {cited_line}",
+            )
+
+        # Ensure the evidence doc contains citations to these lines
+        self.assertIn("docs/PORT27_RESIDENT_EVIDENCE.md:268", doc_content)
+        self.assertIn("docs/PORT27_RESIDENT_EVIDENCE.md:267", doc_content)
+        self.assertIn("docs/PORT27_RESIDENT_EVIDENCE.md:266", doc_content)
+        self.assertIn("docs/PORT27_RESIDENT_EVIDENCE.md:263-264", doc_content)
+        self.assertIn("docs/PORT11A_GM110C_ROM_EVIDENCE.md:223", doc_content)
+        self.assertIn("docs/PORT11A_GM110C_ROM_EVIDENCE.md:226", doc_content)
+        self.assertIn("Startup", doc_content)
+        self.assertNotIn("init_task", doc_content)
+
     def test_instruction_words_notation_and_rom_match(self) -> None:
         """Verify instruction words cited in doc use 0xHHHH notation and match PRIMARY.BIN."""
         doc_content = EVIDENCE_DOC_PATH.read_text(encoding="utf-8")
