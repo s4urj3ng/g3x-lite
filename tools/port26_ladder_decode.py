@@ -87,10 +87,15 @@ Code 44 Next Stage Rules:
   and is recorded in notes, never in next_stage.
 
 Off-By-One Uncertainty Rule (AMBIGUOUS Classification):
-- Evaluated using closed enum CountConfidence {exact, uncertain, unknown} from explicit fields first:
+- Evaluated using closed enum CountConfidence {exact, uncertain, unknown} and boolean aliases in a shared normalizer:
   * 'count_confidence': exact|certain|confident|high|sure -> exact (False); uncertain|approx|approximate|unsure|maybe|low -> uncertain (True)
   * 'uncertain': true|false
   * 'uncertainty': true|false
+- Uncertainty aliases combined with OR semantics:
+  * If any alias is affirmatively true, or count_confidence is 'uncertain' or 'unknown', report is uncertain.
+  * If aliases conflict (one true, one false), uncertain=True is kept with an explicit note.
+  * If an alias value is not a recognised boolean, it is treated as uncertain (never false) with an explicit note.
+  * Result is strictly deterministic and invariant to field order or input format (JSON vs key=value).
 - If no explicit field is present, free-text in 'notes' is checked clause-by-clause
   (clauses split by ';', '.', ',', '!', '?', newline).
   An affirmative uncertainty phrase ('unsure', 'uncertain', 'uncertainty', 'maybe', 'approx', '+/-1',
@@ -104,6 +109,10 @@ Off-By-One Uncertainty Rule (AMBIGUOUS Classification):
 - Counts with two valid neighbours: 2..6, 12..14, 22..25, 32..34, 42..43, and gap 27.
 - Counts with at most one valid neighbour: 1, 7, 11, 15, 21, 26, 28, 29, 31, 35, 41, 44,
   and isolated in-range gaps. These do NOT trigger AMBIGUOUS.
+
+Duplicate Key Governance:
+- Duplicate keys with conflicting values in key=value or JSON format produce AMBIGUOUS
+  with an explicit explanatory note; last-wins overwriting is strictly prohibited.
 
 Phase 0 Path Safety Governance:
 - Pure Python standard library only.
@@ -127,7 +136,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -776,6 +785,124 @@ def has_affirmative_uncertainty_in_text(text: str) -> bool:
     return False
 
 
+def parse_recognized_boolean(val: Any) -> Optional[bool]:
+    """Evaluates whether a value represents a recognized boolean.
+    
+    Returns:
+      True if value represents boolean True.
+      False if value represents boolean False.
+      None if value is NOT a recognized boolean (e.g. 'maybe', 42, None, etc.).
+    """
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, int) and not isinstance(val, bool):
+        if val == 1:
+            return True
+        if val == 0:
+            return False
+        return None
+    if isinstance(val, str):
+        v = val.strip().lower()
+        if v in ("true", "yes", "1", "t", "y", "on"):
+            return True
+        if v in ("false", "no", "0", "f", "n", "off"):
+            return False
+        return None
+    return None
+
+
+def normalize_uncertainty(
+    aliases: Sequence[Tuple[str, Any]],
+    notes_text: str = "",
+) -> Tuple[bool, List[str]]:
+    """Normalises uncertainty across all uncertainty aliases and notes in a shared function.
+    
+    Collects every alias present ('uncertain', 'uncertainty', and 'count_confidence' if it applies)
+    and combines them with OR semantics:
+    - If any alias is affirmatively true, or count_confidence is 'uncertain' or 'unknown',
+      the report is uncertain.
+    - If the aliases conflict (one true, one false), keeps uncertain=True and adds a note that says so.
+    - If an alias value is not a recognised boolean, treats the report as uncertain and adds a note.
+      Never treats it as false.
+    - The result does not depend on field order or input format.
+    - If no explicit aliases are present, checks free-text in notes.
+    """
+    notes_out: List[str] = []
+    has_affirmative_true = False
+    has_affirmative_false = False
+    unrecognized_notes: List[str] = []
+
+    for name, val in aliases:
+        name_lower = name.strip().lower()
+        if name_lower in ("uncertain", "uncertainty"):
+            b = parse_recognized_boolean(val)
+            if b is True:
+                has_affirmative_true = True
+            elif b is False:
+                has_affirmative_false = True
+            else:
+                has_affirmative_true = True
+                unrecognized_notes.append(
+                    f"unrecognised boolean value for uncertainty alias '{name}': {val!r}; treated as uncertain."
+                )
+        elif name_lower == "count_confidence":
+            conf = normalize_count_confidence(val)
+            if conf == CountConfidence.EXACT:
+                has_affirmative_false = True
+            elif conf in (CountConfidence.UNCERTAIN, CountConfidence.UNKNOWN):
+                has_affirmative_true = True
+
+    if unrecognized_notes:
+        for un in sorted(list(dict.fromkeys(unrecognized_notes))):
+            notes_out.append(un)
+
+    if aliases:
+        if has_affirmative_true and has_affirmative_false:
+            is_uncertain = True
+            notes_out.append(
+                "conflicting uncertainty alias values provided; resolved to uncertain=True per OR semantics."
+            )
+        elif has_affirmative_true:
+            is_uncertain = True
+        else:
+            is_uncertain = False
+    else:
+        is_uncertain = has_affirmative_uncertainty_in_text(notes_text)
+
+    return is_uncertain, notes_out
+
+
+def parse_pulses_value(val: Any) -> Any:
+    """Parses raw pulses input from string, list, or scalar into resolved pulses representation."""
+    if isinstance(val, str):
+        v_stripped = val.strip()
+        v_lower = v_stripped.lower()
+        if v_lower == "none":
+            return "none"
+        if v_stripped.startswith("[") and v_stripped.endswith("]"):
+            items = [x.strip() for x in v_stripped[1:-1].split(",") if x.strip()]
+            parsed_list: List[Any] = []
+            for item in items:
+                if re.fullmatch(r"[-+]?[0-9]+", item):
+                    parsed_list.append(int(item))
+                else:
+                    parsed_list.append(item)
+            return parsed_list
+        if "," in v_stripped:
+            items = [x.strip() for x in v_stripped.split(",") if x.strip()]
+            parsed_list = []
+            for item in items:
+                if re.fullmatch(r"[-+]?[0-9]+", item):
+                    parsed_list.append(int(item))
+                else:
+                    parsed_list.append(item)
+            return parsed_list
+        if re.fullmatch(r"[-+]?[0-9]+", v_stripped):
+            return int(v_stripped)
+        return v_stripped
+    return val
+
+
 def parse_header_pulse_digits(header_content: str) -> Dict[int, Tuple[int, int]]:
     """Parses the actual CORE_LADDER_FRAME(tens, units) digits for every pulse macro in led_breadcrumb.h.
     
@@ -1277,6 +1404,105 @@ def parse_expected_diskboot_sha256(doc_path: Optional[Path] = None) -> str:
     return m.group(1).lower()
 
 
+def process_report_pairs(raw_pairs: Sequence[Tuple[Any, Any]]) -> Dict[str, Any]:
+    """Processes raw (key, value) pairs into a canonical report dictionary.
+    
+    Normalises uncertainty aliases, detects duplicate keys with conflicting values,
+    and ensures deterministic outputs regardless of field order or input format.
+    """
+    field_values: Dict[str, List[Any]] = {}
+    uncertainty_aliases: List[Tuple[str, Any]] = []
+    duplicate_conflicts: List[str] = []
+
+    for k, v in raw_pairs:
+        k_clean = str(k).strip().lower()
+        if k_clean in ("uncertain", "uncertainty", "count_confidence"):
+            uncertainty_aliases.append((k_clean, v))
+        else:
+            if k_clean not in field_values:
+                field_values[k_clean] = []
+            field_values[k_clean].append(v)
+
+    report: Dict[str, Any] = {}
+
+    for k, vals in field_values.items():
+        if k == "pulses":
+            parsed_vals = [parse_pulses_value(x) for x in vals]
+            cmp_vals = [tuple(x) if isinstance(x, list) else x for x in parsed_vals]
+            unique_cmp: List[Any] = []
+            for cv in cmp_vals:
+                if cv not in unique_cmp:
+                    unique_cmp.append(cv)
+
+            if len(unique_cmp) > 1:
+                duplicate_conflicts.append(
+                    f"Conflicting duplicate values for key 'pulses': {', '.join(repr(x) for x in parsed_vals)}"
+                )
+                report["pulses"] = parsed_vals
+            else:
+                report["pulses"] = parsed_vals[0]
+
+        elif k == "press":
+            norm_vals = [str(x).strip().lower() for x in vals]
+            unique_press = list(dict.fromkeys(norm_vals))
+            if len(unique_press) > 1:
+                duplicate_conflicts.append(
+                    f"Conflicting duplicate values for key 'press': {', '.join(repr(x) for x in unique_press)}"
+                )
+            report["press"] = norm_vals[0]
+
+        elif k == "diskboot_sha256":
+            norm_vals = [str(x).strip().lower() for x in vals]
+            unique_sha = list(dict.fromkeys(norm_vals))
+            if len(unique_sha) > 1:
+                duplicate_conflicts.append(
+                    f"Conflicting duplicate values for key 'diskboot_sha256': {', '.join(repr(x) for x in unique_sha)}"
+                )
+            report["diskboot_sha256"] = norm_vals[0]
+
+        elif k == "lcd":
+            norm_vals = [normalize_lcd_state(x) for x in vals]
+            unique_lcd = list(dict.fromkeys(norm_vals))
+            if len(unique_lcd) > 1:
+                duplicate_conflicts.append(
+                    f"Conflicting duplicate values for key 'lcd': {', '.join(repr(x) for x in vals)}"
+                )
+            report["lcd"] = vals[0]
+
+        elif k == "inspector_status":
+            norm_vals = [str(x).strip().lower() for x in vals]
+            unique_insp = list(dict.fromkeys(norm_vals))
+            if len(unique_insp) > 1:
+                duplicate_conflicts.append(
+                    f"Conflicting duplicate values for key 'inspector_status': {', '.join(repr(x) for x in unique_insp)}"
+                )
+            report["inspector_status"] = norm_vals[0]
+
+        elif k == "notes":
+            clean_notes = [str(x).strip() for x in vals if str(x).strip()]
+            unique_notes = list(dict.fromkeys(clean_notes))
+            report["notes"] = "; ".join(unique_notes)
+
+        else:
+            norm_vals = [str(x).strip() for x in vals]
+            unique_vals = list(dict.fromkeys(norm_vals))
+            if len(unique_vals) > 1:
+                duplicate_conflicts.append(
+                    f"Conflicting duplicate values for key '{k}': {', '.join(repr(x) for x in vals)}"
+                )
+            report[k] = vals[0]
+
+    notes_text = str(report.get("notes", ""))
+    is_uncertain, unc_notes = normalize_uncertainty(uncertainty_aliases, notes_text=notes_text)
+
+    report["uncertain"] = is_uncertain
+    report["uncertainty"] = is_uncertain
+    report["_uncertainty_notes"] = unc_notes
+    report["_duplicate_conflicts"] = duplicate_conflicts
+
+    return report
+
+
 def parse_owner_report(input_data: Union[str, Path, Dict[str, Any]]) -> Dict[str, Any]:
     """Parses an owner trial report from a dict, raw text (JSON or key=value), or a safe file path.
     
@@ -1290,7 +1516,7 @@ def parse_owner_report(input_data: Union[str, Path, Dict[str, Any]]) -> Dict[str
       - notes: optional notes
     """
     if isinstance(input_data, dict):
-        return dict(input_data)
+        return process_report_pairs(list(input_data.items()))
 
     raw_text: str = ""
 
@@ -1332,12 +1558,14 @@ def parse_owner_report(input_data: Union[str, Path, Dict[str, Any]]) -> Dict[str
     # Try parsing as JSON first
     if raw_text.startswith("{") and raw_text.endswith("}"):
         try:
-            return json.loads(raw_text)
+            parsed_pairs = json.loads(raw_text, object_pairs_hook=list)
+            if isinstance(parsed_pairs, list):
+                return process_report_pairs(parsed_pairs)
         except json.JSONDecodeError:
             pass
 
     # Parse simple key=value or key: value text format
-    report: Dict[str, Any] = {}
+    raw_pairs: List[Tuple[str, Any]] = []
     for line in raw_text.splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
@@ -1348,51 +1576,16 @@ def parse_owner_report(input_data: Union[str, Path, Dict[str, Any]]) -> Dict[str
             continue
 
         key, val = line.split(sep, 1)
-        key = key.strip().lower()
+        key = key.strip()
         val = val.strip()
 
         # Strip surrounding quotes if present
         if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
             val = val[1:-1].strip()
 
-        if key == "pulses":
-            val_lower = val.lower()
-            if val_lower == "none":
-                report[key] = "none"
-            elif val.startswith("[") and val.endswith("]"):
-                items = [x.strip() for x in val[1:-1].split(",") if x.strip()]
-                parsed_list: List[Any] = []
-                for item in items:
-                    if re.fullmatch(r"[-+]?[0-9]+", item):
-                        parsed_list.append(int(item))
-                    else:
-                        parsed_list.append(item)
-                report[key] = parsed_list
-            elif "," in val:
-                items = [x.strip() for x in val.split(",") if x.strip()]
-                parsed_list = []
-                for item in items:
-                    if re.fullmatch(r"[-+]?[0-9]+", item):
-                        parsed_list.append(int(item))
-                    else:
-                        parsed_list.append(item)
-                report[key] = parsed_list
-            elif re.fullmatch(r"[-+]?[0-9]+", val):
-                report[key] = int(val)
-            else:
-                report[key] = val
-        elif key in ("uncertain", "uncertainty"):
-            report["uncertain"] = is_truthy(val)
-        elif key == "count_confidence":
-            report["count_confidence"] = val
-        elif key == "diskboot_sha256":
-            report[key] = val.lower()
-        elif key == "press":
-            report[key] = val.lower()
-        else:
-            report[key] = val
+        raw_pairs.append((key, val))
 
-    return report
+    return process_report_pairs(raw_pairs)
 
 
 def is_count_adjacent_to_two_valid_codes(
@@ -1429,10 +1622,30 @@ def classify_owner_report(
     inspector_status = str(report.get("inspector_status", "")).strip().lower()
     notes_in = str(report.get("notes", "")).strip()
 
+    duplicate_conflicts = list(report.get("_duplicate_conflicts", []))
+    uncertainty_notes = list(report.get("_uncertainty_notes", []))
+    uncertainty_flagged = bool(report.get("uncertain", False))
+
     # Explicit note when held press does not reach stock UI affirmatively
     held_non_stock_note = ""
     if press == "held" and lcd_state != LcdState.STOCK_UI:
         held_non_stock_note = " (Note: press was held, but lcd state not affirmatively stock UI)."
+
+    # Gate Check: Conflicting duplicate keys
+    if duplicate_conflicts:
+        note_dup = (
+            f"Conflicting duplicate keys reported: {'; '.join(duplicate_conflicts)}. "
+            "Unable to definitively isolate terminal stage due to conflicting observations."
+        )
+        if held_non_stock_note:
+            note_dup += held_non_stock_note
+        return {
+            "class": "AMBIGUOUS",
+            "last_stage_reached": None,
+            "next_stage": None,
+            "evidence": "docs/PORT25_OWNER_TRIAL_PLAN.md:155-161; docs/PORT25_LADDER_FIX_CANDIDATE.md:265, 274",
+            "notes": note_dup,
+        }
 
     # 1. Gate Check: Candidate DISKBOOT SHA-256 Verification
     # Citation: docs/PORT25_LADDER_FIX_CANDIDATE.md:385
@@ -1605,6 +1818,8 @@ def classify_owner_report(
         )
         if held_non_stock_note:
             note_np += held_non_stock_note
+        if uncertainty_notes:
+            note_np += " " + " ".join(f"(Note: {n})" for n in uncertainty_notes)
         return {
             "class": "UNKNOWN_CODE",
             "last_stage_reached": None,
@@ -1614,26 +1829,6 @@ def classify_owner_report(
         }
 
     # 4. Check Off-By-One Uncertainty Rule
-    uncertain_val = report.get("uncertain")
-    uncertainty_val = report.get("uncertainty")
-    confidence_val = report.get("count_confidence")
-
-    uncertainty_flagged = False
-    norm_conf = normalize_count_confidence(confidence_val)
-    if norm_conf == CountConfidence.UNCERTAIN:
-        uncertainty_flagged = True
-    elif norm_conf == CountConfidence.EXACT:
-        uncertainty_flagged = False
-    elif uncertain_val is not None or uncertainty_val is not None:
-        if is_truthy(uncertain_val) or is_truthy(uncertainty_val):
-            uncertainty_flagged = True
-        elif (uncertain_val is not None and not is_truthy(uncertain_val)) or (
-            uncertainty_val is not None and not is_truthy(uncertainty_val)
-        ):
-            uncertainty_flagged = False
-    else:
-        uncertainty_flagged = has_affirmative_uncertainty_in_text(notes_in)
-
     if uncertainty_flagged and is_count_adjacent_to_two_valid_codes(count_resolved, table):
         prev_sym = table[count_resolved - 1]["stage_symbol"]
         next_sym = table[count_resolved + 1]["stage_symbol"]
@@ -1644,6 +1839,8 @@ def classify_owner_report(
         )
         if held_non_stock_note:
             note_adj += held_non_stock_note
+        if uncertainty_notes:
+            note_adj += " " + " ".join(f"(Note: {n})" for n in uncertainty_notes)
         return {
             "class": "AMBIGUOUS",
             "last_stage_reached": None,
@@ -1674,6 +1871,9 @@ def classify_owner_report(
         if held_non_stock_note:
             note_text += held_non_stock_note
 
+        if uncertainty_notes:
+            note_text += " " + " ".join(f"(Note: {n})" for n in uncertainty_notes)
+
         return {
             "class": f"CODE_{count_resolved}",
             "last_stage_reached": stage_symbol,
@@ -1689,6 +1889,10 @@ def classify_owner_report(
     )
     if held_non_stock_note:
         note_oot += held_non_stock_note
+    if uncertainty_flagged:
+        note_oot += " (Note: owner flagged uncertainty, but count is not adjacent to two valid codes)."
+    if uncertainty_notes:
+        note_oot += " " + " ".join(f"(Note: {n})" for n in uncertainty_notes)
     return {
         "class": "UNKNOWN_CODE",
         "last_stage_reached": None,

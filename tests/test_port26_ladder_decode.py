@@ -63,11 +63,13 @@ from tools.port26_ladder_decode import (
     is_truthy,
     normalize_count_confidence,
     normalize_lcd_state,
+    normalize_uncertainty,
     parse_expected_diskboot_sha256,
     parse_header_pulse_digits,
     parse_ladder_table_from_build_source,
     parse_ladder_table_from_source,
     parse_owner_report,
+    parse_recognized_boolean,
     safe_open_report,
     validate_safety_path,
     verify_source_consistency,
@@ -653,6 +655,202 @@ class TestPort26LadderDecode(unittest.TestCase):
             with self.subTest(kv_neg=kv.splitlines()[-1]):
                 res = classify_owner_report(kv)
                 self.assertEqual(res["class"], "CODE_24", f"Should be CODE_24 for: {kv!r}")
+
+    def test_uncertainty_normalization_and_duplicate_keys_regression(self) -> None:
+        """[P2 Regression] Normalise uncertainty and reject conflicting duplicate keys:
+        1. pulses=24 with uncertain=true and uncertainty=false gives AMBIGUOUS in JSON,
+           in key=value with one field order, and in key=value with the reversed order.
+           All three outputs must be byte-identical JSON.
+        2. Mirror case: uncertain=false and uncertainty=true also gives AMBIGUOUS in both
+           formats and both orders; all outputs are byte-identical.
+        3. An unrecognised alias value (for example uncertain=maybe) is treated as uncertain.
+        4. Duplicate conflicting key=value lines (for example two pulses= lines with different
+           values) never give a definite CODE_* class.
+        """
+        # 1. pulses=24 with uncertain=true and uncertainty=false
+        json_true_false = (
+            '{\n'
+            f'  "diskboot_sha256": "{self.valid_hash}",\n'
+            '  "press": "short",\n'
+            '  "pulses": 24,\n'
+            '  "uncertain": true,\n'
+            '  "uncertainty": false,\n'
+            '  "lcd": "dark",\n'
+            '  "inspector_status": "none"\n'
+            '}'
+        )
+        kv_order1 = (
+            f"diskboot_sha256 = {self.valid_hash}\n"
+            "press = short\n"
+            "pulses = 24\n"
+            "uncertain = true\n"
+            "uncertainty = false\n"
+            "lcd = dark\n"
+            "inspector_status = none\n"
+        )
+        kv_order2 = (
+            f"diskboot_sha256 = {self.valid_hash}\n"
+            "press = short\n"
+            "pulses = 24\n"
+            "uncertainty = false\n"
+            "uncertain = true\n"
+            "lcd = dark\n"
+            "inspector_status = none\n"
+        )
+
+        out_json = decode_ladder_report(json_true_false)
+        out_kv1 = decode_ladder_report(kv_order1)
+        out_kv2 = decode_ladder_report(kv_order2)
+
+        dict_json = json.loads(out_json)
+        self.assertEqual(dict_json["class"], "AMBIGUOUS")
+        self.assertIn("off-by-one uncertainty rule", dict_json["notes"])
+        self.assertIn("conflicting uncertainty alias values", dict_json["notes"])
+
+        # All three outputs must be byte-identical JSON
+        self.assertEqual(out_json, out_kv1)
+        self.assertEqual(out_json, out_kv2)
+
+        # 2. Mirror case: uncertain=false and uncertainty=true
+        json_false_true = (
+            '{\n'
+            f'  "diskboot_sha256": "{self.valid_hash}",\n'
+            '  "press": "short",\n'
+            '  "pulses": 24,\n'
+            '  "uncertain": false,\n'
+            '  "uncertainty": true,\n'
+            '  "lcd": "dark",\n'
+            '  "inspector_status": "none"\n'
+            '}'
+        )
+        kv_mirror1 = (
+            f"diskboot_sha256 = {self.valid_hash}\n"
+            "press = short\n"
+            "pulses = 24\n"
+            "uncertain = false\n"
+            "uncertainty = true\n"
+            "lcd = dark\n"
+            "inspector_status = none\n"
+        )
+        kv_mirror2 = (
+            f"diskboot_sha256 = {self.valid_hash}\n"
+            "press = short\n"
+            "pulses = 24\n"
+            "uncertainty = true\n"
+            "uncertain = false\n"
+            "lcd = dark\n"
+            "inspector_status = none\n"
+        )
+
+        out_mirror_json = decode_ladder_report(json_false_true)
+        out_mirror_kv1 = decode_ladder_report(kv_mirror1)
+        out_mirror_kv2 = decode_ladder_report(kv_mirror2)
+
+        dict_mirror_json = json.loads(out_mirror_json)
+        self.assertEqual(dict_mirror_json["class"], "AMBIGUOUS")
+        self.assertIn("off-by-one uncertainty rule", dict_mirror_json["notes"])
+        self.assertIn("conflicting uncertainty alias values", dict_mirror_json["notes"])
+
+        self.assertEqual(out_mirror_json, out_mirror_kv1)
+        self.assertEqual(out_mirror_json, out_mirror_kv2)
+        # Symmetrical consistency: mirror outputs are also byte-identical to primary outputs
+        self.assertEqual(out_mirror_json, out_json)
+
+        # 3. Unrecognised alias value (e.g. uncertain=maybe) treated as uncertain (never false)
+        kv_unrecognized = (
+            f"diskboot_sha256 = {self.valid_hash}\n"
+            "press = short\n"
+            "pulses = 24\n"
+            "uncertain = maybe\n"
+            "lcd = dark\n"
+            "inspector_status = none\n"
+        )
+        res_unrec_kv = classify_owner_report(kv_unrecognized)
+        self.assertEqual(res_unrec_kv["class"], "AMBIGUOUS")
+        self.assertIn("unrecognised boolean value for uncertainty alias", res_unrec_kv["notes"])
+        self.assertIn("maybe", res_unrec_kv["notes"])
+
+        json_unrecognized = (
+            '{\n'
+            f'  "diskboot_sha256": "{self.valid_hash}",\n'
+            '  "press": "short",\n'
+            '  "pulses": 24,\n'
+            '  "uncertain": "maybe",\n'
+            '  "lcd": "dark",\n'
+            '  "inspector_status": "none"\n'
+            '}'
+        )
+        res_unrec_json = classify_owner_report(json_unrecognized)
+        self.assertEqual(res_unrec_json["class"], "AMBIGUOUS")
+        self.assertEqual(decode_ladder_report(kv_unrecognized), decode_ladder_report(json_unrecognized))
+
+        # Unrecognised boolean with in-table code not adjacent to two valid codes (e.g. code 11)
+        res_unrec_11 = classify_owner_report({
+            "diskboot_sha256": self.valid_hash,
+            "press": "short",
+            "pulses": 11,
+            "uncertain": "maybe",
+            "lcd": "dark",
+            "inspector_status": "none",
+        })
+        self.assertEqual(res_unrec_11["class"], "CODE_11")
+        self.assertIn("unrecognised boolean value for uncertainty alias", res_unrec_11["notes"])
+        self.assertIn("not adjacent to two valid codes", res_unrec_11["notes"])
+
+        # 4. Duplicate conflicting key=value lines never give a definite CODE_* class
+        kv_conflicting_pulses_1 = (
+            f"diskboot_sha256 = {self.valid_hash}\n"
+            "press = short\n"
+            "pulses = 24\n"
+            "pulses = 25\n"
+            "lcd = dark\n"
+            "inspector_status = none\n"
+        )
+        res_dup_p1 = classify_owner_report(kv_conflicting_pulses_1)
+        self.assertEqual(res_dup_p1["class"], "AMBIGUOUS")
+        self.assertNotEqual(res_dup_p1["class"], "CODE_24")
+        self.assertNotEqual(res_dup_p1["class"], "CODE_25")
+        self.assertIn("Conflicting duplicate values for key 'pulses'", res_dup_p1["notes"])
+
+        kv_conflicting_pulses_2 = (
+            f"diskboot_sha256 = {self.valid_hash}\n"
+            "press = short\n"
+            "pulses = 25\n"
+            "pulses = 24\n"
+            "lcd = dark\n"
+            "inspector_status = none\n"
+        )
+        res_dup_p2 = classify_owner_report(kv_conflicting_pulses_2)
+        self.assertEqual(res_dup_p2["class"], "AMBIGUOUS")
+        self.assertNotEqual(res_dup_p2["class"], "CODE_24")
+        self.assertNotEqual(res_dup_p2["class"], "CODE_25")
+
+        # Conflicting press keys
+        kv_conflicting_press = (
+            f"diskboot_sha256 = {self.valid_hash}\n"
+            "press = short\n"
+            "press = held\n"
+            "pulses = 24\n"
+            "lcd = stock_ui\n"
+            "inspector_status = none\n"
+        )
+        res_dup_press = classify_owner_report(kv_conflicting_press)
+        self.assertEqual(res_dup_press["class"], "AMBIGUOUS")
+        self.assertIn("Conflicting duplicate values for key 'press'", res_dup_press["notes"])
+        self.assertNotEqual(res_dup_press["class"], "CONTROL_HELD_O1")
+        self.assertNotEqual(res_dup_press["class"], "CODE_24")
+
+        # Duplicate IDENTICAL pulses lines (no conflict) decodes cleanly
+        kv_identical_pulses = (
+            f"diskboot_sha256 = {self.valid_hash}\n"
+            "press = short\n"
+            "pulses = 24\n"
+            "pulses = 24\n"
+            "lcd = dark\n"
+            "inspector_status = none\n"
+        )
+        res_ident = classify_owner_report(kv_identical_pulses)
+        self.assertEqual(res_ident["class"], "CODE_24")
 
     def test_wrong_candidate_hash(self) -> None:
         """Covers INVALID_CANDIDATE when candidate SHA-256 does not match."""
