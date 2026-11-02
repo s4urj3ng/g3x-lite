@@ -78,20 +78,26 @@ CreateTask Entry Frame & Argument Register State at 0xFCEF3488 (ATCM 0xBFE14A3C)
 Register  Incoming Value at Entry           Literally Verified Action & Semantic Role
 ----------------------------------------------------------------------------------------
 r0        Task Name Pointer                 Moved to r4; if r0 == 0, loads fallback *(r1);
-                                            stored to descriptor [sp, #24] [VERIFIED].
+                                            stored to stack-frame offset [sp, #24] /
+                                            descriptor offset [desc, #20] (desc = sp + 4) [VERIFIED].
                                             Semantic role as name string pointer [INFERRED].
 r1        Task Execution Priority           Moved to r6; checked (r1 - 1) < 0x20 else asserts;
-                                            stored to descriptor [sp, #29] [VERIFIED].
+                                            stored to stack-frame offset [sp, #29] /
+                                            descriptor offset [desc, #25] (desc = sp + 4) [VERIFIED].
                                             Semantic role as scheduling priority [INFERRED].
 r2        Task Stack Size (Bytes)           Moved to r5; if r2 == 0, loads fallback *(r1 + 4);
-                                            forwarded as parameter to 0xBFE10B88 [VERIFIED].
+                                            forwarded as parameter to 0xBFE10B88; stored to
+                                            stack-frame offset [sp, #20] / descriptor offset
+                                            [desc, #16] (desc = sp + 4) [VERIFIED].
                                             Literal pool address 0xFCEF36A0 unread [INFERRED: PORT11A].
                                             Semantic role as stack size in bytes [INFERRED].
 r3        Task Entry Function Pointer       Checked r3 != 0 else asserts; stored to
-                                            descriptor offset 8 [VERIFIED].
+                                            stack-frame offset [sp, #8] / descriptor offset
+                                            [desc, #4] (desc = sp + 4) [VERIFIED].
                                             Semantic role as entry point [INFERRED].
 sp[0]     User Context Parameter            Loaded from caller stack [sp, #0x28]; forwarded
-                                            to descriptor offset 12 [VERIFIED].
+                                            to stack-frame offset [sp, #12] / descriptor offset
+                                            [desc, #8] (desc = sp + 4) [VERIFIED].
                                             Semantic delivery to spawned task [INFERRED].
 ========================================================================================
 ```
@@ -107,12 +113,12 @@ sp[0]     User Context Parameter            Loaded from caller stack [sp, #0x28]
   4. At `0xFCEF34AC` (`04 b9`), `cbnz r4, 0xbfe14a64` inspects `r4`. If `r4 != 0`, caller value is preserved. If `r4 == 0`, instruction `0xFCEF34AE` (`0c 68`) executes `ldr r4, [r1]`, substituting the default pointer stored at `*(uint32_t *)r1` `[VERIFIED]`.
   5. At `0xFCEF34D4` (`02 94`), `str r4, [sp, #8]` passes `r4` on the stack to internal routine `0xBFE10B88` `[VERIFIED]`.
 - **Call-Site Corroboration in Slice N3 (`0xBFE10B88` / `0xFCEEF5D4`)**:
-  - In `alloc_task_stack_tcb` (`0xFCEEF5D4` / `0xBFE10B88`), after allocating a 56-byte stack frame (`stmdb sp!` 24 B + `sub sp, #32`), instruction `0xBFE10B8E` (`e9dd 780f`) executes `ldrd r7, r8, [sp, #60]`, retrieving `r8` from `sp + 64` (corresponding to caller's `sp + 8`).
-  - At `0xBFE10BF6` (`f8cd 8018`), `str.w r8, [sp, #24]` stores this pointer into offset 24 of the task registration descriptor `[VERIFIED]`.
+  - In `alloc_task_stack_tcb` (`0xFCEEF5D4` / `0xBFE10B88`), after allocating a 56-byte stack frame (`stmdb sp!` 24 B + `sub sp, #32`), instruction `0xBFE10B8E` (`e9dd 780f`) executes `ldrd r7, r8, [sp, #60]`, retrieving `r8` from stack-frame offset `sp + 64` (corresponding to caller's `sp + 8`).
+  - At `0xBFE10BF4` (word `0xA801`, `add r0, sp, #4`), `alloc_task_stack_tcb` sets up the descriptor pointer passed in `r0` to `0xBFE11746`, defining descriptor base `desc = sp + 4`. At `0xBFE10BF6` (`f8cd 8018`), `str.w r8, [sp, #24]` stores this pointer into stack-frame offset `sp + 24`, corresponding to descriptor offset `desc + 20` (`desc = sp + 4`) `[VERIFIED]`.
 - **Stock Caller Call-Site Evidence**:
-  - In `sub_fc05b962` (`PORT27-ROM-STARTUP-TASKS`) at `0xFC05B984`: `ldr r0, [pc, #0x18]` loads `r0 = 0xFC05B9A0`, pointing to literal string `"init_task\0"` `[VERIFIED]`.
+  - In `sub_fc05b962` (`PORT27-ROM-STARTUP-TASKS`) at `0xFC05B984`: `ldr r0, [pc, #0x18]` loads `r0 = 0xFC05B9A0`, pointing to literal string `"init_task\0"` `[INFERRED: historical corroboration, citing docs/PORT27_RESIDENT_EVIDENCE.md:144-155 / docs/PORT11A_GM110C_ROM_EVIDENCE.md:104-108]`.
 - **Status Summary**:
-  - Register forwarding, null check, fallback dereference, and descriptor store: **`[VERIFIED]`**.
+  - Register forwarding, null check, fallback dereference, and descriptor store at stack-frame offset `sp + 24` / descriptor offset `desc + 20`: **`[VERIFIED]`**.
   - Semantic interpretation as null-terminated ASCII task name string: **`[INFERRED]`** (consumer at `0xBFE11746` unread).
 
 ### 3.2 Role of `r1`: Range Check and Descriptor Storage `[VERIFIED]` / Priority Interpretation `[INFERRED]`
@@ -131,11 +137,11 @@ sp[0]     User Context Parameter            Loaded from caller stack [sp, #0x28]
   - In `alloc_task_stack_tcb` at `0xBFE10B92` (`9c0e`), `ldr r4, [sp, #56]` loads `r4` from caller's `[sp]` (retrieving `r6`).
   - At `0xBFE10BA6` (`2c00`), `cmp r4, #0`; `db3a: blt 0xbfe10c20` verifies value is non-negative `[VERIFIED]`.
   - At `0xBFE10BAA` (`4df0`), `ldr r5, [pc, #960]`; `682d: ldr r5, [r5]`; `42ac: cmp r4, r5`; `da36: bge 0xbfe10c20` compares against active task limit `[VERIFIED]`.
-  - At `0xBFE10BEC` (`f88d 401d`), `strb.w r4, [sp, #29]` writes the byte into offset 29 of the task control block descriptor `[VERIFIED]`.
+  - At `0xBFE10BEC` (`f88d 401d`), `strb.w r4, [sp, #29]` writes the priority byte into stack-frame offset `sp + 29`, corresponding to descriptor offset `desc + 25` (`desc = sp + 4`) of the task control block descriptor `[VERIFIED]`.
 - **Stock Caller Call-Site Evidence**:
-  - In `sub_fc05b962` (`PORT27-ROM-STARTUP-TASKS`) at `0xFC05B98A`: `movs r1, #25` (passes 25, within verified $1..32$ bounds) `[VERIFIED]`.
+  - In `sub_fc05b962` (`PORT27-ROM-STARTUP-TASKS`) at `0xFC05B98A`: `movs r1, #25` (passes 25, within verified $1..32$ bounds) `[INFERRED: historical corroboration, citing docs/PORT27_RESIDENT_EVIDENCE.md:147]`.
 - **Status Summary**:
-  - Range check `(r1 - 1) < 0x20` ($1 \le r1 \le 32$) else `DebugAssert`, register forwarding, and descriptor byte store: **`[VERIFIED]`**.
+  - Range check `(r1 - 1) < 0x20` ($1 \le r1 \le 32$) else `DebugAssert`, register forwarding, and descriptor store at stack-frame offset `sp + 29` / descriptor offset `desc + 25`: **`[VERIFIED]`**.
   - Semantic interpretation as task scheduling priority: **`[INFERRED]`** (consumer at `0xBFE11746` and scheduler unread).
 
 ### 3.3 Role of `r2`: Argument Forwarding and Default Load `[VERIFIED]` / Stack Size Interpretation `[INFERRED]`
@@ -150,12 +156,12 @@ sp[0]     User Context Parameter            Loaded from caller stack [sp, #0x28]
 - **Call-Site Corroboration in Slice N3 (`0xBFE10B88` / `0xFCEEF5D4`)**:
   - In `alloc_task_stack_tcb` at `0xBFE10B94` (`b90b`), `cbnz r3, 0xbfe10b9a` verifies that `r3` is non-zero `[VERIFIED]`.
   - At `0xBFE10B96` (`4bf3`) and `0xBFE10B98` (`681b`), `ldr r3, [pc, #972]` (`0xBFE10F64`); `ldr r3, [r3]` provides secondary fallback if `r3 == 0` `[VERIFIED]`.
-  - At `0xBFE10BD8` (`c00e`), `stmia r0!, {r1, r2, r3}` writes `r3` into offset 20 (`[sp, #20]`) of the task creation parameter block passed to internal kernel allocator `0xBFE11746` `[VERIFIED]`.
+  - At `0xBFE10BD6` (word `0xA803`, `add r0, sp, #12`), `alloc_task_stack_tcb` sets `r0 = sp + 12`; then at `0xBFE10BD8` (`c00e`), `stmia r0!, {r1, r2, r3}` writes `{r1, r2, r3}` sequentially into stack-frame offsets `sp + 12`, `sp + 16`, and `sp + 20`. Parameter `r3` (forwarded from `r2` / default stack size) is thus written into stack-frame offset `sp + 20`, corresponding to descriptor offset `desc + 16` (`desc = sp + 4`) of the task creation parameter block passed to internal kernel allocator `0xBFE11746` `[VERIFIED]`.
 - **Stock Caller Call-Site Evidence**:
-  - In `sub_fc05b962` (`PORT27-ROM-STARTUP-TASKS`) at `0xFC05B988`: `movs r2, #0` (passes 0 to trigger default load) `[VERIFIED]`.
-  - In `task_InitFileModules` creator `sub_fc0bd0b4` (`PORT11A-S2A`) at `0xFC0BD0CC`: `mov.w r2, #0x1000` (passes explicit non-zero value 4,096) `[VERIFIED]`.
+  - In `sub_fc05b962` (`PORT27-ROM-STARTUP-TASKS`) at `0xFC05B988`: `movs r2, #0` (passes 0 to trigger default load) `[INFERRED: historical corroboration, citing docs/PORT27_RESIDENT_EVIDENCE.md:146]`.
+  - In `task_InitFileModules` creator `sub_fc0bd0b4` (`PORT11A-S2A`) at `0xFC0BD0CC`: `mov.w r2, #0x1000` (passes explicit non-zero value 4,096) `[INFERRED: historical corroboration, citing docs/PORT11A_GM110C_ROM_EVIDENCE.md:158]`.
 - **Status Summary**:
-  - Argument forwarding, non-zero bypass, and `r2 == 0` fallback load from `[r1, #4]`: **`[VERIFIED]`**.
+  - Argument forwarding, non-zero bypass, `r2 == 0` fallback load from `[r1, #4]`, and store to stack-frame offset `sp + 20` / descriptor offset `desc + 16` (`desc = sp + 4`): **`[VERIFIED]`**.
   - Literal pool word `0x000081CC` at `0xFCEF36A0` and default address `0x000081D0`: **`[INFERRED: docs/PORT11A_GM110C_ROM_EVIDENCE.md:144, 162-164]`**.
   - Semantic interpretation as stack size in bytes: **`[INFERRED]`** (consumer at `0xBFE11746` unread).
   - Runtime numeric integer value at `*(0x000081D0)`: **`[UNKNOWN]`**.
@@ -170,11 +176,11 @@ sp[0]     User Context Parameter            Loaded from caller stack [sp, #0x28]
   3. At `0xFCEF3494`, `ldr.w r8, [sp, #0x28]` reads 32 bits from `sp_current + 0x28`, corresponding precisely to `sp_entry + 0x00` (caller's 5th argument passed on stack). The word is loaded into callee-saved register `r8` `[VERIFIED]`.
   4. At `0xFCEF34CE` (`41 46`), `mov r1, r8` transfers `r8` into `r1` as argument 2 for callee `0xBFE10B88` `[VERIFIED]`.
 - **Call-Site Corroboration in Slice N3 (`0xBFE10B88` / `0xFCEEF5D4`)**:
-  - In `alloc_task_stack_tcb` at `0xBFE10BD8` (`c00e`), `stmia r0!, {r1, r2, r3}` writes incoming `r1` into offset 12 (`[sp, #12]`) of the parameter block passed to `0xBFE11746` `[VERIFIED]`.
+  - In `alloc_task_stack_tcb` at `0xBFE10BD6` (`add r0, sp, #12`) and `0xBFE10BD8` (`c00e`, `stmia r0!, {r1, r2, r3}`), incoming `r1` (caller's `sp[0]`) is written into stack-frame offset `sp + 12`, corresponding to descriptor offset `desc + 8` (`desc = sp + 4`) of the parameter block passed to `0xBFE11746` `[VERIFIED]`.
 - **Stock Caller Call-Site Evidence**:
-  - In `sub_fc05b962` (`PORT27-ROM-STARTUP-TASKS`) at `0xFC05B980..0xFC05B982`: `movs r3, #0`; `str r3, [sp, #0]` (places 0 at `sp[0]`) `[VERIFIED]`.
+  - In `sub_fc05b962` (`PORT27-ROM-STARTUP-TASKS`) at `0xFC05B980..0xFC05B982`: `movs r3, #0`; `str r3, [sp, #0]` (places 0 at `sp[0]`) `[INFERRED: historical corroboration, citing docs/PORT27_RESIDENT_EVIDENCE.md:145]`.
 - **Status Summary**:
-  - Retrieval of 5th parameter from caller stack `sp[0]` and forwarding into descriptor offset 12: **`[VERIFIED]`**.
+  - Retrieval of 5th parameter from caller stack `sp[0]` and forwarding into stack-frame offset `sp + 12` / descriptor offset `desc + 8` (`desc = sp + 4`): **`[VERIFIED]`**.
   - Semantic delivery to spawned task function as user context argument: **`[INFERRED]`** (consumer at `0xBFE11746` and task dispatcher unread).
 
 ### 3.5 Corroborating Role of `r3`: Non-Null Check and Entry Forwarding `[VERIFIED]` / Execution Role `[INFERRED]`
@@ -185,9 +191,9 @@ sp[0]     User Context Parameter            Loaded from caller stack [sp, #0x28]
   1. At `0xFCEF3498`, `mov r7, r3` preserves incoming `r3` in callee-saved register `r7` `[VERIFIED]`.
   2. At `0xFCEF34B6` (`3f b9`), `cbnz r7, 0xbfe14a7c` checks whether `r7` is non-zero. If `r7 == 0`, execution falls through to `0xFCEF34B8`, calling `DebugAssert` with source line 160 (`movs r2, #0xa0`) and aborting task creation `[VERIFIED]`.
   3. At `0xFCEF34D0` (`38 46`), `mov r0, r7` passes the function pointer in `r0` to `0xBFE10B88` `[VERIFIED]`.
-  4. In `alloc_task_stack_tcb` at `0xBFE10BD2` (`e9cd 6001`), `strd r6, r0, [sp, #4]` writes `r0` into offset 8 of the task descriptor `[VERIFIED]`.
+  4. In `alloc_task_stack_tcb` at `0xBFE10BD2` (`e9cd 6001`), `strd r6, r0, [sp, #4]` writes `r0` (task entry function pointer) into stack-frame offset `sp + 8`, corresponding to descriptor offset `desc + 4` (`desc = sp + 4`) of the task descriptor `[VERIFIED]`.
 - **Status Summary**:
-  - Check `r3 != 0` else `DebugAssert`, register forwarding, and descriptor store: **`[VERIFIED]`**.
+  - Check `r3 != 0` else `DebugAssert`, register forwarding, and descriptor store at stack-frame offset `sp + 8` / descriptor offset `desc + 4`: **`[VERIFIED]`**.
   - Execution as spawned task main entry point: **`[INFERRED]`** (consumer at `0xBFE11746` and task dispatcher unread).
 
 ---
@@ -202,9 +208,14 @@ Summary of Task Stack Allocation Properties:
 ----------------------------------------------------------------------------------------
 Property            Finding / Specification                  Epistemic Status & Citation
 ----------------------------------------------------------------------------------------
-Allocated By        Caller passes no buffer pointer;         [VERIFIED: 0xFCEF3488; 0xFCEF34DA]
-                    delegates size to 0xBFE10B88/0xBFE11746
-                    Stack allocation mechanism by kernel     [INFERRED: consumer 0xBFE11746 unread]
+Argument Forwarding Forwarding of r2 to 0xBFE10B88; store    [VERIFIED: 0xFCEF3492; 0xFCEF34D2;
+                    to stack-frame offset [sp, #20] /         0xFCEF34DA; 0xBFE10BD8]
+                    descriptor offset [desc, #16] (desc=sp+4)
+Fallback Load       Fallback load from *(r1 + 4) if r2 == 0  [VERIFIED: 0xFCEF34CA]
+Allocated By        Allocator identity (caller vs kernel);   [INFERRED: consumer 0xBFE11746 unread;
+                    forwarding does not rule out r2 as       forwarding instructions do not rule
+                    a caller-provided buffer pointer          out reading r2 as buffer]
+                    Stack allocation mechanism in kernel     [INFERRED: consumer 0xBFE11746 unread]
 ----------------------------------------------------------------------------------------
 Stack Size (r2!=0)  Explicit caller integer forwarded        [VERIFIED: 0xFCEF34C8; 0xFCEF34D2]
                     Interpretation as byte size              [INFERRED: consumer 0xBFE11746 unread]
@@ -219,14 +230,14 @@ Enforcement Site    Not in CreateTask (0xFCEF3488)           [VERIFIED: no bic/a
 ========================================================================================
 ```
 
-### 4.1 Who Allocates the Stack: Caller vs. Callee/Kernel `[VERIFIED / INFERRED]`
+### 4.1 Who Allocates the Stack: Caller vs. Callee/Kernel `[VERIFIED / INFERRED / UNKNOWN]`
 - **Analysis**:
-  1. Under the calling convention evidenced at `CreateTask` entry (`0xFCEF3488..0xFCEF3494`), the caller passes only five parameters (`r0`–`r3` and `sp[0]`).
-  2. The caller **never allocates or provides a stack buffer pointer**. There is no parameter for a stack memory buffer address `[VERIFIED]`.
-  3. Inside `CreateTask`, instruction `0xFCEF34DA` (`fc f7 7b f8`) executes `bl 0xBFE10B88`, transferring execution to `alloc_task_stack_tcb` with `r3 = stack_size` `[VERIFIED]`.
-  4. In Slice N3 (`0xFCEEF5C0..0xFCEEF7BF`), `alloc_task_stack_tcb` builds a task descriptor on its stack frame (`sp + 4`) and at `0xBFE10BFA` (`f000 fda4`) executes `bl 0xBFE11746`, calling the internal kernel routine `[VERIFIED]`.
-  5. That routine `0xBFE11746` dynamically allocates the stack buffer from kernel memory is **`[INFERRED]`**, because the function body of `0xBFE11746` (ROM `0xFCEF0192`) was not read under PORT-29 policy.
-- **Verdict**: Caller provides no buffer; argument forwarding to callee/kernel is **`[VERIFIED]`**; callee/kernel allocation mechanism is **`[INFERRED]`**.
+  1. Under the calling convention evidenced at `CreateTask` entry (`0xFCEF3488..0xFCEF3494`), five arguments are passed (`r0`–`r3` and `sp[0]`).
+  2. Inside `CreateTask`, `r2` is preserved in `r5` (`0xFCEF3492`) and forwarded as argument `r3` to `alloc_task_stack_tcb` (`0xBFE10B88`) at `0xFCEF34D2` and `0xFCEF34DA` (`bl 0xBFE10B88`), with an `r2 == 0` fallback load from `*(r1 + 4)` at `0xFCEF34CA` `[VERIFIED]`.
+  3. In Slice N3 (`0xFCEEF5C0..0xFCEEF7BF`), `alloc_task_stack_tcb` builds a task descriptor on its stack frame (`desc = sp + 4`, set up at `0xBFE10BF4: add r0, sp, #4`), writes `r3` into stack-frame offset `sp + 20` / descriptor offset `desc + 16` (`0xBFE10BD8`), and executes `bl 0xBFE11746` at `0xBFE10BFA`, transferring the descriptor pointer `r0` to the internal kernel routine `[VERIFIED]`.
+  4. The claim that "the caller never allocates or provides a stack buffer pointer" cannot be certified as verified from the observed forwarding instructions alone: `CreateTask` does not inspect or dereference `r2`, and the forwarding instructions do not rule out the consumer `0xBFE11746` interpreting `r2` as a caller-supplied buffer or structure pointer. The function body of `0xBFE11746` (ROM `0xFCEF0192`) was not read under PORT-29 policy.
+  5. Therefore, the allocator identity (that the DryOS kernel allocates the task stack rather than the caller providing a buffer), the interpretation of `r2` as a byte size, and the downstream stack allocation mechanism are **`[INFERRED: consumer 0xBFE11746 unread]`**.
+- **Verdict**: Register forwarding and `r2 == 0` fallback load are **`[VERIFIED]`**; allocator identity (caller vs kernel) and size semantics are **`[INFERRED]`**; exact kernel allocator mechanism is **`[UNKNOWN]`**.
 
 ### 4.2 Stack Size Determination `[VERIFIED / INFERRED / UNKNOWN]`
 - **Explicit Size (`r2 != 0`)**:
@@ -241,7 +252,7 @@ Enforcement Site    Not in CreateTask (0xFCEF3488)           [VERIFIED: no bic/a
 ### 4.3 Stack Memory Alignment `[VERIFIED / UNKNOWN]`
 - **Absence of Masking in `CreateTask` and `alloc_task_stack_tcb`**:
   - A static audit of all 114 bytes in `CreateTask` (`0xFCEF3488..0xFCEF34F9`) confirms there are zero bitwise masking instructions (`bic`, `and`) or alignment tests applied to `r2` or `r5` `[VERIFIED]`.
-  - A static audit of the 160-byte function body of `alloc_task_stack_tcb` (`0xBFE10B88..0xBFE10C26`, ROM `0xFCEEF5D4..0xFCEEF672`) confirms there are likewise zero alignment masking instructions applied to `r3` before storing it into descriptor offset 20 `[VERIFIED]`.
+  - A static audit of the 160-byte function body of `alloc_task_stack_tcb` (`0xBFE10B88..0xBFE10C26`, ROM `0xFCEEF5D4..0xFCEEF672`) confirms there are likewise zero alignment masking instructions applied to `r3` before storing it into stack-frame offset `sp + 20` / descriptor offset `desc + 16` (`desc = sp + 4`) `[VERIFIED]`.
 - **Downstream Kernel Alignment**:
   - Downstream routine `0xBFE11746` (ROM `0xFCEF0192`) allocates the stack buffer and sets up the initial Task Control Block (TCB). Whether `0xBFE11746` aligns the stack pointer to 4-byte or 8-byte boundaries (AAPCS compliant) cannot be observed within read slices.
   - Therefore, the exact stack alignment enforced by the DryOS kernel allocator remains **`[UNKNOWN]`**.
@@ -252,11 +263,11 @@ Enforcement Site    Not in CreateTask (0xFCEF3488)           [VERIFIED: no bic/a
 
 | Prerequisite Element | Evidenced Property & ROM Instruction | Epistemic Status & Citations |
 |---|---|:---:|
-| **`r0` Role** | Moved to `r4`; if 0, fallback `ldr r4, [r1]`; stored to descriptor `[sp, #24]` | **`[VERIFIED: 0xFCEF348C: mov r4, r0; 0xFCEF34AC: cbnz r4; 0xFCEF34AE: ldr r4, [r1]; 0xBFE10BF6: str.w r8, [sp, #24]]`**<br>**Semantic role as name string pointer: `[INFERRED: consumer 0xBFE11746 unread]`** |
-| **`r1` Role** | Moved to `r6`; checked `(r1 - 1) < 0x20` ($1 \le r1 \le 32$) else `DebugAssert`; stored to descriptor `[sp, #29]` | **`[VERIFIED: 0xFCEF3490: mov r6, r1; 0xFCEF34B0: subs r0, r6, #1; 0xFCEF34B2: cmp r0, #0x20; 0xBFE10BEC: strb.w r4, [sp, #29]]`**<br>**Semantic role as scheduling priority: `[INFERRED: consumer 0xBFE11746 unread]`** |
-| **`r2` Role** | Moved to `r5`; if 0, fallback `ldr r5, [r1, #4]`; forwarded to descriptor offset 20 | **`[VERIFIED: 0xFCEF3492: mov r5, r2; 0xFCEF34C8: cbnz r5; 0xFCEF34CA: ldr r5, [r1, #4]; 0xBFE10BD8: stmia]`**<br>**Literal 0x81CC at 0xFCEF36A0 and 0x81D0: `[INFERRED: docs/PORT11A:144, 162-164]`**<br>**Semantic role as stack size in bytes: `[INFERRED: consumer 0xBFE11746 unread]`** |
-| **`sp[0]` Role** | Loaded from caller stack `[sp, #0x28]`; forwarded to descriptor offset 12 | **`[VERIFIED: 0xFCEF3494: ldr.w r8, [sp, #0x28]; 0xFCEF34CE: mov r1, r8; 0xBFE10BD8: stmia]`**<br>**Semantic delivery to task as user context: `[INFERRED: consumer 0xBFE11746 unread]`** |
-| **Stack Allocator** | Caller provides no buffer pointer; size forwarded to `0xBFE10B88` -> `0xBFE11746` | **`[VERIFIED: 0xFCEF3488; 0xFCEF34DA: bl 0xBFE10B88; 0xBFE10BFA: bl 0xbfe11746]`**<br>**Stack buffer allocation mechanism in kernel: `[INFERRED: consumer 0xBFE11746 unread]`** |
+| **`r0` Role** | Moved to `r4`; if 0, fallback `ldr r4, [r1]`; stored to stack-frame offset `sp + 24` / descriptor offset `desc + 20` (`desc = sp + 4`) | **`[VERIFIED: 0xFCEF348C: mov r4, r0; 0xFCEF34AC: cbnz r4; 0xFCEF34AE: ldr r4, [r1]; 0xBFE10BF6: str.w r8, [sp, #24]]`**<br>**Semantic role as name string pointer: `[INFERRED: consumer 0xBFE11746 unread]`** |
+| **`r1` Role** | Moved to `r6`; checked `(r1 - 1) < 0x20` ($1 \le r1 \le 32$) else `DebugAssert`; stored to stack-frame offset `sp + 29` / descriptor offset `desc + 25` (`desc = sp + 4`) | **`[VERIFIED: 0xFCEF3490: mov r6, r1; 0xFCEF34B0: subs r0, r6, #1; 0xFCEF34B2: cmp r0, #0x20; 0xBFE10BEC: strb.w r4, [sp, #29]]`**<br>**Semantic role as scheduling priority: `[INFERRED: consumer 0xBFE11746 unread]`** |
+| **`r2` Role** | Moved to `r5`; if 0, fallback `ldr r5, [r1, #4]`; forwarded to stack-frame offset `sp + 20` / descriptor offset `desc + 16` (`desc = sp + 4`) | **`[VERIFIED: 0xFCEF3492: mov r5, r2; 0xFCEF34C8: cbnz r5; 0xFCEF34CA: ldr r5, [r1, #4]; 0xBFE10BD8: stmia]`**<br>**Literal 0x81CC at 0xFCEF36A0 and 0x81D0: `[INFERRED: docs/PORT11A:144, 162-164]`**<br>**Semantic role as stack size in bytes: `[INFERRED: consumer 0xBFE11746 unread]`** |
+| **`sp[0]` Role** | Loaded from caller stack `[sp, #0x28]`; forwarded to stack-frame offset `sp + 12` / descriptor offset `desc + 8` (`desc = sp + 4`) | **`[VERIFIED: 0xFCEF3494: ldr.w r8, [sp, #0x28]; 0xFCEF34CE: mov r1, r8; 0xBFE10BD8: stmia]`**<br>**Semantic delivery to task as user context: `[INFERRED: consumer 0xBFE11746 unread]`** |
+| **Stack Allocator** | Forwarding of `r2` to `0xBFE10B88` and descriptor offset `desc + 16` (`desc = sp + 4`); fallback load from `*(r1 + 4)` when `r2 == 0` | **`[VERIFIED: 0xFCEF3492: mov r5, r2; 0xFCEF34CA: ldr r5, [r1, #4]; 0xFCEF34D2: mov r3, r5; 0xFCEF34DA: bl 0xBFE10B88; 0xBFE10BD8: stmia]`**<br>**Allocator identity (caller vs kernel) & size semantics: `[INFERRED: consumer 0xBFE11746 unread; forwarding instructions do not rule out reading r2 as a buffer]`** |
 | **Default Stack Size** | Numeric integer value at `*(0x000081D0)` at runtime | **`[UNKNOWN: ROM source word 0xFCE91228 unread]`** |
 | **Stack Alignment** | Alignment rule enforced by kernel allocator `0xBFE11746` | **`[UNKNOWN: 0xBFE11746 resides outside authorized slices]`** |
 
@@ -271,7 +282,7 @@ Under the reviewer directive in `docs/PORT27_RESIDENT_EVIDENCE.md:578-579` and t
 > [!WARNING]
 > **Final Verdict for PORT-29 T1**: **`NO-GO`**
 >
-> Under strict project epistemic policy, a **GO** verdict requires every element of Item (b) to be certified as **`VERIFIED`**. While register moves, argument checks (`1 <= r1 <= 32` else `DebugAssert`), descriptor stores, and forwarding were strictly observed in ROM, the high-level semantic roles (`r0` as name string, `r1` as scheduling priority, `r2` as stack size in bytes, `sp[0]` as task argument delivered to the spawned task, and callee stack allocation by kernel) are **`[INFERRED]`** because consumer `0xBFE11746` was not read. Furthermore, **stack alignment** and the **runtime default stack size literal** at `0x000081D0` remain **`[UNKNOWN]`**. These gaps compel an explicit **`NO-GO`** verdict.
+> Under strict project epistemic policy, a **GO** verdict requires every element of Item (b) to be certified as **`VERIFIED`**. While register moves, argument checks (`1 <= r1 <= 32` else `DebugAssert`), descriptor stores, argument forwarding, and `r2 == 0` fallback load were strictly observed in ROM, the high-level semantic roles (`r0` as name string, `r1` as scheduling priority, `r2` as stack size in bytes, `sp[0]` as task argument delivered to the spawned task, and stack allocator identity) are **`[INFERRED]`** because consumer `0xBFE11746` was not read. Furthermore, **stack alignment** and the **runtime default stack size literal** at `0x000081D0` remain **`[UNKNOWN]`**. These gaps compel an explicit **`NO-GO`** verdict.
 
 ### 6.2 The Exact Remaining UNKNOWN List & Proposed Bounded Ranges ($\le 4\text{ KiB}$)
 
@@ -284,7 +295,7 @@ To fully resolve the remaining uncertainties in a subsequent milestone, the foll
 | **3** | **(b)** | ROM Source Word for Default Stack Size Literal (`*(0x000081D0)`) | `0x000081D0` (Low RAM destination) | `0xFCE91220..0xFCE9123F` | 32 B | Derived via early boot Copy Loop 3 (`0xFC020054..0xFC020066`, `docs/PORT21_RAM_LIFETIME.md:33, 210, 307`) copying ROM `0xFCE91058` to Low RAM `0x00008000..0x0003F4F4`. ROM source address: $0\text{xFCE91058} + (0\text{x81D0} - 0\text{x8000}) = \mathbf{0\text{xFCE91228}}$. Verifies the default stack size integer. |
 | **4** | **(b)** | Unread Remainder of Slice N4 (`activate_task` downstream routines) | `0xBFE10D74` (ATCM Thumb-2) | `0xFCEEF7C0..0xFCEEF9C3` | 516 B | The `activate_task` body (`0xBFE10D14..0xBFE10D56`, ROM `0xFCEEF760..0xFCEEF7A2`) is already read inside Slice N3. This slice covers downstream helpers following `0xFCEEF7BF`, resolving the 608 vs 612 B doc conflict. |
 | **5** | **(d)** | Reconciled `SleepTask` Body | `0xBFE14968` (ATCM Thumb-2) | `0xFCEF33A0..0xFCEF33DF` | 64 B | Truncates Slice N7 to exactly 64 bytes (`0xFCEF33A0..0xFCEF33DF`), eliminating the size disagreement with PORT27's $\le 64$ B constraint and verifying millisecond tick scaling. |
-| **6** | **(b)** | Semantic Proof of Task Dispatcher Parameter Delivery | `0xBFE10000..` (ATCM) | To be determined from callee trace | $\le 512\text{ B}$ | Proves that `sp[0]` is passed in register `r0` to the dispatched task main entry point and that `r1` priority is scheduled by the DryOS scheduler. |
+| **6** | **(b)** | Task Dispatcher / Context Delivery Consumer Investigation (`0xBFE11746`) | `0xBFE11746` (ATCM Thumb-2) | `0xFCEF0180..0xFCEF037F` | 512 B | Start address `0xFCEF0192` (VMA `0xBFE11746`) is evidenced by `bl 0xbfe11746` at `0xBFE10BFA` in Slice N3, mapped to ROM via early boot Copy Loop 1 formula $\text{ROM} = 0\text{xFCEEF24C} + (0\text{xBFE11746} - 0\text{xBFE10800}) = \mathbf{0\text{xFCEF0192}}$ (`docs/PORT11A_GM110C_ROM_EVIDENCE.md:112-118`). Length is 512 B (window `0xFCEF0180..0xFCEF037F`, sharing the read window of Row 1). Proves descriptor offset `desc + 8` (`sp[0]` context) delivery to task function and `desc + 25` (`r1` priority) handling. Any address further downstream (such as a separate scheduler or context-switch dispatcher) remains **UNKNOWN** until this initial consumer window is read. |
 
 ---
 

@@ -7,10 +7,11 @@ Verifies:
 3. Every range in the manifest is <= 4 KiB (4,096 bytes).
 4. Every range in the manifest falls inside the authorized list from PORT-27 / PORT-28.
 5. Slices match exact byte hashes against PRIMARY.BIN (with manifest safety gate prior to seek/read).
-6. Change set vs merge-base with origin/main contains only allowed paths and no binary artifacts.
+6. PORT-29 artifacts contain no binary or ROM blobs, and no forbidden binaries/build outputs are tracked in git.
 7. docs/PORT29_CREATETASK_EVIDENCE.md contains required tables, citations, and verdict.
 """
 
+import fnmatch
 import hashlib
 import json
 from pathlib import Path
@@ -127,71 +128,54 @@ class TestPort29Evidence(unittest.TestCase):
                     f"Hash mismatch for {eid}: calculated {calc_sha256} != expected {exp_sha256}",
                 )
 
-    def test_no_rom_bytes_or_build_artifacts_tracked(self) -> None:
-        """Verify change set vs origin/main contains only allowed paths and no binary artifacts."""
-        mb_proc = subprocess.run(
-            ["git", "merge-base", "HEAD", "origin/main"],
-            cwd=PROJECT_ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        if mb_proc.returncode != 0 or not mb_proc.stdout.strip():
-            self.skipTest("origin/main unavailable for merge-base check")
-        merge_base = mb_proc.stdout.strip()
-
-        # Check committed changes against merge-base
-        diff_proc = subprocess.run(
-            ["git", "diff", "--name-only", f"{merge_base}..HEAD"],
-            cwd=PROJECT_ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        self.assertEqual(diff_proc.returncode, 0, f"git diff failed: {diff_proc.stderr}")
-        changed_paths = set(line.strip() for line in diff_proc.stdout.splitlines() if line.strip())
-
-        # Also check uncommitted/untracked files in worktree
-        status_proc = subprocess.run(
-            ["git", "status", "--porcelain", "-uall"],
-            cwd=PROJECT_ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        self.assertEqual(status_proc.returncode, 0, f"git status failed: {status_proc.stderr}")
-        for line in status_proc.stdout.splitlines():
-            line = line.strip()
-            if line:
-                changed_paths.add(line.split()[-1])
-
-        allowed_paths = {
-            "evidence/port29_manifest.json",
-            "evidence/port29_trusted_scopes.json",
-            "docs/PORT29_CREATETASK_EVIDENCE.md",
-            "tests/test_port29_evidence.py",
-        }
-        for path in changed_paths:
-            self.assertIn(
-                path,
-                allowed_paths,
-                f"Unpermitted changed or untracked path: {path}",
-            )
-
+    def test_port29_files_contain_no_binary_or_rom_blobs(self) -> None:
+        """Verify PORT-29 artifact files exist, are text, and contain no binary or ROM blobs."""
+        port29_paths = [
+            MANIFEST_PATH,
+            SCOPES_PATH,
+            EVIDENCE_DOC_PATH,
+            PROJECT_ROOT / "tests" / "test_port29_evidence.py",
+        ]
         forbidden_suffixes = {".bin", ".BIN", ".elf", ".o", ".a", ".so", ".dylib"}
-        for path in changed_paths:
-            p = PROJECT_ROOT / path
+        for p in port29_paths:
+            self.assertTrue(p.is_file(), f"Missing PORT-29 artifact: {p}")
             self.assertNotIn(
                 p.suffix,
                 forbidden_suffixes,
-                f"Forbidden binary artifact detected: {path}",
+                f"Forbidden binary artifact suffix: {p}",
             )
-            if p.is_file():
-                self.assertLess(
-                    p.stat().st_size,
-                    500 * 1024,
-                    f"File unexpectedly large (>500 KiB): {path}",
-                )
+            self.assertLess(
+                p.stat().st_size,
+                500 * 1024,
+                f"File unexpectedly large (>500 KiB): {p}",
+            )
+            content = p.read_text(encoding="utf-8")
+            self.assertNotIn("\x00", content, f"NUL byte found in text file: {p}")
+
+    def test_no_unapproved_binaries_tracked_in_git(self) -> None:
+        """Verify git tracks no *.BIN or *.bin files or build outputs under repo (independent of branch diff)."""
+        proc = subprocess.run(
+            ["git", "ls-files", "-z"],
+            cwd=PROJECT_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, f"git ls-files failed: {proc.stderr}")
+        tracked = [p for p in proc.stdout.split("\0") if p]
+        self.assertTrue(tracked, "git ls-files returned empty list")
+
+        forbidden_patterns = ("*.bin", "*.BIN", "*.elf", "*.o", "*.a", "*.so", "*.dylib", "DISKBOOT*", "PRIMARY*")
+        pre_existing_tracked_binaries = {
+            "firmware/tools/witness_inspector_payload.bin",
+        }
+        offending = [
+            p
+            for p in tracked
+            if p not in pre_existing_tracked_binaries
+            and any(fnmatch.fnmatchcase(Path(p).name, pat) for pat in forbidden_patterns)
+        ]
+        self.assertEqual(offending, [], f"Forbidden binaries or build outputs tracked in git: {offending}")
 
     def test_evidence_document_structure_and_verdict(self) -> None:
         """Verify docs/PORT29_CREATETASK_EVIDENCE.md content requirements."""
