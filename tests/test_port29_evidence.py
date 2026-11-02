@@ -16,6 +16,7 @@ import fnmatch
 import hashlib
 import json
 from pathlib import Path
+import struct
 import subprocess
 import unittest
 
@@ -262,6 +263,52 @@ class TestPort29Evidence(unittest.TestCase):
         self.assertIn("0x9800", content)
         self.assertNotIn("never reads or modifies r1", content)
         self.assertNotIn("no access to r1", content)
+
+    def test_instruction_words_notation_and_rom_match(self) -> None:
+        """Verify instruction words cited in doc use 0xHHHH notation and match PRIMARY.BIN."""
+        doc_content = EVIDENCE_DOC_PATH.read_text(encoding="utf-8")
+
+        # Verify notation convention is stated in doc
+        self.assertIn("0xHHHH", doc_content)
+        self.assertIn("1.3 Instruction Word Notation Convention", doc_content)
+
+        # Key addresses and expected halfword tuples in execution order
+        key_instructions = {
+            0xFCEF3488: (0xE92D, 0x43FE),
+            0xFCEF34B8: (0x22A0,),
+            0xFCEF34BC: (0xA17A,),
+            0xFCEF34BE: (0xF7FF, 0xEA02),
+            0xFCEEF764: (0xF04F, 0x34FF),
+            0xFCEEF9B8: (0x80F0, 0x0000),
+        }
+
+        # Check that the document contains each cited instruction word in 0xHHHH form
+        for addr, words in key_instructions.items():
+            formatted = " ".join(f"0x{w:04X}" for w in words)
+            self.assertIn(
+                formatted,
+                doc_content,
+                f"Expected instruction word {formatted} at 0x{addr:08X} cited in doc",
+            )
+
+        if not ROM_PATH.is_file():
+            self.skipTest(f"PRIMARY.BIN not found at {ROM_PATH}")
+
+        # Safety gate: validate manifest entries before reading ROM
+        self._validate_manifest_safety(MANIFEST_PATH)
+
+        with open(ROM_PATH, "rb") as f:
+            for addr, words in key_instructions.items():
+                offset = addr - ROM_BASE
+                f.seek(offset)
+                raw = f.read(len(words) * 2)
+                self.assertEqual(len(raw), len(words) * 2)
+                actual_words = struct.unpack(f"<{len(words)}H", raw)
+                self.assertEqual(
+                    actual_words,
+                    words,
+                    f"Instruction word mismatch at 0x{addr:08X}: actual {actual_words} != expected {words}",
+                )
 
 
 if __name__ == "__main__":
