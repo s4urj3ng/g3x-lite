@@ -1696,17 +1696,19 @@ def parse_owner_report(input_data: Union[str, Path, Dict[str, Any]]) -> Dict[str
 
 def is_count_adjacent_to_two_valid_codes(
     count: int,
-    table: Dict[int, Dict[str, Any]] = LADDER_STAGE_TABLE,
+    table: Optional[Dict[int, Dict[str, Any]]] = None,
 ) -> bool:
     """Evaluates the off-by-one adjacency rule:
     Returns True if and only if BOTH immediate neighbours (count - 1) and (count + 1)
     are registered codes in the source table.
     """
+    if table is None:
+        table = parse_ladder_table_from_build_source()
     return (count - 1 in table) and (count + 1 in table)
 
 
 def get_canonical_ladder_path(
-    table: Dict[int, Dict[str, Any]] = LADDER_STAGE_TABLE,
+    table: Optional[Dict[int, Dict[str, Any]]] = None,
 ) -> Tuple[List[int], List[int]]:
     """Derives the canonical ladder execution paths dynamically from the source-of-truth table.
 
@@ -1715,6 +1717,8 @@ def get_canonical_ladder_path(
       where core_path starts at Code 11 and follows NEXT_STAGE_MAP stage symbols in table up to Code 44,
       and loader_path is the ordered loader steps 1..7.
     """
+    if table is None:
+        table = parse_ladder_table_from_build_source()
     loader_path = sorted([c for c in table if c < 10], key=lambda c: table[c].get("order_index", c))
     symbol_to_code = {entry["stage_symbol"]: code for code, entry in table.items()}
     next_stage_map = derive_next_stage_map(table)
@@ -1731,7 +1735,7 @@ def get_canonical_ladder_path(
 
 def validate_ordered_code_sequence(
     seq: Any,
-    table: Dict[int, Dict[str, Any]] = LADDER_STAGE_TABLE,
+    table: Optional[Dict[int, Dict[str, Any]]] = None,
 ) -> Tuple[Optional[str], Optional[int], Optional[str]]:
     """Validates an ordered sequence of ladder checkpoints.
 
@@ -1747,6 +1751,9 @@ def validate_ordered_code_sequence(
       - If unknown/invalid code: ("UNKNOWN_CODE", None, message)
       - If gapped, non-monotonic, or invalid progression: ("AMBIGUOUS", None, message)
     """
+    if table is None:
+        table = parse_ladder_table_from_build_source()
+
     if isinstance(seq, str):
         seq = parse_sequence_value(seq)
 
@@ -1835,11 +1842,12 @@ def classify_owner_report(
       - evidence: string citation
       - notes: string explanation
     """
+    report = parse_owner_report(input_data)
+
     if table is None:
-        table = LADDER_STAGE_TABLE
+        table = parse_ladder_table_from_build_source()
 
     next_stage_map = derive_next_stage_map(table)
-    report = parse_owner_report(input_data)
 
     reported_sha256 = str(report.get("diskboot_sha256", "")).strip().lower()
     press = str(report.get("press", "short")).strip().lower()
@@ -2376,7 +2384,7 @@ def classify_owner_report(
 def decode_ladder_report(
     input_data: Union[Dict[str, Any], str, Path],
     expected_sha256: str = EXPECTED_PORT25_COMBINED_DISKBOOT_SHA256,
-    table: Dict[int, Dict[str, Any]] = LADDER_STAGE_TABLE,
+    table: Optional[Dict[int, Dict[str, Any]]] = None,
 ) -> str:
     """Classifies an owner trial report and emits deterministic, sorted JSON."""
     result = classify_owner_report(input_data, expected_sha256=expected_sha256, table=table)

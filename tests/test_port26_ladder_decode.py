@@ -29,6 +29,8 @@ Coverage Requirements:
 from __future__ import annotations
 
 import builtins
+import copy
+import io
 import json
 import os
 import re
@@ -57,6 +59,7 @@ from tools.port26_ladder_decode import (
     SafetyViolationError,
     classify_owner_report,
     decode_ladder_report,
+    derive_next_stage_map,
     extract_build_source_pulse_codes,
     get_canonical_ladder_path,
     is_affirmative_stock_ui,
@@ -1355,10 +1358,11 @@ class TestPort26LadderDecode(unittest.TestCase):
         self.assertTrue(json_fixture_path.is_file(), f"Missing fixture: {json_fixture_path}")
         self.assertTrue(txt_fixture_path.is_file(), f"Missing fixture: {txt_fixture_path}")
 
-        # Derive expected stage names dynamically from parsed LADDER_STAGE_TABLE
-        expected_code43_sym = LADDER_STAGE_TABLE[43]["stage_symbol"]
-        expected_code44_sym = LADDER_STAGE_TABLE[44]["stage_symbol"]
-        expected_next_stage = NEXT_STAGE_MAP[43]
+        # Derive expected stage names dynamically from parsed source table
+        parsed_table = parse_ladder_table_from_build_source()
+        expected_code43_sym = parsed_table[43]["stage_symbol"]
+        expected_code44_sym = parsed_table[44]["stage_symbol"]
+        expected_next_stage = derive_next_stage_map(parsed_table)[43]
         self.assertEqual(expected_next_stage, expected_code44_sym)
 
         # 1. Classify JSON fixture file
@@ -1386,6 +1390,108 @@ class TestPort26LadderDecode(unittest.TestCase):
         sub_res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.assertEqual(sub_res.returncode, 0, f"CLI invocation failed: {sub_res.stderr}")
         self.assertEqual(sub_res.stdout, out_json_str)
+
+    def test_default_decode_uses_parsed_source_table_when_mocked_build_source(self) -> None:
+        """[Feedback P2] Default decoding must use parsed source-of-truth table without table arg.
+
+        Verifies that when parse_ladder_table_from_build_source is mocked to return
+        renamed symbols for Code 43 and Code 44, decode_ladder_report and classify_owner_report
+        (and CLI main()) invoke the parser and emit the renamed symbols.
+        """
+        json_fixture_path = REPO_ROOT / "tests" / "fixtures" / "port26" / "owner_report_2026-11-02_port25_short.json"
+        self.assertTrue(json_fixture_path.is_file())
+
+        real_table = parse_ladder_table_from_build_source()
+        mock_table = copy.deepcopy(real_table)
+        mock_code43 = "STAGE_BC_POST_PHYSW_CREATE_RENAMED_BUILD"
+        mock_code44 = "STAGE_BC_PRE_FIRMWARE_CONT_RENAMED_BUILD"
+        mock_table[43]["stage_symbol"] = mock_code43
+        mock_table[44]["stage_symbol"] = mock_code44
+
+        with patch("tools.port26_ladder_decode.parse_ladder_table_from_build_source", return_value=mock_table) as mock_parser:
+            # 1. Programmatic classify WITHOUT passing table
+            res = classify_owner_report(json_fixture_path)
+            mock_parser.assert_called()
+            self.assertEqual(res["last_stage_reached"], mock_code43)
+            self.assertEqual(res["next_stage"], mock_code44)
+            self.assertIn(mock_code43, res["notes"])
+            self.assertIn(mock_code44, res["notes"])
+
+            # 2. Programmatic decode_ladder_report WITHOUT passing table
+            out_str = decode_ladder_report(json_fixture_path)
+            mock_parser.assert_called()
+            res_obj = json.loads(out_str)
+            self.assertEqual(res_obj["last_stage_reached"], mock_code43)
+            self.assertEqual(res_obj["next_stage"], mock_code44)
+
+            # 3. CLI execution via main() WITHOUT passing table
+            buf = io.StringIO()
+            with patch("sys.argv", [str(TOOL_PATH), str(json_fixture_path)]), patch("sys.stdout", buf):
+                decoder.main()
+            mock_parser.assert_called()
+            cli_obj = json.loads(buf.getvalue())
+            self.assertEqual(cli_obj["last_stage_reached"], mock_code43)
+            self.assertEqual(cli_obj["next_stage"], mock_code44)
+
+    def test_default_decode_uses_parsed_source_table_when_mocked_doc_source(self) -> None:
+        """[Feedback P2] Default decoding must propagate parsed doc table through build source parser.
+
+        Verifies that when parse_ladder_table_from_source is mocked to return
+        renamed symbols for Code 43 and Code 44, decode_ladder_report and classify_owner_report
+        (and CLI main()) invoke the parser and emit the renamed symbols.
+        """
+        json_fixture_path = REPO_ROOT / "tests" / "fixtures" / "port26" / "owner_report_2026-11-02_port25_short.json"
+        self.assertTrue(json_fixture_path.is_file())
+
+        real_table = parse_ladder_table_from_source()
+        mock_table = copy.deepcopy(real_table)
+        mock_code43 = "STAGE_BC_POST_PHYSW_CREATE_RENAMED_DOC"
+        mock_code44 = "STAGE_BC_PRE_FIRMWARE_CONT_RENAMED_DOC"
+        mock_table[43]["stage_symbol"] = mock_code43
+        mock_table[44]["stage_symbol"] = mock_code44
+
+        with patch("tools.port26_ladder_decode.parse_ladder_table_from_source", return_value=mock_table) as mock_parser:
+            # 1. Programmatic classify WITHOUT passing table
+            res = classify_owner_report(json_fixture_path)
+            mock_parser.assert_called()
+            self.assertEqual(res["last_stage_reached"], mock_code43)
+            self.assertEqual(res["next_stage"], mock_code44)
+            self.assertIn(mock_code43, res["notes"])
+            self.assertIn(mock_code44, res["notes"])
+
+            # 2. Programmatic decode_ladder_report WITHOUT passing table
+            out_str = decode_ladder_report(json_fixture_path)
+            mock_parser.assert_called()
+            res_obj = json.loads(out_str)
+            self.assertEqual(res_obj["last_stage_reached"], mock_code43)
+            self.assertEqual(res_obj["next_stage"], mock_code44)
+
+            # 3. CLI execution via main() WITHOUT passing table
+            buf = io.StringIO()
+            with patch("sys.argv", [str(TOOL_PATH), str(json_fixture_path)]), patch("sys.stdout", buf):
+                decoder.main()
+            mock_parser.assert_called()
+            cli_obj = json.loads(buf.getvalue())
+            self.assertEqual(cli_obj["last_stage_reached"], mock_code43)
+            self.assertEqual(cli_obj["next_stage"], mock_code44)
+
+    def test_default_decode_fails_loudly_on_parser_error(self) -> None:
+        """[Feedback P2] Default decoding must fail loudly if parsing fails, never falling back silently."""
+        json_fixture_path = REPO_ROOT / "tests" / "fixtures" / "port26" / "owner_report_2026-11-02_port25_short.json"
+
+        with patch("tools.port26_ladder_decode.parse_ladder_table_from_build_source", side_effect=ValueError("Boom: source parse failure")):
+            with self.assertRaises(ValueError):
+                classify_owner_report(json_fixture_path)
+
+            with self.assertRaises(ValueError):
+                decode_ladder_report(json_fixture_path)
+
+            stderr_buf = io.StringIO()
+            with patch("sys.argv", [str(TOOL_PATH), str(json_fixture_path)]), patch("sys.stderr", stderr_buf):
+                with self.assertRaises(SystemExit) as cm:
+                    decoder.main()
+                self.assertEqual(cm.exception.code, 1)
+                self.assertIn("Boom: source parse failure", stderr_buf.getvalue())
 
     def test_canonical_ladder_path_derivation(self) -> None:
         """[PORT-26 T4] Asserts that get_canonical_ladder_path derives paths from table/NEXT_STAGE_MAP."""
