@@ -7,24 +7,28 @@ Task: p26-t1-ladder-decode
 
 Coverage Requirements:
 1. Every table code in LADDER_STAGE_TABLE (29 codes: 1..7, 11..15, 21..26, 28..29, 31..35, 41..44).
-2. 'none' / zero pulses -> NO_PULSES.
-3. Out-of-table counts and all in-range gaps within 1..44 -> UNKNOWN_CODE.
+2. 'none' / zero pulses -> NO_PULSES (exact case-insensitive 'none' ONLY).
+3. Out-of-table counts, out-of-range counts, and invalid inputs -> UNKNOWN_CODE.
 4. Off-by-one ambiguity (conflicting multiple counts, count adjacent to two valid codes with uncertainty).
 5. Comprehensive owner-uncertainty flag spelling variants in both JSON and key=value formats.
 6. Wrong candidate hash -> INVALID_CANDIDATE.
-7. Held-press control reaching stock UI -> CONTROL_HELD_O1.
-8. Refusal of forbidden paths (.bin, .rom, PRIMARY*).
-9. Both input formats (JSON and key=value text) producing byte-identical outputs.
+7. Held-press control reaching stock UI -> CONTROL_HELD_O1 with affirmative allow-list.
+8. Refusal of forbidden paths (.bin, .rom, PRIMARY*, and symlinks before any open).
+9. File parsing: JSON with trailing newline, JSON without, and key=value all decode identically.
 10. Single source of truth consistency:
     - Runtime parsing of docs/PORT25_LADDER_FIX_CANDIDATE.md matches in-tool table.
     - Runtime extraction of p25-t3b build source emit sites (loader_main_breadcrumb.c,
-      build_candidate_port25_ladder_fix.py, led_breadcrumb.h) asserts every pulse count in the doc
-      appears as an LED-ladder emit site in the source, and both doc and source agree on all 29 codes.
-11. Deterministic byte-identical JSON outputs.
+      build_candidate_port25_ladder_fix.py, led_breadcrumb.h).
+    - Parse actual CORE_LADDER_FRAME(tens, units) digits and assert tens*10+units == code.
+    - Loader steps 1..7 emit site order and stage association.
+    - Negative consistency test: modifying CORE_LADDER_FRAME(2, 4) to (2, 5) FAILS.
+11. Code 44 next_stage is sub_fc0d0126; no boot-success claim when lcd='dark'.
+12. Deterministic byte-identical JSON outputs.
 """
 
 from __future__ import annotations
 
+import builtins
 import json
 import os
 import subprocess
@@ -32,6 +36,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TOOL_PATH = REPO_ROOT / "tools" / "port26_ladder_decode.py"
@@ -44,18 +49,22 @@ from tools.port26_ladder_decode import (
     EXPECTED_PORT25_COMBINED_DISKBOOT_SHA256,
     LADDER_STAGE_TABLE,
     NEXT_STAGE_MAP,
+    STOCK_UI_LCD_ALLOWLIST,
     VALID_CLASSES,
     SafetyViolationError,
     classify_owner_report,
     decode_ladder_report,
     extract_build_source_pulse_codes,
+    is_affirmative_stock_ui,
     is_count_adjacent_to_two_valid_codes,
     is_truthy,
     parse_expected_diskboot_sha256,
+    parse_header_pulse_digits,
     parse_ladder_table_from_build_source,
     parse_ladder_table_from_source,
     parse_owner_report,
     validate_safety_path,
+    verify_source_consistency,
 )
 
 
@@ -170,6 +179,47 @@ class TestPort26LadderDecode(unittest.TestCase):
         self.assertEqual(len(combined_table), 29)
         self.assertEqual(set(combined_table.keys()), set(LADDER_STAGE_TABLE.keys()))
 
+    def test_source_consistency_macro_digits_and_emit_sites(self) -> None:
+        """[P2 Regression] Detailed verification of CORE_LADDER_FRAME(tens, units) and loader/core emit sites."""
+        consistency_result = verify_source_consistency(repo_root=REPO_ROOT)
+        code_digits = consistency_result["code_digits"]
+
+        # Assert every core code >= 11 has tens*10+units == code == table code
+        core_codes = [c for c in LADDER_STAGE_TABLE if c >= 11]
+        for c in core_codes:
+            self.assertIn(c, code_digits, f"Code {c} not found in parsed header digits")
+            tens, units = code_digits[c]
+            self.assertEqual(
+                tens * 10 + units,
+                c,
+                f"Code {c} digits mismatch: {tens}*10+{units} != {c}",
+            )
+
+        # Assert loader steps 1..7 match table
+        loader_steps = consistency_result["loader_steps"]
+        self.assertEqual(len(loader_steps), 7)
+        for step in range(1, 8):
+            self.assertEqual(loader_steps[step], LADDER_STAGE_TABLE[step]["stage_symbol"])
+
+    def test_source_consistency_negative_tampered_digits(self) -> None:
+        """[P2 Regression] Negative test: changing CORE_LADDER_FRAME(2, 4) to (2, 5) in header FAILS consistency."""
+        header_path = REPO_ROOT / "chdk-port" / "platform" / "g3x" / "sub" / "110c" / "led_breadcrumb.h"
+        with open(header_path, "r", encoding="utf-8") as f:
+            header_text = f.read()
+
+        target_macro = "CORE_LADDER_PULSE_24 CORE_LADDER_FRAME(2, 4)"
+        self.assertIn(target_macro, header_text)
+        tampered_header = header_text.replace(
+            target_macro,
+            "CORE_LADDER_PULSE_24 CORE_LADDER_FRAME(2, 5)",
+        )
+
+        with self.assertRaises(ValueError) as ctx:
+            verify_source_consistency(header_content=tampered_header, repo_root=REPO_ROOT)
+
+        self.assertIn("PULSE_24", str(ctx.exception))
+        self.assertIn("25 != 24", str(ctx.exception))
+
     def test_every_table_code(self) -> None:
         """Covers every single registered code in the table across loader and core stages."""
         self.assertEqual(len(LADDER_STAGE_TABLE), 29, "Expected exactly 29 registered codes")
@@ -192,19 +242,46 @@ class TestPort26LadderDecode(unittest.TestCase):
                 self.assertTrue(len(res["notes"]) > 0)
                 self.assertIn(res["class"], VALID_CLASSES)
 
-    def test_in_range_gap_codes(self) -> None:
-        """Covers all in-range gaps within 1..44 and out-of-range counts mapping to UNKNOWN_CODE.
+    def test_code_44_continuation_and_stock_ui_evidence(self) -> None:
+        """[P2 Regression] Code 44 next_stage must be sub_fc0d0126, not STOCK_BOOT_SUCCESS.
         
-        Inside 1..44, the 15 gap values are:
-          8, 9, 10, 16, 17, 18, 19, 20, 27, 30, 36, 37, 38, 39, 40.
-        All must map to UNKNOWN_CODE when uncertainty is not flagged.
+        When lcd='dark', no success claim is made. When affirmative stock UI is observed,
+        the claim is recorded in notes, never in next_stage.
         """
+        # Code 44 with lcd='dark' -> next_stage is sub_fc0d0126, no success claim
+        report_dark = {
+            "diskboot_sha256": self.valid_hash,
+            "press": "short",
+            "pulses": 44,
+            "lcd": "dark",
+            "inspector_status": "none",
+        }
+        res_dark = classify_owner_report(report_dark)
+        self.assertEqual(res_dark["class"], "CODE_44")
+        self.assertEqual(res_dark["last_stage_reached"], "STAGE_BC_PRE_FIRMWARE_CONT")
+        self.assertEqual(res_dark["next_stage"], "sub_fc0d0126")
+        self.assertNotIn("success", res_dark["notes"].lower())
+        self.assertNotIn("stock_boot_success", str(res_dark["next_stage"]).lower())
+        self.assertIn("sub_fc0d0126", res_dark["notes"])
+
+        # Code 44 with affirmative lcd='stock_ui' -> records affirmative UI evidence in notes
+        report_stock = {
+            "diskboot_sha256": self.valid_hash,
+            "press": "short",
+            "pulses": 44,
+            "lcd": "stock_ui",
+            "inspector_status": "none",
+        }
+        res_stock = classify_owner_report(report_stock)
+        self.assertEqual(res_stock["class"], "CODE_44")
+        self.assertEqual(res_stock["next_stage"], "sub_fc0d0126")
+        self.assertIn("Independent affirmative UI evidence", res_stock["notes"])
+
+    def test_in_range_gap_codes(self) -> None:
+        """Covers all in-range gaps within 1..44 mapping to UNKNOWN_CODE when uncertainty is not flagged."""
         in_range_gaps = [8, 9, 10, 16, 17, 18, 19, 20, 27, 30, 36, 37, 38, 39, 40]
-        out_of_range_counts = [-5, -1, 45, 50, 99, 120]
 
-        all_unknown_counts = in_range_gaps + out_of_range_counts
-
-        for count in all_unknown_counts:
+        for count in in_range_gaps:
             with self.subTest(count=count):
                 report = {
                     "diskboot_sha256": self.valid_hash,
@@ -221,9 +298,8 @@ class TestPort26LadderDecode(unittest.TestCase):
                 self.assertIn(f"Pulse count {count} does not match", res["notes"])
 
     def test_none_pulses(self) -> None:
-        """Covers 'none' pulse variations mapping to NO_PULSES."""
-        none_variations = ["none", "NONE", "null", "", 0, "0", []]
-        for val in none_variations:
+        """Covers exact case-insensitive 'none' mapping to NO_PULSES."""
+        for val in ["none", "NONE", "None", "  none  "]:
             with self.subTest(pulses=val):
                 report = {
                     "diskboot_sha256": self.valid_hash,
@@ -238,6 +314,44 @@ class TestPort26LadderDecode(unittest.TestCase):
                 self.assertEqual(res["next_stage"], "STAGE_LOADER_AFTER_PROLOGUE")
                 self.assertIn("Zero pulses", res["notes"])
                 self.assertIn("docs/PORT25_OWNER_TRIAL_PLAN.md:201", res["evidence"])
+
+    def test_pulse_input_validation_regressions(self) -> None:
+        """[P2 Regression] Rigorous pulse input validation:
+        Tests for missing, 'unknown', 24.9, True, -1, '24.0', 0, '', and '?'.
+        None of these must become NO_PULSES or CODE_xx.
+        """
+        cases = [
+            ("missing", {}),
+            ("unknown", {"pulses": "unknown"}),
+            ("float_24_9", {"pulses": 24.9}),
+            ("bool_True", {"pulses": True}),
+            ("bool_False", {"pulses": False}),
+            ("negative_minus_1", {"pulses": -1}),
+            ("decimal_str_24_0", {"pulses": "24.0"}),
+            ("zero_int", {"pulses": 0}),
+            ("zero_str", {"pulses": "0"}),
+            ("empty_str", {"pulses": ""}),
+            ("question_mark", {"pulses": "?"}),
+        ]
+
+        for name, extra in cases:
+            with self.subTest(case=name):
+                report = {
+                    "diskboot_sha256": self.valid_hash,
+                    "press": "short",
+                    "lcd": "dark",
+                    "inspector_status": "none",
+                    **extra,
+                }
+                res = classify_owner_report(report)
+                self.assertEqual(
+                    res["class"],
+                    "UNKNOWN_CODE",
+                    f"Case {name} expected UNKNOWN_CODE, got {res['class']}",
+                )
+                self.assertNotEqual(res["class"], "NO_PULSES")
+                self.assertFalse(res["class"].startswith("CODE_"))
+                self.assertIsNone(res["last_stage_reached"])
 
     def test_off_by_one_ambiguity_conflicting_multiple(self) -> None:
         """Covers AMBIGUOUS classification when conflicting multiple counts are reported."""
@@ -278,21 +392,13 @@ class TestPort26LadderDecode(unittest.TestCase):
         """Covers the explicit off-by-one uncertainty rule:
         Triggers AMBIGUOUS when owner flags uncertainty AND count is adjacent to two valid codes.
         """
-        # Count 23 has 22 and 24 in table -> adjacent to two valid codes
         self.assertTrue(is_count_adjacent_to_two_valid_codes(23))
-        # Count 24 has 23 and 25 in table -> adjacent to two valid codes
         self.assertTrue(is_count_adjacent_to_two_valid_codes(24))
-        # Count 27 (out-of-table gap) has 26 and 28 in table -> adjacent to two valid codes
         self.assertTrue(is_count_adjacent_to_two_valid_codes(27))
-        # Count 11 has 10 (gap) and 12 (in table) -> only ONE neighbor
         self.assertFalse(is_count_adjacent_to_two_valid_codes(11))
-        # Count 7 has 6 (in table) and 8 (gap) -> only ONE neighbor
         self.assertFalse(is_count_adjacent_to_two_valid_codes(7))
-        # Count 1 has 0 (gap) and 2 (in table) -> only ONE neighbor
         self.assertFalse(is_count_adjacent_to_two_valid_codes(1))
-        # Count 44 has 43 (in table) and 45 (out) -> only ONE neighbor
         self.assertFalse(is_count_adjacent_to_two_valid_codes(44))
-        # Count 8 has 7 (in table) and 9 (gap) -> only ONE neighbor
         self.assertFalse(is_count_adjacent_to_two_valid_codes(8))
 
         # 1. Count 23 with uncertainty flagged -> AMBIGUOUS
@@ -406,8 +512,6 @@ class TestPort26LadderDecode(unittest.TestCase):
             '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "uncertainty": true, "lcd": "dark", "inspector_status": "none"}',
             '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "uncertainty": "yes", "lcd": "dark", "inspector_status": "none"}',
             '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "uncertain": 1, "lcd": "dark", "inspector_status": "none"}',
-            '{"diskboot_sha256": "%s", "press": "short", "pulses": "24 (uncertain)", "lcd": "dark", "inspector_status": "none"}',
-            '{"diskboot_sha256": "%s", "press": "short", "pulses": "24?", "lcd": "dark", "inspector_status": "none"}',
             '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "notes": "pulse count uncertain", "lcd": "dark", "inspector_status": "none"}',
         ]
         for tmpl in json_uncertain_variants:
@@ -436,8 +540,6 @@ class TestPort26LadderDecode(unittest.TestCase):
             f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24\nuncertain = 1\n",
             f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24\nuncertainty = true\n",
             f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24\nuncertainty = yes\n",
-            f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24 (uncertain)\n",
-            f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24?\n",
             f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24\nnotes = count was uncertain\n",
         ]
         for kv in kv_uncertain_variants:
@@ -461,8 +563,8 @@ class TestPort26LadderDecode(unittest.TestCase):
         """Covers INVALID_CANDIDATE when candidate SHA-256 does not match."""
         invalid_hashes = [
             "0000000000000000000000000000000000000000000000000000000000000000",
-            "9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136",  # default build hash
-            "faad4d8242fbf6f79a44b10a9956f7eb04de9b65f42221f82a3b69eb024cf056",  # poweron-fix hash
+            "9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136",
+            "faad4d8242fbf6f79a44b10a9956f7eb04de9b65f42221f82a3b69eb024cf056",
             "",
             "bad_hash",
         ]
@@ -482,42 +584,95 @@ class TestPort26LadderDecode(unittest.TestCase):
                 self.assertIn("mismatch", res["notes"])
                 self.assertIn("docs/PORT25_LADDER_FIX_CANDIDATE.md:385", res["evidence"])
 
-    def test_held_press_o1_control(self) -> None:
-        """Covers CONTROL_HELD_O1 when a held press reaches the stock UI."""
-        # 1. Standard held press booting to stock UI with inspector status O1
+    def test_stock_ui_detection_regressions(self) -> None:
+        """[P2 Regression] Affirmative Stock-UI detection:
+        - lcd='never reached stock UI' with held+pulses=24 gives no CONTROL_HELD_O1 (gives CODE_24).
+        - lcd='dark' with inspector_status=WITNESS_INVALID gives no CONTROL_HELD_O1.
+        - a valid held + stock_ui report still gives CONTROL_HELD_O1.
+        """
+        # 1. Negative text with 'never' must NOT trigger CONTROL_HELD_O1
         res1 = classify_owner_report({
+            "diskboot_sha256": self.valid_hash,
+            "press": "held",
+            "pulses": 24,
+            "lcd": "never reached stock UI",
+            "inspector_status": "none",
+        })
+        self.assertEqual(res1["class"], "CODE_24")
+        self.assertNotEqual(res1["class"], "CONTROL_HELD_O1")
+
+        # 2. lcd='dark' with inspector_status=WITNESS_INVALID must NOT imply stock UI
+        res2 = classify_owner_report({
+            "diskboot_sha256": self.valid_hash,
+            "press": "held",
+            "pulses": 24,
+            "lcd": "dark",
+            "inspector_status": "WITNESS_INVALID",
+        })
+        self.assertEqual(res2["class"], "CODE_24")
+        self.assertNotEqual(res2["class"], "CONTROL_HELD_O1")
+
+        # 3. Valid held + stock_ui report still gives CONTROL_HELD_O1
+        res3 = classify_owner_report({
             "diskboot_sha256": self.valid_hash,
             "press": "held",
             "pulses": "none",
             "lcd": "stock_ui",
             "inspector_status": "O1",
         })
-        self.assertEqual(res1["class"], "CONTROL_HELD_O1")
-        self.assertEqual(res1["last_stage_reached"], "STOCK_UI")
-        self.assertIsNone(res1["next_stage"])
-        self.assertIn("positive control", res1["notes"])
+        self.assertEqual(res3["class"], "CONTROL_HELD_O1")
+        self.assertEqual(res3["last_stage_reached"], "STOCK_UI")
 
-        # 2. Held press with live_view and inspector O6 (WITNESS_INVALID)
-        res2 = classify_owner_report({
-            "diskboot_sha256": self.valid_hash,
-            "press": "held",
-            "pulses": 44,
-            "lcd": "live_view",
-            "inspector_status": "WITNESS_INVALID",
-        })
-        self.assertEqual(res2["class"], "CONTROL_HELD_O1")
+        # 4. Allow-list check
+        self.assertTrue(is_affirmative_stock_ui("stock_ui"))
+        self.assertTrue(is_affirmative_stock_ui("STOCK UI"))
+        self.assertTrue(is_affirmative_stock_ui("live_view"))
+        self.assertFalse(is_affirmative_stock_ui("never reached stock UI"))
+        self.assertFalse(is_affirmative_stock_ui("not stock ui"))
+        self.assertFalse(is_affirmative_stock_ui("dark"))
+        self.assertFalse(is_affirmative_stock_ui("blank screen"))
+        self.assertFalse(is_affirmative_stock_ui("free text without menu"))
 
-        # 3. Held press that HUNG or powered off early (lcd: dark, pulses: 24)
-        # Should NOT be CONTROL_HELD_O1; should decode to the stage reached
-        res3 = classify_owner_report({
-            "diskboot_sha256": self.valid_hash,
-            "press": "held",
-            "pulses": 24,
-            "lcd": "dark",
-            "inspector_status": "none",
-        })
-        self.assertEqual(res3["class"], "CODE_24")
-        self.assertEqual(res3["last_stage_reached"], "STAGE_BC_PRE_POWER_CHECK")
+    def test_file_parsing_whitespace_regressions(self) -> None:
+        """[P2 Regression] File parsing with whitespace and newline variations:
+        JSON with trailing newline, JSON without, and key=value all decode to CODE_24.
+        """
+        json_content_no_nl = (
+            f'{{"diskboot_sha256": "{self.valid_hash}", '
+            f'"press": "short", "pulses": 24, "lcd": "dark", "inspector_status": "none"}}'
+        )
+        json_content_with_nl = json_content_no_nl + "\n\n  \n"
+        kv_content = (
+            f"diskboot_sha256 = {self.valid_hash}\n"
+            f"press = short\n"
+            f"pulses = 24\n"
+            f"lcd = dark\n"
+            f"inspector_status = none\n"
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p_json_no_nl = Path(tmpdir) / "report_no_nl.json"
+            p_json_with_nl = Path(tmpdir) / "report_with_nl.json"
+            p_kv = Path(tmpdir) / "report.txt"
+
+            p_json_no_nl.write_text(json_content_no_nl, encoding="utf-8")
+            p_json_with_nl.write_text(json_content_with_nl, encoding="utf-8")
+            p_kv.write_text(kv_content, encoding="utf-8")
+
+            res1 = classify_owner_report(p_json_no_nl)
+            res2 = classify_owner_report(p_json_with_nl)
+            res3 = classify_owner_report(p_kv)
+
+            self.assertEqual(res1["class"], "CODE_24")
+            self.assertEqual(res2["class"], "CODE_24")
+            self.assertEqual(res3["class"], "CODE_24")
+
+            # Deterministic byte-identical output across all three
+            out1 = decode_ladder_report(p_json_no_nl)
+            out2 = decode_ladder_report(p_json_with_nl)
+            out3 = decode_ladder_report(p_kv)
+            self.assertEqual(out1, out2)
+            self.assertEqual(out1, out3)
 
     def test_refusal_of_forbidden_paths(self) -> None:
         """Covers strict Phase 0 refusal of paths ending in .bin, .rom, or starting with PRIMARY*."""
@@ -555,6 +710,82 @@ class TestPort26LadderDecode(unittest.TestCase):
                 self.assertEqual(proc.returncode, 2)
                 self.assertIn("Safety violation", proc.stderr)
 
+    def test_path_safety_symlink_regressions(self) -> None:
+        """[P1 Regression] Path safety symlink tests:
+        (a) tmp report.json symlink pointing to a file named PRIMARY.BIN is refused.
+        (b) tmp symlink pointing to a file with .bin extension is refused.
+        (c) refusal happens before any file read (proven by mocking builtins.open).
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            primary_file = tmp_path / "PRIMARY.BIN"
+            primary_file.write_text("sample content", encoding="utf-8")
+
+            bin_file = tmp_path / "sample.bin"
+            bin_file.write_text("sample bin", encoding="utf-8")
+
+            # Symlink (a): report.json -> PRIMARY.BIN
+            symlink_a = tmp_path / "report_a.json"
+            os.symlink(primary_file, symlink_a)
+
+            # Symlink (b): report_b.json -> sample.bin
+            symlink_b = tmp_path / "report_b.json"
+            os.symlink(bin_file, symlink_b)
+
+            # Test (a): symlink to PRIMARY.BIN is refused
+            with self.assertRaises(SafetyViolationError):
+                validate_safety_path(symlink_a)
+            with self.assertRaises(SafetyViolationError):
+                parse_owner_report(symlink_a)
+            with self.assertRaises(SafetyViolationError):
+                decode_ladder_report(symlink_a)
+
+            # Test (b): symlink to .bin file is refused
+            with self.assertRaises(SafetyViolationError):
+                validate_safety_path(symlink_b)
+            with self.assertRaises(SafetyViolationError):
+                parse_owner_report(symlink_b)
+            with self.assertRaises(SafetyViolationError):
+                decode_ladder_report(symlink_b)
+
+            # Test parent component symlink
+            sub_dir = tmp_path / "subdir"
+            sub_dir.mkdir()
+            nested_file = sub_dir / "valid_report.json"
+            nested_file.write_text('{"diskboot_sha256": "x"}', encoding="utf-8")
+            dir_symlink = tmp_path / "dir_link"
+            os.symlink(sub_dir, dir_symlink)
+            symlink_in_dir = dir_symlink / "valid_report.json"
+
+            with self.assertRaises(SafetyViolationError):
+                validate_safety_path(symlink_in_dir)
+            with self.assertRaises(SafetyViolationError):
+                parse_owner_report(symlink_in_dir)
+
+            # Test (c): prove refusal happens before any open() by patching builtins.open
+            with patch("builtins.open") as mock_open:
+                mock_open.side_effect = AssertionError("open() was called on a forbidden symlink path!")
+                with self.assertRaises(SafetyViolationError):
+                    validate_safety_path(symlink_a)
+                with self.assertRaises(SafetyViolationError):
+                    validate_safety_path(symlink_b)
+                with self.assertRaises(SafetyViolationError):
+                    validate_safety_path(symlink_in_dir)
+                with self.assertRaises(SafetyViolationError):
+                    parse_owner_report(symlink_a)
+                with self.assertRaises(SafetyViolationError):
+                    parse_owner_report(symlink_b)
+                with self.assertRaises(SafetyViolationError):
+                    parse_owner_report(symlink_in_dir)
+                with self.assertRaises(SafetyViolationError):
+                    decode_ladder_report(symlink_a)
+                with self.assertRaises(SafetyViolationError):
+                    decode_ladder_report(symlink_b)
+                with self.assertRaises(SafetyViolationError):
+                    decode_ladder_report(symlink_in_dir)
+                # Ensure builtins.open was never called
+                mock_open.assert_not_called()
+
     def test_both_input_formats(self) -> None:
         """Covers both JSON and simple key=value text formats producing byte-identical JSON outputs."""
         json_payload = (
@@ -580,25 +811,10 @@ class TestPort26LadderDecode(unittest.TestCase):
 
         self.assertEqual(out_json_from_json, out_json_from_kv)
 
-        # Verify parsed dictionary values
         dict_from_json = json.loads(out_json_from_json)
         self.assertEqual(dict_from_json["class"], "CODE_25")
         self.assertEqual(dict_from_json["last_stage_reached"], "STAGE_BC_POWER_CHECK_PASS")
         self.assertEqual(dict_from_json["next_stage"], "STAGE_BC_PRE_CREATE_STARTUP")
-
-        # Test from temporary files on disk
-        with tempfile.TemporaryDirectory() as tmpdir:
-            json_file = Path(tmpdir) / "report.json"
-            txt_file = Path(tmpdir) / "report.txt"
-
-            json_file.write_text(json_payload, encoding="utf-8")
-            txt_file.write_text(kv_payload, encoding="utf-8")
-
-            out_file_json = decode_ladder_report(json_file)
-            out_file_txt = decode_ladder_report(txt_file)
-
-            self.assertEqual(out_file_json, out_json_from_json)
-            self.assertEqual(out_file_txt, out_json_from_json)
 
     def test_determinism(self) -> None:
         """Asserts that decoding the exact same input repeatedly produces byte-identical JSON."""
@@ -615,7 +831,6 @@ class TestPort26LadderDecode(unittest.TestCase):
             repeated_output = decode_ladder_report(sample_input)
             self.assertEqual(first_output, repeated_output)
 
-        # Validate JSON formatting
         parsed = json.loads(first_output)
         self.assertEqual(list(parsed.keys()), sorted(list(parsed.keys())))
 

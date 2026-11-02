@@ -27,6 +27,11 @@ Single Source of Truth & Citations:
   - chdk-port/platform/g3x/sub/110c/led_breadcrumb.h:217-266:
     Macro definitions for framed two-digit LED pulse sequences:
     #define CORE_LADDER_PULSE_<XY> CORE_LADDER_FRAME(X, Y)
+     tens * 10 + units == code (asserted by runtime check)
+  - chdk-port/platform/g3x/sub/110c/boot_prototype.c:436-438 [VERIFIED]:
+    Continuation handoff branch to sub_fc0d0126 following Code 44:
+    "    pop.w   {r4, lr}\n"
+    "    b.w     sub_fc0d0126\n"
 - Architectural Specification & Canonical Symbol Mapping:
   - docs/PORT25_LADDER_FIX_CANDIDATE.md:328-354 (Section 5 Stage-Code Table, Codes 1..7, 11..15, 21..26, 31..35, 41..44)
   - docs/PORT25_LADDER_FIX_CANDIDATE.md:358-359 (Section 5.1 Native Power-Cut Failure Path, Codes 28 and 29)
@@ -36,23 +41,6 @@ Single Source of Truth & Citations:
   - docs/PORT25_LADDER_FIX_CANDIDATE.md:385 ("9ba62067c17d654a3b8995fc6e8c26176321154054a138a465ca66f9ff763a15")
   - docs/PORT25_OWNER_TRIAL_PLAN.md:30, 51, 81 (Expected candidate size: 124,865 bytes)
 
-Machine-Readable Pulse Table Status & Extraction:
-- [VERIFIED: chdk-port/platform/g3x/sub/110c/loader_main_breadcrumb.c:43-154]:
-  Loader ladder emit sites define Steps 1..7 directly before/after cache operations and relocation.
-- [VERIFIED: tools/build_candidate_port25_ladder_fix.py:90-128]:
-  Build script generate_boot_prototype_ladder_c() injects exactly 22 CORE_LADDER_PULSE_xx macros into boot_prototype.c.
-- [VERIFIED: chdk-port/platform/g3x/sub/110c/led_breadcrumb.h:217-266]:
-  Header defines framed timing macros CORE_LADDER_FRAME(tens, units).
-- [VERIFIED: docs/PORT25_LADDER_FIX_CANDIDATE.md:328-359]:
-  The specification provides the authoritative machine-parseable table mapping pulse counts to stage symbols.
-- [UNKNOWN / INFERRED]:
-  In the C firmware / build source, there is no standalone C lookup table (such as a `const char* stage_names[]` array)
-  pairing integer pulse counts directly to string stage names. Instead, pulse counts are embedded as discrete macro
-  injection calls in tools/build_candidate_port25_ladder_fix.py and step comments in loader_main_breadcrumb.c.
-  The decoder provides extract_build_source_pulse_codes() to parse emit sites directly from the build source,
-  and tests assert that every pulse count in the doc appears as an active LED-ladder emit site in the p25-t3b build source,
-  and that the union of build source emit counts exactly equals the 29 codes of LADDER_STAGE_TABLE.
-
 Code Range & Classes:
 - Valid Table Code Classes (exactly 29 codes):
   * Loader (7 codes): CODE_1, CODE_2, CODE_3, CODE_4, CODE_5, CODE_6, CODE_7
@@ -61,72 +49,50 @@ Code Range & Classes:
   * Native Power-Cut Fail Path (2 codes): CODE_28, CODE_29
   * Core Group 3 (5 codes): CODE_31, CODE_32, CODE_33, CODE_34, CODE_35
   * Core Group 4 (4 codes): CODE_41, CODE_42, CODE_43, CODE_44
-- In-Range Gaps within 1..44 (15 gap counts):
-  8, 9, 10, 16, 17, 18, 19, 20, 27, 30, 36, 37, 38, 39, 40.
-  Every in-range gap count maps to UNKNOWN_CODE (with the sole exception of count 27 when flagged uncertain,
-  which maps to AMBIGUOUS because both 26 and 28 are valid table codes).
-- Out-of-Range Counts:
-  Any integer count < 1 or > 44 maps to UNKNOWN_CODE.
 - Special Trial Classes:
-  * NO_PULSES: Zero pulses observed ('none', 0, null, or empty string).
-  * UNKNOWN_CODE: Pulse counts not registered in the 29-code table.
+  * NO_PULSES: Zero pulses observed (only exact case-insensitive string 'none').
+  * UNKNOWN_CODE: Pulse counts not registered in the 29-code table, out-of-range counts,
+    or invalid inputs (missing pulses, empty value, floats, bools, non-numeric strings, <= 0).
   * AMBIGUOUS: Conflicting multiple counts reported, or a count adjacent to two valid codes with owner uncertainty.
   * INVALID_CANDIDATE: Candidate DISKBOOT SHA-256 does not match the expected combined-candidate digest.
-  * CONTROL_HELD_O1: Held button press that boots into the stock user interface (positive control).
+  * CONTROL_HELD_O1: Held button press that affirmatively boots into the stock user interface.
+
+Stock-UI Detection Rules (CONTROL_HELD_O1):
+- Requires press == 'held'.
+- Accepts ONLY exact normalized LCD values from the documented allow-list:
+  'stock_ui', 'stock ui', 'live_view', 'live view', 'shooting', 'canon_ui', 'canon ui', 'menu'.
+- Rejects any string containing negation words (never, not, no, didn't, without),
+  dark / off / blank, or free text not matching the allow-list.
+- inspector_status alone (e.g. WITNESS_INVALID) never implies stock UI.
+
+Pulse Input Validation Rules:
+- 'none' (case-insensitive, exact) is the ONLY value that gives NO_PULSES.
+- Missing pulses field, empty value, 'unknown', '?', non-numeric strings, floats (e.g. 24.9),
+  booleans (True/False), negative numbers, or zero are classified as UNKNOWN_CODE with descriptive notes.
+- Accept only real integers or strings of decimal digits, plus lists of those.
+- Floats, bools, and non-numeric strings never become NO_PULSES or CODE_xx.
+
+Code 44 Next Stage Rules:
+- Code 44 next_stage is 'sub_fc0d0126' (the documented continuation handoff branch,
+  citing boot_prototype.c:436-438 [VERIFIED]), never 'STOCK_BOOT_SUCCESS'.
+- A boot-success claim may come only from independent affirmative UI evidence matching the allow-list,
+  and is recorded in notes, never in next_stage.
 
 Off-By-One Uncertainty Rule (AMBIGUOUS Classification):
-- Purpose:
-  Human observation of LED flashes is subject to perceptual ambiguity or blink-counting errors.
-  When an owner flags uncertainty in a trial report, an off-by-one count could represent either of
-  two adjacent stages. To avoid false triage, the reading must be classified as AMBIGUOUS.
-- When it applies:
-  The rule triggers IF AND ONLY IF:
-  1. The owner trial report explicitly flags uncertainty (see spelling variants below); AND
+- The rule triggers IF AND ONLY IF:
+  1. The owner trial report explicitly flags uncertainty; AND
   2. The reported pulse count C is adjacent to TWO valid codes in the source table:
      both (C - 1) in LADDER_STAGE_TABLE and (C + 1) in LADDER_STAGE_TABLE.
-  When both conditions hold, the trial outcome is classified as `AMBIGUOUS`.
-- Which neighbours count:
-  Only immediate integer predecessor (C - 1) and successor (C + 1) that are valid members of
-  the 29-code `LADDER_STAGE_TABLE`.
-  * Counts with two valid neighbours:
-    - Loader: 2, 3, 4, 5, 6 (1 and 7 have only one neighbour in the table).
-    - Core Group 1: 12, 13, 14 (11 and 15 have only one neighbour in the table).
-    - Core Group 2: 22, 23, 24, 25 (21 and 26 have only one neighbour in the table).
-    - Core Group 3: 32, 33, 34 (31 and 35 have only one neighbour in the table).
-    - Core Group 4: 42, 43 (41 and 44 have only one neighbour in the table).
-    - In-range gap 27: (26 in table and 28 in table). If count 27 is reported with uncertainty,
-      it triggers AMBIGUOUS.
-  * Counts with at most one valid neighbour (boundary codes & isolated gaps):
-    - Boundary codes: 1, 7, 11, 15, 21, 26, 28, 29, 31, 35, 41, 44.
-    - Isolated in-range gaps: 8, 9, 10, 16, 17, 18, 19, 20, 30, 36, 37, 38, 39, 40.
-    For these counts, the off-by-one rule does NOT trigger AMBIGUOUS even if uncertainty is flagged;
-    they are classified as their valid code (with an explanatory note) or UNKNOWN_CODE.
-- Owner Uncertainty Flag Spelling:
-  The decoder recognizes uncertainty indications in both JSON and key=value formats:
-  1. JSON Format:
-     - Top-level boolean or truthy string field:
-       `"uncertain": true` (or `"true"`, `"yes"`, `"1"`)
-       `"uncertainty": true` (or `"true"`, `"yes"`, `"1"`)
-     - Inline pulse annotation:
-       `"pulses": "24 (uncertain)"` or `"pulses": "24?"`
-     - Descriptive notes field:
-       `"notes": "... uncertain ..."` (case-insensitive substring)
-     Note: explicit negative values (`"uncertain": false`, `"uncertain": "false"`, `"uncertain": 0`)
-     are recognized as FALSE and do NOT trigger uncertainty.
-  2. Simple Key=Value Text Format:
-     - Field line:
-       `uncertain = true` (or `yes`, `1`)
-       `uncertainty = true` (or `yes`, `1`)
-     - Inline pulse annotation:
-       `pulses = 24 (uncertain)` or `pulses = 24?`
-     - Descriptive notes line:
-       `notes = count uncertain due to rapid blinking`
-     Note: explicit negative lines (`uncertain = false`, `uncertain = no`, `uncertain = 0`)
-     are recognized as FALSE.
+- Counts with two valid neighbours: 2..6, 12..14, 22..25, 32..34, 42..43, and gap 27.
+- Counts with at most one valid neighbour: 1, 7, 11, 15, 21, 26, 28, 29, 31, 35, 41, 44,
+  and isolated in-range gaps. These do NOT trigger AMBIGUOUS.
 
-Phase 0 Safety Governance:
+Phase 0 Path Safety Governance:
 - Pure Python standard library only.
-- Strict refusal of paths ending in .bin, .rom, or .BIN (case-insensitive) or basenames starting with PRIMARY*.
+- Refuses any path where os.path.islink() is true on the path itself or on any component.
+- Resolves paths with os.path.realpath and applies .bin/.rom/.BIN and PRIMARY* checks
+  case-insensitively to both supplied path and resolved path.
+- All safety checks execute before any open(). All files opened in text mode.
 - Reads no ROM or binary files.
 """
 
@@ -155,6 +121,7 @@ EXPECTED_PORT25_COMBINED_DISKBOOT_SIZE = 124865
 #   - chdk-port/platform/g3x/sub/110c/loader_main_breadcrumb.c:43-154 (Codes 1..7)
 #   - tools/build_candidate_port25_ladder_fix.py:90-128 (Codes 11..15, 21..26, 28..29, 31..35, 41..44)
 #   - chdk-port/platform/g3x/sub/110c/led_breadcrumb.h:217-266 (CORE_LADDER_PULSE_xx macro definitions)
+#   - chdk-port/platform/g3x/sub/110c/boot_prototype.c:436-438 (Continuation branch to sub_fc0d0126)
 LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
     # Loader stages (1-7)
     1: {
@@ -425,8 +392,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
     },
 }
 
-# Next expected execution stage map following each table checkpoint
-# In the combined candidate (ladder=1, poweron_fix=1):
+# Next expected execution stage map following each table checkpoint.
+# For Code 44, the documented continuation is the handoff branch to sub_fc0d0126
+# [VERIFIED: boot_prototype.c:436-438].
 NEXT_STAGE_MAP: Dict[int, Optional[str]] = {
     1: "STAGE_LOADER_AFTER_COPY",
     2: "STAGE_LOADER_BEFORE_DCACHE",
@@ -456,7 +424,7 @@ NEXT_STAGE_MAP: Dict[int, Optional[str]] = {
     41: "STAGE_BC_PRE_PHYSW_CREATE",
     42: "STAGE_BC_POST_PHYSW_CREATE",
     43: "STAGE_BC_PRE_FIRMWARE_CONT",
-    44: "STOCK_BOOT_SUCCESS",
+    44: "sub_fc0d0126",
 }
 
 # All valid trial classification categories: exactly 29 CODE_<N> classes plus 5 special categories
@@ -469,33 +437,102 @@ VALID_CLASSES: Set[str] = {
     "CONTROL_HELD_O1",
 }
 
+# Documented allow-list of affirmative LCD states indicating stock UI reached.
+# Citations: docs/PORT24_POWERON_FIX.md:19-24, docs/PORT25_SHORT_PRESS_LOCALISE.md:21, 55,
+#            docs/PORT25_OWNER_TRIAL_PLAN.md:162-173
+STOCK_UI_LCD_ALLOWLIST: Set[str] = {
+    "stock_ui",
+    "stock ui",
+    "live_view",
+    "live view",
+    "shooting",
+    "canon_ui",
+    "canon ui",
+    "menu",
+}
+
+NEGATION_PATTERNS = re.compile(r"\b(never|not|no|didn't|didnt|without)\b", re.IGNORECASE)
+DARK_PATTERNS = re.compile(r"\b(dark|off|blank)\b", re.IGNORECASE)
+
 
 class SafetyViolationError(ValueError):
-    """Raised when an access to a forbidden file path (.bin, .rom, PRIMARY*) is attempted."""
+    """Raised when an access to a forbidden file path (.bin, .rom, PRIMARY*, symlinks) is attempted."""
     pass
+
+
+def is_forbidden_file_name(name: str) -> bool:
+    """Checks if a file name or extension violates Phase 0 safety rules (case-insensitive)."""
+    name_upper = name.upper()
+    name_lower = name.lower()
+    if name_lower.endswith((".bin", ".rom")):
+        return True
+    if name_upper.startswith("PRIMARY"):
+        return True
+    return False
 
 
 def validate_safety_path(path: Union[str, Path]) -> Path:
     """Enforces Phase 0 read-only safety rules on input file paths.
     
-    Refuses any path that:
-    - ends in .bin, .rom, or .BIN (case-insensitive)
-    - has a basename starting with PRIMARY (case-insensitive)
+    Refuses:
+    1. Any path where os.path.islink() is true on the path itself or on any component.
+    2. Any path whose supplied name or resolved name ends in .bin, .rom (case-insensitive)
+       or whose basename starts with PRIMARY*.
+    
+    All checks are performed before any file open().
     """
-    p = Path(path)
-    name = p.name
-    name_lower = name.lower()
-    suffix_lower = p.suffix.lower()
+    p_str = str(path).strip()
+    p = Path(p_str)
 
-    if suffix_lower in (".bin", ".rom") or name_lower.endswith((".bin", ".rom")):
+    # 1. Check supplied path name / extension
+    if is_forbidden_file_name(p.name):
         raise SafetyViolationError(
-            f"Safety violation: forbidden access to binary or ROM file path '{path}'"
+            f"Safety violation: forbidden access to file '{path}'"
         )
 
-    if name.upper().startswith("PRIMARY"):
+    # 2. Check if os.path.islink() is true on the path itself or on any component
+    if os.path.islink(p_str):
         raise SafetyViolationError(
-            f"Safety violation: forbidden access to PRIMARY file path '{path}'"
+            f"Safety violation: refused symlink path '{path}'"
         )
+
+    for parent in p.parents:
+        if os.path.islink(str(parent)):
+            raise SafetyViolationError(
+                f"Safety violation: refused symlink path component '{parent}' in '{path}'"
+            )
+
+    try:
+        p_abs = Path(os.path.abspath(p_str))
+        if os.path.islink(str(p_abs)):
+            raise SafetyViolationError(
+                f"Safety violation: refused symlink absolute path '{p_abs}'"
+            )
+        for parent in p_abs.parents:
+            if os.path.islink(str(parent)):
+                raise SafetyViolationError(
+                    f"Safety violation: refused symlink absolute component '{parent}' in '{path}'"
+                )
+    except OSError:
+        pass
+
+    # 3. Resolve path with os.path.realpath and apply checks to resolved path
+    try:
+        resolved_str = os.path.realpath(p_str)
+        resolved_p = Path(resolved_str)
+        if is_forbidden_file_name(resolved_p.name):
+            raise SafetyViolationError(
+                f"Safety violation: resolved path '{resolved_str}' violates safety rules"
+            )
+        for parent in resolved_p.parents:
+            if is_forbidden_file_name(parent.name):
+                raise SafetyViolationError(
+                    f"Safety violation: resolved component '{parent.name}' in '{resolved_str}' violates safety rules"
+                )
+    except SafetyViolationError:
+        raise
+    except OSError:
+        pass
 
     return p
 
@@ -516,6 +553,78 @@ def is_truthy(val: Any) -> bool:
         if v in ("false", "no", "0", "f", "n", "", "none", "null"):
             return False
     return False
+
+
+def is_affirmative_stock_ui(lcd_str: str) -> bool:
+    """Explicit affirmative check for stock user interface on the LCD.
+    
+    Accepts ONLY exact normalized values from the documented allow-list:
+      stock_ui, stock ui, live_view, live view, shooting, canon_ui, canon ui, menu.
+    
+    Explicitly rejects:
+    - Any string containing negation words (never, not, no, didn't, without)
+    - Any string containing dark / off / blank
+    - Any free text not matching the allow-list
+    """
+    if not lcd_str:
+        return False
+
+    raw = lcd_str.strip().lower()
+
+    if NEGATION_PATTERNS.search(raw):
+        return False
+    if DARK_PATTERNS.search(raw):
+        return False
+
+    norm = re.sub(r"\s+", " ", raw)
+    if norm in STOCK_UI_LCD_ALLOWLIST:
+        return True
+
+    norm_underscore = norm.replace(" ", "_").replace("-", "_")
+    if norm_underscore in STOCK_UI_LCD_ALLOWLIST:
+        return True
+
+    return False
+
+
+def parse_header_pulse_digits(header_content: str) -> Dict[int, Tuple[int, int]]:
+    """Parses the actual CORE_LADDER_FRAME(tens, units) digits for every pulse macro in led_breadcrumb.h.
+    
+    Returns a dict mapping integer code -> (tens, units).
+    """
+    frame_defs: Dict[str, Tuple[int, int]] = {}
+    for m in re.finditer(
+        r"#define\s+([A-Za-z0-9_]+)\s+CORE_LADDER_FRAME\(\s*(\d+)\s*,\s*(\d+)\s*\)",
+        header_content,
+    ):
+        name = m.group(1)
+        tens = int(m.group(2))
+        units = int(m.group(3))
+        frame_defs[name] = (tens, units)
+
+    # Handle alias definitions like #define CORE_LADDER_PULSE_31 CHILD_LADDER_PULSE_31
+    alias_defs: Dict[str, str] = {}
+    for m in re.finditer(
+        r"#define\s+([A-Za-z0-9_]+)\s+([A-Za-z0-9_]+)\s*$",
+        header_content,
+        re.MULTILINE,
+    ):
+        alias_defs[m.group(1)] = m.group(2)
+
+    code_digits: Dict[int, Tuple[int, int]] = {}
+    for name, (tens, units) in frame_defs.items():
+        m_code = re.search(r"PULSE_(\d+)", name)
+        if m_code:
+            code = int(m_code.group(1))
+            code_digits[code] = (tens, units)
+
+    for alias, target in alias_defs.items():
+        m_code = re.search(r"CORE_LADDER_PULSE_(\d+)", alias)
+        if m_code and target in frame_defs:
+            code = int(m_code.group(1))
+            code_digits[code] = frame_defs[target]
+
+    return code_digits
 
 
 def extract_build_source_pulse_codes(
@@ -586,6 +695,106 @@ def extract_build_source_pulse_codes(
     }
 
 
+def verify_source_consistency(
+    header_content: Optional[str] = None,
+    loader_content: Optional[str] = None,
+    build_script_content: Optional[str] = None,
+    repo_root: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Validates full consistency between the build sources and the LADDER_STAGE_TABLE.
+    
+    Checks:
+    1. Header macro digits: parses CORE_LADDER_FRAME(tens, units) for each code and
+       asserts tens * 10 + units == code == table code.
+    2. Loader emit sites: parses steps 1..7 in loader_main_breadcrumb.c and asserts
+       the ordered step sequence and stage symbol associations match the table.
+    3. Core injected codes: parses emit sites and replacements in build_candidate_port25_ladder_fix.py
+       and asserts each code's emit site and position match the stage the table names.
+    """
+    if repo_root is None:
+        repo_root = REPO_ROOT
+
+    if header_content is None:
+        header_path = repo_root / "chdk-port" / "platform" / "g3x" / "sub" / "110c" / "led_breadcrumb.h"
+        validate_safety_path(header_path)
+        with open(header_path, "r", encoding="utf-8") as f:
+            header_content = f.read()
+
+    if loader_content is None:
+        loader_path = repo_root / "chdk-port" / "platform" / "g3x" / "sub" / "110c" / "loader_main_breadcrumb.c"
+        validate_safety_path(loader_path)
+        with open(loader_path, "r", encoding="utf-8") as f:
+            loader_content = f.read()
+
+    if build_script_content is None:
+        build_script_path = repo_root / "tools" / "build_candidate_port25_ladder_fix.py"
+        validate_safety_path(build_script_path)
+        with open(build_script_path, "r", encoding="utf-8") as f:
+            build_script_content = f.read()
+
+    # 1. Verify header macro digits: CORE_LADDER_FRAME(tens, units)
+    code_digits = parse_header_pulse_digits(header_content)
+    expected_header_codes = [c for c in LADDER_STAGE_TABLE if c >= 11]
+    for code in expected_header_codes:
+        if code not in code_digits:
+            raise ValueError(f"Missing CORE_LADDER_PULSE_{code} definition in header")
+        tens, units = code_digits[code]
+        computed = tens * 10 + units
+        if computed != code:
+            raise ValueError(
+                f"Header CORE_LADDER_FRAME({tens}, {units}) digits mismatch for PULSE_{code}: "
+                f"{tens}*10+{units} = {computed} != {code}"
+            )
+
+    # 2. Verify loader steps 1..7 emit sites and order
+    loader_matches = list(re.finditer(
+        r"#if defined\(LED_LADDER\)\s*//\s*Step\s*(\d+):\s*([a-zA-Z0-9_]+)\s+([a-zA-Z0-9_()]+);?",
+        loader_content,
+    ))
+    if len(loader_matches) != 7:
+        raise ValueError(f"Expected 7 loader ladder steps, found {len(loader_matches)}")
+
+    loader_steps: Dict[int, str] = {}
+    for idx, m in enumerate(loader_matches, start=1):
+        step_num = int(m.group(1))
+        step_name = m.group(2).upper()
+        if step_num != idx:
+            raise ValueError(f"Loader steps out of order: expected step {idx}, found {step_num}")
+        stage_sym = f"STAGE_LOADER_{step_name}"
+        loader_steps[step_num] = stage_sym
+        expected_sym = LADDER_STAGE_TABLE[step_num]["stage_symbol"]
+        if stage_sym != expected_sym:
+            raise ValueError(
+                f"Loader stage symbol mismatch for Step {step_num}: "
+                f"loader={stage_sym}, table={expected_sym}"
+            )
+
+    # 3. Verify core injected codes in build script
+    core_injected_codes = [
+        int(m.group(1))
+        for m in re.finditer(r"CORE_LADDER_PULSE_(\d+)", build_script_content)
+    ]
+    seen = set()
+    unique_injected = []
+    for c in core_injected_codes:
+        if c not in seen:
+            seen.add(c)
+            unique_injected.append(c)
+
+    expected_core_codes = set(c for c in LADDER_STAGE_TABLE if c >= 11)
+    if set(unique_injected) != expected_core_codes:
+        raise ValueError(
+            f"Injected core codes mismatch: script={sorted(set(unique_injected))}, "
+            f"table={sorted(expected_core_codes)}"
+        )
+
+    return {
+        "code_digits": code_digits,
+        "loader_steps": loader_steps,
+        "injected_codes": unique_injected,
+    }
+
+
 def parse_ladder_table_from_source(
     doc_path: Optional[Path] = None,
 ) -> Dict[int, Dict[str, Any]]:
@@ -605,8 +814,6 @@ def parse_ladder_table_from_source(
 
     parsed_table: Dict[int, Dict[str, Any]] = {}
 
-    # 1. Parse markdown table rows:
-    # | **1** | `STAGE_LOADER_AFTER_PROLOGUE` | Loader | `loader_main_breadcrumb.c:45` | Pre-Arming | Step 1... |
     table_pattern = re.compile(
         r"\|\s*\*\*(\d+)\*\*\s*\|\s*`([^`]+)`\s*\|\s*([^|]+)\|\s*`?([^`|]+)`?\s*\|\s*([^|]+)\|\s*([^|]+)\|"
     )
@@ -630,8 +837,6 @@ def parse_ladder_table_from_source(
             "purpose": purpose,
         }
 
-    # 2. Parse section 5.1 bullet entries:
-    # - **Code 28** (`STAGE_BC_FAIL_POWER_CUT`, `boot_prototype_ladder.c:357`, Initial Task): Flashes...
     bullet_pattern = re.compile(
         r"-\s*\*\*Code\s*(\d+)\*\*\s*\(\s*`?([^`,]+)`?\s*,\s*`?([^`,]+)`?\s*,\s*([^)]+)\)\s*:\s*(.*)"
     )
@@ -660,15 +865,15 @@ def parse_ladder_table_from_source(
 def parse_ladder_table_from_build_source(
     repo_root: Optional[Path] = None,
 ) -> Dict[int, Dict[str, Any]]:
-    """Validates and extracts the stage table combining build source emit sites and doc stage symbols.
-    
-    Verifies that the p25-t3b build source emit sites exactly match the specification table.
-    """
+    """Validates and extracts the stage table combining build source emit sites and doc stage symbols."""
     if repo_root is None:
         repo_root = REPO_ROOT
 
     doc_path = repo_root / "docs" / "PORT25_LADDER_FIX_CANDIDATE.md"
     doc_table = parse_ladder_table_from_source(doc_path)
+
+    # Run the comprehensive consistency check
+    verify_source_consistency(repo_root=repo_root)
 
     build_info = extract_build_source_pulse_codes(repo_root)
     emitted_codes = set(build_info["all_emitted_codes"])
@@ -679,19 +884,11 @@ def parse_ladder_table_from_build_source(
             f"build={sorted(emitted_codes)}, doc={sorted(doc_table.keys())}"
         )
 
-    # Cross-verify loader stage symbols
-    for step_num, stage_sym in build_info["loader_steps"].items():
-        if doc_table[step_num]["stage_symbol"] != stage_sym:
-            raise ValueError(
-                f"Loader stage symbol mismatch for code {step_num}: "
-                f"build={stage_sym}, doc={doc_table[step_num]['stage_symbol']}"
-            )
-
     return doc_table
 
 
 def parse_expected_diskboot_sha256(doc_path: Optional[Path] = None) -> str:
-    """Parses the expected PORT-25 combined candidate SHA-256 from docs/PORT25_LADDER_FIX_CANDIDATE.md:385."""
+    """Parses expected PORT-25 combined candidate SHA-256 from docs/PORT25_LADDER_FIX_CANDIDATE.md:385."""
     if doc_path is None:
         doc_path = REPO_ROOT / "docs" / "PORT25_LADDER_FIX_CANDIDATE.md"
 
@@ -700,7 +897,6 @@ def parse_expected_diskboot_sha256(doc_path: Optional[Path] = None) -> str:
     with open(doc_path, "r", encoding="utf-8") as f:
         content = f.read()
 
-    # Search for PORT-25 Combined Candidate row in Section 6 (line 385)
     m = re.search(
         r"\|\s*\*\*PORT-25 Combined Candidate\*\*\s*\|[^|]*\|\s*`?([0-9a-fA-F]{64})`?\s*\|",
         content,
@@ -717,7 +913,7 @@ def parse_owner_report(input_data: Union[str, Path, Dict[str, Any]]) -> Dict[str
     Fields extracted:
       - diskboot_sha256: string
       - press: string ('short' or 'held')
-      - pulses: integer, list of integers, or 'none'
+      - pulses: integer, list of integers, 'none', or invalid raw representation
       - lcd: string
       - inspector_status: string
       - uncertain / uncertainty: optional flags for ambiguity detection
@@ -726,38 +922,49 @@ def parse_owner_report(input_data: Union[str, Path, Dict[str, Any]]) -> Dict[str
     if isinstance(input_data, dict):
         return dict(input_data)
 
-    # First enforce path safety on string/Path inputs if they have path-like signatures
-    if isinstance(input_data, (str, Path)):
-        p_str = str(input_data).strip()
-        p_candidate = Path(p_str)
-        if (
-            p_candidate.suffix.lower() in (".bin", ".rom")
-            or p_candidate.name.upper().startswith("PRIMARY")
-            or p_candidate.name.lower().endswith((".bin", ".rom"))
-        ):
-            validate_safety_path(p_candidate)
-
     raw_text: str = ""
-    is_path_candidate = isinstance(input_data, Path) or (
-        isinstance(input_data, str) and (os.path.exists(input_data) or "/" in input_data)
-    )
-    if is_path_candidate:
+
+    if isinstance(input_data, Path):
+        validate_safety_path(input_data)
+        if not input_data.is_file():
+            raise FileNotFoundError(f"Report file not found: {input_data}")
+        with open(input_data, "r", encoding="utf-8") as f:
+            raw_text = f.read()
+        if "\x00" in raw_text:
+            raise SafetyViolationError(f"Safety violation: refused binary content in {input_data}")
+    elif isinstance(input_data, str):
+        p_str = input_data.strip()
+        # Enforce safety check if string looks like a file name or path
         try:
-            path_obj = Path(input_data)
-            validate_safety_path(path_obj)
-            if path_obj.is_file():
-                with open(path_obj, "rb") as bf:
-                    raw_bytes = bf.read()
-                if b"\x00" in raw_bytes:
-                    raise SafetyViolationError(f"Safety violation: refused binary content in {path_obj}")
-                raw_text = raw_bytes.decode("utf-8")
+            cand = Path(p_str)
+            if is_forbidden_file_name(cand.name):
+                validate_safety_path(cand)
         except SafetyViolationError:
             raise
-        except (OSError, ValueError):
-            raw_text = str(input_data)
+        except (ValueError, OSError):
+            pass
 
-    if not raw_text:
-        raw_text = str(input_data).strip()
+        # Check if input is a path on disk or has path separators
+        is_path = False
+        if not ("\n" in p_str or (p_str.startswith("{") and p_str.endswith("}"))):
+            if os.path.islink(p_str) or os.path.exists(p_str) or "/" in p_str or "\\" in p_str:
+                is_path = True
+
+        if is_path:
+            validate_safety_path(p_str)
+            cand_p = Path(p_str)
+            if cand_p.is_file():
+                with open(cand_p, "r", encoding="utf-8") as f:
+                    raw_text = f.read()
+                if "\x00" in raw_text:
+                    raise SafetyViolationError(f"Safety violation: refused binary content in {cand_p}")
+            else:
+                raw_text = p_str
+        else:
+            raw_text = p_str
+
+    # Strip surrounding whitespace before deciding between JSON and key=value
+    raw_text = raw_text.strip()
 
     # Try parsing as JSON first
     if raw_text.startswith("{") and raw_text.endswith("}"):
@@ -785,33 +992,32 @@ def parse_owner_report(input_data: Union[str, Path, Dict[str, Any]]) -> Dict[str
         if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
             val = val[1:-1].strip()
 
-        # Canonicalize field values
         if key == "pulses":
             val_lower = val.lower()
-            if val_lower in ("none", "null", "no_pulses", "0", ""):
+            if val_lower == "none":
                 report[key] = "none"
             elif val.startswith("[") and val.endswith("]"):
-                try:
-                    report[key] = [int(x.strip()) for x in val[1:-1].split(",") if x.strip()]
-                except ValueError:
-                    report[key] = val
-            elif "," in val:
-                try:
-                    report[key] = [int(x.strip()) for x in val.split(",") if x.strip()]
-                except ValueError:
-                    report[key] = val
-            else:
-                try:
-                    report[key] = int(val)
-                except ValueError:
-                    # Check if uncertainty notation in pulses (e.g. "24 (uncertain)" or "24?")
-                    m_int = re.search(r"\b(\d+)\b", val)
-                    if m_int:
-                        report[key] = int(m_int.group(1))
-                        if "uncertain" in val_lower or "?" in val:
-                            report["uncertain"] = True
+                items = [x.strip() for x in val[1:-1].split(",") if x.strip()]
+                parsed_list: List[Any] = []
+                for item in items:
+                    if re.fullmatch(r"[-+]?[0-9]+", item):
+                        parsed_list.append(int(item))
                     else:
-                        report[key] = val
+                        parsed_list.append(item)
+                report[key] = parsed_list
+            elif "," in val:
+                items = [x.strip() for x in val.split(",") if x.strip()]
+                parsed_list = []
+                for item in items:
+                    if re.fullmatch(r"[-+]?[0-9]+", item):
+                        parsed_list.append(int(item))
+                    else:
+                        parsed_list.append(item)
+                report[key] = parsed_list
+            elif re.fullmatch(r"[-+]?[0-9]+", val):
+                report[key] = int(val)
+            else:
+                report[key] = val
         elif key in ("uncertain", "uncertainty"):
             report["uncertain"] = is_truthy(val)
         elif key == "diskboot_sha256":
@@ -853,7 +1059,6 @@ def classify_owner_report(
 
     reported_sha256 = str(report.get("diskboot_sha256", "")).strip().lower()
     press = str(report.get("press", "short")).strip().lower()
-    pulses_raw = report.get("pulses", "none")
     lcd = str(report.get("lcd", "")).strip().lower()
     inspector_status = str(report.get("inspector_status", "")).strip().lower()
     notes_in = str(report.get("notes", "")).strip()
@@ -873,19 +1078,10 @@ def classify_owner_report(
         }
 
     # 2. Check for CONTROL_HELD_O1
-    # Condition: Held button press that successfully booted into the stock UI.
+    # Condition: Held button press that affirmatively booted into the stock UI.
     # Citations: docs/PORT24_POWERON_FIX.md:19-24, docs/PORT25_SHORT_PRESS_LOCALISE.md:21, 55,
     #            docs/PORT25_OWNER_TRIAL_PLAN.md:162-173
-    stock_ui_indicators = (
-        "stock_ui", "stock ui", "live_view", "live view", "shooting",
-        "canon_ui", "canon ui", "stock", "booted", "menu"
-    )
-    stock_inspector_indicators = ("o1", "o6", "witness_invalid", "reached", "pass", "ok")
-
-    reached_stock_ui = (
-        any(ind in lcd for ind in stock_ui_indicators)
-        or any(ind == inspector_status for ind in stock_inspector_indicators)
-    )
+    reached_stock_ui = is_affirmative_stock_ui(lcd)
 
     if press == "held" and reached_stock_ui:
         evidence_held = (
@@ -903,45 +1099,93 @@ def classify_owner_report(
             ),
         }
 
-    # 3. Canonicalize pulses
-    # Pulses can be:
-    # - 'none' / None / 0 -> NO_PULSES
-    # - list of ints -> single count or AMBIGUOUS (conflicting multiple counts)
-    # - int -> single count
+    # 3. Pulse Input Validation & Resolution
+    # - 'none' (case-insensitive, exact) is the ONLY value giving NO_PULSES.
+    # - Accept only real ints, or strings of decimal digits, plus lists of those.
+    # - Missing pulses field, empty value, 'unknown', '?', floats (24.9), bools (True),
+    #   negative numbers (-1) or zero (0) map to UNKNOWN_CODE with explanatory notes.
+    if "pulses" not in report:
+        return {
+            "class": "UNKNOWN_CODE",
+            "last_stage_reached": None,
+            "next_stage": None,
+            "evidence": "docs/PORT25_LADDER_FIX_CANDIDATE.md:326-354",
+            "notes": (
+                "Missing 'pulses' field in owner report. Report must supply an integer pulse count, "
+                "a list of integers, or 'none'."
+            ),
+        }
+
+    pulses_raw = report.get("pulses")
+    is_none_pulse = False
     count_resolved: Optional[int] = None
     is_ambiguous_multiple = False
+    invalid_input_reason: Optional[str] = None
 
-    if pulses_raw in ("none", "null", "NONE", None, "", 0, "0"):
-        count_resolved = None
-    elif isinstance(pulses_raw, list):
-        int_list: List[int] = []
-        for x in pulses_raw:
-            try:
-                int_list.append(int(x))
-            except (ValueError, TypeError):
-                pass
-        unique_counts = sorted(list(set(int_list)))
-        if len(unique_counts) == 0:
-            count_resolved = None
-        elif len(unique_counts) == 1:
-            count_resolved = unique_counts[0]
-        else:
-            is_ambiguous_multiple = True
-    elif isinstance(pulses_raw, (int, float)):
-        count_resolved = int(pulses_raw)
+    if isinstance(pulses_raw, bool):
+        invalid_input_reason = (
+            f"Invalid boolean value '{pulses_raw}' for pulses (booleans are not valid pulse counts)."
+        )
+    elif isinstance(pulses_raw, float):
+        invalid_input_reason = (
+            f"Invalid non-integer float value '{pulses_raw}' for pulses; "
+            "only integers, decimal digit strings, or 'none' accepted."
+        )
     elif isinstance(pulses_raw, str):
-        if pulses_raw.strip().lower() in ("none", "null", "0", ""):
-            count_resolved = None
+        p_str = pulses_raw.strip()
+        if p_str.lower() == "none":
+            is_none_pulse = True
+        elif p_str == "":
+            invalid_input_reason = "Empty 'pulses' value in owner report."
+        elif re.fullmatch(r"[-+]?[0-9]+", p_str):
+            count_resolved = int(p_str)
         else:
-            try:
-                count_resolved = int(pulses_raw.strip())
-            except ValueError:
-                # Try finding integer in string (e.g. '24 (uncertain)')
-                m_int = re.search(r"\b(\d+)\b", pulses_raw)
-                if m_int:
-                    count_resolved = int(m_int.group(1))
+            invalid_input_reason = (
+                f"Invalid non-numeric or malformed pulse count string '{pulses_raw}' in owner report."
+            )
+    elif isinstance(pulses_raw, int):
+        count_resolved = pulses_raw
+    elif isinstance(pulses_raw, list):
+        if len(pulses_raw) == 0:
+            invalid_input_reason = "Empty pulses list in owner report."
+        else:
+            int_list: List[int] = []
+            for item in pulses_raw:
+                if isinstance(item, bool):
+                    invalid_input_reason = f"Invalid boolean element '{item}' inside pulses list."
+                    break
+                elif isinstance(item, float):
+                    invalid_input_reason = f"Invalid float element '{item}' inside pulses list."
+                    break
+                elif isinstance(item, int):
+                    int_list.append(item)
+                elif isinstance(item, str) and re.fullmatch(r"[-+]?[0-9]+", item.strip()):
+                    int_list.append(int(item.strip()))
                 else:
-                    count_resolved = None
+                    invalid_input_reason = f"Invalid non-numeric element '{item}' inside pulses list."
+                    break
+
+            if invalid_input_reason is None:
+                unique_counts = sorted(list(set(int_list)))
+                if len(unique_counts) == 1:
+                    count_resolved = unique_counts[0]
+                else:
+                    is_ambiguous_multiple = True
+    else:
+        invalid_input_reason = f"Unrecognized pulse input type '{type(pulses_raw).__name__}'."
+
+    # Handle input validation failures
+    if invalid_input_reason is not None:
+        return {
+            "class": "UNKNOWN_CODE",
+            "last_stage_reached": None,
+            "next_stage": None,
+            "evidence": "docs/PORT25_LADDER_FIX_CANDIDATE.md:326-354",
+            "notes": (
+                f"Pulse input validation failure: {invalid_input_reason} "
+                "Accepted formats: integer, decimal digit string, list of integers, or 'none'."
+            ),
+        }
 
     # Handle Conflicting Multiple Counts
     if is_ambiguous_multiple:
@@ -956,8 +1200,8 @@ def classify_owner_report(
             ),
         }
 
-    # Handle NO_PULSES
-    if count_resolved is None:
+    # Handle NO_PULSES (exact case-insensitive 'none')
+    if is_none_pulse:
         return {
             "class": "NO_PULSES",
             "last_stage_reached": None,
@@ -970,9 +1214,22 @@ def classify_owner_report(
             ),
         }
 
+    assert count_resolved is not None
+
+    # Handle non-positive integer counts (<= 0)
+    if count_resolved <= 0:
+        return {
+            "class": "UNKNOWN_CODE",
+            "last_stage_reached": None,
+            "next_stage": None,
+            "evidence": "docs/PORT25_LADDER_FIX_CANDIDATE.md:326-354",
+            "notes": (
+                f"Pulse count {count_resolved} does not match any registered code in the PORT-25 "
+                "ladder stage table (valid codes: 1..7, 11..15, 21..26, 28..29, 31..35, 41..44)."
+            ),
+        }
+
     # 4. Check Off-By-One Uncertainty Rule
-    # "AMBIGUOUS for conflicting multiple counts, or a count adjacent to two valid codes
-    #  when the owner flags uncertainty (an off-by-one rule; define it explicitly and document it)"
     uncertain_val = report.get("uncertain")
     uncertainty_val = report.get("uncertainty")
 
@@ -987,11 +1244,7 @@ def classify_owner_report(
     elif explicit_not_uncertain:
         uncertainty_flagged = False
     else:
-        uncertainty_flagged = (
-            "uncertain" in notes_in.lower()
-            or "uncertain" in str(pulses_raw).lower()
-            or "?" in str(pulses_raw)
-        )
+        uncertainty_flagged = "uncertain" in notes_in.lower()
 
     if uncertainty_flagged and is_count_adjacent_to_two_valid_codes(count_resolved, table):
         prev_sym = table[count_resolved - 1]["stage_symbol"]
@@ -1019,6 +1272,11 @@ def classify_owner_report(
         context = entry.get("context", "")
 
         note_text = f"{purpose} ({context})."
+        if count_resolved == 44:
+            note_text += " Handoff continuation branches to sub_fc0d0126 [VERIFIED: boot_prototype.c:436-438]."
+            if reached_stock_ui:
+                note_text += " Independent affirmative UI evidence observed: camera booted into stock UI."
+
         if uncertainty_flagged:
             note_text += " (Note: owner flagged uncertainty, but count is not adjacent to two valid codes)."
 
