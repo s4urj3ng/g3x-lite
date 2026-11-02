@@ -794,3 +794,61 @@ python3 -B tools/port18_trial_report.py private/port18/trial_report.md --out pri
 - **Current next step**: The 2026-11-02 owner trial of the PORT-24 opt-in candidate (`faad4d8242fbf6f79a44b10a9956f7eb04de9b65f42221f82a3b69eb024cf056`, 118,001 B, built from `origin/main` `81532bb` with `build_candidate_port24_poweron_fix.py --poweron-fix`) showed that removing the second `sub_fc1284ac` check in `sub_fc05b962_my` is **VERIFIED insufficient** for a short-press boot (outcome O10 on short press: no LED, LCD stayed off; outcome O1 on held press: stock UI, `CONT_ATTEMPTED / FRESHNESS_UNVERIFIED`, no `TRACE.LOG`) `[VERIFIED] (owner observation, 2026-11-02; outcome O10 in tools/port18_trial_report.py:248-256; outcome O1 in tools/port18_trial_report.py:92-96)`. The remaining cause of the short-press shutdown is **UNKNOWN** `[UNKNOWN]`. Milestone PORT-25 focuses on localising the short-press failure.
 - **Previous next step (superseded 2026-11-02)**: First boot was reached on hardware (outcome O1) `[VERIFIED] (owner observation, 2026-11-01)`. The shutdown on short press is consistent with the Stage 5 power check `sub_fc1284ac` in `sub_fc05b962_my` (`chdk-port/platform/g3x/sub/110c/boot_prototype.c:350; docs/PORT23_POWER_SUPERVISION.md:43-50, 284-293`) `[INFERRED: chdk-port/platform/g3x/sub/110c/boot_prototype.c:350; docs/PORT23_POWER_SUPERVISION.md:43-50, 284-293]`. Tasks `p24-poweron-fix` (an opt-in short-press boot candidate, default output unchanged) and `p24-session-sheet` are next, and PORT-24 T2-T4 are superseded per the owner instruction of 2026-11-01 `[VERIFIED] (owner instruction, 2026-11-01)`.
 
+
+### PORT-26 — Ladder Ingest & Short-Press Triage (2026-11-02)
+- **PORT-25 Merge State**: PR #98, merge commit `2aea9cb`, head `78e4249982` `[VERIFIED: git log 2aea9cb; git log 78e4249982]`.
+- **Owner Combined Candidate Trial (2026-11-02)**: The owner ran the PORT-25 combined-candidate short-press trial on 2026-11-02 (DISKBOOT `9ba62067c17d654a3b8995fc6e8c26176321154054a138a465ca66f9ff763a15`, size 124,865 B). Result: terminal Code 43 (`STAGE_BC_POST_PHYSW_CREATE`) with the camera fully off; the held press reaches the stock UI (`O1` control). Mark this VERIFIED (owner observation, 2026-11-02) `[VERIFIED] (owner observation, 2026-11-02)`.
+- **Trial Ingest Tasks**: Ingest of this result is handled by `p26-t4-code43-ingest` and `p26-t7-owner-priority-record` `[VERIFIED] (AgentBridge milestone PORT-26 task list, 2026-11-02)`.
+- **Owner Priority Direction**: The owner's 2026-11-02 priority puts the CHDK GUI track ahead of the short-press fix `[VERIFIED] (owner priority, 2026-11-02)`.
+- **Tooling & Next-Steps Plan**:
+  - Automated decoder tool: [tools/port26_ladder_decode.py](../tools/port26_ladder_decode.py) parses and classifies owner trial reports across 29 ladder stage codes and 5 special classes `[VERIFIED: tools/port26_ladder_decode.py:161-561]`.
+  - Per-class next-step plan: [docs/PORT26_LADDER_NEXT_STEPS.md](PORT26_LADDER_NEXT_STEPS.md) documents the stage-by-stage execution intervals, power-off points, and next candidate actions for every ladder code `[VERIFIED: docs/PORT26_LADDER_NEXT_STEPS.md:5-207]`.
+
+### Owner priority change (2026-11-02)
+- **Accepted Trial Boot Method**: Boot by holding the power button is the accepted boot method for owner trials `[VERIFIED]` (owner direction, 2026-11-02). Holding the power button until the LED ladder completes bypasses the short-press shutdown and reaches the stock UI (`O1` control state).
+- **Post-PORT-26 Priority Order**: The owner-requested order of development following PORT-26 prioritizes the CHDK GUI track ahead of the short-press fix, sequenced in four steps:
+  1. **Step 1: Resident CHDK task (`spytask` equivalent)**: A resident CHDK task running after the `sub_fc0d0126` handoff (`chdk-port/platform/g3x/sub/110c/boot_prototype.c:438`), with an LED heartbeat as proof-of-life, checked with a held press.
+     - Stock continuation handoff address `0xFC0D0126`: verified (`PORT25-ROM-FIRMWARE-CONT; chdk-port/platform/g3x/sub/110c/boot_prototype.c:438`).
+     - Status LED MMIO `0xD20B0884` (GPIO 33): verified (`docs/PORT20_LED_EVIDENCE.md:23-28`).
+     - DryOS task creation primitive (`CreateTask` / `task_create`) address in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+     - DryOS task exit / sleep primitive addresses (`ExitTask`, `SleepTask`) in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+     - Post-handoff task hook injection site / task dispatcher entry in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+     - CHDK task stack memory allocation range and heap boundary in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+  2. **Step 2: Display**: Bitmap/OSD framebuffer address, palette and dimensions, then a minimal test overlay.
+     - Bitmap/OSD active framebuffer address / pointer in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+     - Bitmap/OSD framebuffer dimensions (width, height, pitch/stride) and pixel format in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+     - Palette buffer address, palette entry format, and color palette hardware registers in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+     - Display update, flush, or screen refresh eventprocs / subroutines in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+  3. **Step 3: Keyboard**: Hook `task_PhySw` / `kbd` processing and ALT toggle, with the short-press fix folded in here.
+     - PORT-26 tasks `p26-t5` and `p26-t6` were deferred to step 3 `[VERIFIED]` (owner direction, 2026-11-02).
+     - Task creation helper `sub_fc1283d2` (`0xFC1283D2`) and `task_PhySw` entry (`0xFC1283AD`, priority 23, stack 2048 B, status RAM `0x00040DAC`): verified (`PORT25-ROM-PHYSW-TASK; docs/PORT25_SHORT_PRESS_LOCALISE.md:250-261`).
+     - `task_PhySw` hook point / keyboard intercept instruction address in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+     - Physical key table, button bitmap mask offsets, and switch descriptors in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+     - Keyboard polling routine (`kbd_read_keys` / `my_kbd_read_keys`) hook address in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+     - Power-button release shutdown dispatch path / `TurnOffE1_FW` edge in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+  4. **Step 4: Standard CHDK GUI / ALT menu**: The standard CHDK GUI/ALT menu running on top of the resident task, display overlay, and keyboard ALT toggle.
+     - CHDK GUI event loop integration and menu navigation dispatch in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+     - OSD / console font tables and character rendering primitives in GM1.10C: `[UNKNOWN: needs a bounded ROM range]`.
+
+### PORT-26 Milestone Close-Out (2026-11-02)
+- **PORT-26 Deliverables**: Milestone PORT-26 completed all triage, decoding, and planning deliverables without modifying runtime boot code `[VERIFIED]`:
+  1. Automated LED ladder decoder tool: [tools/port26_ladder_decode.py](../tools/port26_ladder_decode.py) (and test suite [tests/test_port26_ladder_decode.py](../tests/test_port26_ladder_decode.py)) `[VERIFIED: tools/port26_ladder_decode.py:161-561; tests/test_port26_ladder_decode.py:84-250]`.
+  2. Owner report template: [docs/PORT26_OWNER_REPORT_TEMPLATE.md](PORT26_OWNER_REPORT_TEMPLATE.md) (and tests [tests/test_port26_owner_template.py](../tests/test_port26_owner_template.py)) `[VERIFIED: docs/PORT26_OWNER_REPORT_TEMPLATE.md:20-80; tests/test_port26_owner_template.py:105-125]`.
+  3. Per-class next-steps execution plan: [docs/PORT26_LADDER_NEXT_STEPS.md](PORT26_LADDER_NEXT_STEPS.md) `[VERIFIED: docs/PORT26_LADDER_NEXT_STEPS.md:5-207]`.
+  4. Code 43 owner trial ingest: [docs/PORT26_TRIAL_2026-11-02.md](PORT26_TRIAL_2026-11-02.md) and fixtures tests/fixtures/port26/owner_report_2026-11-02_port25_short.json `[VERIFIED: docs/PORT26_TRIAL_2026-11-02.md:12-90]`.
+  5. Code 43 evidence record and short-press deferral: [docs/PORT26_CODE43_RECORD.md](PORT26_CODE43_RECORD.md) `[VERIFIED: docs/PORT26_CODE43_RECORD.md:12-80]`.
+- **Working Boot Method**: Held press is the owner-accepted working boot method (2026-11-02) `[VERIFIED: owner direction, 2026-11-02; docs/PORT26_CODE43_RECORD.md:40-44; see ### Owner priority change (2026-11-02) above]`.
+- **Next Milestone Order**: The owner-directed sequence prioritizes the CHDK GUI track ahead of the short-press fix (owner instruction, not technical fact) `[VERIFIED: owner direction 2026-11-02, docs/PORT26_CODE43_RECORD.md:59-62]`:
+  1. **Step 1**: resident CHDK task after the sub_fc0d0126 handoff, with an LED heartbeat checked with a held press.
+  2. **Step 2**: display/OSD test overlay.
+  3. **Step 3**: keyboard/task_PhySw hook and ALT toggle, with the short-press fix folded in.
+  4. **Step 4**: CHDK GUI/ALT menu.
+  For technical details, evidence and UNKNOWN ROM ranges see ### Owner priority change (2026-11-02) above and docs/PORT26_CODE43_RECORD.md.
+- **Build Integrity Restatement**:
+  - Default build remains byte-identical: `candidate_port2a/DISKBOOT.BIN` SHA-256 `9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136` (size 118,001 B) `[VERIFIED: docs/PORT19_GO_NOGO.md:31; docs/PORT25_LADDER_FIX_CANDIDATE.md:381]`.
+  - PORT-24 and PORT-25 opt-in build outputs:
+    - PORT-24 opt-in short-press fix (`--poweron-fix`): SHA-256 `faad4d8242fbf6f79a44b10a9956f7eb04de9b65f42221f82a3b69eb024cf056` (118,001 B) `[VERIFIED: docs/PORT24_POWERON_FIX.md:286; docs/PORT25_LADDER_FIX_CANDIDATE.md:382]`.
+    - PORT-24 opt-in breadcrumb ladder: SHA-256 `aa7963de9b6c04c8c5a3077efab12f8383a26db114d5d9b92e320780630abd3c` (118,257 B) `[VERIFIED: docs/PORT24_BREADCRUMB_LADDER.md:517; docs/PORT25_LADDER_FIX_CANDIDATE.md:383]`.
+    - PORT-25 opt-in ladder-only (`--ladder-only`): SHA-256 `45da469f3eb46c4d2aff77a032e5c8bb4eedf8ec8846526853d716d05d2b2f4e` (126,081 B) `[VERIFIED: docs/PORT25_LADDER_FIX_CANDIDATE.md:384]`.
+    - PORT-25 opt-in combined candidate (`--combined`): SHA-256 `9ba62067c17d654a3b8995fc6e8c26176321154054a138a465ca66f9ff763a15` (124,865 B) `[VERIFIED: docs/PORT25_LADDER_FIX_CANDIDATE.md:385]`.
+  - Unchanged in PORT-26: no PORT-26 commit touched `chdk-port/` or the build scripts tools/build_candidate_port2a.py, tools/build_candidate_port24_poweron_fix.py, tools/build_candidate_port24_ladder.py, tools/build_candidate_port25_ladder_fix.py (`git diff 2aea9cb..HEAD -- chdk-port/ tools/build_candidate_port2a.py tools/build_candidate_port24_poweron_fix.py tools/build_candidate_port24_ladder.py tools/build_candidate_port25_ladder_fix.py` and `git log 2aea9cb..HEAD -- chdk-port/ tools/build_candidate_port2a.py tools/build_candidate_port24_poweron_fix.py tools/build_candidate_port24_ladder.py tools/build_candidate_port25_ladder_fix.py` show 0 changes against the PORT-25 merge base `2aea9cb`) `[VERIFIED: git diff 2aea9cb..HEAD -- chdk-port/ tools/build_candidate_port2a.py]`.
