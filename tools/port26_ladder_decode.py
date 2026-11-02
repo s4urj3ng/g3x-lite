@@ -518,37 +518,36 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
 # Next expected execution stage map following each table checkpoint.
 # For Code 44, the documented continuation is the handoff branch to sub_fc0d0126
 # [VERIFIED: boot_prototype.c:436-438].
-NEXT_STAGE_MAP: Dict[int, Optional[str]] = {
-    1: "STAGE_LOADER_AFTER_COPY",
-    2: "STAGE_LOADER_BEFORE_DCACHE",
-    3: "STAGE_LOADER_AFTER_DCACHE",
-    4: "STAGE_LOADER_BEFORE_ICACHE",
-    5: "STAGE_LOADER_AFTER_ICACHE",
-    6: "STAGE_LOADER_BEFORE_BX",
-    7: "STAGE_BC_CORE_ENTRY",
-    11: "STAGE_BC_POST_BSS",
-    12: "STAGE_BC_STAGE3_ENTRY",
-    13: "STAGE_BC_PRE_KERNEL_INIT",
-    14: "STAGE_BC_STAGE4_ENTRY",
-    15: "STAGE_BC_STAGE5_ENTRY",
-    21: "STAGE_BC_PRE_MPU_SETUP",
-    22: "STAGE_BC_POST_MPU_SETUP",
-    23: "STAGE_BC_PRE_POWER_CHECK",
-    24: "STAGE_BC_POWER_CHECK_PASS",
-    25: "STAGE_BC_PRE_CREATE_STARTUP",
-    26: "STAGE_BC_STARTUP_ENTRY",
-    28: "STAGE_BC_HALT_SHUTDOWN",
-    29: None,
-    31: "STAGE_BC_POST_EARLY_INIT",
-    32: "STAGE_BC_PRE_SD1STINIT",
-    33: "STAGE_BC_POST_SD1STINIT",
-    34: "STAGE_BC_PRE_WATCHDOG_START",
-    35: "STAGE_BC_POST_WATCHDOG_START",
-    41: "STAGE_BC_PRE_PHYSW_CREATE",
-    42: "STAGE_BC_POST_PHYSW_CREATE",
-    43: "STAGE_BC_PRE_FIRMWARE_CONT",
-    44: "sub_fc0d0126",
-}
+def derive_next_stage_map(table: Dict[int, Dict[str, Any]]) -> Dict[int, Optional[str]]:
+    """Derives next expected stage map directly from the provided stage table."""
+    mapping: Dict[int, Optional[str]] = {}
+    normal_codes = [
+        1, 2, 3, 4, 5, 6, 7,
+        11, 12, 13, 14, 15,
+        21, 22, 23, 24, 25, 26,
+        31, 32, 33, 34, 35,
+        41, 42, 43, 44,
+    ]
+    for i, c in enumerate(normal_codes):
+        if c == 44:
+            mapping[c] = "sub_fc0d0126"
+        elif i + 1 < len(normal_codes):
+            next_c = normal_codes[i + 1]
+            mapping[c] = table[next_c]["stage_symbol"] if next_c in table else None
+        else:
+            mapping[c] = None
+
+    if 28 in table and 29 in table:
+        mapping[28] = table[29]["stage_symbol"]
+    elif 28 in table:
+        mapping[28] = None
+    if 29 in table:
+        mapping[29] = None
+
+    return mapping
+
+
+NEXT_STAGE_MAP: Dict[int, Optional[str]] = derive_next_stage_map(LADDER_STAGE_TABLE)
 
 # All valid trial classification categories: exactly 29 CODE_<N> classes plus 5 special categories
 VALID_CLASSES: Set[str] = {
@@ -1503,6 +1502,10 @@ def process_report_pairs(raw_pairs: Sequence[Tuple[Any, Any]]) -> Dict[str, Any]
         k_clean = str(k).strip().lower()
         if k_clean in ("uncertain", "uncertainty", "count_confidence"):
             uncertainty_aliases.append((k_clean, v))
+        elif k_clean in ("sequence", "code_sequence"):
+            if "sequence" not in field_values:
+                field_values["sequence"] = []
+            field_values["sequence"].append(v)
         else:
             if k_clean not in field_values:
                 field_values[k_clean] = []
@@ -1520,14 +1523,15 @@ def process_report_pairs(raw_pairs: Sequence[Tuple[Any, Any]]) -> Dict[str, Any]
                     unique_cmp.append(cv)
 
             if len(unique_cmp) > 1:
+                sorted_reps = sorted(repr(list(x) if isinstance(x, tuple) else x) for x in unique_cmp)
                 duplicate_conflicts.append(
-                    f"Conflicting duplicate values for key 'pulses': {', '.join(repr(x) for x in parsed_vals)}"
+                    f"Conflicting duplicate values for key 'pulses': {', '.join(sorted_reps)}"
                 )
                 report["pulses"] = parsed_vals
             else:
                 report["pulses"] = parsed_vals[0]
 
-        elif k in ("sequence", "code_sequence"):
+        elif k == "sequence":
             parsed_vals = [parse_sequence_value(x) for x in vals]
             cmp_vals = [tuple(x) if isinstance(x, list) else x for x in parsed_vals]
             unique_cmp_seq: List[Any] = []
@@ -1536,8 +1540,9 @@ def process_report_pairs(raw_pairs: Sequence[Tuple[Any, Any]]) -> Dict[str, Any]
                     unique_cmp_seq.append(cv)
 
             if len(unique_cmp_seq) > 1:
+                sorted_reps = sorted(repr(list(x) if isinstance(x, tuple) else x) for x in unique_cmp_seq)
                 duplicate_conflicts.append(
-                    f"Conflicting duplicate values for key '{k}': {', '.join(repr(x) for x in parsed_vals)}"
+                    f"Conflicting duplicate values for alias/key 'sequence': {', '.join(sorted_reps)}"
                 )
                 report["sequence"] = parsed_vals
             else:
@@ -1545,7 +1550,7 @@ def process_report_pairs(raw_pairs: Sequence[Tuple[Any, Any]]) -> Dict[str, Any]
 
         elif k == "press":
             norm_vals = [str(x).strip().lower() for x in vals]
-            unique_press = list(dict.fromkeys(norm_vals))
+            unique_press = sorted(list(dict.fromkeys(norm_vals)))
             if len(unique_press) > 1:
                 duplicate_conflicts.append(
                     f"Conflicting duplicate values for key 'press': {', '.join(repr(x) for x in unique_press)}"
@@ -1554,7 +1559,7 @@ def process_report_pairs(raw_pairs: Sequence[Tuple[Any, Any]]) -> Dict[str, Any]
 
         elif k == "diskboot_sha256":
             norm_vals = [str(x).strip().lower() for x in vals]
-            unique_sha = list(dict.fromkeys(norm_vals))
+            unique_sha = sorted(list(dict.fromkeys(norm_vals)))
             if len(unique_sha) > 1:
                 duplicate_conflicts.append(
                     f"Conflicting duplicate values for key 'diskboot_sha256': {', '.join(repr(x) for x in unique_sha)}"
@@ -1563,16 +1568,16 @@ def process_report_pairs(raw_pairs: Sequence[Tuple[Any, Any]]) -> Dict[str, Any]
 
         elif k == "lcd":
             norm_vals = [normalize_lcd_state(x) for x in vals]
-            unique_lcd = list(dict.fromkeys(norm_vals))
+            unique_lcd = sorted(list(dict.fromkeys(norm_vals)))
             if len(unique_lcd) > 1:
                 duplicate_conflicts.append(
-                    f"Conflicting duplicate values for key 'lcd': {', '.join(repr(x) for x in vals)}"
+                    f"Conflicting duplicate values for key 'lcd': {', '.join(repr(str(x)) for x in sorted(list(dict.fromkeys(str(x) for x in vals))))}"
                 )
             report["lcd"] = vals[0]
 
         elif k == "inspector_status":
             norm_vals = [str(x).strip().lower() for x in vals]
-            unique_insp = list(dict.fromkeys(norm_vals))
+            unique_insp = sorted(list(dict.fromkeys(norm_vals)))
             if len(unique_insp) > 1:
                 duplicate_conflicts.append(
                     f"Conflicting duplicate values for key 'inspector_status': {', '.join(repr(x) for x in unique_insp)}"
@@ -1586,10 +1591,10 @@ def process_report_pairs(raw_pairs: Sequence[Tuple[Any, Any]]) -> Dict[str, Any]
 
         else:
             norm_vals = [str(x).strip() for x in vals]
-            unique_vals = list(dict.fromkeys(norm_vals))
+            unique_vals = sorted(list(dict.fromkeys(norm_vals)))
             if len(unique_vals) > 1:
                 duplicate_conflicts.append(
-                    f"Conflicting duplicate values for key '{k}': {', '.join(repr(x) for x in vals)}"
+                    f"Conflicting duplicate values for key '{k}': {', '.join(repr(x) for x in unique_vals)}"
                 )
             report[k] = vals[0]
 
@@ -1712,13 +1717,14 @@ def get_canonical_ladder_path(
     """
     loader_path = sorted([c for c in table if c < 10], key=lambda c: table[c].get("order_index", c))
     symbol_to_code = {entry["stage_symbol"]: code for code, entry in table.items()}
+    next_stage_map = derive_next_stage_map(table)
 
     core_path: List[int] = []
-    curr_sym = NEXT_STAGE_MAP.get(7)
+    curr_sym = next_stage_map.get(7)
     while curr_sym and curr_sym in symbol_to_code:
         code = symbol_to_code[curr_sym]
         core_path.append(code)
-        curr_sym = NEXT_STAGE_MAP.get(code)
+        curr_sym = next_stage_map.get(code)
 
     return core_path, loader_path
 
@@ -1818,7 +1824,7 @@ def validate_ordered_code_sequence(
 def classify_owner_report(
     input_data: Union[Dict[str, Any], str, Path],
     expected_sha256: str = EXPECTED_PORT25_COMBINED_DISKBOOT_SHA256,
-    table: Dict[int, Dict[str, Any]] = LADDER_STAGE_TABLE,
+    table: Optional[Dict[int, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Classifies an owner trial report into a deterministic outcome structure.
     
@@ -1829,6 +1835,10 @@ def classify_owner_report(
       - evidence: string citation
       - notes: string explanation
     """
+    if table is None:
+        table = LADDER_STAGE_TABLE
+
+    next_stage_map = derive_next_stage_map(table)
     report = parse_owner_report(input_data)
 
     reported_sha256 = str(report.get("diskboot_sha256", "")).strip().lower()
@@ -1904,9 +1914,12 @@ def classify_owner_report(
     # - Accept only real ints, or strings of decimal digits, plus lists of those or ordered sequences.
     # - Missing pulses field, empty value, 'unknown', '?', floats (24.9), bools (True),
     #   negative numbers (-1) or zero (0) map to UNKNOWN_CODE with explanatory notes.
-    if "pulses" not in report and "sequence" not in report and "code_sequence" not in report:
+    has_pulses = "pulses" in report
+    has_sequence = "sequence" in report
+
+    if not has_pulses and not has_sequence:
         note_missing = (
-            "Missing 'pulses' field in owner report. Report must supply an integer pulse count, "
+            "Missing 'pulses' or 'sequence' field in owner report. Report must supply an integer pulse count, "
             "a list of integers, an ordered sequence, or 'none'."
         )
         if held_non_stock_note:
@@ -1919,32 +1932,205 @@ def classify_owner_report(
             "notes": note_missing,
         }
 
-    pulses_raw = report.get("pulses")
-    sequence_raw = report.get("sequence") or report.get("code_sequence")
+    pulses_raw = report.get("pulses") if has_pulses else None
+    sequence_raw = report.get("sequence") if has_sequence else None
 
     is_none_pulse = False
     count_resolved: Optional[int] = None
-    is_ambiguous_multiple = False
-    ambig_reason: Optional[str] = None
-    invalid_input_reason: Optional[str] = None
     is_sequence = False
     seq_codes: List[int] = []
 
-    # If sequence is explicitly supplied, validate it first
-    if sequence_raw is not None:
+    # CASE A: Both pulses and sequence are present in the report
+    if has_pulses and has_sequence:
+        # Validate sequence
+        if isinstance(sequence_raw, list) and len(sequence_raw) == 0:
+            return {
+                "class": "AMBIGUOUS",
+                "last_stage_reached": None,
+                "next_stage": None,
+                "evidence": "docs/PORT25_OWNER_TRIAL_PLAN.md:155-161; docs/PORT25_LADDER_FIX_CANDIDATE.md:265, 274",
+                "notes": "Empty sequence list reported alongside pulses." + held_non_stock_note,
+            }
         seq_err, seq_term, seq_msg = validate_ordered_code_sequence(sequence_raw, table)
-        if seq_err == "UNKNOWN_CODE":
-            invalid_input_reason = seq_msg
-        elif seq_err == "AMBIGUOUS":
-            is_ambiguous_multiple = True
-            ambig_reason = seq_msg
-        else:
-            assert seq_term is not None
+        if seq_err is not None:
+            return {
+                "class": "AMBIGUOUS",
+                "last_stage_reached": None,
+                "next_stage": None,
+                "evidence": "docs/PORT25_OWNER_TRIAL_PLAN.md:155-161; docs/PORT25_LADDER_FIX_CANDIDATE.md:265, 274",
+                "notes": f"Invalid sequence in report: {seq_msg}" + held_non_stock_note,
+            }
+
+        # Validate pulses and compare against sequence
+        if isinstance(pulses_raw, list):
+            if len(pulses_raw) == 0:
+                return {
+                    "class": "AMBIGUOUS",
+                    "last_stage_reached": None,
+                    "next_stage": None,
+                    "evidence": "docs/PORT25_OWNER_TRIAL_PLAN.md:155-161; docs/PORT25_LADDER_FIX_CANDIDATE.md:265, 274",
+                    "notes": "Empty pulses list reported alongside sequence." + held_non_stock_note,
+                }
+            elif len(pulses_raw) == 1:
+                item = pulses_raw[0]
+                if isinstance(item, bool) or not isinstance(item, int) and not (isinstance(item, str) and item.isdigit()):
+                    return {
+                        "class": "AMBIGUOUS",
+                        "last_stage_reached": None,
+                        "next_stage": None,
+                        "evidence": "docs/PORT25_OWNER_TRIAL_PLAN.md:155-161; docs/PORT25_LADDER_FIX_CANDIDATE.md:265, 274",
+                        "notes": f"Invalid pulses value {item!r} reported alongside sequence." + held_non_stock_note,
+                    }
+                p_code = int(item)
+                if p_code != seq_term:
+                    return {
+                        "class": "AMBIGUOUS",
+                        "last_stage_reached": None,
+                        "next_stage": None,
+                        "evidence": "docs/PORT25_OWNER_TRIAL_PLAN.md:155-161; docs/PORT25_LADDER_FIX_CANDIDATE.md:265, 274",
+                        "notes": f"Explicit 'pulses' count ({p_code}) conflicts with terminal code of sequence ({seq_term})." + held_non_stock_note,
+                    }
+                count_resolved = seq_term
+                is_sequence = True
+                seq_codes = sequence_raw if isinstance(sequence_raw, list) else parse_sequence_value(sequence_raw)
+            else:
+                p_err, p_term, p_msg = validate_ordered_code_sequence(pulses_raw, table)
+                if p_err is not None:
+                    return {
+                        "class": "AMBIGUOUS",
+                        "last_stage_reached": None,
+                        "next_stage": None,
+                        "evidence": "docs/PORT25_OWNER_TRIAL_PLAN.md:155-161; docs/PORT25_LADDER_FIX_CANDIDATE.md:265, 274",
+                        "notes": f"Invalid pulses sequence: {p_msg}" + held_non_stock_note,
+                    }
+                p_list = pulses_raw if isinstance(pulses_raw, list) else parse_sequence_value(pulses_raw)
+                s_list = sequence_raw if isinstance(sequence_raw, list) else parse_sequence_value(sequence_raw)
+                if p_list != s_list or p_term != seq_term:
+                    return {
+                        "class": "AMBIGUOUS",
+                        "last_stage_reached": None,
+                        "next_stage": None,
+                        "evidence": "docs/PORT25_OWNER_TRIAL_PLAN.md:155-161; docs/PORT25_LADDER_FIX_CANDIDATE.md:265, 274",
+                        "notes": f"Sequence and pulses list differ: pulses ends at Code {p_term}, sequence ends at Code {seq_term} (missing final code)." + held_non_stock_note,
+                    }
+                count_resolved = seq_term
+                is_sequence = True
+                seq_codes = s_list
+        elif isinstance(pulses_raw, int) and not isinstance(pulses_raw, bool):
+            if pulses_raw != seq_term:
+                return {
+                    "class": "AMBIGUOUS",
+                    "last_stage_reached": None,
+                    "next_stage": None,
+                    "evidence": "docs/PORT25_OWNER_TRIAL_PLAN.md:155-161; docs/PORT25_LADDER_FIX_CANDIDATE.md:265, 274",
+                    "notes": f"Explicit 'pulses' count ({pulses_raw}) conflicts with terminal code of sequence ({seq_term})." + held_non_stock_note,
+                }
+            count_resolved = seq_term
             is_sequence = True
             seq_codes = sequence_raw if isinstance(sequence_raw, list) else parse_sequence_value(sequence_raw)
-            count_resolved = seq_term
+        elif isinstance(pulses_raw, str):
+            p_str = pulses_raw.strip()
+            if p_str.lower() == "none":
+                return {
+                    "class": "AMBIGUOUS",
+                    "last_stage_reached": None,
+                    "next_stage": None,
+                    "evidence": "docs/PORT25_OWNER_TRIAL_PLAN.md:155-161; docs/PORT25_LADDER_FIX_CANDIDATE.md:265, 274",
+                    "notes": "Report indicates pulses='none' while also supplying a non-empty sequence." + held_non_stock_note,
+                }
+            elif re.fullmatch(r"[-+]?[0-9]+", p_str):
+                p_int = int(p_str)
+                if p_int != seq_term:
+                    return {
+                        "class": "AMBIGUOUS",
+                        "last_stage_reached": None,
+                        "next_stage": None,
+                        "evidence": "docs/PORT25_OWNER_TRIAL_PLAN.md:155-161; docs/PORT25_LADDER_FIX_CANDIDATE.md:265, 274",
+                        "notes": f"Explicit 'pulses' count ({p_int}) conflicts with terminal code of sequence ({seq_term})." + held_non_stock_note,
+                    }
+                count_resolved = seq_term
+                is_sequence = True
+                seq_codes = sequence_raw if isinstance(sequence_raw, list) else parse_sequence_value(sequence_raw)
+            else:
+                p_parsed = parse_pulses_value(pulses_raw)
+                if isinstance(p_parsed, list):
+                    p_err, p_term, p_msg = validate_ordered_code_sequence(p_parsed, table)
+                    if p_err is not None:
+                        return {
+                            "class": "AMBIGUOUS",
+                            "last_stage_reached": None,
+                            "next_stage": None,
+                            "evidence": "docs/PORT25_OWNER_TRIAL_PLAN.md:155-161; docs/PORT25_LADDER_FIX_CANDIDATE.md:265, 274",
+                            "notes": f"Invalid pulses sequence: {p_msg}" + held_non_stock_note,
+                        }
+                    s_list = sequence_raw if isinstance(sequence_raw, list) else parse_sequence_value(sequence_raw)
+                    if p_parsed != s_list or p_term != seq_term:
+                        return {
+                            "class": "AMBIGUOUS",
+                            "last_stage_reached": None,
+                            "next_stage": None,
+                            "evidence": "docs/PORT25_OWNER_TRIAL_PLAN.md:155-161; docs/PORT25_LADDER_FIX_CANDIDATE.md:265, 274",
+                            "notes": f"Sequence and pulses list differ: pulses ends at Code {p_term}, sequence ends at Code {seq_term}." + held_non_stock_note,
+                        }
+                    count_resolved = seq_term
+                    is_sequence = True
+                    seq_codes = s_list
+                else:
+                    return {
+                        "class": "AMBIGUOUS",
+                        "last_stage_reached": None,
+                        "next_stage": None,
+                        "evidence": "docs/PORT25_OWNER_TRIAL_PLAN.md:155-161; docs/PORT25_LADDER_FIX_CANDIDATE.md:265, 274",
+                        "notes": f"Invalid non-numeric pulses value {pulses_raw!r} reported alongside sequence." + held_non_stock_note,
+                    }
+        else:
+            return {
+                "class": "AMBIGUOUS",
+                "last_stage_reached": None,
+                "next_stage": None,
+                "evidence": "docs/PORT25_OWNER_TRIAL_PLAN.md:155-161; docs/PORT25_LADDER_FIX_CANDIDATE.md:265, 274",
+                "notes": f"Invalid pulses value {pulses_raw!r} reported alongside sequence." + held_non_stock_note,
+            }
 
-    if pulses_raw is not None and invalid_input_reason is None and not is_ambiguous_multiple:
+    # CASE B: Only sequence is present in the report
+    elif has_sequence:
+        if isinstance(sequence_raw, list) and len(sequence_raw) == 0:
+            return {
+                "class": "UNKNOWN_CODE",
+                "last_stage_reached": None,
+                "next_stage": None,
+                "evidence": "docs/PORT25_LADDER_FIX_CANDIDATE.md:326-354",
+                "notes": "Empty sequence list in owner report." + held_non_stock_note,
+            }
+        seq_err, seq_term, seq_msg = validate_ordered_code_sequence(sequence_raw, table)
+        if seq_err == "UNKNOWN_CODE":
+            return {
+                "class": "UNKNOWN_CODE",
+                "last_stage_reached": None,
+                "next_stage": None,
+                "evidence": "docs/PORT25_LADDER_FIX_CANDIDATE.md:326-354",
+                "notes": f"Pulse input validation failure: {seq_msg}" + held_non_stock_note,
+            }
+        elif seq_err == "AMBIGUOUS":
+            return {
+                "class": "AMBIGUOUS",
+                "last_stage_reached": None,
+                "next_stage": None,
+                "evidence": "docs/PORT25_OWNER_TRIAL_PLAN.md:155-161; docs/PORT25_LADDER_FIX_CANDIDATE.md:265, 274",
+                "notes": f"Conflicting multiple pulse counts reported: {sequence_raw}. ({seq_msg})" + held_non_stock_note,
+            }
+        else:
+            assert seq_term is not None
+            count_resolved = seq_term
+            is_sequence = True
+            seq_codes = sequence_raw if isinstance(sequence_raw, list) else parse_sequence_value(sequence_raw)
+
+    # CASE C: Only pulses is present in the report
+    else:
+        invalid_input_reason: Optional[str] = None
+        is_ambiguous_multiple = False
+        ambig_reason: Optional[str] = None
+
         if isinstance(pulses_raw, bool):
             invalid_input_reason = (
                 f"Invalid boolean value '{pulses_raw}' for pulses (booleans are not valid pulse counts)."
@@ -1961,28 +2147,13 @@ def classify_owner_report(
             elif p_str == "":
                 invalid_input_reason = "Empty 'pulses' value in owner report."
             elif re.fullmatch(r"[-+]?[0-9]+", p_str):
-                p_int = int(p_str)
-                if is_sequence and count_resolved is not None and p_int != count_resolved:
-                    is_ambiguous_multiple = True
-                    ambig_reason = (
-                        f"Explicit 'pulses' count ({p_int}) conflicts with terminal code "
-                        f"of sequence ({count_resolved})."
-                    )
-                else:
-                    count_resolved = p_int
+                count_resolved = int(p_str)
             else:
                 invalid_input_reason = (
                     f"Invalid non-numeric or malformed pulse count string '{pulses_raw}' in owner report."
                 )
         elif isinstance(pulses_raw, int):
-            if is_sequence and count_resolved is not None and pulses_raw != count_resolved:
-                is_ambiguous_multiple = True
-                ambig_reason = (
-                    f"Explicit 'pulses' count ({pulses_raw}) conflicts with terminal code "
-                    f"of sequence ({count_resolved})."
-                )
-            else:
-                count_resolved = pulses_raw
+            count_resolved = pulses_raw
         elif isinstance(pulses_raw, list):
             if len(pulses_raw) == 0:
                 invalid_input_reason = "Empty pulses list in owner report."
@@ -2006,62 +2177,53 @@ def classify_owner_report(
                 if invalid_input_reason is None:
                     unique_counts = sorted(list(set(int_list)))
                     if len(unique_counts) == 1:
-                        p_int = unique_counts[0]
-                        if is_sequence and count_resolved is not None and p_int != count_resolved:
-                            is_ambiguous_multiple = True
-                            ambig_reason = f"Explicit 'pulses' count ({p_int}) conflicts with terminal code of sequence ({count_resolved})."
-                        else:
-                            count_resolved = p_int
+                        count_resolved = unique_counts[0]
                     else:
-                        if not is_sequence and not is_ambiguous_multiple:
-                            seq_err, seq_term, seq_msg = validate_ordered_code_sequence(int_list, table)
-                            if seq_err == "UNKNOWN_CODE":
-                                invalid_input_reason = seq_msg
-                            elif seq_err == "AMBIGUOUS":
-                                is_ambiguous_multiple = True
-                                ambig_reason = seq_msg
-                            else:
-                                assert seq_term is not None
-                                count_resolved = seq_term
-                                is_sequence = True
-                                seq_codes = int_list
+                        seq_err, seq_term, seq_msg = validate_ordered_code_sequence(int_list, table)
+                        if seq_err == "UNKNOWN_CODE":
+                            invalid_input_reason = seq_msg
+                        elif seq_err == "AMBIGUOUS":
+                            is_ambiguous_multiple = True
+                            ambig_reason = seq_msg
+                        else:
+                            assert seq_term is not None
+                            count_resolved = seq_term
+                            is_sequence = True
+                            seq_codes = int_list
         else:
             invalid_input_reason = f"Unrecognized pulse input type '{type(pulses_raw).__name__}'."
 
-    # Handle input validation failures
-    if invalid_input_reason is not None:
-        note_inval = (
-            f"Pulse input validation failure: {invalid_input_reason} "
-            "Accepted formats: integer, decimal digit string, list of integers, or 'none'."
-        )
-        if held_non_stock_note:
-            note_inval += held_non_stock_note
-        return {
-            "class": "UNKNOWN_CODE",
-            "last_stage_reached": None,
-            "next_stage": None,
-            "evidence": "docs/PORT25_LADDER_FIX_CANDIDATE.md:326-354",
-            "notes": note_inval,
-        }
+        if invalid_input_reason is not None:
+            note_inval = (
+                f"Pulse input validation failure: {invalid_input_reason} "
+                "Accepted formats: integer, decimal digit string, list of integers, or 'none'."
+            )
+            if held_non_stock_note:
+                note_inval += held_non_stock_note
+            return {
+                "class": "UNKNOWN_CODE",
+                "last_stage_reached": None,
+                "next_stage": None,
+                "evidence": "docs/PORT25_LADDER_FIX_CANDIDATE.md:326-354",
+                "notes": note_inval,
+            }
 
-    # Handle Conflicting Multiple Counts / Sequence Ambiguity
-    if is_ambiguous_multiple:
-        reported_val = pulses_raw if pulses_raw is not None else sequence_raw
-        note_ambig = (
-            f"Conflicting multiple pulse counts reported: {reported_val}. "
-            "Unable to definitively isolate terminal stage due to conflicting observations."
-        )
-        if ambig_reason:
-            note_ambig += f" ({ambig_reason})"
-        if held_non_stock_note:
-            note_ambig += held_non_stock_note
-        return {
-            "class": "AMBIGUOUS",
-            "last_stage_reached": None,
-            "next_stage": None,
-            "evidence": "docs/PORT25_OWNER_TRIAL_PLAN.md:155-161; docs/PORT25_LADDER_FIX_CANDIDATE.md:265, 274",
-            "notes": note_ambig,
-        }
+        if is_ambiguous_multiple:
+            note_ambig = (
+                f"Conflicting multiple pulse counts reported: {pulses_raw}. "
+                "Unable to definitively isolate terminal stage due to conflicting observations."
+            )
+            if ambig_reason:
+                note_ambig += f" ({ambig_reason})"
+            if held_non_stock_note:
+                note_ambig += held_non_stock_note
+            return {
+                "class": "AMBIGUOUS",
+                "last_stage_reached": None,
+                "next_stage": None,
+                "evidence": "docs/PORT25_OWNER_TRIAL_PLAN.md:155-161; docs/PORT25_LADDER_FIX_CANDIDATE.md:265, 274",
+                "notes": note_ambig,
+            }
 
     # Handle NO_PULSES (exact case-insensitive 'none')
     if is_none_pulse:
@@ -2135,7 +2297,7 @@ def classify_owner_report(
     if count_resolved in table:
         entry = table[count_resolved]
         stage_symbol = entry["stage_symbol"]
-        next_stage = NEXT_STAGE_MAP.get(count_resolved)
+        next_stage = next_stage_map.get(count_resolved)
         candidate_line = entry.get("candidate_line", 328)
         file_line = entry.get("file_line", "boot_prototype.c")
         purpose = entry.get("purpose", "")
@@ -2152,8 +2314,22 @@ def classify_owner_report(
                 if lcd_state == LcdState.STOCK_UI:
                     note_text += " Independent affirmative UI evidence observed: camera booted into stock UI."
             else:
-                next_code_num = count_resolved + 1 if (count_resolved + 1) in table else None
-                next_code_str = f"Code {next_code_num} ({next_stage})" if next_code_num else next_stage
+                normal_codes = [
+                    1, 2, 3, 4, 5, 6, 7,
+                    11, 12, 13, 14, 15,
+                    21, 22, 23, 24, 25, 26,
+                    31, 32, 33, 34, 35,
+                    41, 42, 43, 44,
+                ]
+                if count_resolved in normal_codes:
+                    c_idx = normal_codes.index(count_resolved)
+                    if c_idx + 1 < len(normal_codes):
+                        n_code = normal_codes[c_idx + 1]
+                        next_code_str = f"Code {n_code} ({next_stage})"
+                    else:
+                        next_code_str = next_stage or "none"
+                else:
+                    next_code_str = next_stage or "none"
                 note_text += f" Next unreached stage: {next_code_str}."
         elif count_resolved == 44:
             note_text += " Handoff continuation branches to sub_fc0d0126 [VERIFIED: boot_prototype.c:436-438]."

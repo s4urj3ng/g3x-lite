@@ -1602,6 +1602,228 @@ class TestPort26LadderDecode(unittest.TestCase):
         self.assertIsNone(res_default_build["last_stage_reached"])
         self.assertIsNone(res_default_build["next_stage"])
 
+    def test_both_pulses_and_sequence_validation_and_comparison_regressions(self) -> None:
+        """[P1 Regression] When both pulses and sequence are present, validate both and compare them.
+        
+        If they differ, or if either one is invalid (gap, non-monotonic, missing the final code),
+        the result must be AMBIGUOUS, never CODE_43 'verified'.
+        Regression tests:
+        1. Keep fixture sequence and set pulses to [7, 11, 13] -> AMBIGUOUS
+        2. Keep fixture sequence and set pulses to [7, 12, 11] -> AMBIGUOUS
+        3. Keep fixture sequence and set pulses to full sequence ending at 42 -> AMBIGUOUS
+        """
+        fixture_seq = [7, 11, 12, 13, 14, 15, 21, 22, 23, 24, 25, 26, 31, 32, 33, 34, 35, 41, 42, 43]
+
+        # Case 1: pulses has gap [7, 11, 13] while sequence is fixture sequence
+        rep_gap = {
+            "diskboot_sha256": self.valid_hash,
+            "press": "short",
+            "sequence": fixture_seq,
+            "pulses": [7, 11, 13],
+            "lcd": "dark",
+            "inspector_status": "not_run",
+        }
+        res_gap = classify_owner_report(rep_gap)
+        self.assertEqual(res_gap["class"], "AMBIGUOUS")
+        self.assertIsNone(res_gap["last_stage_reached"])
+        self.assertIsNone(res_gap["next_stage"])
+        self.assertNotEqual(res_gap["class"], "CODE_43")
+
+        # Case 2: pulses is non-monotonic [7, 12, 11] while sequence is fixture sequence
+        rep_non_mono = {
+            "diskboot_sha256": self.valid_hash,
+            "press": "short",
+            "sequence": fixture_seq,
+            "pulses": [7, 12, 11],
+            "lcd": "dark",
+            "inspector_status": "not_run",
+        }
+        res_non_mono = classify_owner_report(rep_non_mono)
+        self.assertEqual(res_non_mono["class"], "AMBIGUOUS")
+        self.assertIsNone(res_non_mono["last_stage_reached"])
+        self.assertIsNone(res_non_mono["next_stage"])
+        self.assertNotEqual(res_non_mono["class"], "CODE_43")
+
+        # Case 3: pulses is full sequence ending at 42 (missing final code 43) while sequence ends at 43
+        seq_ending_42 = [7, 11, 12, 13, 14, 15, 21, 22, 23, 24, 25, 26, 31, 32, 33, 34, 35, 41, 42]
+        rep_missing_final = {
+            "diskboot_sha256": self.valid_hash,
+            "press": "short",
+            "sequence": fixture_seq,
+            "pulses": seq_ending_42,
+            "lcd": "dark",
+            "inspector_status": "not_run",
+        }
+        res_missing_final = classify_owner_report(rep_missing_final)
+        self.assertEqual(res_missing_final["class"], "AMBIGUOUS")
+        self.assertIsNone(res_missing_final["last_stage_reached"])
+        self.assertIsNone(res_missing_final["next_stage"])
+        self.assertNotEqual(res_missing_final["class"], "CODE_43")
+
+    def test_sequence_alias_normalisation_and_order_invariance(self) -> None:
+        """[P2 Regression] Normalise aliases (sequence, code_sequence) before duplicate detection.
+        
+        If aliases conflict, return AMBIGUOUS regardless of field order.
+        If aliases match, return valid classification.
+        Test swaps the order and checks the result is byte-identical.
+        """
+        seq43 = [7, 11, 12, 13, 14, 15, 21, 22, 23, 24, 25, 26, 31, 32, 33, 34, 35, 41, 42, 43]
+        seq42 = [7, 11, 12, 13, 14, 15, 21, 22, 23, 24, 25, 26, 31, 32, 33, 34, 35, 41, 42]
+
+        # 1. Conflicting aliases: sequence first, then code_sequence
+        kv_conf_order1 = (
+            f"diskboot_sha256 = {self.valid_hash}\n"
+            "press = short\n"
+            f"sequence = {seq43}\n"
+            f"code_sequence = {seq42}\n"
+            "lcd = dark\n"
+        )
+        # 2. Conflicting aliases: code_sequence first, then sequence
+        kv_conf_order2 = (
+            f"diskboot_sha256 = {self.valid_hash}\n"
+            "press = short\n"
+            f"code_sequence = {seq42}\n"
+            f"sequence = {seq43}\n"
+            "lcd = dark\n"
+        )
+
+        res_order1 = classify_owner_report(kv_conf_order1)
+        res_order2 = classify_owner_report(kv_conf_order2)
+
+        self.assertEqual(res_order1["class"], "AMBIGUOUS")
+        self.assertEqual(res_order2["class"], "AMBIGUOUS")
+        self.assertIn("Conflicting duplicate values for alias/key 'sequence'", res_order1["notes"])
+        self.assertIn("Conflicting duplicate values for alias/key 'sequence'", res_order2["notes"])
+
+        # Both swapped orders produce byte-identical JSON
+        out_order1 = decode_ladder_report(kv_conf_order1)
+        out_order2 = decode_ladder_report(kv_conf_order2)
+        self.assertEqual(out_order1, out_order2)
+
+        # 3. Matching aliases in both orders: decodes cleanly to CODE_43
+        kv_match1 = (
+            f"diskboot_sha256 = {self.valid_hash}\n"
+            "press = short\n"
+            f"sequence = {seq43}\n"
+            f"code_sequence = {seq43}\n"
+            "lcd = dark\n"
+        )
+        kv_match2 = (
+            f"diskboot_sha256 = {self.valid_hash}\n"
+            "press = short\n"
+            f"code_sequence = {seq43}\n"
+            f"sequence = {seq43}\n"
+            "lcd = dark\n"
+        )
+        res_m1 = classify_owner_report(kv_match1)
+        res_m2 = classify_owner_report(kv_match2)
+        self.assertEqual(res_m1["class"], "CODE_43")
+        self.assertEqual(res_m2["class"], "CODE_43")
+        self.assertEqual(decode_ladder_report(kv_match1), decode_ladder_report(kv_match2))
+
+    def test_empty_sequence_or_pulses_presence_not_truthiness(self) -> None:
+        """[P2 Regression] Check whether field is present, not whether it is truthy.
+        
+        An explicit sequence=[] (or pulses=[]) with a valid hash must return
+        UNKNOWN_CODE (or AMBIGUOUS) cleanly, with no assertion or crash.
+        """
+        # Case 1: explicit sequence=[] with valid hash and short press
+        rep_empty_seq = {
+            "diskboot_sha256": self.valid_hash,
+            "press": "short",
+            "sequence": [],
+            "lcd": "dark",
+        }
+        res_empty_seq = classify_owner_report(rep_empty_seq)
+        self.assertIn(res_empty_seq["class"], ("UNKNOWN_CODE", "AMBIGUOUS"))
+        self.assertIsNone(res_empty_seq["last_stage_reached"])
+
+        # Case 2: explicit pulses=[] with valid hash and short press
+        rep_empty_pulses = {
+            "diskboot_sha256": self.valid_hash,
+            "press": "short",
+            "pulses": [],
+            "lcd": "dark",
+        }
+        res_empty_pulses = classify_owner_report(rep_empty_pulses)
+        self.assertIn(res_empty_pulses["class"], ("UNKNOWN_CODE", "AMBIGUOUS"))
+        self.assertIsNone(res_empty_pulses["last_stage_reached"])
+
+        # Case 3: both sequence=[] and pulses=[] with valid hash
+        rep_both_empty = {
+            "diskboot_sha256": self.valid_hash,
+            "press": "short",
+            "sequence": [],
+            "pulses": [],
+            "lcd": "dark",
+        }
+        res_both_empty = classify_owner_report(rep_both_empty)
+        self.assertIn(res_both_empty["class"], ("UNKNOWN_CODE", "AMBIGUOUS"))
+        self.assertIsNone(res_both_empty["last_stage_reached"])
+
+        # Case 4: JSON string with sequence: []
+        json_empty_seq = (
+            '{\n'
+            f'  "diskboot_sha256": "{self.valid_hash}",\n'
+            '  "press": "short",\n'
+            '  "sequence": [],\n'
+            '  "lcd": "dark"\n'
+            '}'
+        )
+        res_json = classify_owner_report(json_empty_seq)
+        self.assertIn(res_json["class"], ("UNKNOWN_CODE", "AMBIGUOUS"))
+        self.assertIsNone(res_json["last_stage_reached"])
+
+    def test_parsed_table_dynamic_next_stage_with_renamed_code44(self) -> None:
+        """[P2 Regression] Both stage reached and next_stage are taken from parsed table.
+        
+        Passes a parsed table with a renamed Code 44 symbol and checks that:
+        1. Next stage of Code 43 shows the renamed Code 44 symbol.
+        2. Notes echo the renamed Code 44 symbol.
+        3. Code 44 itself shows the renamed symbol as last_stage_reached.
+        """
+        import copy
+        renamed_symbol = "STAGE_BC_PRE_FIRMWARE_CONT_RENAMED_CUSTOM"
+
+        custom_table = copy.deepcopy(LADDER_STAGE_TABLE)
+        custom_table[44]["stage_symbol"] = renamed_symbol
+
+        # Verify derive_next_stage_map produces renamed symbol for Code 43
+        derived_map = decoder.derive_next_stage_map(custom_table)
+        self.assertEqual(derived_map[43], renamed_symbol)
+
+        # 1. Code 43 report with custom table
+        report_43 = {
+            "diskboot_sha256": self.valid_hash,
+            "press": "short",
+            "pulses": [7, 11, 12, 13, 14, 15, 21, 22, 23, 24, 25, 26, 31, 32, 33, 34, 35, 41, 42, 43],
+            "sequence": [7, 11, 12, 13, 14, 15, 21, 22, 23, 24, 25, 26, 31, 32, 33, 34, 35, 41, 42, 43],
+            "lcd": "dark",
+            "inspector_status": "not_run",
+        }
+        res_43 = classify_owner_report(report_43, table=custom_table)
+        self.assertEqual(res_43["class"], "CODE_43")
+        self.assertEqual(res_43["last_stage_reached"], custom_table[43]["stage_symbol"])
+        self.assertEqual(res_43["next_stage"], renamed_symbol)
+        self.assertIn(renamed_symbol, res_43["notes"])
+
+        # 2. Code 44 report with custom table
+        report_44 = {
+            "diskboot_sha256": self.valid_hash,
+            "press": "short",
+            "pulses": 44,
+            "lcd": "dark",
+            "inspector_status": "not_run",
+        }
+        res_44 = classify_owner_report(report_44, table=custom_table)
+        self.assertEqual(res_44["class"], "CODE_44")
+        self.assertEqual(res_44["last_stage_reached"], renamed_symbol)
+        self.assertEqual(res_44["next_stage"], "sub_fc0d0126")
+
+        # 3. decode_ladder_report with custom table outputs JSON containing renamed symbol
+        out_json = decode_ladder_report(report_43, table=custom_table)
+        self.assertIn(renamed_symbol, out_json)
+
 
 if __name__ == "__main__":
     unittest.main()
