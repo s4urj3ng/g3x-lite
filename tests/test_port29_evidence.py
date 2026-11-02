@@ -6,8 +6,8 @@ Verifies:
 2. port11c_evidence_validator.py validates the manifest against trusted scopes with 0 errors.
 3. Every range in the manifest is <= 4 KiB (4,096 bytes).
 4. Every range in the manifest falls inside the authorized list from PORT-27 / PORT-28.
-5. Slices match exact byte hashes against PRIMARY.BIN.
-6. No ROM bytes or binaries are committed in the git worktree.
+5. Slices match exact byte hashes against PRIMARY.BIN (with manifest safety gate prior to seek/read).
+6. Change set vs merge-base with origin/main contains only allowed paths and no binary artifacts.
 7. docs/PORT29_CREATETASK_EVIDENCE.md contains required tables, citations, and verdict.
 """
 
@@ -62,9 +62,9 @@ class TestPort29Evidence(unittest.TestCase):
         self.assertIn("Result: VALID (0 errors", proc.stdout)
         self.assertIn("Trust Level: EXTERNAL_POLICY_CONSISTENCY_CHECKED", proc.stdout)
 
-    def test_manifest_ranges_within_budget_and_authorized(self) -> None:
-        """Verify each manifest entry is <= 4 KiB and is an authorized range."""
-        with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
+    def _validate_manifest_safety(self, manifest_path: Path) -> dict:
+        """Validate every manifest entry against authorized list and 4 KiB limit before any ROM read."""
+        with open(manifest_path, "r", encoding="utf-8") as f:
             manifest = json.load(f)
 
         entries = manifest.get("evidence_entries", [])
@@ -72,8 +72,8 @@ class TestPort29Evidence(unittest.TestCase):
 
         total_bytes = 0
         for entry in entries:
-            eid = entry["evidence_id"]
-            self.assertIn(eid, AUTHORIZED_RANGES, f"Unexpected evidence entry {eid}")
+            eid = entry.get("evidence_id")
+            self.assertIn(eid, AUTHORIZED_RANGES, f"Unauthorized evidence entry: {eid}")
 
             start = int(entry["start_address"], 16)
             end = int(entry["end_address"], 16)
@@ -91,14 +91,22 @@ class TestPort29Evidence(unittest.TestCase):
             total_bytes += byte_count
 
         self.assertLessEqual(total_bytes, 4096, f"Total bytes {total_bytes} exceeds scope limit")
+        return manifest
+
+    def test_manifest_ranges_within_budget_and_authorized(self) -> None:
+        """Verify each manifest entry is <= 4 KiB and is an authorized range."""
+        self._validate_manifest_safety(MANIFEST_PATH)
 
     def test_byte_hashes_match_primary_bin(self) -> None:
-        """Verify SHA-256 hashes in manifest match exact bytes in PRIMARY.BIN."""
+        """Verify SHA-256 hashes in manifest match exact bytes in PRIMARY.BIN.
+
+        Enforces strict safety gate: manifest must be validated against authorized list
+        and 4 KiB limit before any file seek or read on PRIMARY.BIN occurs.
+        """
+        manifest = self._validate_manifest_safety(MANIFEST_PATH)
+
         if not ROM_PATH.is_file():
             self.skipTest(f"PRIMARY.BIN not found at {ROM_PATH}")
-
-        with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
-            manifest = json.load(f)
 
         with open(ROM_PATH, "rb") as rom_file:
             for entry in manifest.get("evidence_entries", []):
@@ -120,28 +128,70 @@ class TestPort29Evidence(unittest.TestCase):
                 )
 
     def test_no_rom_bytes_or_build_artifacts_tracked(self) -> None:
-        """Verify no ROM binary dumps or unapproved files are tracked in git status."""
-        proc = subprocess.run(
+        """Verify change set vs origin/main contains only allowed paths and no binary artifacts."""
+        mb_proc = subprocess.run(
+            ["git", "merge-base", "HEAD", "origin/main"],
+            cwd=PROJECT_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if mb_proc.returncode != 0 or not mb_proc.stdout.strip():
+            self.skipTest("origin/main unavailable for merge-base check")
+        merge_base = mb_proc.stdout.strip()
+
+        # Check committed changes against merge-base
+        diff_proc = subprocess.run(
+            ["git", "diff", "--name-only", f"{merge_base}..HEAD"],
+            cwd=PROJECT_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.assertEqual(diff_proc.returncode, 0, f"git diff failed: {diff_proc.stderr}")
+        changed_paths = set(line.strip() for line in diff_proc.stdout.splitlines() if line.strip())
+
+        # Also check uncommitted/untracked files in worktree
+        status_proc = subprocess.run(
             ["git", "status", "--porcelain", "-uall"],
             cwd=PROJECT_ROOT,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
         )
-        self.assertEqual(proc.returncode, 0)
-        allowed_modified = {
+        self.assertEqual(status_proc.returncode, 0, f"git status failed: {status_proc.stderr}")
+        for line in status_proc.stdout.splitlines():
+            line = line.strip()
+            if line:
+                changed_paths.add(line.split()[-1])
+
+        allowed_paths = {
             "evidence/port29_manifest.json",
             "evidence/port29_trusted_scopes.json",
             "docs/PORT29_CREATETASK_EVIDENCE.md",
             "tests/test_port29_evidence.py",
         }
-        for line in proc.stdout.splitlines():
-            status_file = line.strip().split()[-1]
+        for path in changed_paths:
             self.assertIn(
-                status_file,
-                allowed_modified,
-                f"Unpermitted file modification or addition: {status_file}",
+                path,
+                allowed_paths,
+                f"Unpermitted changed or untracked path: {path}",
             )
+
+        forbidden_suffixes = {".bin", ".BIN", ".elf", ".o", ".a", ".so", ".dylib"}
+        for path in changed_paths:
+            p = PROJECT_ROOT / path
+            self.assertNotIn(
+                p.suffix,
+                forbidden_suffixes,
+                f"Forbidden binary artifact detected: {path}",
+            )
+            if p.is_file():
+                self.assertLess(
+                    p.stat().st_size,
+                    500 * 1024,
+                    f"File unexpectedly large (>500 KiB): {path}",
+                )
 
     def test_evidence_document_structure_and_verdict(self) -> None:
         """Verify docs/PORT29_CREATETASK_EVIDENCE.md content requirements."""
