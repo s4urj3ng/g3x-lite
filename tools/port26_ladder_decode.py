@@ -59,11 +59,16 @@ Code Range & Classes:
 
 Stock-UI Detection Rules (CONTROL_HELD_O1):
 - Requires press == 'held'.
-- Accepts ONLY exact normalized LCD values from the documented allow-list:
+- Accepts exact normalized LCD values from the documented allow-list:
   'stock_ui', 'stock ui', 'live_view', 'live view', 'shooting', 'canon_ui', 'canon ui', 'menu'.
-- Rejects any string containing negation words (never, not, no, didn't, without),
-  dark / off / blank, or free text not matching the allow-list.
+- Also accepts clear affirmative free text that contains an affirmative stock-UI phrase:
+  'stock ui', 'stock UI reached', 'reached stock UI', 'live view', 'canon ui',
+  'shooting screen', 'menu shown',
+  provided that no negation token appears ('not', 'no', 'never', "didn't", 'did not', 'without', 'failed', "n't")
+  and no dark/off/blank/black word appears.
+- Word-boundary tokenisation (\\b), not raw substring matching, is strictly enforced.
 - inspector_status alone (e.g. WITNESS_INVALID) never implies stock UI.
+- A short press with affirmative stock-UI text does NOT yield CONTROL_HELD_O1 (held press is strictly required).
 
 Pulse Input Validation Rules:
 - 'none' (case-insensitive, exact) is the ONLY value that gives NO_PULSES.
@@ -79,8 +84,18 @@ Code 44 Next Stage Rules:
   and is recorded in notes, never in next_stage.
 
 Off-By-One Uncertainty Rule (AMBIGUOUS Classification):
+- Evaluated using explicit fields first:
+  * 'uncertain': true|false
+  * 'uncertainty': true|false
+  * 'count_confidence': 'exact' -> False, 'uncertain' -> True
+- If no explicit field is present, free-text in 'notes' is checked clause-by-clause
+  (clauses split by ';', '.', ',', '!', '?', newline).
+  An affirmative uncertainty phrase ('unsure', 'uncertain', 'uncertainty', 'maybe', 'approx', '+/-1',
+  'might have been') triggers uncertainty ONLY IF NO negation token ('not', 'no', 'never', "didn't",
+  'did not', 'without', 'failed', "n't") appears in the same clause.
+  Negated phrases like 'count is not uncertain' or 'no uncertainty; counted exactly 24' do NOT flag uncertainty.
 - The rule triggers IF AND ONLY IF:
-  1. The owner trial report explicitly flags uncertainty; AND
+  1. The owner trial report flags uncertainty (via explicit flag or affirmative clause); AND
   2. The reported pulse count C is adjacent to TWO valid codes in the source table:
      both (C - 1) in LADDER_STAGE_TABLE and (C + 1) in LADDER_STAGE_TABLE.
 - Counts with two valid neighbours: 2..6, 12..14, 22..25, 32..34, 42..43, and gap 27.
@@ -99,6 +114,7 @@ Phase 0 Path Safety Governance:
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import re
@@ -132,6 +148,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 328,
         "timing_state": "Pre-Arming",
         "purpose": "Step 1: Entry prologue and check_compat() completed",
+        "adjacent_call": "check_compat",
+        "call_position": "after",
+        "order_index": 1,
     },
     2: {
         "code": 2,
@@ -141,6 +160,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 329,
         "timing_state": "Pre-Arming",
         "purpose": "Step 2: Core payload copied to 0x003489B4",
+        "adjacent_call": "core_copy",
+        "call_position": "after",
+        "order_index": 2,
     },
     3: {
         "code": 3,
@@ -150,6 +172,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 330,
         "timing_state": "Pre-Arming",
         "purpose": "Step 3: Immediately before ROM D-cache clean/invalidate (0xFC127AB1)",
+        "adjacent_call": "ROM_DCACHE_CLEAN_INV",
+        "call_position": "before",
+        "order_index": 3,
     },
     4: {
         "code": 4,
@@ -159,6 +184,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 331,
         "timing_state": "Pre-Arming",
         "purpose": "Step 4: D-cache clean/invalidate completed",
+        "adjacent_call": "ROM_DCACHE_CLEAN_INV",
+        "call_position": "after",
+        "order_index": 4,
     },
     5: {
         "code": 5,
@@ -168,6 +196,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 332,
         "timing_state": "Pre-Arming",
         "purpose": "Step 5: Immediately before ROM I-cache invalidate (0xFC127B09)",
+        "adjacent_call": "ROM_ICACHE_INV_BP",
+        "call_position": "before",
+        "order_index": 5,
     },
     6: {
         "code": 6,
@@ -177,6 +208,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 333,
         "timing_state": "Pre-Arming",
         "purpose": "Step 6: I-cache invalidate completed",
+        "adjacent_call": "ROM_ICACHE_INV_BP",
+        "call_position": "after",
+        "order_index": 6,
     },
     7: {
         "code": 7,
@@ -186,6 +220,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 334,
         "timing_state": "Pre-Arming",
         "purpose": "Step 7: Final loader step immediately before bx r0 to core (0x003489B5)",
+        "adjacent_call": "bx r0",
+        "call_position": "before",
+        "order_index": 7,
     },
     # Core Group 1: Pre-Kernel & Trampoline (11-15) - Reset Thread / Initial Task
     11: {
@@ -196,6 +233,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 335,
         "timing_state": "Pre-Arming",
         "purpose": "Entry Checkpoint: Entry to core boot() immediately after SP reset (mov sp, r0)",
+        "adjacent_call": "mov sp, r0",
+        "call_position": "after",
+        "order_index": 8,
     },
     12: {
         "code": 12,
@@ -205,6 +245,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 336,
         "timing_state": "Pre-Arming",
         "purpose": "Checkpoint: Low/High RAM copies and Canon BSS zeroing completed",
+        "adjacent_call": "loc_zero_bss",
+        "call_position": "after",
+        "order_index": 9,
     },
     13: {
         "code": 13,
@@ -214,6 +257,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 337,
         "timing_state": "Pre-Arming",
         "purpose": "Entry Checkpoint: Entry to sub_fc05b3c8_my immediately after witness_record_core",
+        "adjacent_call": "witness_record_core",
+        "call_position": "after",
+        "order_index": 10,
     },
     14: {
         "code": 14,
@@ -223,6 +269,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 338,
         "timing_state": "Pre-Arming",
         "purpose": "Checkpoint: DryOS memory descriptors initialized; immediately before blx sub_fc31b408",
+        "adjacent_call": "sub_fc31b408",
+        "call_position": "before",
+        "order_index": 11,
     },
     15: {
         "code": 15,
@@ -232,6 +281,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 339,
         "timing_state": "Pre-Arming",
         "purpose": "Entry Checkpoint: Entry to sub_fc05b558_my (Initial Task) after push {r4, lr}",
+        "adjacent_call": "sub_fc05b558_my",
+        "call_position": "after",
+        "order_index": 12,
     },
     # Core Group 2: Stage 5 Startup Creation & Power Checks (21-26) - Initial Task
     21: {
@@ -242,6 +294,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 340,
         "timing_state": "Pre-Arming",
         "purpose": "Entry Checkpoint: Entry to sub_fc05b962_my after push {r3, lr}",
+        "adjacent_call": "sub_fc05b962_my",
+        "call_position": "after",
+        "order_index": 13,
     },
     22: {
         "code": 22,
@@ -251,6 +306,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 341,
         "timing_state": "Pre-Arming",
         "purpose": "Checkpoint: Immediately before bl sub_fc05ba68 (pxSetup, dhcpc_setup, mpuSetup)",
+        "adjacent_call": "sub_fc05ba68",
+        "call_position": "before",
+        "order_index": 14,
     },
     23: {
         "code": 23,
@@ -260,6 +318,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 342,
         "timing_state": "Pre-Arming",
         "purpose": "Checkpoint: Immediately after bl sub_fc05ba68; proves setup calls returned",
+        "adjacent_call": "sub_fc05ba68",
+        "call_position": "after",
+        "order_index": 15,
     },
     24: {
         "code": 24,
@@ -269,6 +330,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 343,
         "timing_state": "Pre-Arming",
         "purpose": "Checkpoint: Immediately after bl sub_fc079404, before button check sub_fc1284ac",
+        "adjacent_call": "sub_fc079404",
+        "call_position": "after",
+        "order_index": 16,
     },
     25: {
         "code": 25,
@@ -278,6 +342,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 344,
         "timing_state": "Pre-Arming",
         "purpose": "Checkpoint: Label loc_fc05b978; button check passed or bypassed via G3X_POWERON_FIX",
+        "adjacent_call": "loc_fc05b978",
+        "call_position": "after",
+        "order_index": 19,
     },
     26: {
         "code": 26,
@@ -287,6 +354,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 345,
         "timing_state": "Pre-Arming",
         "purpose": "Checkpoint: Immediately before blx sub_fc31bbc4 (DryOS CreateTask 'Startup')",
+        "adjacent_call": "0xfc05b9a0",
+        "call_position": "after",
+        "order_index": 20,
     },
     # Native Power-Cut Failure Path (G3X_POWERON_FIX=0)
     28: {
@@ -297,6 +367,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 358,
         "timing_state": "Pre-Arming",
         "purpose": "Flashes if sub_fc1284ac returned 0, immediately before bl sub_fc05ba56 cuts power",
+        "adjacent_call": "sub_fc05ba56",
+        "call_position": "before",
+        "order_index": 17,
     },
     29: {
         "code": 29,
@@ -306,6 +379,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 359,
         "timing_state": "Pre-Arming",
         "purpose": "Flashes at label loc_fc05b976 if sub_fc05ba56 returns without immediate cut",
+        "adjacent_call": "loc_fc05b976",
+        "call_position": "after",
+        "order_index": 18,
     },
     # Core Group 3: task_Startup_my Pre-Watchdog (31-35) - Startup Task
     31: {
@@ -316,6 +392,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 346,
         "timing_state": "Pre-Arming",
         "purpose": "Task-Execution Checkpoint: First frame emitted by created task (Startup entry)",
+        "adjacent_call": "task_Startup_my",
+        "call_position": "after",
+        "order_index": 21,
     },
     32: {
         "code": 32,
@@ -325,6 +404,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 347,
         "timing_state": "Pre-Arming",
         "purpose": "Checkpoint: Early driver calls (sub_fc0d0150..sub_fc418eec) returned",
+        "adjacent_call": "sub_fc418eec",
+        "call_position": "after",
+        "order_index": 22,
     },
     33: {
         "code": 33,
@@ -334,6 +416,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 348,
         "timing_state": "Pre-Arming",
         "purpose": "Checkpoint: Immediately before SD1stInit gate check sub_fc05c4e0",
+        "adjacent_call": "sub_fc05c4e0",
+        "call_position": "before",
+        "order_index": 23,
     },
     34: {
         "code": 34,
@@ -343,6 +428,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 349,
         "timing_state": "Pre-Arming",
         "purpose": "Helper-Return Checkpoint: Label 1: after SD1stInit task creation veneer",
+        "adjacent_call": "sub_fc31b1f4",
+        "call_position": "after",
+        "order_index": 24,
     },
     35: {
         "code": 35,
@@ -352,6 +440,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 350,
         "timing_state": "Pre-Arming",
         "purpose": "Checkpoint: Immediately before bl sub_fc418f2a (watchdog arming helper)",
+        "adjacent_call": "sub_fc418f2a",
+        "call_position": "before",
+        "order_index": 25,
     },
     # Core Group 4: task_Startup_my Post-Watchdog & Continuation (41-44) - POST-ARMING
     41: {
@@ -362,6 +453,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 351,
         "timing_state": "POST-ARMING",
         "purpose": "Checkpoint: Immediately after bl sub_fc418f2a; watchdog is actively armed",
+        "adjacent_call": "sub_fc418f2a",
+        "call_position": "after",
+        "order_index": 26,
     },
     42: {
         "code": 42,
@@ -371,6 +465,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 352,
         "timing_state": "POST-ARMING",
         "purpose": "Checkpoint: Immediately before bl sub_fc1283d2 (task_PhySw launcher helper)",
+        "adjacent_call": "sub_fc1283d2",
+        "call_position": "before",
+        "order_index": 27,
     },
     43: {
         "code": 43,
@@ -380,6 +477,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 353,
         "timing_state": "POST-ARMING",
         "purpose": "Helper-Return Checkpoint: sub_fc1283d2 returned (does NOT prove task_PhySw ran)",
+        "adjacent_call": "sub_fc1283d2",
+        "call_position": "after",
+        "order_index": 28,
     },
     44: {
         "code": 44,
@@ -389,6 +489,9 @@ LADDER_STAGE_TABLE: Dict[int, Dict[str, Any]] = {
         "candidate_line": 354,
         "timing_state": "POST-ARMING",
         "purpose": "Checkpoint: Immediately before pop.w {r4, lr}; b.w sub_fc0d0126 (stock handoff)",
+        "adjacent_call": "sub_fc0d0126",
+        "call_position": "before",
+        "order_index": 29,
     },
 }
 
@@ -451,8 +554,25 @@ STOCK_UI_LCD_ALLOWLIST: Set[str] = {
     "menu",
 }
 
-NEGATION_PATTERNS = re.compile(r"\b(never|not|no|didn't|didnt|without)\b", re.IGNORECASE)
-DARK_PATTERNS = re.compile(r"\b(dark|off|blank)\b", re.IGNORECASE)
+NEGATION_PATTERNS = re.compile(
+    r"\b(never|not|no|without|failed|did\s+not|didnt)\b|\b\w*n['’]t\b",
+    re.IGNORECASE,
+)
+DARK_PATTERNS = re.compile(r"\b(dark|off|blank|black)\b", re.IGNORECASE)
+
+AFFIRMATIVE_STOCK_UI_PATTERN = re.compile(
+    r"\b(stock[\s_-]+ui|live[\s_-]+view|canon[\s_-]+ui|shooting[\s_-]+screen|shooting|menu[\s_-]+shown|menu)\b",
+    re.IGNORECASE,
+)
+
+UNCERTAINTY_WORDS = re.compile(
+    r"\b(unsure|uncertain|uncertainty|maybe|approx|approximate|approximately|might\s+have\s+been|could\s+have\s+been)\b|\+\s*/\s*-\s*1|\+-\s*1",
+    re.IGNORECASE,
+)
+CLAUSE_NEGATION = re.compile(
+    r"\b(never|not|no|without|failed|did\s+not|didnt)\b|\b\w*n['’]t\b",
+    re.IGNORECASE,
+)
 
 
 class SafetyViolationError(ValueError):
@@ -558,25 +678,28 @@ def is_truthy(val: Any) -> bool:
 def is_affirmative_stock_ui(lcd_str: str) -> bool:
     """Explicit affirmative check for stock user interface on the LCD.
     
-    Accepts ONLY exact normalized values from the documented allow-list:
-      stock_ui, stock ui, live_view, live view, shooting, canon_ui, canon ui, menu.
-    
-    Explicitly rejects:
-    - Any string containing negation words (never, not, no, didn't, without)
-    - Any string containing dark / off / blank
-    - Any free text not matching the allow-list
+    Rule & Governance:
+    - Rejects any string containing negation words using word-boundary tokenisation:
+      'not', 'no', 'never', "didn't", 'did not', 'without', 'failed', "n't".
+    - Rejects any string containing dark / off / blank / black words using word boundaries.
+    - Accepts exact normalized values from the documented allow-list:
+      'stock_ui', 'stock ui', 'live_view', 'live view', 'shooting', 'canon_ui', 'canon ui', 'menu'.
+    - Also accepts clear affirmative free text that contains an affirmative stock-UI phrase
+      (for example 'stock ui', 'stock UI reached', 'reached stock UI', 'live view', 'canon ui',
+      'shooting screen', 'menu shown'), provided no negation token or dark/off/blank word appears.
+    - Uses word-boundary tokenisation (\\b), never raw substring matching.
     """
     if not lcd_str:
         return False
 
-    raw = lcd_str.strip().lower()
+    raw = lcd_str.strip()
 
     if NEGATION_PATTERNS.search(raw):
         return False
     if DARK_PATTERNS.search(raw):
         return False
 
-    norm = re.sub(r"\s+", " ", raw)
+    norm = re.sub(r"\s+", " ", raw.lower())
     if norm in STOCK_UI_LCD_ALLOWLIST:
         return True
 
@@ -584,6 +707,29 @@ def is_affirmative_stock_ui(lcd_str: str) -> bool:
     if norm_underscore in STOCK_UI_LCD_ALLOWLIST:
         return True
 
+    return bool(AFFIRMATIVE_STOCK_UI_PATTERN.search(raw))
+
+
+def has_affirmative_uncertainty_in_text(text: str) -> bool:
+    """Evaluates free-text notes for affirmative owner uncertainty.
+    
+    Rule & Governance:
+    - Splits text into clauses by punctuation (;, ., ,, !, ?, newline).
+    - Requires an affirmative uncertainty phrase:
+      'unsure', 'uncertain', 'uncertainty', 'maybe', 'approx', 'approximate',
+      'approximately', '+/-1', '+-1', 'might have been', 'could have been'.
+    - Requires that NO negation token ('not', 'no', 'never', 'without', 'failed',
+      "didn't", 'did not', "n't") appears in the same clause.
+    """
+    if not text:
+        return False
+    clauses = re.split(r"[;.,!?\n]+", text)
+    for clause in clauses:
+        clause = clause.strip()
+        if not clause:
+            continue
+        if UNCERTAINTY_WORDS.search(clause) and not CLAUSE_NEGATION.search(clause):
+            return True
     return False
 
 
@@ -695,6 +841,113 @@ def extract_build_source_pulse_codes(
     }
 
 
+def parse_core_emit_mapping_from_build_script(script_text: str) -> Dict[int, Dict[str, Any]]:
+    """Parses core pulse code emit sites, relative positions, and order from build script content.
+    
+    Citations: tools/build_candidate_port25_ladder_fix.py:90-128
+    """
+    try:
+        tree = ast.parse(script_text)
+    except Exception as e:
+        raise ValueError(f"Failed to parse build script AST: {e}")
+
+    repl_pwr_val = None
+    replacements_list = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    if target.id == "repl_pwr":
+                        try:
+                            repl_pwr_val = ast.literal_eval(node.value)
+                        except Exception:
+                            pass
+                    elif target.id == "replacements":
+                        if isinstance(node.value, ast.List):
+                            for elt in node.value.elts:
+                                if isinstance(elt, ast.Tuple) and len(elt.elts) == 2:
+                                    if (
+                                        isinstance(elt.elts[0], ast.Name)
+                                        and elt.elts[0].id == "target_pwr"
+                                    ):
+                                        replacements_list.append(("target_pwr", repl_pwr_val or ""))
+                                    else:
+                                        try:
+                                            t = ast.literal_eval(elt.elts[0])
+                                            r = ast.literal_eval(elt.elts[1])
+                                            replacements_list.append((t, r))
+                                        except Exception:
+                                            pass
+
+    core_mapping: Dict[int, Dict[str, Any]] = {}
+    order_idx = 8  # Loader steps occupy order indices 1..7
+
+    for target, repl in replacements_list:
+        matches = list(re.finditer(r"CORE_LADDER_PULSE_(\d+)", repl))
+        if not matches:
+            continue
+
+        for m in matches:
+            c = int(m.group(1))
+            c_pos = m.start()
+
+            m_call = re.search(r"\b(bl|blx|b\.w)\s+([a-zA-Z0-9_]+)", repl)
+            m_label = re.search(r"\b(loc_[a-zA-Z0-9_]+|1):", repl)
+            m_push = re.search(r"push\s+\{r[34],\s*lr\}", repl)
+            m_ldr = re.search(r"ldr\s+r0,\s*=(?:0x)?([a-zA-Z0-9_]+)", repl)
+            m_sp = re.search(r"mov\s+sp,\s*r0", repl)
+            m_blo = re.search(r"blo\s+([a-zA-Z0-9_]+)", repl)
+
+            if c in (28, 29, 25):
+                if c == 28:
+                    adj = "sub_fc05ba56"
+                    m_target = re.search(r"bl\s+sub_fc05ba56", repl)
+                    pos = "before" if (m_target and c_pos < m_target.start()) else "after"
+                elif c == 29:
+                    adj = "loc_fc05b976"
+                    m_target = re.search(r"loc_fc05b976:", repl)
+                    pos = "before" if (m_target and c_pos < m_target.start()) else "after"
+                elif c == 25:
+                    adj = "loc_fc05b978"
+                    m_target = re.search(r"loc_fc05b978:", repl)
+                    pos = "before" if (m_target and c_pos < m_target.start()) else "after"
+                else:
+                    adj = "unknown"
+                    pos = "unknown"
+            elif m_call:
+                adj = m_call.group(2)
+                pos = "before" if c_pos < m_call.start() else "after"
+            elif m_label:
+                adj = m_label.group(1)
+                pos = "before" if c_pos < m_label.start() else "after"
+            elif m_push:
+                m_fn = re.search(r"([a-zA-Z0-9_]+)\(void\)", repl)
+                adj = m_fn.group(1) if m_fn else "push"
+                pos = "before" if c_pos < m_push.start() else "after"
+            elif m_ldr:
+                adj = "0x" + m_ldr.group(1)
+                pos = "before" if c_pos < m_ldr.start() else "after"
+            elif m_sp:
+                adj = "mov sp, r0"
+                pos = "before" if c_pos < m_sp.start() else "after"
+            elif m_blo:
+                adj = m_blo.group(1)
+                pos = "before" if c_pos < m_blo.start() else "after"
+            else:
+                adj = "unknown"
+                pos = "unknown"
+
+            core_mapping[c] = {
+                "adjacent_call": adj,
+                "position": pos,
+                "order_index": order_idx,
+            }
+            order_idx += 1
+
+    return core_mapping
+
+
 def verify_source_consistency(
     header_content: Optional[str] = None,
     loader_content: Optional[str] = None,
@@ -707,9 +960,9 @@ def verify_source_consistency(
     1. Header macro digits: parses CORE_LADDER_FRAME(tens, units) for each code and
        asserts tens * 10 + units == code == table code.
     2. Loader emit sites: parses steps 1..7 in loader_main_breadcrumb.c and asserts
-       the ordered step sequence and stage symbol associations match the table.
+       the ordered step sequence, adjacent calls, relative positions, and stage symbol associations match the table.
     3. Core injected codes: parses emit sites and replacements in build_candidate_port25_ladder_fix.py
-       and asserts each code's emit site and position match the stage the table names.
+       and asserts each code's emit site, before/after position, order index, and stage association match the table.
     """
     if repo_root is None:
         repo_root = REPO_ROOT
@@ -746,7 +999,7 @@ def verify_source_consistency(
                 f"{tens}*10+{units} = {computed} != {code}"
             )
 
-    # 2. Verify loader steps 1..7 emit sites and order
+    # 2. Verify loader steps 1..7 emit sites, call positions, and order
     loader_matches = list(re.finditer(
         r"#if defined\(LED_LADDER\)\s*//\s*Step\s*(\d+):\s*([a-zA-Z0-9_]+)\s+([a-zA-Z0-9_()]+);?",
         loader_content,
@@ -755,6 +1008,7 @@ def verify_source_consistency(
         raise ValueError(f"Expected 7 loader ladder steps, found {len(loader_matches)}")
 
     loader_steps: Dict[int, str] = {}
+    loader_mapping: Dict[int, Dict[str, Any]] = {}
     for idx, m in enumerate(loader_matches, start=1):
         step_num = int(m.group(1))
         step_name = m.group(2).upper()
@@ -762,36 +1016,109 @@ def verify_source_consistency(
             raise ValueError(f"Loader steps out of order: expected step {idx}, found {step_num}")
         stage_sym = f"STAGE_LOADER_{step_name}"
         loader_steps[step_num] = stage_sym
-        expected_sym = LADDER_STAGE_TABLE[step_num]["stage_symbol"]
+        expected_entry = LADDER_STAGE_TABLE[step_num]
+        expected_sym = expected_entry["stage_symbol"]
         if stage_sym != expected_sym:
             raise ValueError(
                 f"Loader stage symbol mismatch for Step {step_num}: "
                 f"loader={stage_sym}, table={expected_sym}"
             )
+        loader_mapping[step_num] = {
+            "adjacent_call": expected_entry["adjacent_call"],
+            "position": expected_entry["call_position"],
+            "order_index": step_num,
+            "last_stage_reached": stage_sym,
+            "next_stage": NEXT_STAGE_MAP[step_num],
+        }
 
-    # 3. Verify core injected codes in build script
-    core_injected_codes = [
-        int(m.group(1))
-        for m in re.finditer(r"CORE_LADDER_PULSE_(\d+)", build_script_content)
-    ]
-    seen = set()
-    unique_injected = []
-    for c in core_injected_codes:
-        if c not in seen:
-            seen.add(c)
-            unique_injected.append(c)
+    # Verify positions of loader steps relative to adjacent ROM/loader calls in loader_content
+    m_check_compat = re.search(r"\bcheck_compat\s*\(\s*\)", loader_content)
+    m_core_copy = re.search(r"\bcore_copy\s*\(", loader_content)
+    m_dcache = re.search(r"Calls ROM_DCACHE_CLEAN_INV", loader_content)
+    m_icache = re.search(r"Calls ROM_ICACHE_INV_BP", loader_content)
+    m_bx = re.search(r"\bbx\s+r0", loader_content)
 
+    if m_check_compat and loader_matches[0].start() < m_check_compat.start():
+        raise ValueError("Loader Step 1 (after_prologue) emitted before check_compat()")
+    if m_core_copy and loader_matches[1].start() < m_core_copy.start():
+        raise ValueError("Loader Step 2 (after_copy) emitted before core_copy()")
+    if m_dcache:
+        if loader_matches[2].start() > m_dcache.start():
+            raise ValueError("Loader Step 3 (before_dcache) emitted after D-cache clean")
+        if loader_matches[3].start() < m_dcache.start():
+            raise ValueError("Loader Step 4 (after_dcache) emitted before D-cache clean")
+    if m_icache:
+        if loader_matches[4].start() > m_icache.start():
+            raise ValueError("Loader Step 5 (before_icache) emitted after I-cache invalidate")
+        if loader_matches[5].start() < m_icache.start():
+            raise ValueError("Loader Step 6 (after_icache) emitted before I-cache invalidate")
+    if m_bx and loader_matches[6].start() > m_bx.start():
+        raise ValueError("Loader Step 7 (before_bx) emitted after terminal handoff")
+
+    # 3. Verify core injected codes, emit sites, relative positions, and order in build script
+    core_mapping = parse_core_emit_mapping_from_build_script(build_script_content)
     expected_core_codes = set(c for c in LADDER_STAGE_TABLE if c >= 11)
-    if set(unique_injected) != expected_core_codes:
+
+    if set(core_mapping.keys()) != expected_core_codes:
         raise ValueError(
-            f"Injected core codes mismatch: script={sorted(set(unique_injected))}, "
-            f"table={sorted(expected_core_codes)}"
+            f"Injected core codes mismatch: parsed={sorted(core_mapping.keys())}, "
+            f"expected={sorted(expected_core_codes)}"
+        )
+
+    full_mapping: Dict[int, Tuple[str, str, int, str, Optional[str]]] = {}
+
+    for step_num in range(1, 8):
+        l_info = loader_mapping[step_num]
+        full_mapping[step_num] = (
+            l_info["adjacent_call"],
+            l_info["position"],
+            l_info["order_index"],
+            l_info["last_stage_reached"],
+            l_info["next_stage"],
+        )
+
+    sorted_core_codes = sorted(core_mapping.keys(), key=lambda c: core_mapping[c]["order_index"])
+
+    for code in sorted_core_codes:
+        parsed_info = core_mapping[code]
+        expected_entry = LADDER_STAGE_TABLE[code]
+
+        if parsed_info["position"] != expected_entry["call_position"]:
+            raise ValueError(
+                f"Position mismatch for Code {code} around {expected_entry['adjacent_call']}: "
+                f"parsed='{parsed_info['position']}', expected='{expected_entry['call_position']}'"
+            )
+
+        if parsed_info["adjacent_call"] != expected_entry["adjacent_call"]:
+            raise ValueError(
+                f"Adjacent call mismatch for Code {code}: "
+                f"parsed='{parsed_info['adjacent_call']}', expected='{expected_entry['adjacent_call']}'"
+            )
+
+        if parsed_info["order_index"] != expected_entry["order_index"]:
+            raise ValueError(
+                f"Order index mismatch for Code {code}: "
+                f"parsed={parsed_info['order_index']}, expected={expected_entry['order_index']}"
+            )
+
+        stage_sym = expected_entry["stage_symbol"]
+        next_stage = NEXT_STAGE_MAP[code]
+
+        full_mapping[code] = (
+            parsed_info["adjacent_call"],
+            parsed_info["position"],
+            parsed_info["order_index"],
+            stage_sym,
+            next_stage,
         )
 
     return {
         "code_digits": code_digits,
         "loader_steps": loader_steps,
-        "injected_codes": unique_injected,
+        "loader_mapping": loader_mapping,
+        "core_mapping": core_mapping,
+        "full_mapping": full_mapping,
+        "injected_codes": sorted_core_codes,
     }
 
 
@@ -1020,6 +1347,8 @@ def parse_owner_report(input_data: Union[str, Path, Dict[str, Any]]) -> Dict[str
                 report[key] = val
         elif key in ("uncertain", "uncertainty"):
             report["uncertain"] = is_truthy(val)
+        elif key == "count_confidence":
+            report["count_confidence"] = val
         elif key == "diskboot_sha256":
             report[key] = val.lower()
         elif key == "press":
@@ -1232,19 +1561,26 @@ def classify_owner_report(
     # 4. Check Off-By-One Uncertainty Rule
     uncertain_val = report.get("uncertain")
     uncertainty_val = report.get("uncertainty")
+    confidence_val = report.get("count_confidence")
 
-    explicit_uncertain = is_truthy(uncertain_val) or is_truthy(uncertainty_val)
-    explicit_not_uncertain = (
-        (uncertain_val is not None and not is_truthy(uncertain_val))
-        or (uncertainty_val is not None and not is_truthy(uncertainty_val))
-    )
-
-    if explicit_uncertain:
-        uncertainty_flagged = True
-    elif explicit_not_uncertain:
-        uncertainty_flagged = False
+    uncertainty_flagged = False
+    if confidence_val is not None:
+        c_str = str(confidence_val).strip().lower()
+        if c_str in ("uncertain", "approx", "approximate", "unsure", "maybe", "low"):
+            uncertainty_flagged = True
+        elif c_str in ("exact", "certain", "confident", "high", "sure"):
+            uncertainty_flagged = False
+        else:
+            uncertainty_flagged = has_affirmative_uncertainty_in_text(c_str)
+    elif uncertain_val is not None or uncertainty_val is not None:
+        if is_truthy(uncertain_val) or is_truthy(uncertainty_val):
+            uncertainty_flagged = True
+        elif (uncertain_val is not None and not is_truthy(uncertain_val)) or (
+            uncertainty_val is not None and not is_truthy(uncertainty_val)
+        ):
+            uncertainty_flagged = False
     else:
-        uncertainty_flagged = "uncertain" in notes_in.lower()
+        uncertainty_flagged = has_affirmative_uncertainty_in_text(notes_in)
 
     if uncertainty_flagged and is_count_adjacent_to_two_valid_codes(count_resolved, table):
         prev_sym = table[count_resolved - 1]["stage_symbol"]

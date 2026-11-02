@@ -31,6 +31,7 @@ from __future__ import annotations
 import builtins
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -201,6 +202,18 @@ class TestPort26LadderDecode(unittest.TestCase):
         for step in range(1, 8):
             self.assertEqual(loader_steps[step], LADDER_STAGE_TABLE[step]["stage_symbol"])
 
+        # Assert full mapping {code -> (adjacent_call, before|after, order_index, last_stage_reached, next_stage)}
+        full_mapping = consistency_result["full_mapping"]
+        self.assertEqual(len(full_mapping), len(LADDER_STAGE_TABLE))
+        for code, expected_entry in LADDER_STAGE_TABLE.items():
+            self.assertIn(code, full_mapping)
+            adj, pos, ord_idx, last_stage, next_stage = full_mapping[code]
+            self.assertEqual(adj, expected_entry["adjacent_call"], f"Emit site mismatch for code {code}")
+            self.assertEqual(pos, expected_entry["call_position"], f"Position mismatch for code {code}")
+            self.assertEqual(ord_idx, expected_entry["order_index"], f"Order index mismatch for code {code}")
+            self.assertEqual(last_stage, expected_entry["stage_symbol"], f"Last stage mismatch for code {code}")
+            self.assertEqual(next_stage, NEXT_STAGE_MAP[code], f"Next stage mismatch for code {code}")
+
     def test_source_consistency_negative_tampered_digits(self) -> None:
         """[P2 Regression] Negative test: changing CORE_LADDER_FRAME(2, 4) to (2, 5) in header FAILS consistency."""
         header_path = REPO_ROOT / "chdk-port" / "platform" / "g3x" / "sub" / "110c" / "led_breadcrumb.h"
@@ -219,6 +232,67 @@ class TestPort26LadderDecode(unittest.TestCase):
 
         self.assertIn("PULSE_24", str(ctx.exception))
         self.assertIn("25 != 24", str(ctx.exception))
+
+    def test_source_consistency_negative_swapped_22_23_around_sub_fc05ba68(self) -> None:
+        """[P2 Negative Test] Swapping CORE_LADDER_PULSE_22 and 23 emit sites around sub_fc05ba68 in memory raises ValueError."""
+        build_script_path = REPO_ROOT / "tools" / "build_candidate_port25_ladder_fix.py"
+        with open(build_script_path, "r", encoding="utf-8") as f:
+            build_script_text = f.read()
+
+        target = r'CORE_LADDER_PULSE_22 \"    bl      sub_fc05ba68\\n\" CORE_LADDER_PULSE_23'
+        replacement = r'CORE_LADDER_PULSE_23 \"    bl      sub_fc05ba68\\n\" CORE_LADDER_PULSE_22'
+        self.assertIn(target, build_script_text)
+
+        tampered_script = build_script_text.replace(target, replacement)
+        self.assertNotEqual(tampered_script, build_script_text)
+
+        with self.assertRaises(ValueError) as ctx:
+            verify_source_consistency(build_script_content=tampered_script, repo_root=REPO_ROOT)
+
+        err_msg = str(ctx.exception)
+        self.assertTrue(
+            "Position mismatch" in err_msg or "Order index mismatch" in err_msg,
+            f"Expected position or order index mismatch, got: {err_msg}",
+        )
+
+    def test_source_consistency_negative_reordered_loader_steps(self) -> None:
+        """[P2 Negative Test] Reordering two loader steps in loader_main_breadcrumb.c in memory raises ValueError."""
+        loader_path = REPO_ROOT / "chdk-port" / "platform" / "g3x" / "sub" / "110c" / "loader_main_breadcrumb.c"
+        with open(loader_path, "r", encoding="utf-8") as f:
+            loader_text = f.read()
+
+        s3_pat = re.search(
+            r"#if defined\(LED_LADDER\)\s*//\s*Step 3: before_dcache\s*LADDER_ASM_PULSE\s*#endif",
+            loader_text,
+        )
+        s4_pat = re.search(
+            r"#if defined\(LED_LADDER\)\s*//\s*Step 4: after_dcache\s*LADDER_ASM_PULSE\s*#endif",
+            loader_text,
+        )
+        self.assertIsNotNone(s3_pat)
+        self.assertIsNotNone(s4_pat)
+
+        s3_text = s3_pat.group(0)
+        s4_text = s4_pat.group(0)
+
+        # Swap Step 3 and Step 4 in memory
+        tampered_loader = (
+            loader_text.replace(s3_text, "TEMP_STEP_SWAP")
+            .replace(s4_text, s3_text)
+            .replace("TEMP_STEP_SWAP", s4_text)
+        )
+        self.assertNotEqual(tampered_loader, loader_text)
+
+        with self.assertRaises(ValueError) as ctx:
+            verify_source_consistency(loader_content=tampered_loader, repo_root=REPO_ROOT)
+
+        err_msg = str(ctx.exception)
+        self.assertTrue(
+            "Loader steps out of order" in err_msg
+            or "emitted before" in err_msg
+            or "emitted after" in err_msg,
+            f"Expected loader step order or position failure, got: {err_msg}",
+        )
 
     def test_every_table_code(self) -> None:
         """Covers every single registered code in the table across loader and core stages."""
@@ -504,7 +578,9 @@ class TestPort26LadderDecode(unittest.TestCase):
         self.assertEqual(res9["class"], "UNKNOWN_CODE")
 
     def test_owner_uncertainty_spelling_variants(self) -> None:
-        """Covers all spelling variants of the owner uncertainty flag in JSON and key=value."""
+        """Covers all spelling variants of the owner uncertainty flag in JSON and key=value,
+        including explicit flags and negated free-text regression cases.
+        """
         # 1. JSON variants that must trigger uncertainty on adjacent code 24:
         json_uncertain_variants = [
             '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "uncertain": true, "lcd": "dark", "inspector_status": "none"}',
@@ -512,7 +588,12 @@ class TestPort26LadderDecode(unittest.TestCase):
             '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "uncertainty": true, "lcd": "dark", "inspector_status": "none"}',
             '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "uncertainty": "yes", "lcd": "dark", "inspector_status": "none"}',
             '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "uncertain": 1, "lcd": "dark", "inspector_status": "none"}',
+            '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "count_confidence": "uncertain", "lcd": "dark", "inspector_status": "none"}',
             '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "notes": "pulse count uncertain", "lcd": "dark", "inspector_status": "none"}',
+            '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "notes": "unsure, maybe 23 or 24", "lcd": "dark", "inspector_status": "none"}',
+            '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "notes": "approx 24 pulses", "lcd": "dark", "inspector_status": "none"}',
+            '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "notes": "counted 24, +/-1 pulse error", "lcd": "dark", "inspector_status": "none"}',
+            '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "notes": "counted 24; might have been 23", "lcd": "dark", "inspector_status": "none"}',
         ]
         for tmpl in json_uncertain_variants:
             raw = tmpl % self.valid_hash
@@ -526,6 +607,9 @@ class TestPort26LadderDecode(unittest.TestCase):
             '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "uncertain": "false", "lcd": "dark", "inspector_status": "none"}',
             '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "uncertain": 0, "lcd": "dark", "inspector_status": "none"}',
             '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "uncertainty": false, "lcd": "dark", "inspector_status": "none"}',
+            '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "count_confidence": "exact", "lcd": "dark", "inspector_status": "none"}',
+            '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "notes": "count is not uncertain", "lcd": "dark", "inspector_status": "none"}',
+            '{"diskboot_sha256": "%s", "press": "short", "pulses": 24, "notes": "no uncertainty; counted exactly 24", "lcd": "dark", "inspector_status": "none"}',
         ]
         for tmpl in json_not_uncertain:
             raw = tmpl % self.valid_hash
@@ -540,7 +624,10 @@ class TestPort26LadderDecode(unittest.TestCase):
             f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24\nuncertain = 1\n",
             f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24\nuncertainty = true\n",
             f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24\nuncertainty = yes\n",
+            f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24\ncount_confidence = uncertain\n",
             f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24\nnotes = count was uncertain\n",
+            f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24\nnotes = unsure, maybe 23 or 24\n",
+            f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24\nnotes = approx 24\n",
         ]
         for kv in kv_uncertain_variants:
             with self.subTest(kv_raw=kv.splitlines()[-1]):
@@ -553,6 +640,9 @@ class TestPort26LadderDecode(unittest.TestCase):
             f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24\nuncertain = no\n",
             f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24\nuncertain = 0\n",
             f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24\nuncertainty = false\n",
+            f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24\ncount_confidence = exact\n",
+            f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24\nnotes = count is not uncertain\n",
+            f"diskboot_sha256 = {self.valid_hash}\npress = short\npulses = 24\nnotes = no uncertainty; counted exactly 24\n",
         ]
         for kv in kv_not_uncertain:
             with self.subTest(kv_neg=kv.splitlines()[-1]):
@@ -586,48 +676,98 @@ class TestPort26LadderDecode(unittest.TestCase):
 
     def test_stock_ui_detection_regressions(self) -> None:
         """[P2 Regression] Affirmative Stock-UI detection:
-        - lcd='never reached stock UI' with held+pulses=24 gives no CONTROL_HELD_O1 (gives CODE_24).
+        - lcd='reached stock UI' leads to CONTROL_HELD_O1 in both JSON and key=value formats.
+        - 'did not reach stock UI', 'never reached stock ui', and 'stock ui not shown' do NOT.
+        - a short press with 'reached stock UI' does NOT give CONTROL_HELD_O1 (gives CODE_44).
         - lcd='dark' with inspector_status=WITNESS_INVALID gives no CONTROL_HELD_O1.
         - a valid held + stock_ui report still gives CONTROL_HELD_O1.
         """
-        # 1. Negative text with 'never' must NOT trigger CONTROL_HELD_O1
-        res1 = classify_owner_report({
+        # 1. Affirmative free text 'reached stock UI' leads to CONTROL_HELD_O1 in JSON and key=value
+        json_affirmative = (
+            f'{{"diskboot_sha256": "{self.valid_hash}", "press": "held", '
+            f'"pulses": 44, "lcd": "reached stock UI", "inspector_status": "none"}}'
+        )
+        res_json = classify_owner_report(json_affirmative)
+        self.assertEqual(res_json["class"], "CONTROL_HELD_O1")
+        self.assertEqual(res_json["last_stage_reached"], "STOCK_UI")
+        self.assertIsNone(res_json["next_stage"])
+
+        kv_affirmative = (
+            f"diskboot_sha256 = {self.valid_hash}\n"
+            "press = held\n"
+            "pulses = 44\n"
+            "lcd = reached stock UI\n"
+            "inspector_status = none\n"
+        )
+        res_kv = classify_owner_report(kv_affirmative)
+        self.assertEqual(res_kv["class"], "CONTROL_HELD_O1")
+        self.assertEqual(res_kv["last_stage_reached"], "STOCK_UI")
+        self.assertIsNone(res_kv["next_stage"])
+
+        # 2. Negative phrases must NOT trigger CONTROL_HELD_O1 (give CODE_44 on pulses=44)
+        negated_phrases = [
+            "did not reach stock UI",
+            "never reached stock ui",
+            "stock ui not shown",
+            "stock ui didn't show",
+            "stock UI failed",
+        ]
+        for phrase in negated_phrases:
+            with self.subTest(negated_phrase=phrase):
+                res_neg = classify_owner_report({
+                    "diskboot_sha256": self.valid_hash,
+                    "press": "held",
+                    "pulses": 44,
+                    "lcd": phrase,
+                    "inspector_status": "none",
+                })
+                self.assertEqual(res_neg["class"], "CODE_44", f"Failed for phrase: {phrase}")
+                self.assertNotEqual(res_neg["class"], "CONTROL_HELD_O1")
+
+        # 3. Short press with 'reached stock UI' does NOT give CONTROL_HELD_O1 (gives CODE_44)
+        res_short = classify_owner_report({
             "diskboot_sha256": self.valid_hash,
-            "press": "held",
-            "pulses": 24,
-            "lcd": "never reached stock UI",
+            "press": "short",
+            "pulses": 44,
+            "lcd": "reached stock UI",
             "inspector_status": "none",
         })
-        self.assertEqual(res1["class"], "CODE_24")
-        self.assertNotEqual(res1["class"], "CONTROL_HELD_O1")
+        self.assertEqual(res_short["class"], "CODE_44")
+        self.assertNotEqual(res_short["class"], "CONTROL_HELD_O1")
 
-        # 2. lcd='dark' with inspector_status=WITNESS_INVALID must NOT imply stock UI
-        res2 = classify_owner_report({
+        # 4. lcd='dark' with inspector_status=WITNESS_INVALID must NOT imply stock UI
+        res_dark = classify_owner_report({
             "diskboot_sha256": self.valid_hash,
             "press": "held",
             "pulses": 24,
             "lcd": "dark",
             "inspector_status": "WITNESS_INVALID",
         })
-        self.assertEqual(res2["class"], "CODE_24")
-        self.assertNotEqual(res2["class"], "CONTROL_HELD_O1")
+        self.assertEqual(res_dark["class"], "CODE_24")
+        self.assertNotEqual(res_dark["class"], "CONTROL_HELD_O1")
 
-        # 3. Valid held + stock_ui report still gives CONTROL_HELD_O1
-        res3 = classify_owner_report({
+        # 5. Valid held + stock_ui report still gives CONTROL_HELD_O1
+        res_stock = classify_owner_report({
             "diskboot_sha256": self.valid_hash,
             "press": "held",
             "pulses": "none",
             "lcd": "stock_ui",
             "inspector_status": "O1",
         })
-        self.assertEqual(res3["class"], "CONTROL_HELD_O1")
-        self.assertEqual(res3["last_stage_reached"], "STOCK_UI")
+        self.assertEqual(res_stock["class"], "CONTROL_HELD_O1")
+        self.assertEqual(res_stock["last_stage_reached"], "STOCK_UI")
 
-        # 4. Allow-list check
+        # 6. Affirmative and allow-list check
         self.assertTrue(is_affirmative_stock_ui("stock_ui"))
         self.assertTrue(is_affirmative_stock_ui("STOCK UI"))
         self.assertTrue(is_affirmative_stock_ui("live_view"))
-        self.assertFalse(is_affirmative_stock_ui("never reached stock UI"))
+        self.assertTrue(is_affirmative_stock_ui("reached stock UI"))
+        self.assertTrue(is_affirmative_stock_ui("stock UI reached"))
+        self.assertTrue(is_affirmative_stock_ui("menu shown"))
+        self.assertTrue(is_affirmative_stock_ui("shooting screen"))
+        self.assertFalse(is_affirmative_stock_ui("did not reach stock UI"))
+        self.assertFalse(is_affirmative_stock_ui("never reached stock ui"))
+        self.assertFalse(is_affirmative_stock_ui("stock ui not shown"))
         self.assertFalse(is_affirmative_stock_ui("not stock ui"))
         self.assertFalse(is_affirmative_stock_ui("dark"))
         self.assertFalse(is_affirmative_stock_ui("blank screen"))
