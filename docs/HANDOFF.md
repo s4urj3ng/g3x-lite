@@ -2275,5 +2275,5 @@ python3 -B tools/port18_trial_report.py private/port18/trial_report.md --out pri
 - **Trial Ingest Tasks**: Ingest of this result is handled by `p26-t4-code43-ingest` and `p26-t7-owner-priority-record` `[VERIFIED]`.
 - **Owner Priority Direction**: The owner's 2026-11-02 priority puts the CHDK GUI track ahead of the short-press fix `[VERIFIED] (owner priority, 2026-11-02)`.
 - **Tooling & Next-Steps Plan**:
-  - Automated decoder tool: [tools/port26_ladder_decode.py](tools/port26_ladder_decode.py) parses and classifies owner trial reports across 29 ladder stage codes and 5 special classes `[VERIFIED: tools/port26_ladder_decode.py:161-516]`.
-  - Per-class next-step plan: [docs/PORT26_LADDER_NEXT_STEPS.md](PORT26_LADDER_NEXT_STEPS.md) documents the stage-by-stage execution intervals, power-off points, and next candidate actions for every ladder code `[VERIFIED: docs/PORT26_LADDER_NEXT_STEPS.md:5-177]`.
+  - Automated decoder tool: [tools/port26_ladder_decode.py](../tools/port26_ladder_decode.py) parses and classifies owner trial reports across 29 ladder stage codes and 5 special classes `[VERIFIED: tools/port26_ladder_decode.py:161-561]`.
+  - Per-class next-step plan: [docs/PORT26_LADDER_NEXT_STEPS.md](PORT26_LADDER_NEXT_STEPS.md) documents the stage-by-stage execution intervals, power-off points, and next candidate actions for every ladder code `[VERIFIED: docs/PORT26_LADDER_NEXT_STEPS.md:5-207]`.
