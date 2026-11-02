@@ -31,11 +31,59 @@ Every owner report must provide the following five primary fields, with optional
 |---|---|---|---|:---:|
 | `diskboot_sha256` | **Required** | Hex string | 64-character lowercase SHA-256 digest of `A/DISKBOOT.BIN`. Pinned value for the PORT-25 combined candidate is `9ba62067c17d654a3b8995fc6e8c26176321154054a138a465ca66f9ff763a15`. Any differing digest triggers `INVALID_CANDIDATE`. | `[VERIFIED: docs/PORT25_LADDER_FIX_CANDIDATE.md:385; tools/port26_ladder_decode.py:149-151, 1698-1708]` |
 | `press` | **Required** | Enum string | `short` or `held`.<br>- `short`: Brief power button tap (~100-200 ms). Primary diagnostic trial.<br>- `held`: Power button held continuously until UI/backlight illuminates. Positive control trial. | `[VERIFIED: docs/PORT25_OWNER_TRIAL_PLAN.md:98, 465-485; tools/port26_ladder_decode.py:64-78, 1714-1728]` |
-| `pulses` | **Required** | Integer, list, or enum | Recorded rear green LED (`0xD20B0884`) optical pulse count.<br>- `none`: Exactly zero optical pulses observed -> `NO_PULSES`.<br>- Registered table integer: One of the 29 registered ladder stage codes (`1..7`, `11..15`, `21..26`, `28..29`, `31..35`, `41..44`).<br>- Multiple pulse counts: e.g. `[21, 22]` or `21, 22` -> `AMBIGUOUS`.<br>- Out-of-table integers / invalid inputs: `UNKNOWN_CODE`. | `[VERIFIED: docs/PORT25_LADDER_FIX_CANDIDATE.md:328-354, 358-359; tools/port26_ladder_decode.py:45-62, 80-85, 1735-1865]` |
+| `pulses` | **Required** | Integer, list, or enum | Decoded checkpoint code of the last observed ladder checkpoint (not raw total flash count; see detailed instructions in § 2.1).<br>- `none`: Exactly zero optical pulses observed -> `NO_PULSES`.<br>- Registered table integer: One of the 29 registered ladder stage codes (loader cumulative pulses `1..7`; core two-digit framed codes $10*T+U$: `11..15`, `21..26`, `28..29`, `31..35`, `41..44`).<br>- Multiple pulse counts: Conflicting candidate readings of ONE uncertain checkpoint (e.g. `22, 23` or `[22, 23]`) -> `AMBIGUOUS`.<br>- Out-of-table integers / invalid inputs: `UNKNOWN_CODE`. | `[VERIFIED: docs/PORT25_OWNER_TRIAL_PLAN.md §4:191-233; docs/PORT25_LADDER_FIX_CANDIDATE.md:328-354, 358-359; tools/port26_ladder_decode.py:45-62, 80-85, 1735-1865]` |
 | `lcd` | **Required** | Enum string | Visual state of the camera rear LCD display.<br>- `stock_ui`: Matches allowlist (`stock_ui`, `stock ui`, `live_view`, `shooting`, `canon_ui`, `menu`).<br>- `dark` / `off`: Screen completely unpowered/black.<br>- `backlight_off`: Backlight disabled.<br>- `on_no_ui`: Backlight illuminated without graphical UI elements.<br>- `unknown`: Unclassifiable or ambiguous state. | `[VERIFIED: tools/port26_ladder_decode.py:566-580, 583-617]` |
 | `inspector_status` | **Required** | String | Status readout rendered by Canon Basic witness inspector script (`extend.m` / `WITNESS.BIN`).<br>- `not_run`: Default when camera does not boot to stock UI or inspector is not invoked.<br>- `WITNESS_INVALID`: Light blue readout at historical address `0x0035F7A0` (expected for PORT-25 combined candidate).<br>- Other readouts: `CONT_ATTEMPTED`, `CORE_REACHED`, `LOADER_REACHED`, `STALE / REPLAY`, or error tokens (`ERR_OPEN`, etc.). | `[VERIFIED: docs/PORT25_OWNER_TRIAL_PLAN.md:86, 468-470; tools/port26_ladder_decode.py:55-57, 1516-1524]` |
-| `uncertain` | *Optional* | Boolean | `true` or `false`. When `true`, if the reported pulse count is adjacent to two valid table codes (e.g. `2..6`, `12..14`, `22..25`, `32..34`, `42..43`, or gap `27`), the report is classified as `AMBIGUOUS`. Aliased by `uncertainty` or `count_confidence`. | `[VERIFIED: tools/port26_ladder_decode.py:93-116, 858-916, 1887-1906]` |
+| `uncertain` | *Optional* | Boolean | `true` or `false`. When `true`, if the reported checkpoint code is adjacent to two valid table codes (e.g. `2..6`, `12..14`, `22..25`, `32..34`, `42..43`, or gap `27`), the report is classified as `AMBIGUOUS`. Aliased by `uncertainty` or `count_confidence`. | `[VERIFIED: tools/port26_ladder_decode.py:93-116, 858-916, 1887-1906]` |
 | `notes` | *Optional* | Free-text string | Explanatory notes detailing owner observations. Checked for affirmative uncertainty phrases (`unsure`, `approx`, `+/-1`, etc.) if explicit `uncertain` key is omitted. | `[VERIFIED: tools/port26_ladder_decode.py:103-108, 809-830, 1525-1529]` |
+
+---
+
+### 2.1 Decoding and Entering the 'pulses' Field (Checkpoint Code Specification)
+
+The `pulses` field records the **DECODED checkpoint code** of the last observed ladder checkpoint, **NOT the raw total count of optical flashes** seen `[VERIFIED: docs/PORT25_OWNER_TRIAL_PLAN.md §4:191-197; tools/port26_ladder_decode.py:45-62]`.
+
+#### 2.1.1 Step-by-Step Decoding Instructions & 10*T+U Formula
+Core ladder checkpoints emit framed two-digit decimal codes. To decode an observed core checkpoint:
+1. **Count Tens flashes ($T$)**: Count the number of flashes in the first burst ($T \in \{1, 2, 3, 4\}$) `[VERIFIED: docs/PORT25_OWNER_TRIAL_PLAN.md §4:193-194]`.
+2. **Identify inter-digit gap**: Confirm the dark pause separating digits ($[48.0, 69.0]\text{ ms}$, nominal $48.50\text{ ms}$) `[VERIFIED: docs/PORT25_OWNER_TRIAL_PLAN.md §4:254, 279]`.
+3. **Count Units flashes ($U$)**: Count the number of flashes in the second burst ($U \in \{1..9\}$) `[VERIFIED: docs/PORT25_OWNER_TRIAL_PLAN.md §4:193-194]`.
+4. **Identify frame-end gap**: Confirm the longer dark gap or terminal darkness ($\ge 90.0\text{ ms}$, nominal $90.44\text{ ms}$) marking the end of the frame `[VERIFIED: docs/PORT25_OWNER_TRIAL_PLAN.md §4:256, 283]`.
+5. **Compute decoded code ($10*T+U$)**: Calculate the two-digit checkpoint code using the formula:
+   $$\text{code} = 10 \times T + U \quad (\text{or } 10*T+U)$$
+
+**Worked Conversion**:
+- If an owner observes $T = 2$ tens flashes, an inter-digit gap, and $U = 3$ units flashes before the camera halts or powers off:
+  $$\text{code} = 10 \times 2 + 3 = 23 \quad (T=2, U=3 \to \text{pulses}=23)$$
+- The owner enters:
+  ```ini
+  pulses = 23
+  ```
+
+#### 2.1.2 Loader Cumulative Pulses vs. Core Framed Codes (per docs/PORT25_OWNER_TRIAL_PLAN.md §4)
+Per `docs/PORT25_OWNER_TRIAL_PLAN.md §4:191-233`, the PORT-25 candidate implements two distinct diagnostic transmission formats:
+1. **Loader-Stage Cumulative Pulses (Steps 1–7)**:
+   - *Transmission format*: Emits $N$ single blinks via `LADDER_ASM_PULSE` (20.97–50.0 ms ON, 57.62–138.28 ms OFF) `[VERIFIED: docs/PORT25_OWNER_TRIAL_PLAN.md §4:191-193; docs/PORT25_LADDER_FIX_CANDIDATE.md:214-227]`.
+   - *How entered*: Entered directly as the single integer $N$ (e.g. `pulses = 1` through `pulses = 7`) `[VERIFIED: tools/port26_ladder_decode.py:48-50]`. Each integer reflects the cumulative loader step reached (`STAGE_LOADER_AFTER_PROLOGUE` through `STAGE_LOADER_BEFORE_BX`) `[VERIFIED: docs/PORT25_OWNER_TRIAL_PLAN.md §4:202-208]`.
+2. **Core-Stage Two-Digit Framed Codes (Codes 11–44)**:
+   - *Transmission format*: Emits Tens ($T$) blinks, an inter-digit dark gap (41.94–100.0 ms), Units ($U$) blinks, and a frame-end dark gap (83.89–200.0 ms) `[VERIFIED: docs/PORT25_OWNER_TRIAL_PLAN.md §4:193-194; docs/PORT25_LADDER_FIX_CANDIDATE.md:236-249]`. Checkpoints are logically grouped into Group 1 (11..15), Group 2 (21..26; fail path 28..29), Group 3 (31..35), and Group 4 (41..44) `[INFERRED: docs/PORT25_OWNER_TRIAL_PLAN.md §4:199-231]`.
+   - *How entered*: Entered as the decoded two-digit integer $10*T+U$ (e.g. `pulses = 11`, `pulses = 23`, `pulses = 44`), NEVER as raw flash counts `[VERIFIED: tools/port26_ladder_decode.py:51-54]`.
+   - Prior to trial observation, whether a failure halts in the loader or core cannot be known `[UNKNOWN: docs/PORT25_OWNER_TRIAL_PLAN.md §4:201-230]`.
+
+#### 2.1.3 List Values: Conflicting Candidate Readings of ONE Checkpoint vs. Sequential History
+- **List value semantics**: A list value (e.g. `pulses = 22, 23` or `pulses = [22, 23]`) specifies **conflicting candidate readings of ONE uncertain checkpoint** (such as optical ambiguity between 2 and 3 units blinks for a single terminal frame) `[VERIFIED: tools/port26_ladder_decode.py:1774-1778]`. The decoder evaluates multiple candidate readings for a single checkpoint as `AMBIGUOUS` `[VERIFIED: tools/port26_ladder_decode.py:1774-1778]`.
+- **Do NOT enter the sequential history of passed checkpoints**: The camera executes ladder checkpoints sequentially ($1 \to \dots \to 7 \to 11 \to \dots \to 44$) `[VERIFIED: docs/PORT25_OWNER_TRIAL_PLAN.md §3.1.1:157]`. The owner must **NOT** enter the sequence of all checkpoints passed (e.g. `pulses = 1, 2, ..., 23`). Submitting a list of passed checkpoints tells the decoder that multiple conflicting codes were seen for the terminal checkpoint, causing it to return `AMBIGUOUS`.
+- **Reporting the final/last code seen (docs/PORT25_OWNER_TRIAL_PLAN.md §4 & §3.1.1)**:
+  The owner reports only the **final/last code seen** where camera execution halted `[VERIFIED: docs/PORT25_OWNER_TRIAL_PLAN.md §4:197; §3.1.1:156-160]`. Per § 3.1.1, if execution cuts off during a units-digit gap, power loss can truncate a longer stage code into a shorter valid code (e.g. Code 32 truncated into Code 31) `[INFERRED: docs/PORT25_OWNER_TRIAL_PLAN.md §3.1.1:154-155]`. Under the § 3.1.1 lower-bound reporting rule:
+  1. Record the terminal observed code in the `pulses` field (e.g. `pulses = 31`) `[VERIFIED: tools/port26_ladder_decode.py:1735-1865]`.
+  2. In the `notes` field, phrase the finding with the **last confirmed checkpoint as a lower bound** (e.g. "Last confirmed checkpoint: Code 26 (lower bound); terminal observed code: Code 31 (unconfirmed due to truncation ambiguity; matching T2 Candidate 4)") `[INFERRED: docs/PORT25_OWNER_TRIAL_PLAN.md §3.1.1:158-160]`.
+
+#### 2.1.4 Warning: Never Enter Raw Total Flash Count (T+U)
+> [!WARNING]
+> **Entering the raw total flash count ($T+U$) causes catastrophic misclassification!**  
+> Entering the raw total flash count ($T+U$) instead of the decoded checkpoint code ($10*T+U$) quietly produces a false decoder class.  
+> **Example**: If the camera halts at Code 23 (2 tens flashes followed by 3 units flashes), the owner sees a total of $2 + 3 = 5$ optical flashes. If the owner enters `pulses = 5`, the decoder quietly returns **`CODE_5`** (`STAGE_LOADER_BEFORE_ICACHE`). This erroneously diagnoses a Stage 5 Initial Task core checkpoint in `boot_prototype_ladder.c:347` as an early loader cache flush in `loader_main_breadcrumb.c:132`, misleading engineering triage.  
+> **Always enter the decoded checkpoint code ($10*T+U$) for core checkpoints!**
 
 ---
 
@@ -58,7 +106,7 @@ uncertain = false
 notes = 
 ```
 
-*(Note: In the unfilled template above, `pulses` is intentionally blank. Decoding the unfilled template produces `UNKNOWN_CODE` until a pulse count or `'none'` is provided.)*
+*(Note: In the unfilled template above, `pulses` is intentionally blank. Decoding the unfilled template produces `UNKNOWN_CODE` until a decoded checkpoint code or `'none'` is provided.)*
 
 ---
 
@@ -74,8 +122,8 @@ The decoder maps trial reports deterministically into exactly **34 outcome class
    - **Core Group 4 (Codes 41..44)**: Hardware watchdog actively armed, task_PhySw spawner helper, helper return, pre-continuation handoff to `sub_fc0d0126`.
 2. **5 Special Trial Classes**:
    - `NO_PULSES`: Exactly zero pulses observed (`pulses = none`).
-   - `UNKNOWN_CODE`: Unregistered pulse counts (gaps like `27`, `30`, or out-of-range like `99`), non-positive counts, or invalid formats.
-   - `AMBIGUOUS`: Conflicting duplicate keys, multiple conflicting counts reported (e.g. `[21, 22]`), or an off-by-one uncertain count adjacent to two valid codes.
+   - `UNKNOWN_CODE`: Unregistered checkpoint codes (gaps like `27`, `30`, or out-of-range like `99`), non-positive codes, or invalid formats.
+   - `AMBIGUOUS`: Conflicting duplicate keys, multiple conflicting candidate readings for one checkpoint (e.g. `pulses = 22, 23` or `[22, 23]`), or an off-by-one uncertain code adjacent to two valid codes.
    - `INVALID_CANDIDATE`: `diskboot_sha256` does not match the pinned PORT-25 combined candidate digest.
    - `CONTROL_HELD_O1`: Held button press (`press = held`) that affirmatively boots to the stock Canon UI (`lcd = stock_ui`).
 
@@ -324,7 +372,7 @@ pulses = 28
 lcd = dark
 inspector_status = not_run
 uncertain = false
-notes = Fail Power Cut (STAGE_BC_FAIL_POWER_CUT): Flashes if sub_fc1284ac returned 0, immediately before bl sub_fc05ba56 cuts power.
+notes = Fail Power Cut (STAGE_BC_FAIL_POWER_CUT): Code 28 emitted if sub_fc1284ac returned 0, immediately before bl sub_fc05ba56 cuts power.
 ```
 
 #### Worked Example: CODE_29
@@ -336,7 +384,7 @@ pulses = 29
 lcd = dark
 inspector_status = not_run
 uncertain = false
-notes = Halt Shutdown (STAGE_BC_HALT_SHUTDOWN): Flashes at label loc_fc05b976 if sub_fc05ba56 returns without immediate cut.
+notes = Halt Shutdown (STAGE_BC_HALT_SHUTDOWN): Code 29 emitted at label loc_fc05b976 if sub_fc05ba56 returns without immediate cut.
 ```
 
 ---
@@ -480,7 +528,7 @@ pulses = 99
 lcd = dark
 inspector_status = not_run
 uncertain = false
-notes = Pulse count 99 does not match any registered code in the PORT-25 ladder stage table.
+notes = Decoded checkpoint code 99 does not match any registered code in the PORT-25 ladder stage table.
 ```
 
 #### Worked Example: AMBIGUOUS
@@ -488,11 +536,11 @@ notes = Pulse count 99 does not match any registered code in the PORT-25 ladder 
 # Expected Class: AMBIGUOUS
 diskboot_sha256 = 9ba62067c17d654a3b8995fc6e8c26176321154054a138a465ca66f9ff763a15
 press = short
-pulses = 23
+pulses = 22, 23
 lcd = dark
 inspector_status = not_run
-uncertain = true
-notes = Owner flagged uncertainty on pulse count 23, which is adjacent to two valid codes (22 and 24).
+uncertain = false
+notes = Conflicting candidate readings (Code 22 vs 23) of ONE uncertain terminal checkpoint; classifies as AMBIGUOUS per § 2.1.
 ```
 
 #### Worked Example: INVALID_CANDIDATE

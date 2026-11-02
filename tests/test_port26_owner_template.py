@@ -291,6 +291,9 @@ class TestPort26OwnerTemplate(unittest.TestCase):
         self.assertIn("STAGE_BC_FAIL_POWER_CUT", self.doc_text)
         self.assertIn("STAGE_BC_STARTUP_ENTRY", self.doc_text)
         self.assertIn("STAGE_BC_PRE_FIRMWARE_CONT", self.doc_text)
+        # Pulses decoding formula and PORT25_OWNER_TRIAL_PLAN.md §4 citation
+        self.assertIn("10*T+U", self.doc_text)
+        self.assertIn("PORT25_OWNER_TRIAL_PLAN.md §4", self.doc_text)
 
         # 4. LCD states
         self.assertIn("lcd", self.doc_text)
@@ -305,6 +308,19 @@ class TestPort26OwnerTemplate(unittest.TestCase):
         # 6. Uncertainty handling
         self.assertIn("uncertain", self.doc_text)
         self.assertIn("AMBIGUOUS", self.doc_text)
+
+    def test_pulses_field_decoding_instructions_and_citations(self) -> None:
+        """Verifies pulses field description mentions 10*T+U decoding, worked conversion, and cites PORT25_OWNER_TRIAL_PLAN.md §4."""
+        # 10*T+U formula and PORT25_OWNER_TRIAL_PLAN.md §4 citation
+        self.assertIn("10*T+U", self.doc_text)
+        self.assertIn("PORT25_OWNER_TRIAL_PLAN.md §4", self.doc_text)
+        # Worked conversion example (T=2, U=3 -> pulses=23)
+        self.assertIn("T=2, U=3", self.doc_text)
+        self.assertIn("pulses = 23", self.doc_text)
+        # Warning against entering raw total flash count (T+U)
+        self.assertIn("raw total flash count", self.doc_text)
+        # Clarification that list values mean conflicting candidate readings of ONE uncertain checkpoint
+        self.assertIn("conflicting candidate readings of ONE uncertain checkpoint", self.doc_text)
 
     def test_key_value_syntax_purity(self) -> None:
         """Verifies that all lines in each worked example adhere strictly to key=value syntax or comments."""
