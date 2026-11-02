@@ -224,7 +224,8 @@
       },
       "authorization_scope_id": "SCOPE-PORT31-CREATETASK-FINAL",
       "classification": "STATIC_VERIFIED",
-      "notes": "Task stack watermark fill (0xBFE11E04 / 0xFCEF0850) and dynamic stack allocator entry (0xBFE11E62 / 0xFCEF08AE -> pool 0x000403A4 at 0xFCEF089C)"
+      "notes": "Task stack watermark fill (0xBFE11E04 / 0xFCEF0850) and wrapper routine (0xBFE11E62 / 0xFCEF08AE): at 0xFCEF089C loads constant 0x000403A4 into r0, keeps stack_size in r1, and tail-calls 0xBFE1452E with b.w. Note [INFERRED, provenance HISTORICAL_CHDK]: semantic reading of 0x000403A4 as a heap pool descriptor is not verified; callee 0xBFE1452E (ROM 0xFCEF2F7A) and descriptor layout were not read (see doc §3.5).",
+      "inferred_notes": "INFERRED (provenance: HISTORICAL_CHDK): Semantic interpretation of 0x000403A4 as identifying a heap pool descriptor is not verified; callee 0xBFE1452E (ROM 0xFCEF2F7A) and descriptor layout were not read (see doc §3.5)."
     },
     {
       "evidence_id": "PORT29-ROM-N5",
