@@ -132,7 +132,18 @@ sp[0]     Fifth Argument (Candidate Context)Loaded from caller stack [sp, #0x28]
   3. At `0xFCEF34B2` (`20 28`), `cmp r0, #0x20` compares `r6 - 1` against unsigned integer `32` (`0x20`) `[VERIFIED]`.
   4. At `0xFCEF34B4` (`00 d2`), `bhs 0xbfe14a6c` takes an error branch if `r0 >= 32` (unsigned), strictly enforcing that incoming `r1` must satisfy $0 \le (r1 - 1) < 32$, which is mathematically equivalent to:
      $$1 \le r1 \le 32$$
-  5. If `r1` is outside $1..32$, execution branches to `0xFCEF34B8`: `movs r2, #0xa0` (loads integer literal 160), `adr r1, #0x1e8` (computes literal address `0xFCEF36A4`), and `blx 0xBFE13E78` (branches to error handler in Slice N5), returning error code 3 at `0xFCEF34C2` (`movs r0, #3`) `[VERIFIED: instructions, branch conditions, register arguments, and control flow]`. The target string at address `0xFCEF36A4` lies outside the authorized ranges, so any meaning taken from it as an assertion source file string (such as `"KerTask.c"`) or interpretation of literal `160` as a source line number is **`[INFERRED]`**, and the semantic identification of handler `0xBFE13E78` as `DebugAssert` is **`[INFERRED]`**.
+  5. If `r1` is outside $1..32$, execution branches to `0xFCEF34B8`:
+     - `0xFCEF34B8` (`22 a0`): `movs r2, #0xa0` (loads integer literal 160) `[VERIFIED]`.
+     - `0xFCEF34BA` (`20 00`): `movs r0, #0` `[VERIFIED]`.
+     - `0xFCEF34BC` (`a1 7a`): instruction word `0xA17A` (`adr r1, #0x1e8`).
+       The ADR instruction word `0xA17A` computes:
+       $$\text{Target ROM} = \text{Align}(0\text{xFCEF34BC} + 4, 4) + 0\text{x1E8} = 0\text{xFCEF34C0} + 0\text{x1E8} = \mathbf{0\text{xFCEF36A8}}$$
+       In ATCM VMA space (where `0xFCEF34BC` maps to ATCM `0xBFE14A70`):
+       $$\text{Target ATCM} = \text{Align}(0\text{xBFE14A70} + 4, 4) + 0\text{x1E8} = 0\text{xBFE14A74} + 0\text{x1E8} = \mathbf{0\text{xBFE14C5C}}$$
+       The address computation $\text{ROM } 0\text{xFCEF36A8} \iff \text{ATCM } 0\text{xBFE14C5C}$ is **`[VERIFIED]`**.
+     - `0xFCEF34BE..0xFCEF34C1` (`f7 ff ea 02`): `blx 0xBFE13E78` branches to error handler veneer in Slice N5 `[VERIFIED]`.
+     - `0xFCEF34C2` (`20 03`): `movs r0, #3`, returning error code 3 `[VERIFIED: instructions, branch conditions, register arguments, and control flow]`.
+     - Because address `0xFCEF36A8` (ATCM `0xBFE14C5C`) lies outside authorized read ranges, what is stored at `0xFCEF36A8` was not read; any meaning taken from it as an assertion source file string (such as `"KerTask.c"` known from `docs/PORT11A_GM110C_ROM_EVIDENCE.md:147, 187`) or interpretation of literal `160` as a source line number is **`[INFERRED]`**, and the semantic identification of handler `0xBFE13E78` as `DebugAssert` is **`[INFERRED]`**.
   6. If valid, at `0xFCEF34D6` (`cd e9 00 62`), `strd r6, r2, [sp]` stores `r6` at `[sp]` and `r2` (`0`) at `[sp, #4]` for callee `0xBFE10B88` `[VERIFIED]`.
 - **Call-Site Corroboration in Slice N3 (`0xBFE10B88` / `0xFCEEF5D4`)**:
   - In `alloc_task_stack_tcb` at `0xBFE10B92` (`9c0e`), `ldr r4, [sp, #56]` loads `r4` from caller's `[sp]` (retrieving `r6`).
@@ -190,7 +201,7 @@ sp[0]     Fifth Argument (Candidate Context)Loaded from caller stack [sp, #0x28]
 - **Disassembly**: `mov r7, r3`
 - **Technical Reasoning**:
   1. At `0xFCEF3498`, `mov r7, r3` preserves incoming `r3` in callee-saved register `r7` `[VERIFIED]`.
-  2. At `0xFCEF34B6` (`3f b9`), `cbnz r7, 0xbfe14a7c` checks whether `r7` is non-zero. If `r7 == 0`, execution falls through to error path `0xFCEF34B8` (`movs r2, #0xa0`; `adr r1, #0x1e8`; `blx 0xBFE13E78`), returning error code 3 at `0xFCEF34C2` `[VERIFIED: branch condition and instructions; semantic role of 0xBFE13E78 as DebugAssert and literal 0xa0 as source line 160 are INFERRED]`.
+  2. At `0xFCEF34B6` (`3f b9`), `cbnz r7, 0xbfe14a7c` checks whether `r7` is non-zero. If `r7 == 0`, execution falls through to error path `0xFCEF34B8`: `movs r2, #0xa0` (`0x22A0`), `movs r0, #0` (`0x2000`), `adr r1, #0x1e8` (instruction word `0xA17A` at `0xFCEF34BC`, computing $\text{Align}(0\text{xFCEF34BC} + 4, 4) + 0\text{x1E8} = 0\text{xFCEF36A8}$, ATCM `0xBFE14C5C`), and `blx 0xBFE13E78` (`0xF7FF 0xEA02`), returning error code 3 at `0xFCEF34C2` `[VERIFIED: branch condition and instructions; address computation 0xFCEF36A8 / ATCM 0xBFE14C5C is VERIFIED; contents at 0xFCEF36A8 and semantic role of 0xBFE13E78 as DebugAssert and literal 0xa0 as source line 160 are INFERRED]`.
   3. At `0xFCEF34D0` (`38 46`), `mov r0, r7` passes the function pointer in `r0` to `0xBFE10B88` `[VERIFIED]`.
   4. In `alloc_task_stack_tcb` at `0xBFE10BD2` (`e9cd 6001`), `strd r6, r0, [sp, #4]` writes `r0` (task entry function pointer) into stack-frame offset `sp + 8`, corresponding to descriptor offset `desc + 4` (`desc = sp + 4`) of the task descriptor `[VERIFIED]`.
 - **Status Summary**:
@@ -208,6 +219,17 @@ sp[0]     Fifth Argument (Candidate Context)Loaded from caller stack [sp, #0x28]
   - `0xFCEEF770`: `0x4668` (`mov r0, sp`); `0xFCEEF772..775: 0xF003 E8C4` (`blx 0xFCEF28FC`, callee in Slice N5; INFERRED: take kernel lock) `[Hash coverage: PORT29-ROM-N3]`
   - `0xFCEEF776`: `0x4628` (`mov r0, r5`); `0xFCEEF778..77B: 0xF000 FC81` (`bl 0xFCEF007E`, callee outside slices; INFERRED: TCB pointer lookup) `[Hash coverage: PORT29-ROM-N3]`
   - `0xFCEEF77C`: `0xB170` (`cbz r0, 0xFCEEF79C`) `[Hash coverage: PORT29-ROM-N3]`
+  - `0xFCEEF77E`: `0x4990` (`ldr r1, [pc, #0x240]`) `[Hash coverage: PORT29-ROM-N3]`
+  - `0xFCEEF780`: `0x6809` (`ldr r1, [r1, #0]`) `[Hash coverage: PORT29-ROM-N3]`
+  - `0xFCEEF782`: `0xB939` (`cbnz r1, 0xFCEEF794`) `[Hash coverage: PORT29-ROM-N3]`
+  - `0xFCEEF784`: `0x498D` (`ldr r1, [pc, #0x234]`) `[Hash coverage: PORT29-ROM-N3]`
+  - `0xFCEEF786`: `0x6809` (`ldr r1, [r1, #0]`) `[Hash coverage: PORT29-ROM-N3]`
+  - `0xFCEEF788`: `0xF991 104B` (`ldrsb.w r1, [r1, #0x4b]`) `[Hash coverage: PORT29-ROM-N3]`
+  - `0xFCEEF78C`: `0x2900` (`cmp r1, #0`) `[Hash coverage: PORT29-ROM-N3]`
+  - `0xFCEEF78E`: `0xDC01` (`bgt 0xFCEEF794`) `[Hash coverage: PORT29-ROM-N3]`
+  - `0xFCEEF790`: `0x2101` (`movs r1, #1`) `[Hash coverage: PORT29-ROM-N3]`
+  - `0xFCEEF792`: `0xE000` (`b 0xFCEEF796`) `[Hash coverage: PORT29-ROM-N3]`
+  - `0xFCEEF794`: `0x2100` (`movs r1, #0`) `[Hash coverage: PORT29-ROM-N3]`
   - `0xFCEEF796`: `0xF7FF FE4F` (`bl 0xFCEEF438`, callee outside slices; INFERRED: enqueue / activate task) `[Hash coverage: PORT29-ROM-N3]`
   - `0xFCEEF79A`: `0x2400` (`movs r4, #0`) `[Hash coverage: PORT29-ROM-N3]`
   - `0xFCEEF79C`: `0x9800` (`ldr r0, [sp, #0]`); `0xFCEEF79E..7A1: 0xF003 E8B2` (`blx 0xFCEF2904`, callee in Slice N5; INFERRED: release kernel lock) `[Hash coverage: PORT29-ROM-N3]`
@@ -221,16 +243,46 @@ sp[0]     Fifth Argument (Candidate Context)Loaded from caller stack [sp, #0x28]
      - **Input of -1 return outcome (Returns -1)**: If caller passes invalid task handle `r0 = -1` (`0xFFFFFFFF`), instruction `0xFCEEF768` (`adds r0, r0, #1`) evaluates to 0 and sets the Z flag. Consequently, conditional branch `0xFCEEF76A` (`bne 0xFCEEF770`) is not taken. Execution falls through directly to `0xFCEEF76C` (`4620: mov r0, r4`), which moves `r4` (`-1`) into return register `r0`, and `0xFCEEF76E` (`BD38: pop {r3, r4, r5, pc}`) returns `-1` to caller `[VERIFIED: branch condition, register values, and return path; covered by manifest entry PORT29-ROM-N3]`.
      - **Null-result return outcome (Returns -1)**: If input `r0 != -1`, branch `bne 0xFCEEF770` is taken, acquiring the kernel lock at `0xFCEEF772` (`blx 0xFCEF28FC`), restoring `r0 = r5` (input handle) at `0xFCEEF776`, and calling routine `0xFCEF007E` at `0xFCEEF778` (`bl 0xFCEF007E`, unread callee; INFERRED: TCB pointer lookup). If `0xFCEF007E` returns `r0 == 0` (null result), instruction `0xFCEEF77C` (`B170: cbz r0, 0xFCEEF79C`) branches to `0xFCEEF79C` to release the lock (`blx 0xFCEF2904`) and branches at `0xFCEEF7A2` (`E7E3: b 0xFCEEF76C`) to `0xFCEEF76C`. At `0xFCEEF76C`, `mov r0, r4` executes with `r4` still holding `-1` (unmodified since `0xFCEEF764`), returning `-1` to caller `[VERIFIED: branch conditions, register preservation, and return value -1; covered by manifest entry PORT29-ROM-N3; callee semantic roles INFERRED]`.
      - **Success return outcome (Returns 0)**: If `0xFCEF007E` returns a non-null pointer (`r0 != 0`), execution proceeds past `0xFCEEF77C` to `0xFCEEF796` (`bl 0xFCEEF438`, unread callee; INFERRED: enqueue / activate task). Execution then reaches `0xFCEEF79A` (`2400: movs r4, #0`), which explicitly sets `r4 = 0`. At `0xFCEEF79C`, it releases the lock (`blx 0xFCEF2904`) and branches at `0xFCEEF7A2` (`b 0xFCEEF76C`) to `0xFCEEF76C`, executing `mov r0, r4` to return status code `0` to caller `[VERIFIED: instruction sequence, register assignments, and return value 0; covered by manifest entry PORT29-ROM-N3; callee semantic roles INFERRED]`.
-  4. **Register and Memory Accesses Inside Authorized Slices vs. Downstream Parameter Usage**:
-     - Within the instructions of `activate_task` (`0xFCEEF760..0xFCEEF7A2`, covered by manifest entry `PORT29-ROM-N3`), only `r0` is inspected and forwarded. No instructions inside this slice read, modify, or dereference `r1` (priority), `r2` (stack size), or `sp[0]` (context), nor do they access their offsets within the descriptor `[VERIFIED: limited strictly to register and memory accesses actually observed inside the authorized ranges]`.
-     - However, `activate_task` calls external routines at `0xFCEF007E` and `0xFCEEF438`, which were not read. Whether later downstream code (invoked through those routines or subsequent kernel scheduling) consumes or relies on the stored descriptor parameters (`r0`, `r1`, `r2`, `sp[0]`) cannot be determined from authorized ranges.
-     - Therefore, the claim that later code does not use the stored descriptor parameters (`r0`, `r1`, `r2`, `sp[0]`) is **`[UNKNOWN]`**.
-     - To investigate whether downstream code accesses the stored descriptor parameters, bounded proposed inspection ranges ($\le 4\text{ KiB}$ each) are defined as proposals for a future milestone:
+  4. **Data-Flow Analysis across `0xFCEEF77E..0xFCEEF79C`**:
+     The table below details every instruction in the sequence `0xFCEEF77E..0xFCEEF79C` (covered by manifest entry `PORT29-ROM-N3`), showing the local manipulation of `r1` and stack slot `sp[0]`:
+
+     | ROM Address | Instruction Word(s) | Disassembly | Architectural & Data-Flow Effect | Epistemic Status |
+     |:---:|:---:|---|---|:---:|
+     | `0xFCEEF77E` | `0x4990` | `ldr r1, [pc, #0x240]` | PC-relative literal load from $\text{Align}(0\text{xFCEEF77E}+4, 4) + 0\text{x240} = 0\text{xFCEEF9C0}$, loading Low RAM address `0x00008040` into `r1`. Overwrites any prior content in register `r1`. | `[VERIFIED: instruction in Slice N3, literal word in N4]` |
+     | `0xFCEEF780` | `0x6809` | `ldr r1, [r1, #0]` | Dereferences `r1`, loading 32-bit word from Low RAM address `0x00008040` into `r1`. | `[VERIFIED]` |
+     | `0xFCEEF782` | `0xB939` | `cbnz r1, 0xFCEEF794` | Evaluates `r1`; if non-zero (`r1 != 0`), branches to `0xFCEEF794` (bypassing secondary check and setting local `r1 = 0`). | `[VERIFIED]` |
+     | `0xFCEEF784` | `0x498D` | `ldr r1, [pc, #0x234]` | PC-relative literal load from $\text{Align}(0\text{xFCEEF784}+4, 4) + 0\text{x234} = 0\text{xFCEEF9BC}$, loading Low RAM address `0x0000803C` into `r1`. | `[VERIFIED: instruction in Slice N3, literal word in N4]` |
+     | `0xFCEEF786` | `0x6809` | `ldr r1, [r1, #0]` | Dereferences `r1`, loading 32-bit word from Low RAM address `0x0000803C` into `r1`. | `[VERIFIED]` |
+     | `0xFCEEF788` | `0xF991 0x104B` | `ldrsb.w r1, [r1, #0x4B]` | Loads signed byte from structure offset `[r1, #0x4B]` into `r1` (sign-extended to 32 bits). | `[VERIFIED]` |
+     | `0xFCEEF78C` | `0x2900` | `cmp r1, #0` | Compares signed byte in `r1` against immediate `0`. | `[VERIFIED]` |
+     | `0xFCEEF78E` | `0xDC01` | `bgt 0xFCEEF794` | Conditional branch if signed `r1 > 0` to `0xFCEEF794` (setting local `r1 = 0`). | `[VERIFIED]` |
+     | `0xFCEEF790` | `0x2101` | `movs r1, #1` | Sets local flag `r1 = 1` (path taken when signed byte $\le 0$). | `[VERIFIED]` |
+     | `0xFCEEF792` | `0xE000` | `b 0xFCEEF796` | Unconditional branch jumping over `0xFCEEF794` directly to call site at `0xFCEEF796`. | `[VERIFIED]` |
+     | `0xFCEEF794` | `0x2100` | `movs r1, #0` | Sets local flag `r1 = 0` (path taken when `*(0x8040) != 0` or signed byte at `*(0x803C)+0x4B > 0`). | `[VERIFIED]` |
+     | `0xFCEEF796` | `0xF7FF 0xFE4F` | `bl 0xFCEEF438` | Branch with link to unread activation callee `0xFCEEF438` (ATCM `0xBFE109EC`), passing `r0` (task pointer from `0xFCEF007E`) and `r1` (local flag, `0` or `1`). | `[VERIFIED: branch and register args; callee semantic role is INFERRED]` |
+     | `0xFCEEF79A` | `0x2400` | `movs r4, #0` | Sets `r4 = 0` (success return code). | `[VERIFIED]` |
+     | `0xFCEEF79C` | `0x9800` | `ldr r0, [sp, #0]` | Reads 32-bit word from local stack frame slot `sp[0]` into `r0`, passed as lock context argument to unlock helper `0xFCEF2904` (`blx 0xFCEF2904` at `0xFCEEF79E`). | `[VERIFIED: stack load; unlock handler semantic role is INFERRED]` |
+
+  5. **Distinction Between Local `activate_task` Variables and `CreateTask` Arguments**:
+     - **`r1` and `sp[0]` in `activate_task` are Strictly Local**:
+       The `r1` and `sp[0]` values manipulated across `0xFCEEF77E..0xFCEEF79C` are strictly local to `activate_task` and are **not** the original `CreateTask` `r1` or `sp[0]` arguments:
+       - In `CreateTask`, `r1` was the incoming priority argument, validated against $1 \le r1 \le 32$ and stored into descriptor offset `desc + 25` in `alloc_task_stack_tcb`. In `activate_task`, `r1` is generated entirely anew via literal pool loads (`0xFCEEF77E: ldr r1, [pc, #0x240]` and `0xFCEEF784: ldr r1, [pc, #0x234]`) and explicit immediate writes (`movs r1, #1` or `movs r1, #0`). It has no data-flow connection to `CreateTask`'s `r1`.
+       - In `CreateTask`, `sp[0]` was the caller's 5th argument passed on the caller's stack frame at `sp_entry + 0x00`, retrieved via `ldr.w r8, [sp, #0x28]` and stored into descriptor offset `desc + 8` in `alloc_task_stack_tcb`. In `activate_task`, `sp[0]` reads from `activate_task`'s own local 16-byte stack frame allocated at `0xFCEEF760` (`push {r3, r4, r5, lr}`). This local stack slot was passed to kernel lock helper `0xFCEF28FC` (`mov r0, sp; blx 0xFCEF28FC`) at `0xFCEEF770..0xFCEEF775`, and is retrieved at `0xFCEEF79C` (`ldr r0, [sp, #0]`) to pass to unlock helper `0xFCEF2904`. It has no data-flow connection to `CreateTask`'s `sp[0]`.
+     - **Epistemic Relationship to `CreateTask` Arguments `[UNKNOWN / INFERRED]`**:
+       - Whether the local flag placed in `r1` (`0` or `1`) passed to `bl 0xFCEEF438` at `0xFCEEF796` relates semantically to the task priority or scheduling state configured by `CreateTask` is **`[UNKNOWN]`**; callee `0xFCEEF438` (ATCM `0xBFE109EC`) lies outside authorized read slices. Any interpretation of this parameter as an activation flag or scheduling mode is **`[INFERRED]`**.
+       - Whether the local lock slot `sp[0]` or the lock/unlock routines (`0xFCEF28FC`, `0xFCEF2904`) interact with or affect the user context stored in the TCB descriptor at `desc + 8` is **`[UNKNOWN]`**.
+       - Whether downstream activation callees (`0xFCEF007E`, `0xFCEEF438`) consume or rely on any of the stored descriptor parameters (`r0` name, `r1` priority, `r2` stack size, `sp[0]` context) cannot be determined from authorized ranges and remains **`[UNKNOWN]`**.
+     - **`r2` is Untouched in `activate_task`**:
+       Across all instructions of `activate_task` (`0xFCEEF760..0xFCEEF7A2`), register `r2` is neither read nor modified `[VERIFIED: limited strictly to instructions inside the authorized slice]`. The incoming `CreateTask` `r2` argument (candidate stack size) was forwarded to `alloc_task_stack_tcb` and stored into descriptor offset `desc + 16` (`desc = sp + 4`).
+     - To investigate whether downstream activation code accesses the stored descriptor parameters, bounded proposed inspection ranges ($\le 4\text{ KiB}$ each) are defined as proposals for a future milestone:
        - Proposed ROM slice for `0xFCEF007E` (ATCM `0xBFE11632`): `0xFCEF0070..0xFCEF00EF` (128 B, $\le 4\text{ KiB}$, proposal for a future milestone).
        - Proposed ROM slice for `0xFCEEF438` (ATCM `0xBFE109EC`): `0xFCEEF430..0xFCEEF4AF` (128 B, $\le 4\text{ KiB}$, proposal for a future milestone).
 - **Status Summary**:
   - Task handle check, register preservation, return value outcomes (-1 on invalid input, -1 on null result, 0 on success): **`[VERIFIED: covered by manifest entry PORT29-ROM-N3]`**; semantic locking and activation mechanisms in unread callees: **`[INFERRED]`**.
-  - Absence of instructions reading calling convention parameters `r1`, `r2`, and `sp[0]` within `activate_task` body: **`[VERIFIED: limited strictly to accesses seen inside authorized slice]`**.
+  - Local data flow in `activate_task` (`0xFCEEF77E..0xFCEEF79C`): `r1` literal loads, dereferences, conditional branches, immediate flag assignments (`0` or `1`), and local stack load `ldr r0, [sp, #0]`: **`[VERIFIED: covered by manifest entry PORT29-ROM-N3]`**.
+  - Differentiation of local variables vs `CreateTask` arguments: `r1` and `sp[0]` in `activate_task` are strictly local to `activate_task` and are not the original `CreateTask` `r1` / `sp[0]` arguments: **`[VERIFIED]`**.
+  - Epistemic relationship between local activation parameters and original `CreateTask` arguments: **`[UNKNOWN: callee 0xFCEEF438 unread]`**; semantic interpretations: **`[INFERRED]`**.
+  - Absence of instructions accessing `r2` within `activate_task` body: **`[VERIFIED: limited strictly to accesses seen inside authorized slice]`**.
   - Claim that later code does not use stored descriptor parameters (`r0`/`r1`/`r2`/`sp[0]`): **`[UNKNOWN: call targets 0xFCEF007E and 0xFCEEF438 unread; proposed as bounded slices <= 4 KiB for a future milestone]`**.
 
 ---
@@ -310,7 +362,7 @@ Enforcement Site    Not in CreateTask (0xFCEF3488)           [VERIFIED: no bic/a
 | **Stack Allocator** | Forwarding of `r2` to `0xBFE10B88` and descriptor offset `desc + 16` (`desc = sp + 4`); fallback load from `*(r1 + 4)` when `r2 == 0` | **`[VERIFIED: 0xFCEF3492: mov r5, r2; 0xFCEF34CA: ldr r5, [r1, #4]; 0xFCEF34D2: mov r3, r5; 0xFCEF34DA: bl 0xBFE10B88; 0xBFE10BD8: stmia]`**<br>**Allocator identity (caller vs kernel) & size semantics: `[INFERRED: consumer 0xBFE11746 unread; forwarding instructions do not rule out reading r2 as a buffer]`** |
 | **Default Stack Size** | Runtime numeric integer value at `*(0x000081D0)` | **`[UNKNOWN: ROM initializer word 0xFCE91228 establishes only initial boot value; runtime value and writers modifying 0x81D0 before CreateTask remain UNKNOWN-location]`** |
 | **Stack Alignment** | Alignment rule enforced by kernel allocator `0xBFE11746` | **`[UNKNOWN: 0xBFE11746 resides outside authorized slices]`** |
-| **Later Parameter Use in Activation** | Usage of stored descriptor parameters in activation callees (`0xFCEF007E`, `0xFCEEF438`) | **`[UNKNOWN: call targets 0xFCEF007E and 0xFCEEF438 unread; proposed as bounded slices <= 4 KiB for a future milestone]`** |
+| **Later Parameter Use in Activation** | Usage of stored descriptor parameters in activation callees (`0xFCEF007E`, `0xFCEEF438`); local `r1` (flag 0/1) and local stack slot `sp[0]` in `activate_task` do not derive from `CreateTask` `r1`/`sp[0]` | **`[UNKNOWN: call targets 0xFCEF007E and 0xFCEEF438 unread; proposed as bounded slices <= 4 KiB for a future milestone]`** |
 
 ---
 

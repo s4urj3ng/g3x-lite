@@ -249,6 +249,20 @@ class TestPort29Evidence(unittest.TestCase):
         self.assertIn("Verdict", content)
         self.assertIn("NO-GO", content)
 
+        # Verified ADR target and instruction word
+        self.assertIn("0xA17A", content)
+        self.assertIn("0xFCEF36A8", content)
+        self.assertIn("0xBFE14C5C", content)
+        self.assertNotIn("0xFCEF36A4", content)
+
+        # activate_task local data flow table and instruction verification
+        self.assertIn("0xFCEEF77E", content)
+        self.assertIn("0xFCEEF79C", content)
+        self.assertIn("0x4990", content)
+        self.assertIn("0x9800", content)
+        self.assertNotIn("never reads or modifies r1", content)
+        self.assertNotIn("no access to r1", content)
+
 
 if __name__ == "__main__":
     unittest.main()
