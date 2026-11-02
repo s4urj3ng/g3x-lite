@@ -1,0 +1,84 @@
+{
+  "policy_version": "1.0.0",
+  "policy_authority": "UNVERIFIED_EXTERNAL_POLICY (External consistency check fixture only; out-of-band owner approval required)",
+  "authorization_scopes": [
+    {
+      "scope_id": "SCOPE-PORT30-CREATETASK-CLOSE",
+      "firmware_revision": "GM1.10C",
+      "approved_ranges": [
+        {
+          "start_address": "0xFC31B408",
+          "end_address": "0xFC31B507",
+          "label": "PORT29-ROM-N1 sub_fc31b408 heap alignment & init veneer table (re-cited)"
+        },
+        {
+          "start_address": "0xFCE91170",
+          "end_address": "0xFCE9118F",
+          "label": "PORT30-ROM-INIT-811C ROM initializer for secondary default stack size (*(0x0000811C))"
+        },
+        {
+          "start_address": "0xFCE91220",
+          "end_address": "0xFCE9123F",
+          "label": "PORT30-ROM-INIT-81D0 ROM initializer for default stack size (*(0x000081D0))"
+        },
+        {
+          "start_address": "0xFCEEF430",
+          "end_address": "0xFCEEF4AF",
+          "label": "PORT30-ROM-ACTIVATE-CALLEE2 task activation callee 2: task enqueue/activation (0xFCEEF438)"
+        },
+        {
+          "start_address": "0xFCEEF5C0",
+          "end_address": "0xFCEEF7BF",
+          "label": "PORT29-ROM-N3 alloc_task_stack_tcb body (re-cited)"
+        },
+        {
+          "start_address": "0xFCEEF7C0",
+          "end_address": "0xFCEEF9C3",
+          "label": "PORT29-ROM-N4 activate_task task activation helper remainder (re-cited)"
+        },
+        {
+          "start_address": "0xFCEF0070",
+          "end_address": "0xFCEF00EF",
+          "label": "PORT30-ROM-ACTIVATE-CALLEE1 task activation callee 1: TCB descriptor lookup (0xFCEF007E)"
+        },
+        {
+          "start_address": "0xFCEF0180",
+          "end_address": "0xFCEF037F",
+          "label": "PORT30-ROM-ALLOC-TASK kernel task allocator and alignment routine (0xBFE11746 / 0xFCEF0192)"
+        },
+        {
+          "start_address": "0xFCEF28B0",
+          "end_address": "0xFCEF29AF",
+          "label": "PORT29-ROM-N5 DebugAssert panic/assert handler veneer table (re-cited)"
+        },
+        {
+          "start_address": "0xFCEF33A0",
+          "end_address": "0xFCEF33DF",
+          "label": "PORT30-ROM-SLEEPTASK reconciled SleepTask body (0xBFE14968 / 0xFCEF33B4)"
+        },
+        {
+          "start_address": "0xFCEF3488",
+          "end_address": "0xFCEF34F9",
+          "label": "PORT29-ROM-CREATETASK CreateTask body and calling convention (re-cited)"
+        },
+        {
+          "start_address": "0xFCEF36A0",
+          "end_address": "0xFCEF36A3",
+          "label": "PORT30-ROM-CREATETASK-LIT CreateTask literal pool pointer entry at 0xFCEF36A0"
+        },
+        {
+          "start_address": "0xFCEF3A20",
+          "end_address": "0xFCEF3A5F",
+          "label": "PORT29-ROM-N6 ATCM interrupt disable & restore routines (re-cited)"
+        }
+      ],
+      "max_bytes_total": 4096,
+      "allowed_classifications": [
+        "STATIC_VERIFIED",
+        "INFERRED",
+        "UNKNOWN"
+      ],
+      "description": "PORT-30 GM1.10C CreateTask calling convention and task stack allocation close evidence scope"
+    }
+  ]
+}
