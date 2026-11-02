@@ -135,8 +135,8 @@ When a valid resident candidate is tested with the held-press boot method in a f
    - Group 2 (21, 22, 23, 24, 25, 26): Stage 5 entry, MPU config, power check bypass pass, `CreateTask("Startup")` `[VERIFIED: docs/PORT25_LADDER_FIX_CANDIDATE.md:342-347]`.
    - Group 3 (31, 32, 33, 34, 35): `task_Startup_my` entry, driver init, SD init return, watchdog arming `[VERIFIED: docs/PORT25_LADDER_FIX_CANDIDATE.md:348-352]`.
    - Group 4 (41, 42, 43, 44): Post-watchdog, `task_PhySw` create, helper return, pre-firmware continuation `[VERIFIED: docs/PORT25_LADDER_FIX_CANDIDATE.md:353-354]`.
-4. **Stock Firmware Startup**: LCD backlight illuminates, Canon splash logo displays, shooting/playback UI renders on screen `[INFERRED]`.
-5. **Resident LED Heartbeat**: Once the stock UI is operating, the rear green LED toggles continuously at **roughly 1 Hz** (~500 ms ON, ~500 ms OFF) `[INFERRED: prompt p27-t4]`. The heartbeat runs as an independent DryOS background task, confirming non-destructive coexistence with stock camera operations.
+4. **Stock Firmware Startup**: LCD backlight illuminates, Canon splash logo displays, shooting/playback UI renders on screen `[INFERRED: docs/PORT24_SESSION_PLAN.md:92-96; docs/PORT26_CODE43_RECORD.md:40-44]`.
+5. **Resident LED Heartbeat**: Once the stock UI is operating, the rear green LED toggles continuously at **roughly 1 Hz** (~500 ms ON, ~500 ms OFF) `[INFERRED: prompt p27-t4; docs/PORT27_RESIDENT_EVIDENCE.md:460-463]`. Observing a visible LED heartbeat alongside the stock UI suggests that a resident background task is executing its toggle loop `[INFERRED: docs/PORT27_RESIDENT_EVIDENCE.md:244-248, 460-463]`. However, this visible toggle does NOT establish non-destructive coexistence or memory safety, which remain strictly `[UNKNOWN: docs/PORT27_RESIDENT_CANDIDATE.md:24, 65, 87-92]`. Specifically, relocated core RAM (`0x003489B4..0x00368680`) is excluded from DryOS heap pool 1 allocations `[VERIFIED: boot_prototype.c:24, 177-178, 212-215]`, but whether unmanaged non-heap RAM users (such as hardware DMA transfers, image buffers, or video pipelines) overwrite resident code or stack memory remains `[UNKNOWN: docs/PORT27_RESIDENT_CANDIDATE.md:24, 65]`.
 
 ---
 
@@ -148,8 +148,8 @@ When candidate trials are conducted in a future milestone, optical ladder captur
 
 1. **Decoder Operation & Digest Override**:
    Optical pulse sequences captured from the rear green LED are decoded using `tools/port26_ladder_decode.py` `[VERIFIED: tools/port26_ladder_decode.py:1-40]`.
-   By default, `tools/port26_ladder_decode.py` pins the expected candidate SHA-256 to the PORT-25 combined digest (`9ba62067c17d654a3b8995fc6e8c26176321154054a138a465ca66f9ff763a15`) `[VERIFIED: tools/port26_ladder_decode.py:1894-1898]`.
-   When evaluating any new candidate binary digest, the decoder requires passing `--candidate-sha256 <NEW_HASH>` (or updating the tool's expected candidate digest) to avoid a digest mismatch error `[VERIFIED: tools/port26_ladder_decode.py:1894-1898]`.
+   By default, `tools/port26_ladder_decode.py` pins the expected candidate SHA-256 to the PORT-25 combined digest (`9ba62067c17d654a3b8995fc6e8c26176321154054a138a465ca66f9ff763a15`) `[VERIFIED: tools/port26_ladder_decode.py:149-151, 1888-1898]`.
+   The command-line interface (`main()`, `tools/port26_ladder_decode.py:2394-2420`) accepts only positional `input`, `--json`, and `--report` flags, and contains no command-line option to override the candidate SHA-256. At the Python API level, `classify_owner_report` (`tools/port26_ladder_decode.py:1831-1835`) and `decode_ladder_report` (`tools/port26_ladder_decode.py:2383-2387`) accept an optional parameter `expected_sha256: str = EXPECTED_PORT25_COMBINED_DISKBOOT_SHA256`. When evaluating a new candidate binary digest in a future milestone, overriding the expected hash requires either passing `expected_sha256` via the Python API or updating the module constant `EXPECTED_PORT25_COMBINED_DISKBOOT_SHA256` (`tools/port26_ladder_decode.py:149-151`); invoking the existing CLI directly against a different candidate hash will trigger an `INVALID_CANDIDATE` classification `[VERIFIED: tools/port26_ladder_decode.py:1888-1898, 2394-2420]`.
 
 2. **Decoder Output Classes**:
    The decoder evaluates input trial parameters and emits exact classification classes `[VERIFIED: tools/port26_ladder_decode.py:1901-2020]`:
@@ -158,8 +158,14 @@ When candidate trials are conducted in a future milestone, optical ladder captur
    - Stage Codes `CODE_11` through `CODE_44`: Emitted when decoded pulse sequences match specific stage definitions `[VERIFIED: tools/port26_ladder_decode.py:1980-2020]`. For example, `CODE_43` indicates execution reached the helper-return checkpoint in `task_Startup_my`, while `CODE_44` indicates full completion of the early boot ladder.
    - `UNKNOWN_CODE`: Emitted when pulse counts or sequence timings cannot be matched to a defined checkpoint `[VERIFIED: tools/port26_ladder_decode.py:1930]`.
 
-3. **Resident Heartbeat Verification**:
-   In a resident heartbeat trial, the ladder phase completes with `CODE_44` / `CONTROL_HELD_O1`, followed by the appearance of the Canon stock UI and an ongoing ~1 Hz rear green LED heartbeat. If the stock UI boots cleanly but the LED remains dark or solid ON, early boot succeeded but the resident heartbeat task failed to spawn or hung during execution.
+3. **Resident Heartbeat Verification & Outcome Interpretation**:
+   In a candidate resident heartbeat trial, the early boot ladder completes through `CODE_44` / `CONTROL_HELD_O1`, followed by the appearance of the Canon stock UI `[VERIFIED: docs/PORT26_CODE43_RECORD.md:40-44; tools/port26_ladder_decode.py:1901-1918]`.
+   - **Heartbeat Visible (~1 Hz Toggle)**: If the rear green LED toggles continuously at roughly 1 Hz while the stock UI is operating, the interpretation that the resident heartbeat task is actively executing is `[INFERRED: prompt p27-t4; docs/PORT27_RESIDENT_EVIDENCE.md:244-248, 460-463]`. However, observing an ongoing optical blink does NOT establish non-destructive coexistence or long-term memory safety, both of which remain strictly `[UNKNOWN: docs/PORT27_RESIDENT_CANDIDATE.md:24, 65, 87-92]`. Heap pool 1 exclusion up to `0x00368680` protects relocated core RAM only against standard DryOS heap allocations `[VERIFIED: boot_prototype.c:24, 177-178, 212-215]`; survival against non-heap RAM users (DMA transfers, video codec buffers, framebuffers) and stack preservation under unread kernel allocation routines remain `[UNKNOWN: docs/PORT27_RESIDENT_CANDIDATE.md:24, 65, 87-92]`.
+   - **LED Dark or Solid ON**: If the stock UI boots cleanly but the rear green LED remains dark or solid ON, the interpretation that the resident task failed to spawn or hung during execution is `[INFERRED: docs/PORT27_RESIDENT_CANDIDATE.md:87-92]`. Plausible alternative root causes remain `[UNKNOWN: docs/PORT27_RESIDENT_CANDIDATE.md:24, 65, 87-92]`, including:
+     1. The task was created but never scheduled by the DryOS scheduler `[UNKNOWN: docs/PORT27_RESIDENT_CANDIDATE.md:25, 61, 87-92]`.
+     2. LED MMIO register writes (`0xD20B0884`) were overridden or reconfigured by stock firmware background tasks or GPIO controllers `[UNKNOWN: docs/PORT23_LED_BREADCRUMBS.md:6-7; docs/PORT27_RESIDENT_CANDIDATE.md:24]`.
+     3. The sleep/delay primitive stalled or deadlocked due to unverified tick scaling or non-task execution context `[UNKNOWN: docs/PORT27_RESIDENT_CANDIDATE.md:66, 94]`.
+     4. The task crashed silently due to stack overflow, kernel assert, or memory corruption elsewhere in the system `[UNKNOWN: docs/PORT27_RESIDENT_CANDIDATE.md:60, 90-91]`.
 
 ---
 
