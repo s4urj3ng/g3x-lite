@@ -19,22 +19,22 @@ This dossier resolves **PORT-27 Item (b)** for Canon PowerShot G3 X firmware **G
 ### 1.1 Scope Authorization & Offline Policy Compliance
 1. **Strict Read Scope Compliance**: The candidate authorized range list from `docs/PORT27_RESIDENT_CANDIDATE.md:56-67` Section 3 and `docs/PORT28_PORT27_OUTCOME.md:143-176` Sections 4.1–4.3 comprises Slices N3–N7, the `CreateTask` body (`0xFCEF3488..0xFCEF34F9`, 114 bytes), and the two additional UNKNOWN entries (Slice N1 / `sub_fc31b408` and Item 8 non-heap RAM users), totaling 1,894 bytes (~1.9 KiB).
 2. **Exclusion and Reconciliation of Unclear, Disputed, or Oversized Ranges**: In strict accordance with the task read policy ("If a range's bounds are unclear, the two docs disagree about it, or it is longer than 4 KiB, do not read it. Record it as UNKNOWN with the reason"):
-   - **Slice N4** (`0xFCEEF760..0xFCEEF9C3`, 612 B): The 96-byte prefix `0xFCEEF760..0xFCEEF7BF` was **already read** as part of Slice N3 (`0xFCEEF5C0..0xFCEEF7BF`). This read prefix fully contains the `activate_task` helper body (`0xBFE10D14..0xBFE10D56`, ROM `0xFCEEF760..0xFCEEF7A2`, 68 B). The remainder of Slice N4 (`0xFCEEF7C0..0xFCEEF9C3`) was **not read** and remains `UNKNOWN-not-read` due to an extent disagreement between `docs/PORT27_OWNER_TRIAL_PLAN.md:71` (608 B) and `docs/PORT28_PORT27_OUTCOME.md:154` (612 B).
+   - **Slice N4** (`0xFCEEF760..0xFCEEF9C3`, 612 B): Reconciled strictly against `docs/PORT27_RESIDENT_CANDIDATE.md:59` Section 3 and `docs/PORT28_PORT27_OUTCOME.md:154, 168`. `docs/PORT27_OWNER_TRIAL_PLAN.md` is excluded as a scope authority per reviewer policy. Both authoritative sources agree on entry/start address `0xFCEEF760` (`docs/PORT27_RESIDENT_CANDIDATE.md:59` lists Source ROM Entry Address `0xFCEEF760` with proposed inspection window $\le 1\text{ KiB}$; `docs/PORT28_PORT27_OUTCOME.md:154, 168` lists Source ROM Entry `0xFCEEF760` with 612-byte proposed range `0xFCEEF760..0xFCEEF9C3`). Because the start addresses match and the 612-byte window is within the $\le 1\text{ KiB}$ bound, the exact PORT28 612-byte window is read (`0xFCEEF760..0xFCEEF9C3`, SHA-256 `1d5b2cc6b57e8d6ff8c2cfee30f39a747ddc9e35e2ec1e8973c155d5a7a9d6fb`). It shares a consistent 96-byte overlap with Slice N3 on `0xFCEEF760..0xFCEEF7BF`, which is supported and verified via `--allow-overlap`.
    - **Slice N7** (`0xFCEF33A0..0xFCEF33EF`, 80 B) was **not read** due to a direct documentation disagreement on window size: `docs/PORT27_RESIDENT_CANDIDATE.md:66` strictly caps the proposed inspection window at $\le 64$ B at entry `0xFCEF33B4`, whereas `docs/PORT28_PORT27_OUTCOME.md:161, 171` defines an 80-byte range starting at `0xFCEF33A0` (exceeding the 64-byte boundary).
    - **Item 8** (Relocated Core Non-Heap RAM Users) was **not read** because its bounds are unclear (no bounded ROM address), the two documents disagree (entire 32 MiB ROM in PORT27 vs no bounded ROM location in PORT28), and the span exceeds 4 KiB (130,252 B RAM / 32 MiB ROM).
-3. **Manifest and Trusted Scopes**: All 5 read slices (totaling 1,202 bytes, well within the 4,096-byte scope budget) are declared in `evidence/port29_manifest.json` and authorized under `evidence/port29_trusted_scopes.json`. Earlier port manifests were kept in `docs/agentbridge/` (e.g. `docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json`) or `tests/fixtures/` (`port11a_manifest.json`), while PORT-29 places `port29_manifest.json` and `port29_trusted_scopes.json` under `evidence/` as mandated by the task specification.
+3. **Manifest and Trusted Scopes**: All 6 read slices (totaling 1,814 bytes, well within the 4,096-byte scope budget) are declared in `evidence/port29_manifest.json` and authorized under `evidence/port29_trusted_scopes.json`. Earlier port manifests were kept in `docs/agentbridge/` (e.g. `docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json`) or `tests/fixtures/` (`port11a_manifest.json`), while PORT-29 places `port29_manifest.json` and `port29_trusted_scopes.json` under `evidence/` as mandated by the task specification.
 4. **No Firmware Flashing or Hardware Access**: No physical camera hardware was connected, no SD card was modified, no binary payloads or build outputs were created, and zero ROM bytes were committed `[VERIFIED: docs/SAFETY.md:3-8; AGENTS.md:18-24]`.
 
 ### 1.2 Evidence Validator Execution & Output
 The machine-readable evidence manifest was verified using `tools/port11c_evidence_validator.py`:
 
 ```bash
-python3 -B tools/port11c_evidence_validator.py --manifest evidence/port29_manifest.json --trusted-scopes evidence/port29_trusted_scopes.json
+python3 -B tools/port11c_evidence_validator.py --manifest evidence/port29_manifest.json --trusted-scopes evidence/port29_trusted_scopes.json --allow-overlap
 ```
 
 **Exact Quoted Validator Output**:
 ```
-Evidence Manifest Validation: 5 entries, Trust Level: EXTERNAL_POLICY_CONSISTENCY_CHECKED
+Evidence Manifest Validation: 6 entries, Trust Level: EXTERNAL_POLICY_CONSISTENCY_CHECKED
 ----------------------------------------------------------------------
 ----------------------------------------------------------------------
 Result: VALID (0 errors, 0 warnings)
@@ -44,7 +44,7 @@ Result: VALID (0 errors, 0 warnings)
 
 ## 2. Authorized ROM Ranges Evaluation Table
 
-The table below catalogs every range in the candidate authorized range list from `docs/PORT27_RESIDENT_CANDIDATE.md:56-67` Section 3 and `docs/PORT28_PORT27_OUTCOME.md:143-176` Sections 4.1–4.3, detailing source doc citations, start and end addresses, byte spans, SHA-256 cryptographic hashes, and read status (`READ`, `PARTIALLY READ VIA N3`, or `UNKNOWN-not-read`).
+The table below catalogs every range in the candidate authorized range list from `docs/PORT27_RESIDENT_CANDIDATE.md:56-67` Section 3 and `docs/PORT28_PORT27_OUTCOME.md:143-176` Sections 4.1–4.3, detailing source doc citations, start and end addresses, byte spans, SHA-256 cryptographic hashes, and read status (`READ` or `UNKNOWN-not-read`).
 
 In `docs/PORT27_RESIDENT_CANDIDATE.md:56-67` Section 3, nine entries are enumerated:
 - Rows 1, 2, 3, 5/6, 9 correspond to Slices N3, N4, N5, N6, N7.
@@ -54,11 +54,11 @@ In `docs/PORT27_RESIDENT_CANDIDATE.md:56-67` Section 3, nine entries are enumera
 | Range ID | Target Routine / Subsystem | Source Citation (Doc:Line) | Start Address | End Address | Length (Bytes) | SHA-256 Digest | Status | Policy Compliance & Epistemic Reasoning |
 |---|---|---|:---:|:---:|:---:|:---:|:---:|---|
 | **PORT29-ROM-N1** | `sub_fc31b408` Heap Init & Veneer Table | `docs/PORT27_RESIDENT_CANDIDATE.md:64`; `docs/PORT28_PORT27_OUTCOME.md:159, 165` | `0xFC31B408` | `0xFC31B507` | 256 B | `b93e3f48ab31f467e9ee3f4ba907ea3032a3a81cac4fe1ff18a2c0ba138181ce` | **`READ`** | Bounded ($\le 4\text{ KiB}$), both docs agree on start `0xFC31B408` and length 256 B; non-overlapping. Authorized under Item (a) kernel init. Provides zero calling convention evidence for Item (b); no CreateTask claim relies on it. |
-| **PORT29-ROM-N3** | `alloc_task_stack_tcb` Task Allocator Body | `docs/PORT27_RESIDENT_CANDIDATE.md:58`; `docs/PORT28_PORT27_OUTCOME.md:153, 167` | `0xFCEEF5C0` | `0xFCEEF7BF` | 512 B | `6d5869cf7e64256371fbe1ed693f64125dc0fbccd538ced877cfbb5cfe5fcdd2` | **`READ`** | Bounded ($\le 4\text{ KiB}$); captures `0xBFE10B88` body (160 B) and task parameter setup; also covers the N4 prefix containing `activate_task` (`0xBFE10D14..0xBFE10D56`). |
+| **PORT29-ROM-N3** | `alloc_task_stack_tcb` Task Allocator Body | `docs/PORT27_RESIDENT_CANDIDATE.md:58`; `docs/PORT28_PORT27_OUTCOME.md:153, 167` | `0xFCEEF5C0` | `0xFCEEF7BF` | 512 B | `6d5869cf7e64256371fbe1ed693f64125dc0fbccd538ced877cfbb5cfe5fcdd2` | **`READ`** | Bounded ($\le 4\text{ KiB}$); captures `0xBFE10B88` body (160 B) and task parameter setup; shares 96-byte overlap with N4 on `0xFCEEF760..0xFCEEF7BF`. |
+| **PORT29-ROM-N4** | `activate_task` Task Activation Helper | `docs/PORT27_RESIDENT_CANDIDATE.md:59`; `docs/PORT28_PORT27_OUTCOME.md:154, 168` | `0xFCEEF760` | `0xFCEEF9C3` | 612 B | `1d5b2cc6b57e8d6ff8c2cfee30f39a747ddc9e35e2ec1e8973c155d5a7a9d6fb` | **`READ`** | Bounded ($\le 4\text{ KiB}$); reconciled strictly against PORT27 §3 and PORT28 §4.2-4.3 (excluding PORT27_OWNER_TRIAL_PLAN.md). Start address `0xFCEEF760` matches in both docs; 612 B window is consistent with PORT27's $\le 1\text{ KiB}$ bound. Covers `activate_task` body (`0xBFE10D14..0xBFE10D56`, ROM `0xFCEEF760..0xFCEEF7A2`, 68 B) and literal pool words (`0xFCEEF9B0..0xFCEEF9C3`). Shares consistent 96-byte overlap with N3 on `0xFCEEF760..0xFCEEF7BF`. |
 | **PORT29-ROM-N5** | `DebugAssert` Kernel Panic Handler Veneer Table | `docs/PORT27_RESIDENT_CANDIDATE.md:60`; `docs/PORT28_PORT27_OUTCOME.md:155, 169` | `0xFCEF28B0` | `0xFCEF29AF` | 256 B | `93c956e9d994888fc228997a65d0785901a4c23e0921c5e3cf6befa450fb2142` | **`READ`** | Bounded ($\le 4\text{ KiB}$); covers `0xBFE13E78` veneer target vector; both docs agree on $\le 256$ B window. |
 | **PORT29-ROM-CREATETASK** | `CreateTask` Body & Calling Convention | `docs/PORT27_RESIDENT_CANDIDATE.md:61`; `docs/PORT28_PORT27_OUTCOME.md:147` | `0xFCEF3488` | `0xFCEF34F9` | 114 B | `6d7fbecb5f9589cc34994a63ac6cf7e2def132a7c355a789a29ea3cae8c50ddf` | **`READ`** | Bounded ($\le 4\text{ KiB}$); exact 114-byte extent confirmed by terminating epilogue branch; both docs agree. |
 | **PORT29-ROM-N6** | ATCM Interrupt Disable & Restore Veneers | `docs/PORT27_RESIDENT_CANDIDATE.md:62-63`; `docs/PORT28_PORT27_OUTCOME.md:157-158, 170` | `0xFCEF3A20` | `0xFCEF3A5F` | 64 B | `3bf663507211b96500c59647e3f065cff96d111421ee5a2c867c022536c45969` | **`READ`** | Bounded ($\le 4\text{ KiB}$); covers `0xBFE14FE6` and `0xBFE14FEA` branch trampolines; both docs agree on 64 B. |
-| **PORT29-ROM-N4** | `activate_task` Task Activation Helper | `docs/PORT27_RESIDENT_CANDIDATE.md:59`; `docs/PORT28_PORT27_OUTCOME.md:154, 168` | `0xFCEEF760` | `0xFCEEF9C3` | 612 B | N/A | **`PARTIALLY READ VIA N3 / UNKNOWN-not-read for remainder`** | Prefix `0xFCEEF760..0xFCEEF7BF` (96 B) is read inside Slice N3, covering `activate_task` (`0xBFE10D14..0xBFE10D56`, ROM `0xFCEEF760..0xFCEEF7A2`). Remainder `0xFCEEF7C0..0xFCEEF9C3` is unread due to 608 vs 612 B doc conflict. |
 | **PORT29-ROM-N7** | `SleepTask` Body & Millisecond Scaling | `docs/PORT27_RESIDENT_CANDIDATE.md:66`; `docs/PORT28_PORT27_OUTCOME.md:161, 171` | `0xFCEF33A0` | `0xFCEF33EF` | 80 B | N/A | **`UNKNOWN-not-read`** | Disagreement between source docs on bounds: `docs/PORT27_RESIDENT_CANDIDATE.md:66` specifies window $\le 64$ B at `0xFCEF33B4`, whereas `docs/PORT28_PORT27_OUTCOME.md:161` specifies 80 B at `0xFCEF33A0` ($80 > 64$). |
 | **PORT29-ROM-RAMUSERS** | Relocated Core Non-Heap RAM Users | `docs/PORT27_RESIDENT_CANDIDATE.md:65`; `docs/PORT28_PORT27_OUTCOME.md:160, 176` | `0x003489B4` (RAM) / `0xFC000000` (ROM) | `0x00368680` (RAM) / `0xFDFFFFFF` (ROM) | 130,252 B (RAM) / 32 MiB (ROM) | N/A | **`UNKNOWN-not-read`** | Exceeds 4 KiB limit (130,252 B RAM / 32 MiB ROM); bounds unclear; docs disagree (entire 32 MiB ROM in PORT27 vs no bounded ROM location in PORT28). |
 
@@ -77,25 +77,26 @@ CreateTask Entry Frame & Argument Register State at 0xFCEF3488 (ATCM 0xBFE14A3C)
 ----------------------------------------------------------------------------------------
 Register  Incoming Value at Entry           Literally Verified Action & Semantic Role
 ----------------------------------------------------------------------------------------
-r0        Task Name Pointer                 Moved to r4; if r0 == 0, loads fallback *(r1);
+r0        First Argument (Candidate Name)   Moved to r4; if r0 == 0, loads fallback *(r1);
                                             stored to stack-frame offset [sp, #24] /
                                             descriptor offset [desc, #20] (desc = sp + 4) [VERIFIED].
                                             Semantic role as name string pointer [INFERRED].
-r1        Task Execution Priority           Moved to r6; checked (r1 - 1) < 0x20 else asserts;
-                                            stored to stack-frame offset [sp, #29] /
-                                            descriptor offset [desc, #25] (desc = sp + 4) [VERIFIED].
+r1        Second Argument (INFERRED: prio)  Moved to r6; checked (r1 - 1) < 0x20 else error branch;
+                                            byte stored at stack-frame offset [sp, #29] /
+                                            descriptor offset [desc, #25] (desc = sp + 4;
+                                            INFERRED: priority) [VERIFIED].
                                             Semantic role as scheduling priority [INFERRED].
-r2        Task Stack Size (Bytes)           Moved to r5; if r2 == 0, loads fallback *(r1 + 4);
+r2        Third Argument (Candidate Stack)  Moved to r5; if r2 == 0, loads fallback *(r1 + 4);
                                             forwarded as parameter to 0xBFE10B88; stored to
                                             stack-frame offset [sp, #20] / descriptor offset
                                             [desc, #16] (desc = sp + 4) [VERIFIED].
                                             Literal pool address 0xFCEF36A0 unread [INFERRED: PORT11A].
                                             Semantic role as stack size in bytes [INFERRED].
-r3        Task Entry Function Pointer       Checked r3 != 0 else asserts; stored to
+r3        Fourth Argument (INFERRED: entry) Checked r3 != 0 else error branch; stored to
                                             stack-frame offset [sp, #8] / descriptor offset
                                             [desc, #4] (desc = sp + 4) [VERIFIED].
                                             Semantic role as entry point [INFERRED].
-sp[0]     User Context Parameter            Loaded from caller stack [sp, #0x28]; forwarded
+sp[0]     Fifth Argument (Candidate Context)Loaded from caller stack [sp, #0x28]; forwarded
                                             to stack-frame offset [sp, #12] / descriptor offset
                                             [desc, #8] (desc = sp + 4) [VERIFIED].
                                             Semantic delivery to spawned task [INFERRED].
@@ -131,17 +132,17 @@ sp[0]     User Context Parameter            Loaded from caller stack [sp, #0x28]
   3. At `0xFCEF34B2` (`20 28`), `cmp r0, #0x20` compares `r6 - 1` against unsigned integer `32` (`0x20`) `[VERIFIED]`.
   4. At `0xFCEF34B4` (`00 d2`), `bhs 0xbfe14a6c` takes an error branch if `r0 >= 32` (unsigned), strictly enforcing that incoming `r1` must satisfy $0 \le (r1 - 1) < 32$, which is mathematically equivalent to:
      $$1 \le r1 \le 32$$
-  5. If `r1` is outside $1..32$, execution branches to `0xFCEF34B8`: `movs r2, #0xa0` (source line 160), `adr r1, #0x1e8` (`"KerTask.c"`), and `blx 0xBFE13E78` (invoking `DebugAssert` in Slice N5), returning error code 3 at `0xFCEF34C2` (`movs r0, #3`) `[VERIFIED]`.
+  5. If `r1` is outside $1..32$, execution branches to `0xFCEF34B8`: `movs r2, #0xa0` (loads integer literal 160), `adr r1, #0x1e8` (computes literal address `0xFCEF36A4`), and `blx 0xBFE13E78` (branches to error handler in Slice N5), returning error code 3 at `0xFCEF34C2` (`movs r0, #3`) `[VERIFIED: instructions, branch conditions, register arguments, and control flow]`. The target string at address `0xFCEF36A4` lies outside the authorized ranges, so any meaning taken from it as an assertion source file string (such as `"KerTask.c"`) or interpretation of literal `160` as a source line number is **`[INFERRED]`**, and the semantic identification of handler `0xBFE13E78` as `DebugAssert` is **`[INFERRED]`**.
   6. If valid, at `0xFCEF34D6` (`cd e9 00 62`), `strd r6, r2, [sp]` stores `r6` at `[sp]` and `r2` (`0`) at `[sp, #4]` for callee `0xBFE10B88` `[VERIFIED]`.
 - **Call-Site Corroboration in Slice N3 (`0xBFE10B88` / `0xFCEEF5D4`)**:
   - In `alloc_task_stack_tcb` at `0xBFE10B92` (`9c0e`), `ldr r4, [sp, #56]` loads `r4` from caller's `[sp]` (retrieving `r6`).
   - At `0xBFE10BA6` (`2c00`), `cmp r4, #0`; `db3a: blt 0xbfe10c20` verifies value is non-negative `[VERIFIED]`.
-  - At `0xBFE10BAA` (`4df0`), `ldr r5, [pc, #960]`; `682d: ldr r5, [r5]`; `42ac: cmp r4, r5`; `da36: bge 0xbfe10c20` compares against active task limit `[VERIFIED]`.
-  - At `0xBFE10BEC` (`f88d 401d`), `strb.w r4, [sp, #29]` writes the priority byte into stack-frame offset `sp + 29`, corresponding to descriptor offset `desc + 25` (`desc = sp + 4`) of the task control block descriptor `[VERIFIED]`.
+  - At `0xBFE10BAA` (`4df0`), `ldr r5, [pc, #960]`; `682d: ldr r5, [r5]`; `42ac: cmp r4, r5`; `da36: bge 0xbfe10c20` compares `r4` against the value loaded through pointer `[pc, #960]`, branching to error block `0xBFE10C20` if `r4 >= r5` `[VERIFIED: compare instruction, branch condition, and control flow]`. Because the literal pool word at `0xFCEEF9B8` (holding Low RAM pointer `0x000080F0`) and the runtime RAM value at `0x000080F0` were not read within Slice N3, a compare against a value loaded through an unread literal pool word does not establish an active task limit; the compare itself is **`[VERIFIED]`**, its semantic interpretation as an active task limit check is **`[INFERRED]`**, and the exact runtime limit value is **`[UNKNOWN]`**.
+  - At `0xBFE10BEC` (`f88d 401d`), `strb.w r4, [sp, #29]` writes the byte stored at `desc + 25` (`sp + 29`, with `desc = sp + 4`; INFERRED: priority) of the task control block descriptor `[VERIFIED: byte store at desc+25; semantic role as task priority is INFERRED]`.
 - **Stock Caller Call-Site Evidence**:
   - In `sub_fc05b962` (`PORT27-ROM-STARTUP-TASKS`) at `0xFC05B98A`: `movs r1, #25` (passes 25, within verified $1..32$ bounds) `[INFERRED: historical corroboration, citing docs/PORT27_RESIDENT_EVIDENCE.md:147]`.
 - **Status Summary**:
-  - Range check `(r1 - 1) < 0x20` ($1 \le r1 \le 32$) else `DebugAssert`, register forwarding, and descriptor store at stack-frame offset `sp + 29` / descriptor offset `desc + 25`: **`[VERIFIED]`**.
+  - Range check `(r1 - 1) < 0x20` ($1 \le r1 \le 32$) else error branch, register forwarding, and byte stored at `desc + 25` (`sp + 29`, with `desc = sp + 4`; INFERRED: priority): **`[VERIFIED: instructions and data flow]`**; semantic role of target routine as `DebugAssert` and byte role as scheduling priority: **`[INFERRED]`**.
   - Semantic interpretation as task scheduling priority: **`[INFERRED]`** (consumer at `0xBFE11746` and scheduler unread).
 
 ### 3.3 Role of `r2`: Argument Forwarding and Default Load `[VERIFIED]` / Stack Size Interpretation `[INFERRED]`
@@ -156,7 +157,7 @@ sp[0]     User Context Parameter            Loaded from caller stack [sp, #0x28]
 - **Call-Site Corroboration in Slice N3 (`0xBFE10B88` / `0xFCEEF5D4`)**:
   - In `alloc_task_stack_tcb` at `0xBFE10B94` (`b90b`), `cbnz r3, 0xbfe10b9a` verifies that `r3` is non-zero `[VERIFIED]`.
   - At `0xBFE10B96` (`4bf3`) and `0xBFE10B98` (`681b`), `ldr r3, [pc, #972]` (`0xBFE10F64`); `ldr r3, [r3]` provides secondary fallback if `r3 == 0` `[VERIFIED]`.
-  - At `0xBFE10BD6` (word `0xA803`, `add r0, sp, #12`), `alloc_task_stack_tcb` sets `r0 = sp + 12`; then at `0xBFE10BD8` (`c00e`), `stmia r0!, {r1, r2, r3}` writes `{r1, r2, r3}` sequentially into stack-frame offsets `sp + 12`, `sp + 16`, and `sp + 20`. Parameter `r3` (forwarded from `r2` / default stack size) is thus written into stack-frame offset `sp + 20`, corresponding to descriptor offset `desc + 16` (`desc = sp + 4`) of the task creation parameter block passed to internal kernel allocator `0xBFE11746` `[VERIFIED]`.
+  - At `0xBFE10BD6` (word `0xA803`, `add r0, sp, #12`), `alloc_task_stack_tcb` sets `r0 = sp + 12`; then at `0xBFE10BD8` (`c00e`), `stmia r0!, {r1, r2, r3}` writes `{r1, r2, r3}` sequentially into stack-frame offsets `sp + 12`, `sp + 16`, and `sp + 20`. Parameter `r3` (forwarded from `r2` / default load; INFERRED: default stack size) is thus written into stack-frame offset `sp + 20`, corresponding to descriptor offset `desc + 16` (`desc = sp + 4`) of the task creation parameter block passed to internal kernel allocator `0xBFE11746` `[VERIFIED]`.
 - **Stock Caller Call-Site Evidence**:
   - In `sub_fc05b962` (`PORT27-ROM-STARTUP-TASKS`) at `0xFC05B988`: `movs r2, #0` (passes 0 to trigger default load) `[INFERRED: historical corroboration, citing docs/PORT27_RESIDENT_EVIDENCE.md:146]`.
   - In `task_InitFileModules` creator `sub_fc0bd0b4` (`PORT11A-S2A`) at `0xFC0BD0CC`: `mov.w r2, #0x1000` (passes explicit non-zero value 4,096) `[INFERRED: historical corroboration, citing docs/PORT11A_GM110C_ROM_EVIDENCE.md:158]`.
@@ -189,12 +190,37 @@ sp[0]     User Context Parameter            Loaded from caller stack [sp, #0x28]
 - **Disassembly**: `mov r7, r3`
 - **Technical Reasoning**:
   1. At `0xFCEF3498`, `mov r7, r3` preserves incoming `r3` in callee-saved register `r7` `[VERIFIED]`.
-  2. At `0xFCEF34B6` (`3f b9`), `cbnz r7, 0xbfe14a7c` checks whether `r7` is non-zero. If `r7 == 0`, execution falls through to `0xFCEF34B8`, calling `DebugAssert` with source line 160 (`movs r2, #0xa0`) and aborting task creation `[VERIFIED]`.
+  2. At `0xFCEF34B6` (`3f b9`), `cbnz r7, 0xbfe14a7c` checks whether `r7` is non-zero. If `r7 == 0`, execution falls through to error path `0xFCEF34B8` (`movs r2, #0xa0`; `adr r1, #0x1e8`; `blx 0xBFE13E78`), returning error code 3 at `0xFCEF34C2` `[VERIFIED: branch condition and instructions; semantic role of 0xBFE13E78 as DebugAssert and literal 0xa0 as source line 160 are INFERRED]`.
   3. At `0xFCEF34D0` (`38 46`), `mov r0, r7` passes the function pointer in `r0` to `0xBFE10B88` `[VERIFIED]`.
   4. In `alloc_task_stack_tcb` at `0xBFE10BD2` (`e9cd 6001`), `strd r6, r0, [sp, #4]` writes `r0` (task entry function pointer) into stack-frame offset `sp + 8`, corresponding to descriptor offset `desc + 4` (`desc = sp + 4`) of the task descriptor `[VERIFIED]`.
 - **Status Summary**:
-  - Check `r3 != 0` else `DebugAssert`, register forwarding, and descriptor store at stack-frame offset `sp + 8` / descriptor offset `desc + 4`: **`[VERIFIED]`**.
+  - Check `r3 != 0` else error branch, register forwarding, and descriptor store at stack-frame offset `sp + 8` / descriptor offset `desc + 4`: **`[VERIFIED: instructions and flow; semantic role as task entry point and callee role as DebugAssert are INFERRED]`**.
   - Execution as spawned task main entry point: **`[INFERRED]`** (consumer at `0xBFE11746` and task dispatcher unread).
+
+### 3.6 Role of Task Activation Helper `activate_task` (`0xBFE10D14` / `0xFCEEF760`, Slice N4)
+- **ROM Address Range**: `0xFCEEF760..0xFCEEF9C3` (612 B; ATCM VMA `0xBFE10D14..0xBFE10F77`)
+- **Key Instruction Words**:
+  - `0xFCEEF760`: `0xB538` (`push {r3, r4, r5, lr}`)
+  - `0xFCEEF762`: `0x4605` (`mov r5, r0`)
+  - `0xFCEEF764`: `0xF04F 34FF` (`mov.w r4, #0xFFFFFFFF`)
+  - `0xFCEEF768`: `0x1C40` (`adds r0, r0, #1`); `0xD101: bne 0xFCEEF770`
+  - `0xFCEEF76C`: `0x4620` (`mov r0, r4`); `0xBD38: pop {r3, r4, r5, pc}`
+  - `0xFCEEF770`: `0x4668` (`mov r0, sp`); `0xF003 E8C4: blx 0xFCEF28FC` (callee in Slice N5; INFERRED: take kernel lock)
+  - `0xFCEEF776`: `0x4628` (`mov r0, r5`); `0xF000 FC81: bl 0xFCEF007E` (callee outside slices; INFERRED: TCB pointer lookup)
+  - `0xFCEEF77C`: `0xB170` (`cbz r0, 0xFCEEF79C`)
+  - `0xFCEEF796`: `0xF7FF FE4F: bl 0xFCEEF438` (callee outside slices; INFERRED: enqueue / activate task)
+  - `0xFCEEF79C`: `0x9800` (`ldr r0, [sp, #0]`); `0xF003 E8B2: blx 0xFCEF2904` (callee in Slice N5; INFERRED: release kernel lock)
+  - `0xFCEEF7A2`: `0xE7E3: b 0xFCEEF76C` (`pop {r3, r4, r5, pc}`)
+  - `0xFCEEF9B8..0xFCEEF9C3`: Literal pool holding Low RAM pointers `0x000080F0`, `0x0000803C`, `0x00008040`
+- **Technical Reasoning**:
+  1. `CreateTask` invokes `activate_task` at `0xFCEF34F2` (`bl 0xBFE10D14`, ATCM `0xBFE14AA6`) immediately after `alloc_task_stack_tcb` returns `[VERIFIED]`.
+  2. The only argument passed to `activate_task` in `r0` is the task ID/handle returned by `alloc_task_stack_tcb` `[VERIFIED]`.
+  3. Routine `activate_task` checks if the handle is valid (`r0 != -1`), branches to `0xFCEF28FC` (in Slice N5; INFERRED: acquire lock), branches to `0xFCEF007E` (outside read slices; INFERRED: lookup TCB descriptor), branches to `0xFCEEF438` (outside read slices; INFERRED: enqueue/activate task), branches to `0xFCEF2904` (in Slice N5; INFERRED: release lock), and returns status code 0 in `r0` `[VERIFIED: instructions, branch conditions, register arguments, callee branch targets and return value; semantic roles of callees are INFERRED]`.
+  4. Crucially, `activate_task` does not read or consume `r1` (byte stored at `desc + 25`; INFERRED: priority), `r2` (forwarded parameter; INFERRED: stack size), or `sp[0]` (forwarded context; INFERRED: user context) `[VERIFIED: absence of read instructions in activate_task; parameter semantic roles are INFERRED]`.
+- **Status Summary**:
+  - Task handle check, register preservation, callee branch sequences, and return status 0: **`[VERIFIED]`**; semantic locking and activation mechanisms in unread callees: **`[INFERRED]`**.
+  - Independence of calling convention parameters `r1`, `r2`, and `sp[0]` from `activate_task`: **`[VERIFIED]`**.
+  - Semantic scheduling state transitions in downstream callee `0xFCEEF438`: **`[INFERRED]`** (`0xFCEEF438` unread).
 
 ---
 
@@ -221,7 +247,9 @@ Stack Size (r2!=0)  Explicit caller integer forwarded        [VERIFIED: 0xFCEF34
                     Interpretation as byte size              [INFERRED: consumer 0xBFE11746 unread]
 Stack Size (r2==0)  Fallback load from *(r1 + 4)             [VERIFIED: 0xFCEF34CA]
                     Address 0x000081D0 via literal 0x81CC    [INFERRED: docs/PORT11A:144, 162-164]
-Dynamic Value       RAM literal at 0x000081D0                [UNKNOWN: unread in ROM]
+Initial Boot Value  ROM initializer at 0xFCE91228            [UNKNOWN: unread in ROM; <= 32 B proposed]
+Runtime Value       Dynamic RAM value at *(0x000081D0)       [UNKNOWN: writers before CreateTask unread;
+                                                             UNKNOWN-location]
 ----------------------------------------------------------------------------------------
 Alignment Rule      ARM AAPCS 8-byte stack alignment         [INFERRED: DryOS / ARM standard]
 Enforcement Site    Not in CreateTask (0xFCEF3488)           [VERIFIED: no bic/and in slice]
@@ -247,7 +275,8 @@ Enforcement Site    Not in CreateTask (0xFCEF3488)           [VERIFIED: no bic/a
   - Instruction `0xFCEF34CA` (`ldr r5, [r1, #4]`) loads `r5 = *(uint32_t *)(r1 + 4)`. The fallback substitution mechanism is strictly **`[VERIFIED]`**.
   - Derivation of `r1 = 0x000081CC` and `r1 + 4 = 0x000081D0` depends on unread literal pool entry `0xFCEF36A0` and is **`[INFERRED: citing docs/PORT11A_GM110C_ROM_EVIDENCE.md:144, 162-164]`**.
   - Address `0x000081D0` resides in system Low RAM (`0x00008000..0x0003F4F4`). As established in `docs/PORT21_RAM_LIFETIME.md:33, 210, 307` and `docs/CHDK_PORT1A_STARTUP_TRACE.md:213`, early boot Copy Loop 3 (`0xFC020054..0xFC020066`) copies Low RAM variables from ROM source `0xFCE91058`. The ROM source word corresponding to `0x000081D0` resides at $0\text{xFCE91058} + (0\text{x81D0} - 0\text{x8000}) = \mathbf{0\text{xFCE91228}}$, which was not read in PORT-29.
-  - The runtime numeric integer value at `*(0x000081D0)` remains **`[UNKNOWN]`**.
+  - A future read of ROM `0xFCE91228` can establish only the INITIAL value written to RAM `0x81D0` during early boot, not its runtime value.
+  - The runtime numeric integer value at `*(0x000081D0)` remains **`[UNKNOWN]`**. Settling the runtime value requires inspecting the code that writes `0x81D0` during initialization or establishing proof that no other writer modifies `0x81D0` before `CreateTask` callers run; because no verified ROM address is currently evidenced for such writers, this writer inspection is marked `UNKNOWN-location`.
 
 ### 4.3 Stack Memory Alignment `[VERIFIED / UNKNOWN]`
 - **Absence of Masking in `CreateTask` and `alloc_task_stack_tcb`**:
@@ -264,11 +293,11 @@ Enforcement Site    Not in CreateTask (0xFCEF3488)           [VERIFIED: no bic/a
 | Prerequisite Element | Evidenced Property & ROM Instruction | Epistemic Status & Citations |
 |---|---|:---:|
 | **`r0` Role** | Moved to `r4`; if 0, fallback `ldr r4, [r1]`; stored to stack-frame offset `sp + 24` / descriptor offset `desc + 20` (`desc = sp + 4`) | **`[VERIFIED: 0xFCEF348C: mov r4, r0; 0xFCEF34AC: cbnz r4; 0xFCEF34AE: ldr r4, [r1]; 0xBFE10BF6: str.w r8, [sp, #24]]`**<br>**Semantic role as name string pointer: `[INFERRED: consumer 0xBFE11746 unread]`** |
-| **`r1` Role** | Moved to `r6`; checked `(r1 - 1) < 0x20` ($1 \le r1 \le 32$) else `DebugAssert`; stored to stack-frame offset `sp + 29` / descriptor offset `desc + 25` (`desc = sp + 4`) | **`[VERIFIED: 0xFCEF3490: mov r6, r1; 0xFCEF34B0: subs r0, r6, #1; 0xFCEF34B2: cmp r0, #0x20; 0xBFE10BEC: strb.w r4, [sp, #29]]`**<br>**Semantic role as scheduling priority: `[INFERRED: consumer 0xBFE11746 unread]`** |
+| **`r1` Role** | Moved to `r6`; checked `(r1 - 1) < 0x20` ($1 \le r1 \le 32$) else error branch; byte stored at desc+25 (`sp + 29`, with `desc = sp + 4`; INFERRED: priority) | **`[VERIFIED: 0xFCEF3490: mov r6, r1; 0xFCEF34B0: subs r0, r6, #1; 0xFCEF34B2: cmp r0, #0x20; 0xBFE10BEC: strb.w r4, [sp, #29]]`**<br>**Semantic role as scheduling priority: `[INFERRED: consumer 0xBFE11746 unread]`**; **error handler role as DebugAssert: `[INFERRED]`** |
 | **`r2` Role** | Moved to `r5`; if 0, fallback `ldr r5, [r1, #4]`; forwarded to stack-frame offset `sp + 20` / descriptor offset `desc + 16` (`desc = sp + 4`) | **`[VERIFIED: 0xFCEF3492: mov r5, r2; 0xFCEF34C8: cbnz r5; 0xFCEF34CA: ldr r5, [r1, #4]; 0xBFE10BD8: stmia]`**<br>**Literal 0x81CC at 0xFCEF36A0 and 0x81D0: `[INFERRED: docs/PORT11A:144, 162-164]`**<br>**Semantic role as stack size in bytes: `[INFERRED: consumer 0xBFE11746 unread]`** |
 | **`sp[0]` Role** | Loaded from caller stack `[sp, #0x28]`; forwarded to stack-frame offset `sp + 12` / descriptor offset `desc + 8` (`desc = sp + 4`) | **`[VERIFIED: 0xFCEF3494: ldr.w r8, [sp, #0x28]; 0xFCEF34CE: mov r1, r8; 0xBFE10BD8: stmia]`**<br>**Semantic delivery to task as user context: `[INFERRED: consumer 0xBFE11746 unread]`** |
 | **Stack Allocator** | Forwarding of `r2` to `0xBFE10B88` and descriptor offset `desc + 16` (`desc = sp + 4`); fallback load from `*(r1 + 4)` when `r2 == 0` | **`[VERIFIED: 0xFCEF3492: mov r5, r2; 0xFCEF34CA: ldr r5, [r1, #4]; 0xFCEF34D2: mov r3, r5; 0xFCEF34DA: bl 0xBFE10B88; 0xBFE10BD8: stmia]`**<br>**Allocator identity (caller vs kernel) & size semantics: `[INFERRED: consumer 0xBFE11746 unread; forwarding instructions do not rule out reading r2 as a buffer]`** |
-| **Default Stack Size** | Numeric integer value at `*(0x000081D0)` at runtime | **`[UNKNOWN: ROM source word 0xFCE91228 unread]`** |
+| **Default Stack Size** | Runtime numeric integer value at `*(0x000081D0)` | **`[UNKNOWN: ROM initializer word 0xFCE91228 establishes only initial boot value; runtime value and writers modifying 0x81D0 before CreateTask remain UNKNOWN-location]`** |
 | **Stack Alignment** | Alignment rule enforced by kernel allocator `0xBFE11746` | **`[UNKNOWN: 0xBFE11746 resides outside authorized slices]`** |
 
 ---
@@ -282,7 +311,7 @@ Under the reviewer directive in `docs/PORT27_RESIDENT_EVIDENCE.md:578-579` and t
 > [!WARNING]
 > **Final Verdict for PORT-29 T1**: **`NO-GO`**
 >
-> Under strict project epistemic policy, a **GO** verdict requires every element of Item (b) to be certified as **`VERIFIED`**. While register moves, argument checks (`1 <= r1 <= 32` else `DebugAssert`), descriptor stores, argument forwarding, and `r2 == 0` fallback load were strictly observed in ROM, the high-level semantic roles (`r0` as name string, `r1` as scheduling priority, `r2` as stack size in bytes, `sp[0]` as task argument delivered to the spawned task, and stack allocator identity) are **`[INFERRED]`** because consumer `0xBFE11746` was not read. Furthermore, **stack alignment** and the **runtime default stack size literal** at `0x000081D0` remain **`[UNKNOWN]`**. These gaps compel an explicit **`NO-GO`** verdict.
+> Under strict project epistemic policy, a **GO** verdict requires every element of Item (b) to be certified as **`VERIFIED`**. While register moves, argument checks (`1 <= r1 <= 32` else error branch; INFERRED: DebugAssert), descriptor stores, argument forwarding, and `r2 == 0` fallback load were strictly observed in ROM, the high-level semantic roles (`r0` as name string, `r1` as scheduling priority, `r2` as stack size in bytes, `sp[0]` as task argument delivered to the spawned task, and stack allocator identity) are **`[INFERRED]`** because consumer `0xBFE11746` was not read. Furthermore, **stack alignment** and the **runtime default stack size literal** at `0x000081D0` remain **`[UNKNOWN]`**. These gaps compel an explicit **`NO-GO`** verdict.
 
 ### 6.2 The Exact Remaining UNKNOWN List & Proposed Bounded Ranges ($\le 4\text{ KiB}$)
 
@@ -292,18 +321,17 @@ To fully resolve the remaining uncertainties in a subsequent milestone, the foll
 |:---:|:---:|---|:---:|:---:|:---:|---|
 | **1** | **(b)** | Kernel Task Allocator & Stack Alignment Routine (`0xBFE11746`) | `0xBFE11746` (ATCM Thumb-2) | `0xFCEF0180..0xFCEF037F` | 512 B | Called via `bl 0xbfe11746` at `0xBFE10BFA` in `alloc_task_stack_tcb`. Mapped via formula $\text{ROM} = 0\text{xFCEEF24C} + (0\text{xBFE11746} - 0\text{xBFE10800}) = \mathbf{0\text{xFCEF0192}}$. Reading this 512-byte slice verifies the exact stack buffer allocation, stack alignment (4-byte vs 8-byte), TCB descriptor layout, and proves whether `r2` is consumed as stack byte count and `sp[0]` is delivered to the task function. |
 | **2** | **(b)** | `CreateTask` Literal Pool Entry (Pointer at `0xFCEF36A0`) | `0xBFE14C54` (ATCM) | `0xFCEF36A0..0xFCEF36A3` | 4 B | Read by `0xFCEF34AA: ldr r1, [pc, #0x1f4]`. Verifies the 32-bit literal word (`0x000081CC`) currently known only from historical documentation `docs/PORT11A_GM110C_ROM_EVIDENCE.md:144`. |
-| **3** | **(b)** | ROM Source Word for Default Stack Size Literal (`*(0x000081D0)`) | `0x000081D0` (Low RAM destination) | `0xFCE91220..0xFCE9123F` | 32 B | Derived via early boot Copy Loop 3 (`0xFC020054..0xFC020066`, `docs/PORT21_RAM_LIFETIME.md:33, 210, 307`) copying ROM `0xFCE91058` to Low RAM `0x00008000..0x0003F4F4`. ROM source address: $0\text{xFCE91058} + (0\text{x81D0} - 0\text{x8000}) = \mathbf{0\text{xFCE91228}}$. Verifies the default stack size integer. |
-| **4** | **(b)** | Unread Remainder of Slice N4 (`activate_task` downstream routines) | `0xBFE10D74` (ATCM Thumb-2) | `0xFCEEF7C0..0xFCEEF9C3` | 516 B | The `activate_task` body (`0xBFE10D14..0xBFE10D56`, ROM `0xFCEEF760..0xFCEEF7A2`) is already read inside Slice N3. This slice covers downstream helpers following `0xFCEEF7BF`, resolving the 608 vs 612 B doc conflict. |
-| **5** | **(d)** | Reconciled `SleepTask` Body | `0xBFE14968` (ATCM Thumb-2) | `0xFCEF33A0..0xFCEF33DF` | 64 B | Truncates Slice N7 to exactly 64 bytes (`0xFCEF33A0..0xFCEF33DF`), eliminating the size disagreement with PORT27's $\le 64$ B constraint and verifying millisecond tick scaling. |
-| **6** | **(b)** | Task Dispatcher / Context Delivery Consumer Investigation (`0xBFE11746`) | `0xBFE11746` (ATCM Thumb-2) | `0xFCEF0180..0xFCEF037F` | 512 B | Start address `0xFCEF0192` (VMA `0xBFE11746`) is evidenced by `bl 0xbfe11746` at `0xBFE10BFA` in Slice N3, mapped to ROM via early boot Copy Loop 1 formula $\text{ROM} = 0\text{xFCEEF24C} + (0\text{xBFE11746} - 0\text{xBFE10800}) = \mathbf{0\text{xFCEF0192}}$ (`docs/PORT11A_GM110C_ROM_EVIDENCE.md:112-118`). Length is 512 B (window `0xFCEF0180..0xFCEF037F`, sharing the read window of Row 1). Proves descriptor offset `desc + 8` (`sp[0]` context) delivery to task function and `desc + 25` (`r1` priority) handling. Any address further downstream (such as a separate scheduler or context-switch dispatcher) remains **UNKNOWN** until this initial consumer window is read. |
+| **3** | **(b)** | ROM Initializer Word for Default Stack Size (`*(0x000081D0)`) | `0x000081D0` (Low RAM destination) | `0xFCE91220..0xFCE9123F` | 32 B | Derived via early boot Copy Loop 3 (`0xFC020054..0xFC020066`, `docs/PORT21_RAM_LIFETIME.md:33, 210, 307`) copying ROM `0xFCE91058` to Low RAM `0x00008000..0x0003F4F4`. ROM source address: $0\text{xFCE91058} + (0\text{x81D0} - 0\text{x8000}) = \mathbf{0\text{xFCE91228}}$. Reading this bounded 32-byte ROM slice ($\le 4\text{ KiB}$) establishes only the INITIAL value written to RAM `0x81D0` during early boot, not its runtime value. The runtime value at `*(0x000081D0)` remains **UNKNOWN**. Settling the runtime value at `0x000081D0` requires extra evidence: the code that writes `0x81D0` during init, or proof that no other writer modifies `0x81D0` before `CreateTask` callers run. Because no bounded range ($\le 4\text{ KiB}$) is currently known for such writers, this extra writer evidence is marked `UNKNOWN-location`. |
+| **4** | **(d)** | Reconciled `SleepTask` Body | `0xBFE14968` (ATCM Thumb-2) | `0xFCEF33A0..0xFCEF33DF` | 64 B | Truncates Slice N7 to exactly 64 bytes (`0xFCEF33A0..0xFCEF33DF`), eliminating the size disagreement with PORT27's $\le 64$ B constraint and verifying millisecond tick scaling. |
+| **5** | **(b)** | Task Dispatcher / Context Delivery Consumer Investigation (`0xBFE11746`) | `0xBFE11746` (ATCM Thumb-2) | `0xFCEF0180..0xFCEF037F` | 512 B | Start address `0xFCEF0192` (VMA `0xBFE11746`) is evidenced by `bl 0xbfe11746` at `0xBFE10BFA` in Slice N3, mapped to ROM via early boot Copy Loop 1 formula $\text{ROM} = 0\text{xFCEEF24C} + (0\text{xBFE11746} - 0\text{xBFE10800}) = \mathbf{0\text{xFCEF0192}}$ (`docs/PORT11A_GM110C_ROM_EVIDENCE.md:112-118`). Length is 512 B (window `0xFCEF0180..0xFCEF037F`, sharing the read window of Row 1). Proves descriptor offset `desc + 8` (`sp[0]` context) delivery to task function and byte stored at `desc + 25` (`r1` parameter; INFERRED: priority) handling. Any address further downstream (such as a separate scheduler or context-switch dispatcher) remains **UNKNOWN** until this initial consumer window is read. |
 
 ---
 
 ## 7. Acceptance Criteria Verification Checklist
 
-- [x] **`python3 -B tools/port11c_evidence_validator.py --manifest evidence/port29_manifest.json --trusted-scopes evidence/port29_trusted_scopes.json` reports VALID with 0 errors**: Confirmed. Exact quoted output provided in §1.2.
-- [x] **Every manifest range is one of the authorized ranges from `docs/PORT27_RESIDENT_CANDIDATE.md` Section 3 / `docs/PORT28_PORT27_OUTCOME.md`, is $\le 4\text{ KiB}$, and has start, length and SHA-256**: Confirmed. All 5 read slices in §2 are authorized ranges $\le 512$ B.
-- [x] **Unclear or oversized ranges are listed as UNKNOWN and were not read**: Confirmed. Slice N4 prefix is read in N3, remainder is unread; Slice N7 (bounds disagreement) and Item 8 (oversized > 4 KiB / unclear bounds) are cataloged as `UNKNOWN-not-read` in §2.
+- [x] **`python3 -B tools/port11c_evidence_validator.py --manifest evidence/port29_manifest.json --trusted-scopes evidence/port29_trusted_scopes.json --allow-overlap` reports VALID with 0 errors**: Confirmed. Exact quoted output provided in §1.2.
+- [x] **Every manifest range is one of the authorized ranges from `docs/PORT27_RESIDENT_CANDIDATE.md` Section 3 / `docs/PORT28_PORT27_OUTCOME.md`, is $\le 4\text{ KiB}$, and has start, length and SHA-256**: Confirmed. All 6 read slices in §2 are authorized ranges $\le 612$ B.
+- [x] **Unclear or oversized ranges are listed as UNKNOWN and were not read**: Confirmed. Slice N4 was reconciled and read; Slice N7 (bounds disagreement) and Item 8 (oversized > 4 KiB / unclear bounds) are cataloged as `UNKNOWN-not-read` in §2.
 - [x] **`docs/PORT29_CREATETASK_EVIDENCE.md` states the roles of `r0`, `r1`, `r2` and `sp[0]` at `CreateTask` entry, and the `r2` stack allocator, size and alignment**: Confirmed in §3 and §4 with exact assembly words, VMA addresses, and reasoning.
 - [x] **Every claim has a VERIFIED / INFERRED / UNKNOWN label**: Confirmed throughout document.
 - [x] **The doc ends with an explicit GO/NO-GO verdict that matches the labels**: Confirmed in §6.1 with an explicit `NO-GO` verdict and remaining UNKNOWN list with bounded proposed ranges in §6.2.

@@ -29,6 +29,7 @@ ROM_BASE = 0xFC000000
 AUTHORIZED_RANGES = {
     "PORT29-ROM-N1": (0xFC31B408, 0xFC31B507, 256),
     "PORT29-ROM-N3": (0xFCEEF5C0, 0xFCEEF7BF, 512),
+    "PORT29-ROM-N4": (0xFCEEF760, 0xFCEEF9C3, 612),
     "PORT29-ROM-N5": (0xFCEF28B0, 0xFCEF29AF, 256),
     "PORT29-ROM-CREATETASK": (0xFCEF3488, 0xFCEF34F9, 114),
     "PORT29-ROM-N6": (0xFCEF3A20, 0xFCEF3A5F, 64),
@@ -57,6 +58,7 @@ class TestPort29Evidence(unittest.TestCase):
             str(MANIFEST_PATH),
             "--trusted-scopes",
             str(SCOPES_PATH),
+            "--allow-overlap",
         ]
         proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.assertEqual(proc.returncode, 0, f"Validator failed with exit {proc.returncode}: {proc.stderr}")
@@ -69,7 +71,7 @@ class TestPort29Evidence(unittest.TestCase):
             manifest = json.load(f)
 
         entries = manifest.get("evidence_entries", [])
-        self.assertEqual(len(entries), 5, "Expected exactly 5 evidence entries in manifest")
+        self.assertEqual(len(entries), 6, "Expected exactly 6 evidence entries in manifest")
 
         total_bytes = 0
         for entry in entries:
@@ -185,6 +187,7 @@ class TestPort29Evidence(unittest.TestCase):
         self.assertIn("PORT-29 T1", content)
         self.assertIn("0xFCEF3488", content)
         self.assertIn("0xFCEEF5C0", content)
+        self.assertIn("0xFCEEF760", content)
         self.assertIn("r0", content)
         self.assertIn("r1", content)
         self.assertIn("r2", content)
@@ -195,7 +198,7 @@ class TestPort29Evidence(unittest.TestCase):
 
         # Exact validator command output citation
         self.assertIn(
-            "Evidence Manifest Validation: 5 entries, Trust Level: EXTERNAL_POLICY_CONSISTENCY_CHECKED",
+            "Evidence Manifest Validation: 6 entries, Trust Level: EXTERNAL_POLICY_CONSISTENCY_CHECKED",
             content,
         )
         self.assertIn("Result: VALID (0 errors, 0 warnings)", content)
