@@ -51,6 +51,10 @@ Code Range & Classes:
   * Core Group 4 (4 codes): CODE_41, CODE_42, CODE_43, CODE_44
 - Special Trial Classes:
   * NO_PULSES: Zero pulses observed (only exact case-insensitive string 'none').
+    last_stage_reached and next_stage are set to 'UNKNOWN (no LED evidence)'.
+    Notes echo observed press, lcd, and inspector_status verbatim, record that no ladder
+    checkpoint was observed (VERIFIED from report), and flag any conflict if LCD indicates stock UI
+    or backlight illumination with zero pulses observed (labelled UNKNOWN).
   * UNKNOWN_CODE: Pulse counts not registered in the 29-code table, out-of-range counts,
     or invalid inputs (missing pulses, empty value, floats, bools, non-numeric strings, <= 0).
   * AMBIGUOUS: Conflicting multiple counts reported, or a count adjacent to two valid codes with owner uncertainty.
@@ -603,9 +607,49 @@ def normalize_lcd_state(lcd_val: Any) -> LcdState:
         return LcdState.OFF
     if clean in ("backlight_off", "backlight off"):
         return LcdState.BACKLIGHT_OFF
-    if clean in ("on_no_ui", "on no ui", "on_without_ui", "backlight_on", "backlight on"):
+    if clean in (
+        "on_no_ui", "on no ui", "on_without_ui", "backlight_on", "backlight on",
+        "backlight-on", "illuminated", "backlight", "screen on", "display on",
+        "screen illuminated", "display illuminated", "illuminated lcd",
+        "an illuminated lcd", "backlight-on lcd",
+    ):
         return LcdState.ON_NO_UI
     return LcdState.UNKNOWN
+
+
+def check_no_pulses_lcd_conflict(raw_lcd: Any) -> Optional[str]:
+    """Checks if the reported LCD state conflicts with observing zero LED pulses.
+
+    If lcd indicates stock UI or backlight was reached with zero pulses, returns an
+    explanatory conflict description labelled UNKNOWN. Never explains the conflict away.
+    """
+    if raw_lcd is None:
+        return None
+    clean = re.sub(r"\s+", " ", str(raw_lcd).strip().lower())
+    if not clean:
+        return None
+
+    # Check for negation tokens: if negated, no affirmative conflict
+    # (e.g. "not stock UI", "no backlight", "backlight off", "off", "dark", etc.)
+    negation_match = re.search(r"\b(not|no|never|without|off|failed|dark|blank|black)\b", clean)
+    if negation_match and clean not in ("on_no_ui", "on no ui", "on_without_ui"):
+        return None
+
+    if clean in STOCK_UI_LCD_ALLOWLIST or normalize_lcd_state(clean) == LcdState.STOCK_UI:
+        return "lcd indicates stock UI was reached with zero LED pulses observed"
+
+    if clean in (
+        "on_no_ui", "on no ui", "on_without_ui", "backlight_on", "backlight on",
+        "backlight-on", "illuminated", "backlight", "screen on", "display on",
+        "screen illuminated", "display illuminated", "illuminated lcd",
+        "an illuminated lcd", "backlight-on lcd",
+    ):
+        return "lcd indicates active backlight/illumination with zero LED pulses observed"
+
+    if re.search(r"\b(backlight|illuminat\w*|screen on|display on)\b", clean):
+        return "lcd indicates active backlight/illumination with zero LED pulses observed"
+
+    return None
 
 
 def is_affirmative_stock_ui(lcd_str: str) -> bool:
@@ -1619,7 +1663,9 @@ def classify_owner_report(
     press = str(report.get("press", "short")).strip().lower()
     raw_lcd = report.get("lcd", "")
     lcd_state = normalize_lcd_state(raw_lcd)
-    inspector_status = str(report.get("inspector_status", "")).strip().lower()
+    raw_inspector = str(report.get("inspector_status", "")).strip()
+    inspector_status = raw_inspector.lower()
+    raw_lcd_str = str(raw_lcd).strip()
     notes_in = str(report.get("notes", "")).strip()
 
     duplicate_conflicts = list(report.get("_duplicate_conflicts", []))
@@ -1793,19 +1839,29 @@ def classify_owner_report(
 
     # Handle NO_PULSES (exact case-insensitive 'none')
     if is_none_pulse:
-        note_none = (
-            "Zero pulses observed (camera dark from start). Camera remained unpowered, "
-            "StartDiskboot did not execute loader (card lock / VBR issue), or loader stalled "
-            "in check_compat() before Step 1 pulse (docs/PORT25_OWNER_TRIAL_PLAN.md:201)."
-        )
+        note_parts = [
+            "No ladder checkpoint was observed (VERIFIED from the report itself).",
+            f"Observed report inputs: press='{press}', lcd='{raw_lcd_str}', inspector_status='{raw_inspector}'.",
+            "Underlying boot progress and failure cause are UNKNOWN (no LED evidence recorded in trial table).",
+        ]
+        conflict_desc = check_no_pulses_lcd_conflict(raw_lcd)
+        if conflict_desc:
+            note_parts.append(
+                f"Reported observations conflict with the ladder's expected behaviour [UNKNOWN: {conflict_desc}]."
+            )
         if held_non_stock_note:
-            note_none += held_non_stock_note
+            note_parts.append(held_non_stock_note.strip())
+        if notes_in:
+            note_parts.append(f"Owner notes: '{notes_in}'.")
+        if uncertainty_notes:
+            note_parts.extend(f"(Note: {n})" for n in uncertainty_notes)
+
         return {
             "class": "NO_PULSES",
-            "last_stage_reached": None,
-            "next_stage": "STAGE_LOADER_AFTER_PROLOGUE",
+            "last_stage_reached": "UNKNOWN (no LED evidence)",
+            "next_stage": "UNKNOWN (no LED evidence)",
             "evidence": "docs/PORT25_OWNER_TRIAL_PLAN.md:201; docs/PORT25_LADDER_FIX_CANDIDATE.md:328",
-            "notes": note_none,
+            "notes": " ".join(note_parts),
         }
 
     assert count_resolved is not None

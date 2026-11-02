@@ -391,10 +391,112 @@ class TestPort26LadderDecode(unittest.TestCase):
                 }
                 res = classify_owner_report(report)
                 self.assertEqual(res["class"], "NO_PULSES")
-                self.assertIsNone(res["last_stage_reached"])
-                self.assertEqual(res["next_stage"], "STAGE_LOADER_AFTER_PROLOGUE")
-                self.assertIn("Zero pulses", res["notes"])
+                self.assertEqual(res["last_stage_reached"], "UNKNOWN (no LED evidence)")
+                self.assertEqual(res["next_stage"], "UNKNOWN (no LED evidence)")
+                self.assertIn("no ladder checkpoint was observed", res["notes"].lower())
+                self.assertNotIn("dark from start", res["notes"].lower())
                 self.assertIn("docs/PORT25_OWNER_TRIAL_PLAN.md:201", res["evidence"])
+
+    def test_no_pulses_observations_and_conflict_regressions(self) -> None:
+        """[P2 Regression] Owner reports with pulses='none':
+        (a) pulses=none + lcd=stock_ui + expected hash + short press:
+            class NO_PULSES, last_stage_reached/next_stage UNKNOWN, no 'dark from start' text.
+            Observations conflict with ladder expected behaviour, labelled UNKNOWN.
+            Both JSON and key=value input tested, asserting byte-identical output.
+        (b) pulses=none + an illuminated or backlight-on LCD:
+            same expectations (class NO_PULSES, last_stage_reached/next_stage UNKNOWN,
+            no 'dark from start' text, conflict note labelled UNKNOWN).
+        (c) pulses=none + lcd=off:
+            gives NO_PULSES with no contradictory text and no 'dark from start' text.
+        """
+        # (a) pulses=none + lcd=stock_ui + expected hash + short press
+        stock_ui_json = (
+            "{\n"
+            f'  "diskboot_sha256": "{self.valid_hash}",\n'
+            '  "inspector_status": "none",\n'
+            '  "lcd": "stock_ui",\n'
+            '  "press": "short",\n'
+            '  "pulses": "none"\n'
+            "}"
+        )
+        stock_ui_kv = (
+            f"diskboot_sha256 = {self.valid_hash}\n"
+            "press = short\n"
+            "pulses = none\n"
+            "lcd = stock_ui\n"
+            "inspector_status = none\n"
+        )
+
+        res_json = classify_owner_report(stock_ui_json)
+        res_kv = classify_owner_report(stock_ui_kv)
+
+        self.assertEqual(res_json["class"], "NO_PULSES")
+        self.assertEqual(res_kv["class"], "NO_PULSES")
+        self.assertEqual(res_json["last_stage_reached"], "UNKNOWN (no LED evidence)")
+        self.assertEqual(res_kv["last_stage_reached"], "UNKNOWN (no LED evidence)")
+        self.assertEqual(res_json["next_stage"], "UNKNOWN (no LED evidence)")
+        self.assertEqual(res_kv["next_stage"], "UNKNOWN (no LED evidence)")
+
+        # Verify no 'dark from start' text
+        self.assertNotIn("dark from start", res_json["notes"].lower())
+        self.assertNotIn("dark from start", res_kv["notes"].lower())
+
+        # Verify observed inputs echoed verbatim
+        self.assertIn("lcd='stock_ui'", res_json["notes"])
+        self.assertIn("inspector_status='none'", res_json["notes"])
+        self.assertIn("press='short'", res_json["notes"])
+
+        # Verify conflict note labelled UNKNOWN
+        self.assertIn("conflict with the ladder's expected behaviour", res_json["notes"].lower())
+        self.assertIn("unknown", res_json["notes"].lower())
+
+        # Verify byte-identical JSON output between JSON and key=value inputs
+        out_json_from_json = decode_ladder_report(stock_ui_json)
+        out_json_from_kv = decode_ladder_report(stock_ui_kv)
+        self.assertEqual(out_json_from_json, out_json_from_kv)
+
+        # (b) pulses=none + an illuminated or backlight-on LCD
+        for illuminated_val in [
+            "illuminated",
+            "backlight_on",
+            "backlight on",
+            "an illuminated lcd",
+            "backlight",
+        ]:
+            with self.subTest(lcd=illuminated_val):
+                report_b = {
+                    "diskboot_sha256": self.valid_hash,
+                    "press": "short",
+                    "pulses": "none",
+                    "lcd": illuminated_val,
+                    "inspector_status": "none",
+                }
+                res_b = classify_owner_report(report_b)
+                self.assertEqual(res_b["class"], "NO_PULSES")
+                self.assertEqual(res_b["last_stage_reached"], "UNKNOWN (no LED evidence)")
+                self.assertEqual(res_b["next_stage"], "UNKNOWN (no LED evidence)")
+                self.assertNotIn("dark from start", res_b["notes"].lower())
+                self.assertIn(f"lcd='{illuminated_val}'", res_b["notes"])
+                self.assertIn("conflict with the ladder's expected behaviour", res_b["notes"].lower())
+                self.assertIn("unknown", res_b["notes"].lower())
+
+        # (c) pulses=none + lcd=off still gives NO_PULSES with no contradictory text
+        for off_val in ["off", "OFF", "dark"]:
+            with self.subTest(lcd=off_val):
+                report_c = {
+                    "diskboot_sha256": self.valid_hash,
+                    "press": "short",
+                    "pulses": "none",
+                    "lcd": off_val,
+                    "inspector_status": "none",
+                }
+                res_c = classify_owner_report(report_c)
+                self.assertEqual(res_c["class"], "NO_PULSES")
+                self.assertEqual(res_c["last_stage_reached"], "UNKNOWN (no LED evidence)")
+                self.assertEqual(res_c["next_stage"], "UNKNOWN (no LED evidence)")
+                self.assertNotIn("dark from start", res_c["notes"].lower())
+                self.assertNotIn("conflict", res_c["notes"].lower())
+                self.assertIn(f"lcd='{off_val}'", res_c["notes"])
 
     def test_pulse_input_validation_regressions(self) -> None:
         """[P2 Regression] Rigorous pulse input validation:
