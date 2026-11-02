@@ -32,7 +32,7 @@ The table below catalogs every item from the PORT-30 remaining-UNKNOWN list ([`d
   - [`evidence/port31_manifest.json`](../evidence/port31_manifest.json)
   - [`evidence/port31_trusted_scopes.json`](../evidence/port31_trusted_scopes.json)
   - [`docs/HANDOFF.md`](HANDOFF.md)
-- **Verdict Summary**: **`NO-GO`** (Item (b) / resident candidate gate closed: `r1` priority role, `r2` forwarding/TCB storage, `r2` parameter role as byte count, `r0` forwarding/fallback/storage, `r3` entry point, `sp[0]` retrieval/storage, and heap allocation delegation to pool `0x000403A4` are `[VERIFIED]`; `r0` task name string semantics is `[INFERRED]`; `sp[0]` task-argument delivery to spawned task entry function, `r2` internal heap allocator implementation, `r2` runtime default stack size values, `r2` stack buffer and SP alignment, and `SleepTask` delay units and tick conversion remain `[UNKNOWN]`)
+- **Verdict Summary**: **`NO-GO`** (Item (b) / resident candidate gate closed: `r1` priority role, `r2` forwarding/TCB storage, `r2` parameter role as byte count, `r0` forwarding/fallback/storage, `r3` entry point, `sp[0]` retrieval/storage, dynamic allocation flag `0x80` in `[TCB + 0x4A]`, and numeric argument forwarding in wrapper `0xBFE11E62` (loading `r0 = 0x000403A4`, `r1 = size`, and tail-calling `0xBFE1452E`) are `[VERIFIED]`; `r0` task name string semantics and interpretation of `0x000403A4` as identifying a heap pool descriptor are `[INFERRED]` (provenance: `HISTORICAL_CHDK`); `sp[0]` task-argument delivery to spawned task entry function, `r2` allocator pool-descriptor layout and callee `0xBFE1452E` internal implementation, `r2` runtime default stack size values, `r2` stack buffer and SP alignment, and `SleepTask` delay units and tick conversion remain `[UNKNOWN]`)
 
 ---
 
@@ -137,8 +137,9 @@ This section evaluates the seven required items: the roles of `r0`, `r1`, `r2`, 
       - `0xFCEF085C` (`0x4770`): `bx lr` returns `[VERIFIED]`.
     - **Routine `0xBFE11E62` (`ROM 0xFCEF08AE`)**:
       - `0xFCEF08AE` (`0xE7F5`): `b 0xBFE11E50` branches to ROM `0xFCEF089C` `[VERIFIED]`.
-      - `0xFCEF089C` (`0x4816`): `ldr r0, [pc, #88]` loads heap pool descriptor pointer `0x000403A4` from `0xFCEF08F8` `[VERIFIED]`.
-      - `0xFCEF089E` (`0xF002 0xBB6C`): `b.w 0xBFE1452E` tail-calls kernel dynamic memory allocator with `r0 = 0x000403A4` (heap pool pointer) and `r1 = stack_size` (byte count, preserved unmodified) `[VERIFIED]`.
+      - `0xFCEF089C` (`0x4816`): `ldr r0, [pc, #88]` loads 32-bit constant `0x000403A4` from literal pool at `0xFCEF08F8` `[VERIFIED]`.
+      - `0xFCEF089E` (`0xF002 0xBB6C`): `b.w 0xBFE1452E` tail-calls callee `0xBFE1452E` with numeric arguments `r0 = 0x000403A4` and `r1 = stack_size` (byte count, preserved unmodified) `[VERIFIED]`.
+      - *Heap pool descriptor interpretation*: The interpretation of `0x000403A4` as identifying a heap pool descriptor is `[INFERRED]` (provenance: `HISTORICAL_CHDK`). The callee body at `0xBFE1452E` was not read, and no descriptor layout was verified in ROM.
 - **Conclusion**: `r2` parameter role as stack size in bytes is **`[VERIFIED]`**. Callee arithmetic converting bytes to 32-bit words via `lsrs r1, r1, #2` is **`[VERIFIED]`**. However, runtime values for default stack sizes (`*(0x81D0)` and `*(0x811C)`) remain **`[UNKNOWN]`** because ROM initializers are `0x00000000` and runtime initialization writers were SKIPPED.
 
 ### 3.4 Role of `sp[0]` (5th Parameter / Task Context Argument)
@@ -157,8 +158,10 @@ This section evaluates the seven required items: the roles of `r0`, `r1`, `r2`, 
 
 ### 3.5 The `r2` Stack Allocator
 - **Label**:
-  - Dynamic allocation delegation to heap pool `0x000403A4`: **`[VERIFIED]`**.
-  - Allocator internal implementation inside `0xBFE1452E`: **`[UNKNOWN]`**.
+  - Numeric argument forwarding (wrapper `0xBFE11E62` loads `0x000403A4` into `r0`, forwards size in `r1`, and tail-calls `0xBFE1452E`): **`[VERIFIED]`**.
+  - Dynamic allocation flag `0x80` recorded in `[TCB + 0x4A]`: **`[VERIFIED]`**.
+  - Semantic interpretation of `0x000403A4` as identifying a heap pool descriptor: **`[INFERRED]`** (provenance: `HISTORICAL_CHDK`).
+  - Heap pool descriptor layout at `0x000403A4` and internal implementation of allocator callee `0xBFE1452E`: **`[UNKNOWN]`**.
 - **Citations & Step-by-Step Disassembly Reasoning**:
   - In `alloc_task_stack_tcb` (`0xBFE10B88`), instruction `0xFCEEF61C..0xFCEEF624` writes a hardcoded `0` into descriptor offset `desc + 12` (`sp + 16`) `[VERIFIED: PORT29-ROM-N3]`.
   - In `0xBFE11746` (`PORT30-ROM-ALLOC-TASK`):
@@ -172,12 +175,14 @@ This section evaluates the seven required items: the roles of `r0`, `r1`, `r2`, 
     - `0xFCEF01F6` (`0xF884 0x004A`): `strb.w r0, [r4, #0x4A]` records dynamic allocation flag `0x80` in `[TCB + 0x4A]` `[VERIFIED]`.
   - In newly read slice `PORT31-ROM-STACK-CALLEES` (`0xFCEF0850..0xFCEF097F`):
     - `0xFCEF08AE` (`0xE7F5`): `b 0xBFE11E50` branches to ROM `0xFCEF089C` `[VERIFIED]`.
-    - `0xFCEF089C` (`0x4816`): `ldr r0, [pc, #88]` loads heap pool descriptor pointer `0x000403A4` from literal pool at `0xFCEF08F8` `[VERIFIED]`.
-    - `0xFCEF089E` (`0xF002 0xBB6C`): `b.w 0xBFE1452E` tail-calls kernel dynamic memory allocator with `r0 = 0x000403A4` and `r1 = stack_size` `[VERIFIED]`.
+    - `0xFCEF089C` (`0x4816`): `ldr r0, [pc, #88]` loads 32-bit constant `0x000403A4` from literal pool at `0xFCEF08F8` `[VERIFIED]`.
+    - `0xFCEF089E` (`0xF002 0xBB6C`): `b.w 0xBFE1452E` tail-calls callee `0xBFE1452E` with numeric arguments `r0 = 0x000403A4` and `r1 = stack_size` (byte count) `[VERIFIED]`.
     - Routine `0xBFE11E04` (`0xFCEF0850`) is confirmed as the stack watermark fill routine (`lsrs r1, r1, #2` / `stmia r0!, {r2}` with canary `0x19980218`), not a memory allocator.
-- **Epistemic Justification for `[UNKNOWN]`**:
-  - Delegation to heap pool `0x000403A4` via wrapper `0xBFE11E62` and dynamic flag `0x80` recorded in `[TCB + 0x4A]` are verified in ROM.
-  - However, routine `0xBFE1452E` (ROM `0xFCEF2F7A`) lies outside authorized read slices. Its internal heap management, pool block headers, and fragmentation algorithms remain **`[UNKNOWN]`**.
+- **Epistemic Justification for `[INFERRED]` and `[UNKNOWN]`**:
+  - The cited instructions only prove numeric argument forwarding: wrapper `0xBFE11E62` loads literal `0x000403A4` into `r0`, preserves `stack_size` in `r1`, and tail-calls `0xBFE1452E`, while `alloc_task` records flag `0x80` into `[TCB + 0x4A]`. These mechanics are **`[VERIFIED]`**.
+  - However, the cited instructions do NOT show that `0x000403A4` identifies a heap pool descriptor: the callee body at `0xBFE1452E` (ROM `0xFCEF2F7A`) was not read, and no descriptor-layout evidence is cited from verified ROM.
+  - The interpretation that `0x000403A4` identifies a heap pool descriptor is **`[INFERRED]`** (provenance: `HISTORICAL_CHDK`, based on historical DryOS conventions where memory allocation routines take a pool descriptor address in `r0`).
+  - Furthermore, because callee body `0xBFE1452E` lies outside authorized read slices, the internal heap allocation algorithm, descriptor layout, block headers, and fragmentation behavior remain **`[UNKNOWN]`**.
 
 ### 3.6 The `r2` Stack Size
 - **Label**:
@@ -238,7 +243,7 @@ This section evaluates the seven required items: the roles of `r0`, `r1`, `r2`, 
 > [!IMPORTANT]
 > **The `CreateTask` / `G3X_RESIDENT` line is CLOSED for this firmware (PowerShot G3 X GM1.10C) unless the project owner explicitly opens it again.**
 >
-> Four consecutive research and evidence milestones (PORT-27, PORT-28, PORT-29, PORT-30, and PORT-31) have rigorously investigated stock GM1.10C firmware ROM. While incoming register forwarding and TCB storage are proven (`r0` forwarding/storage `[VERIFIED]`, `r0` task name string semantics `[INFERRED]`, `r1` priority $1 \le r1 \le 32$ `[VERIFIED]`, `r2` stack size in bytes `[VERIFIED]`, `r3` entry function `[VERIFIED]`, `sp[0]` retrieval/storage `[VERIFIED]`, and heap pool delegation to `0x000403A4` `[VERIFIED]`), critical elements including `sp[0]` context delivery to the spawned task `[UNKNOWN]`, `r2` heap allocator implementation `[UNKNOWN]`, runtime default stack sizes `[UNKNOWN]`, stack/SP alignment `[UNKNOWN]`, and `SleepTask` delay units and tick conversion `[UNKNOWN]` cannot be closed within bounded ROM inspection quotas without unconstrained scans or owner-directed trial redesign. No resident candidate (`G3X_RESIDENT=1`) will be constructed.
+> Four consecutive research and evidence milestones (PORT-27, PORT-28, PORT-29, PORT-30, and PORT-31) have rigorously investigated stock GM1.10C firmware ROM. While incoming register forwarding and TCB storage are proven (`r0` forwarding/storage `[VERIFIED]`, `r0` task name string semantics `[INFERRED]`, `r1` priority $1 \le r1 \le 32$ `[VERIFIED]`, `r2` stack size in bytes `[VERIFIED]`, `r3` entry function `[VERIFIED]`, `sp[0]` retrieval/storage `[VERIFIED]`, dynamic allocation flag `0x80` in `[TCB + 0x4A]` `[VERIFIED]`, and numeric argument forwarding in wrapper `0xBFE11E62` with `r0 = 0x000403A4` and `r1 = size` `[VERIFIED]`), critical elements including `r0` C-string semantics `[INFERRED]`, `0x000403A4` heap pool descriptor interpretation `[INFERRED]`, `sp[0]` context delivery to the spawned task `[UNKNOWN]`, `r2` allocator pool-descriptor layout and callee `0xBFE1452E` internal implementation `[UNKNOWN]`, runtime default stack sizes `[UNKNOWN]`, stack/SP alignment `[UNKNOWN]`, and `SleepTask` delay units and tick conversion `[UNKNOWN]` cannot be closed within bounded ROM inspection quotas without unconstrained scans or owner-directed trial redesign. No resident candidate (`G3X_RESIDENT=1`) will be constructed.
 
 ### Final Exact UNKNOWN List
 1. **`r0` Task Name String Semantics**:
@@ -248,15 +253,18 @@ This section evaluates the seven required items: the roles of `r0`, `r1`, `r2`, 
    - *Reason it could not be closed*: Storage of `sp[0]` into `[TCB + 0x10]` is verified, but the downstream task dispatcher / context-switch code that restores `[TCB + 0x10]` into `r0` upon task launch is not localised in ROM (`UNKNOWN-location`).
    - *Range / evidence needed*: Unbounded / `UNKNOWN-location`; requires locating and reading the task context switch / dispatcher routine downstream of task scheduling.
 3. **`r2` Stack Allocator Internal Implementation**:
-   - *Reason it could not be closed*: Callee wrapper `0xBFE11E62` delegates dynamic allocation to kernel heap routine `0xBFE1452E` (ROM `0xFCEF2F7A`) for heap pool `0x000403A4`, which lies outside authorized read slices.
+   - *Reason it could not be closed*: Callee wrapper `0xBFE11E62` delegates dynamic allocation via tail-call to kernel routine `0xBFE1452E` (ROM `0xFCEF2F7A`), which lies outside authorized read slices.
    - *Range / evidence needed*: Reading kernel heap allocator routine `0xBFE1452E` (ROM `0xFCEF2F7A`, $\le 256$ B).
-4. **`r2` Runtime Default Stack Size**:
+4. **`r2` Allocator Pool-Descriptor Role (`0x000403A4`)**:
+   - *Reason it could not be closed*: Wrapper `0xBFE11E62` loads literal `0x000403A4` into `r0` and tail-calls `0xBFE1452E` with the size in `r1`. However, callee `0xBFE1452E` was not read, and no descriptor-layout evidence was verified in ROM. The interpretation that `0x000403A4` identifies a heap pool descriptor remains `[INFERRED]` (provenance: `HISTORICAL_CHDK`). Proving the pool-descriptor role and layout requires reading the callee and verifying the descriptor structure.
+   - *Range / evidence needed*: Reading kernel heap allocator routine `0xBFE1452E` (ROM `0xFCEF2F7A`, $\le 256$ B) and inspecting descriptor memory at RAM `0x000403A4` (or its initialization routine in ROM) to verify whether `0x000403A4` is indeed a heap pool descriptor structure.
+5. **`r2` Runtime Default Stack Size**:
    - *Reason it could not be closed*: ROM initializers for `*(0x000081D0)` and `*(0x0000811C)` are `0x00000000`, and runtime initialization writers are unlocalised in ROM (`UNKNOWN-location`).
    - *Range / evidence needed*: Unbounded / `UNKNOWN-location`; requires locating and reading the initialization routines that write default stack sizes into RAM addresses `0x000081D0` and `0x0000811C`.
-5. **`r2` Stack Buffer & Initial Stack Pointer Alignment**:
+6. **`r2` Stack Buffer & Initial Stack Pointer Alignment**:
    - *Reason it could not be closed*: Covered call-site instructions in `PORT30-ROM-ALLOC-TASK` (`0xFCEF0180..0xFCEF037F`, including call sites at `0xFCEF01E0`, `0xFCEF0204`, and `0xFCEF0210..0xFCEF0228`) contain no alignment masking or SP adjustment. However, external callee bodies—dynamic heap allocator `0xBFE1452E` (ROM `0xFCEF2F7A`) and downstream helper callees invoked from `0xFCEF0210..0xFCEF0228` (such as ROM `0xFCEF2794`)—were not read because they lie outside authorized read slices.
    - *Range / evidence needed*: Reading kernel heap allocator `0xBFE1452E` (ROM `0xFCEF2F7A`, $\le 256$ B) and downstream callee bodies (e.g. ROM `0xFCEF2794`, which has no exact bounds established in committed docs) to inspect buffer allocation alignment and initial SP framing.
-6. **`SleepTask` Delay Units & Downstream Tick Conversion**:
+7. **`SleepTask` Delay Units & Downstream Tick Conversion**:
    - *Reason it could not be closed*: The covered instructions in `PORT31-ROM-SLEEPTASK-BODY` (`0xFCEF33E0..0xFCEF345F`) prove only that `SleepTask` forwards its incoming delay argument unchanged (`mov r1, r4`) to timer configuration callee `0xBFE15014` at ROM `0xFCEF3A60`. Delay units (milliseconds vs ticks) and any downstream tick conversion formula are NOT established because callee `0xFCEF3A60` was not read.
    - *Range / evidence needed*: Reading timer configuration callee `0xBFE15014` at ROM `0xFCEF3A60`. The range start is `0xFCEF3A60`, but the routine body has no exact bounds established in committed documentation (length is unlocalised / unbounded without reading the callee epilogue).
 
@@ -270,10 +278,10 @@ Under the project decision rule mandated by the task specification:
 > [!WARNING]
 > **Final Verdict for PORT-31 T1**: **`NO-GO`**
 >
-> While incoming parameter forwarding and TCB storage of `r0` (into `[TCB + 0x24]`), parameter extraction, range checking, and ready-queue enqueuing of `r1` (scheduling priority), argument forwarding, TCB storage, and byte-count semantics of `r2` (stack size in bytes), task entry point `r3` (into `[TCB + 0xC]`), argument storage of `sp[0]` (into `[TCB + 0x10]`), and dynamic allocation delegation to heap pool `0x000403A4` are certified as **`[VERIFIED]`**, five required items cannot be verified:
-> 1. **`r0` Task Name String Semantics**: Cited ROM instructions treat `r0` purely as an opaque 32-bit word. That `r0` represents a null-terminated C string is **`[INFERRED]`** from stock call-site data; no consumer reading `[TCB + 0x24]` as a C string was read in ROM.
+> While incoming parameter forwarding and TCB storage of `r0` (into `[TCB + 0x24]`), parameter extraction, range checking, and ready-queue enqueuing of `r1` (scheduling priority), argument forwarding, TCB storage, and byte-count semantics of `r2` (stack size in bytes), task entry point `r3` (into `[TCB + 0xC]`), argument storage of `sp[0]` (into `[TCB + 0x10]`), dynamic allocation flag `0x80` in `[TCB + 0x4A]`, and numeric argument forwarding in wrapper `0xBFE11E62` (loading `r0 = 0x000403A4`, `r1 = size`, and tail-calling `0xBFE1452E`) are certified as **`[VERIFIED]`**, the required items cannot all be verified:
+> 1. **`r0` Task Name String Semantics**: Cited ROM instructions treat `r0` purely as an opaque 32-bit word. That `r0` represents a null-terminated C string is **`[INFERRED]`** (provenance: `HISTORICAL_CHDK` and stock call-site data); no consumer reading `[TCB + 0x24]` as a C string was read in ROM.
 > 2. **`sp[0]` Task-Argument Delivery**: Storage into `[TCB + 0x10]` is verified, but downstream task dispatcher delivery of this argument to the task entry function remains **`[UNKNOWN]`**.
-> 3. **`r2` Stack Allocator Internal Implementation**: Dynamic delegation to heap pool `0x000403A4` is verified, but internal heap allocator routine `0xBFE1452E` (ROM `0xFCEF2F7A`) lies outside authorized read slices and remains **`[UNKNOWN]`**.
+> 3. **`r2` Stack Allocator Internal Implementation & Pool-Descriptor Role**: Wrapper `0xBFE11E62` loading numeric constant `0x000403A4` into `r0`, forwarding size in `r1`, and tail-calling `0xBFE1452E` is verified, but the interpretation that `0x000403A4` identifies a heap pool descriptor is **`[INFERRED]`** (provenance: `HISTORICAL_CHDK`); callee `0xBFE1452E` (ROM `0xFCEF2F7A`) was not read and no descriptor layout was verified, so internal heap allocator implementation and descriptor role remain **`[UNKNOWN]`**.
 > 4. **`r2` Runtime Default Stack Size**: ROM initializers for `*(0x000081D0)` and `*(0x0000811C)` are `0x00000000` (zero). Runtime default values depend on unlocalised initialization writers and remain **`[UNKNOWN]`**.
 > 5. **`r2` Stack Buffer & Initial SP Alignment**: Buffer alignment returned by allocator `0xBFE1452E` and initial stack pointer alignment in downstream context setup remain unverified because the external callee bodies lie outside authorized read slices and remain **`[UNKNOWN]`**.
 >
