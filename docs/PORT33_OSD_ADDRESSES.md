@@ -1,0 +1,39 @@
+# PORT-33: Opt-In `G3X_OSD=1` Overlay Candidate Addresses & Assumptions Table
+
+## 1. Build & Artifact Metadata
+
+| Field | Value |
+|:---|:---|
+| **Pinned Toolchain** | `toolchains/gcc-arm-none-eabi-5_4-2016q3` (`arm-none-eabi-gcc` 5.4.1 20160919) |
+| **Flag-On Build Command** | `G3X_OSD=1 python3 -B tools/build_candidate_port25_ladder_fix.py --osd --out-dir <dir>` |
+| **Flag-On `DISKBOOT.BIN` SHA-256** | `683751539979f3e8956fd6c1794683c062f54385e6e1a3261b02ed8d63cc9855` |
+| **Flag-On `DISKBOOT.BIN` Size** | `124,833` bytes (`candidate_loader.bin`: `124,832` B) |
+| **Flag-On Loaded Size (`candidate_main.bin`)** | `123,392` bytes (`0x003489B4..0x00366BB4`; `boot_witness`: `0x00361150`) |
+| **Flag-On Linked `_end` (`core_end_symbol`)** | `0x00368660` |
+| **Flag-On Heap Start (`dryos_heap_base`)** | `0x00368680` (`linked _end = 0x00368660 <= heap_start = 0x00368680`, `32` B clearance) |
+| **Flag-Off Combined Command** | `python3 -B tools/build_candidate_port25_ladder_fix.py --ladder-fix --out-dir <dir>` (`G3X_RESIDENT` & `G3X_OSD` unset/`0`) |
+| **Flag-Off Combined `DISKBOOT.BIN` SHA-256** | `9ba62067c17d654a3b8995fc6e8c26176321154054a138a465ca66f9ff763a15` (`124,865` bytes, byte-identical to PORT-25) |
+| **Flag-Off Default `DISKBOOT.BIN` SHA-256** | `9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136` (`118,001` bytes, byte-identical to PORT-19/24/25) |
+| **G3X_RESIDENT=1 Only `DISKBOOT.BIN` SHA-256** | `63c7942f561242b55d8226bfefe7818dd5b959aee35eae0adb4f41a4783ece5a` (`124,561` bytes, byte-identical to PORT-32) |
+| **Test Overlay Specification** | 120x40 px opaque filled rectangle at (16, 16) with 2px white border, checkerboard background, and centered "CHDK" text pattern, redrawn every ~1 s for >=30 s |
+
+## 2. Adapted Addresses & Constants Table
+
+| name | GM1.10C value | label | sibling source path:line | owner observation that confirms/refutes | source / manifest |
+|:---|:---:|:---:|:---|:---|:---|
+| `active_bitmap_buffer` | `0x0000D2A4` | `FINSIG` | `chdk-port/platform/g7x/lib.c:263`<br>`chdk-port/platform/g5x/sub/100c/stubs_entry.S:186` | **Confirms**: Overlay renders on active display buffer without flicker or page tearing.<br>**Refutes**: Rendering to stale or inactive buffer creates no visible overlay. | `reference/finsig_gm110c/stubs_entry.S:186` |
+| `bitmap_buffer` | `0x0000D2A8` | `FINSIG` | `chdk-port/platform/g7x/lib.c:263`<br>`chdk-port/platform/g5x/lib.c:21`<br>`chdk-port/platform/g5x/sub/100c/stubs_entry.S:188` | **Confirms**: 16bpp UYVY overlay pixels appear in stock UI buffer without memory fault.<br>**Refutes**: Fault/crash on writing display DRAM or garbled screen memory. | `reference/finsig_gm110c/stubs_entry.S:188` |
+| `opacity_buffer` | `0xFC1837FC` | `ROM_VERIFIED` | `chdk-port/platform/g5x/sub/100c/stubs_min.S:3`<br>`chdk-port/platform/g7x/lib.c:291`<br>`chdk-port/platform/g3x/sub/110c/stubs_min.S:4` | **Confirms**: 0xFF opacity bytes make test overlay solidly opaque over live view / Canon UI.<br>**Refutes**: Overlay is completely transparent or compositor hangs on opacity read. | `evidence/port33_manifest.json` (`PORT33-ROM-OPACITY-BUFFER`) |
+| `transfer_src_overlay` | `0xFC380635` | `FINSIG` | `chdk-port/platform/g7x/lib.c:13`<br>`chdk-port/platform/g5x/lib.c:10`<br>`chdk-port/platform/g5x/sub/100c/stubs_entry.S:348` | **Confirms**: Display compositor updates screen with new overlay content every ~1 s.<br>**Refutes**: Static overlay never updates or camera asserts in display transfer task. | `reference/finsig_gm110c/stubs_entry.S:352` |
+| `CreateTask` | `0xBFE14A3D` | `FINSIG` | `chdk-port/platform/g7x/sub/100d/boot.c:30`<br>`chdk-port/platform/sx710hs/sub/100a/boot.c:31`<br>`chdk-port/include/lolevel.h:54` | **Confirms**: Second CHDK task ("OSDOverlay", prio 25, stack 0x2000) spawns and runs.<br>**Refutes**: Kernel task creation returns error code or crashes DryOS scheduler. | `reference/finsig_gm110c/stubs_entry.S:200` |
+| `SleepTask` veneer | `0xFC31BF84` | `ROM_VERIFIED` | `chdk-port/platform/g7x/sub/100d/stubs_entry.S:310`<br>`chdk-port/include/lolevel.h:52` | **Confirms**: OSD task suspends for ~1,000 ms between overlay redraw passes.<br>**Refutes**: Task starves lower-priority threads or hangs system clock. | `docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json` (`PORT27-ROM-SLEEPTASK-VENEER`) |
+| `dryos_heap_base` | `0x00368680` | `ROM_VERIFIED` | `chdk-port/platform/g5x/sub/100c/boot.c:190`<br>`chdk-port/platform/g7x/sub/100d/boot.c:165` | **Confirms**: Core image (`_end = 0x00368660`) is strictly excluded from heap pool 1.<br>**Refutes**: Heap allocator overwrites CHDK code/data during camera operation. | `docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json` (`PORT27-ROM-HEAP-SETUP`) |
+| `G3X_LED_MMIO_ADDR` | `0xD20B0884` | `ROM_VERIFIED` | `chdk-port/platform/g16/sub/100h/boot.c:40`<br>`chdk-port/platform/sx60hs/sub/100f/boot.c:531` | **Confirms**: Green rear LED continues double-blinking at ~1 Hz while OSD overlay updates.<br>**Refutes**: LED stops blinking or stays permanently ON/OFF. | `docs/agentbridge/PORT25_EVIDENCE_MANIFEST.json` (`PORT25-ROM-GPIO-WRITE-MMIO`) |
+| `sub_fc0d0126` | `0xFC0D0126` | `ROM_VERIFIED` | `chdk-port/platform/g5x/sub/100c/boot.c:473`<br>`chdk-port/platform/g7x/sub/100d/boot.c:375` | **Confirms**: Stock firmware initialization proceeds into normal shooting/playback mode.<br>**Refutes**: Camera freezes at handoff before reaching operational state. | `docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json` (`PORT27-ROM-FIRMWARE-CONT`) |
+| `CAM_SCREEN_WIDTH` | `720` | `HISTORICAL_CHDK` | `chdk-port/platform/g7x/lib.c:316`<br>`chdk-port/platform/g3x/platform_camera.h:75` | **Confirms**: Horizontal coordinate space matches camera physical display width.<br>**Refutes**: Visual truncation or aspect ratio stretch on screen. | `chdk-port/platform/g3x/platform_camera.h:75` |
+| `CAM_SCREEN_HEIGHT` | `480` | `HISTORICAL_CHDK` | `chdk-port/platform/g7x/lib.c:317`<br>`chdk-port/platform/g3x/platform_camera.h:76` | **Confirms**: Vertical coordinate space matches camera physical display height.<br>**Refutes**: Visual vertical clipping or coordinate shift. | `chdk-port/platform/g3x/platform_camera.h:76` |
+| `CAM_BITMAP_WIDTH` | `736` | `HISTORICAL_CHDK` | `chdk-port/platform/g7x/lib.c:317`<br>`chdk-port/platform/g3x/platform_camera.h:73` | **Confirms**: 736-pixel buffer stride prevents line tearing or diagonal skew.<br>**Refutes**: Diagonal shearing or corrupted line scanning in overlay. | `chdk-port/platform/g3x/platform_camera.h:73` |
+| `CAM_BITMAP_HEIGHT` | `480` | `HISTORICAL_CHDK` | `chdk-port/platform/g7x/lib.c:318`<br>`chdk-port/platform/g3x/platform_camera.h:74` | **Confirms**: Buffer allocation height matches display hardware buffer vertical bounds.<br>**Refutes**: Vertical buffer overflow into adjacent DRAM regions. | `chdk-port/platform/g3x/platform_camera.h:74` |
+| `G3X_UYVY_WHITE` | `0xEB80EB80` | `HISTORICAL_CHDK` | `chdk-port/core/gui_draw.c:75-80`<br>`chdk-port/platform/g7x/lib.c:263` | **Confirms**: Bright white UYVY (Y=0xEB, U=0x80, V=0x80) draws visible border and "CHDK" text.<br>**Refutes**: Distorted colors or invisible text pattern. | `chdk-port/core/gui_draw.c:75-80` |
+| `G3X_UYVY_DARK` | `0x18801880` | `HISTORICAL_CHDK` | `chdk-port/core/gui_draw.c:115`<br>`chdk-port/platform/g7x/lib.c:263` | **Confirms**: Dark neutral UYVY (Y=0x18, U=0x80, V=0x80) draws dark checkerboard tiles.<br>**Refutes**: Inverted or unreadable checkerboard pattern. | `chdk-port/core/gui_draw.c:115` |
+| `G3X_UYVY_MEDIUM` | `0x38803880` | `HISTORICAL_CHDK` | `chdk-port/core/gui_draw.c:75-80`<br>`chdk-port/platform/g7x/lib.c:263` | **Confirms**: Medium neutral UYVY (Y=0x38, U=0x80, V=0x80) draws contrasting checkerboard tiles.<br>**Refutes**: Low contrast background tiles blend into dark background. | `chdk-port/core/gui_draw.c:75-80` |

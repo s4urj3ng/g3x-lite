@@ -539,15 +539,15 @@ class TestContentAuthenticationAndDigestPinning(unittest.TestCase):
         expected_set = {"docs/PROJECT_STATE.md", "docs/HANDOFF.md"}
         self.assertEqual(set(PINNED_ORIGIN_MAIN_PREFIX_LENGTHS.keys()), expected_set)
         self.assertEqual(APPEND_TOLERANT_PINNED_FILES, frozenset(expected_set))
-        self.assertEqual(PINNED_ORIGIN_MAIN_PREFIX_LENGTHS["docs/PROJECT_STATE.md"], 171564)
-        self.assertEqual(PINNED_ORIGIN_MAIN_PREFIX_LENGTHS["docs/HANDOFF.md"], 244363)
+        self.assertEqual(PINNED_ORIGIN_MAIN_PREFIX_LENGTHS["docs/PROJECT_STATE.md"], 171594)
+        self.assertEqual(PINNED_ORIGIN_MAIN_PREFIX_LENGTHS["docs/HANDOFF.md"], 244393)
         self.assertEqual(
             PINNED_ORIGIN_MAIN_FILE_HASHES["docs/PROJECT_STATE.md"],
-            "6b8000b03e1c4c0b290111a17763f4adeb1a493f9e0385f6d9fa47f6743e74ab",
+            "64d1c7eeba9e22abb2952214e502b874dd2947b806c3445e0295115e3ea89587",
         )
         self.assertEqual(
             PINNED_ORIGIN_MAIN_FILE_HASHES["docs/HANDOFF.md"],
-            "6967e1d8313d5d16070addb8e87ed0adb178c70fa9743b2f3a24c32160e72a67",
+            "5a4a7e9855f1893b7518d60548340ef8e382b47c27751786805357f1ded7266c",
         )
 
     def test_append_tolerant_prefix_modified_byte_truncated_and_appended(self):

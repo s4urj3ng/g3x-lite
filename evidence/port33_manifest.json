@@ -1,0 +1,40 @@
+{
+  "manifest_version": "1.0.0",
+  "authorization_scopes": [
+    {
+      "scope_id": "SCOPE-PORT33-OSD-OVERLAY",
+      "firmware_revision": "GM1.10C",
+      "approved_ranges": [
+        {
+          "start_address": "0xFC1837F0",
+          "end_address": "0xFC18380F",
+          "label": "PORT33-ROM-OPACITY-BUFFER BmpDDev.c opacity buffer pointer table in primary ROM"
+        }
+      ],
+      "max_bytes_total": 4096,
+      "allowed_classifications": [
+        "STATIC_VERIFIED",
+        "INFERRED",
+        "UNKNOWN"
+      ],
+      "description": "PORT-33 GM1.10C OSD bitmap and opacity buffer verification scope"
+    }
+  ],
+  "evidence_entries": [
+    {
+      "evidence_id": "PORT33-ROM-OPACITY-BUFFER",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC1837F0",
+      "end_address": "0xFC18380F",
+      "expected_byte_count": 32,
+      "sha256": "9614d061d4c79f4ab9f6f91f32bcfef74f45db178389c12bc940384a275145fc",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT33-OSD-OVERLAY",
+      "classification": "STATIC_VERIFIED",
+      "notes": "BmpDDev.c string literal and opacity buffer pointer table at 0xFC1837FC (0x5FE80000, 0x5FC40000, 0x5FB80000)"
+    }
+  ]
+}
