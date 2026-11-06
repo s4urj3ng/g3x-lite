@@ -42,12 +42,14 @@ SUB_DIR = CHDK_PORT / "platform" / "g3x" / "sub" / "110c"
 TOOLCHAIN_BIN = REPO_ROOT / "toolchains" / "gcc-arm-none-eabi-5_4-2016q3" / "bin"
 ARM_GCC = TOOLCHAIN_BIN / "arm-none-eabi-gcc"
 ARM_OBJDUMP = TOOLCHAIN_BIN / "arm-none-eabi-objdump"
+ARM_NM = TOOLCHAIN_BIN / "arm-none-eabi-nm"
 
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from build_candidate_port2a import extract_symbol_addr_from_nm  # noqa: E402
 from build_candidate_port25_ladder_fix import (  # noqa: E402
     BOOT_PROTOTYPE_LADDER_C,
     BOOT_PROTOTYPE_RESIDENT_C,
@@ -73,8 +75,10 @@ PINNED_PORT25_LADDER_ONLY_SIZE = 126081
 PINNED_PORT25_COMBINED_SHA256 = "9ba62067c17d654a3b8995fc6e8c26176321154054a138a465ca66f9ff763a15"
 PINNED_PORT25_COMBINED_SIZE = 124865
 
-PINNED_PORT32_RESIDENT_SHA256 = "c9f660b01d5fcba62cb5b659f25a4588c15c3a0f28d9b074f1550f74c5e72fb6"
-PINNED_PORT32_RESIDENT_SIZE = 124993
+PINNED_PORT32_RESIDENT_SHA256 = "d12beea5c4479bf5c41184f996fc5397cb8a30478b5ccedbdf8676fc72de5f42"
+PINNED_PORT32_RESIDENT_SIZE = 124561
+PINNED_PORT32_RESIDENT_MAIN_SIZE = 123120
+PINNED_PORT32_RESIDENT_END_ADDR = 0x00368550
 
 EXPECTED_LADDER_CODES = [
     11, 12, 13, 14, 15,
@@ -257,10 +261,14 @@ class TestPort32ResidentCandidate(unittest.TestCase):
             self.assertEqual(res1["diskboot_size"], res2["diskboot_size"])
             self.assertEqual(res1["diskboot_sha256"], PINNED_PORT32_RESIDENT_SHA256)
             self.assertEqual(res1["diskboot_size"], PINNED_PORT32_RESIDENT_SIZE)
+            self.assertEqual(res1["core_end_addr"], f"0x{PINNED_PORT32_RESIDENT_END_ADDR:08X}")
             self.assertEqual(res1["heap_start_addr"], "0x00368680")
 
-            # Hash and toolchain must appear in docs/PORT32_RESIDENT_CANDIDATE.md
+            # Hash, loaded size, linked _end, heap start, and toolchain must appear in docs/PORT32_RESIDENT_CANDIDATE.md
             self.assertIn(res1["diskboot_sha256"], doc_text)
+            self.assertIn("123,120", doc_text)
+            self.assertIn(res1["core_end_addr"], doc_text)
+            self.assertIn(res1["heap_start_addr"], doc_text)
             self.assertIn("toolchains/gcc-arm-none-eabi-5_4-2016q3", doc_text)
 
             # Disassemble candidate_main.elf to verify resident implementation details
@@ -427,6 +435,54 @@ class TestPort32ResidentCandidate(unittest.TestCase):
             self.assertIn("push\t{r7, lr}", hb_body, "Expected 8-byte aligned compiler prologue push {r7, lr}")
             self.assertNotIn("mov\tsp", hb_body, "No inline sp write allowed in g3x_resident_heartbeat_task")
             self.assertNotIn("sub\tsp", hb_body, "No manual sp adjustment in g3x_resident_heartbeat_task")
+
+    @unittest.skipUnless(HAVE_TOOLCHAIN, "Pinned ARM toolchain required")
+    def test_g_linked_end_within_heap_start_and_manifest_accurate(self) -> None:
+        """(g) Linked _end read from linker output is <= resident heap start, and manifest records real linked _end."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            res = build_candidate(ladder=True, poweron_fix=True, out_dir=tmpdir, resident=True)
+
+            # 1. Read actual linked _end directly from linker output (nm -n on candidate_main.elf)
+            nm_proc = subprocess.run(
+                [str(ARM_NM), "-n", res["core_elf"]],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True,
+            )
+            linked_end = extract_symbol_addr_from_nm(nm_proc.stdout, "_end")
+            self.assertEqual(linked_end, PINNED_PORT32_RESIDENT_END_ADDR)
+            self.assertEqual(os.path.getsize(res["core_bin"]), PINNED_PORT32_RESIDENT_MAIN_SIZE)
+
+            # 2. Read the heap start actually passed in sub_fc05b3c8_my disassembly and metadata
+            objdump_proc = subprocess.run(
+                [str(ARM_OBJDUMP), "-d", res["core_elf"]],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True,
+            )
+            m_heap = re.search(r"<sub_fc05b3c8_my>:(.*?)<sub_fc05b558_my>:", objdump_proc.stdout, re.DOTALL)
+            self.assertIsNotNone(m_heap)
+            self.assertIn("00368680", m_heap.group(1), "sub_fc05b3c8_my must load 0x00368680 as heap start")
+            passed_heap_start = int(res["heap_start_addr"], 16)
+            self.assertEqual(passed_heap_start, G3X_RESIDENT_HEAP_START)
+
+            # 3. Assert linked _end <= heap start (no DryOS heap overlap with CHDK image)
+            self.assertLessEqual(
+                linked_end,
+                passed_heap_start,
+                f"Linked _end (0x{linked_end:08X}) must be <= heap start (0x{passed_heap_start:08X})",
+            )
+
+            # 4. Assert manifest and build metadata _end equal the actual linked _end (not the heap constant)
+            self.assertEqual(int(res["core_end_addr"], 16), linked_end)
+            with open(res["manifest_path"], "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+            inv = manifest["architectural_invariants"]
+            self.assertEqual(int(inv["core_end_symbol"], 16), linked_end)
+            self.assertNotEqual(int(inv["core_end_symbol"], 16), passed_heap_start)
+            self.assertEqual(int(inv["dryos_heap_base"], 16), passed_heap_start)
 
 
 if __name__ == "__main__":

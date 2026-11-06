@@ -389,6 +389,35 @@ static inline __attribute__((always_inline)) void g3x_ladder_pulse_c(void)
 #define G3X_LADDER_OFF_VAL               0x004C0003
 #endif
 
+/* Under G3X_RESIDENT=1, use 16-bit Thumb movs for the low 16-bit LED halfwords
+ * (movs r1, #2 / #3 before movt r1, #0x004d / #0x004c) in LADDER_PULSE_ON_OFF so
+ * the linked resident core image (_end <= 0x00368680, 123,120 B loaded) fits below
+ * the PORT-27 raised DryOS heap start (0x00368680) while keeping flag-off bytes
+ * 100% unchanged. */
+#if defined(LED_LADDER)
+#undef LADDER_PULSE_ON_OFF
+#define LADDER_PULSE_ON_OFF \
+    "    movs    r1, #0x0002\n" \
+    "    movt    r1, #0x004d\n" \
+    "    mrs     r3, cpsr\n" \
+    "    cpsid   i\n" \
+    "    str     r1, [r0]\n" \
+    "    dsb     sy\n" \
+    "    mov.w   r2, #0x100000\n" \
+    "1:\n" \
+    "    subs    r2, r2, #1\n" \
+    "    bne     1b\n" \
+    "    movs    r1, #0x0003\n" \
+    "    movt    r1, #0x004c\n" \
+    "    str     r1, [r0]\n" \
+    "    dsb     sy\n" \
+    "    msr     cpsr_cxsf, r3\n" \
+    "    mov.w   r2, #0x50000\n" \
+    "2:\n" \
+    "    subs    r2, r2, #1\n" \
+    "    bne     2b\n"
+#endif
+
 static inline __attribute__((always_inline)) void g3x_resident_led_write(unsigned int val)
 {
     /* Same LED MMIO register (0xD20B0884) and barrier routine as PORT-25 ladder

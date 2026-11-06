@@ -408,6 +408,10 @@ def build_candidate_core_ladder_fix(
     proc = subprocess.run([NM, "-n", core_elf], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
     witness_addr = extract_symbol_addr_from_nm(proc.stdout, "boot_witness")
     core_end_addr = extract_symbol_addr_from_nm(proc.stdout, "_end")
+    if resident and core_end_addr > G3X_RESIDENT_HEAP_START:
+        raise ValueError(
+            f"Linked _end (0x{core_end_addr:08X}) overlaps resident heap start (0x{G3X_RESIDENT_HEAP_START:08X})"
+        )
     print(f"  [OK] boot_witness discovered at 0x{witness_addr:08X}, _end at 0x{core_end_addr:08X}")
 
     return core_elf, core_bin, witness_addr, core_end_addr
@@ -607,13 +611,26 @@ def build_candidate(
         "witness_inspector_payload.bin": insp_bin,
     }
 
+    heap_start_addr = G3X_RESIDENT_HEAP_START if resident else core_end_addr
+    if core_end_addr > heap_start_addr:
+        raise ValueError(
+            f"Linked _end (0x{core_end_addr:08X}) exceeds heap start (0x{heap_start_addr:08X})"
+        )
+
     manifest_path = generate_manifest(
         artifacts,
         witness_addr=witness_addr,
-        core_end_addr=G3X_RESIDENT_HEAP_START if resident else core_end_addr,
+        core_end_addr=core_end_addr,
         candidate_dir=candidate_dir,
         inspector_verified=True,
     )
+    if resident:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest_data = json.load(f)
+        manifest_data["architectural_invariants"]["core_end_symbol"] = f"0x{core_end_addr:08X}"
+        manifest_data["architectural_invariants"]["dryos_heap_base"] = f"0x{heap_start_addr:08X}"
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest_data, f, indent=2)
 
     diskboot_sha256 = sha256_file(diskboot_bin)
     diskboot_size = os.path.getsize(diskboot_bin)
