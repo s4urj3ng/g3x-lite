@@ -59,9 +59,18 @@ CANDIDATE_PORT25_LADDER_FIX_DIR = os.path.join(REPO_ROOT, "candidate_port25_ladd
 CANDIDATE_PORT25_LADDER_DIR = os.path.join(REPO_ROOT, "candidate_port25_ladder")
 CANDIDATE_PORT25_POWERON_DIR = os.path.join(REPO_ROOT, "candidate_port25_poweron_fix")
 CANDIDATE_PORT25_DEFAULT_DIR = os.path.join(REPO_ROOT, "candidate_port25_default")
+CANDIDATE_PORT32_RESIDENT_DIR = os.path.join(REPO_ROOT, "candidate_port32_resident")
 
 # Backward compatibility alias
 CANDIDATE_LADDER_FIX_DIR = CANDIDATE_PORT25_LADDER_FIX_DIR
+
+G3X_RESIDENT_HEAP_START = 0x00368680
+G3X_RESIDENT_CREATETASK_ADDR = 0xFCEF3488
+G3X_RESIDENT_HANDOFF_ADDR = 0xFC0D0126
+G3X_RESIDENT_SLEEPTASK_VENEER = 0xFC31BF84
+G3X_RESIDENT_SLEEPTASK_ADDR = 0xFCEF33B4
+G3X_RESIDENT_STACK_SIZE = 0x2000
+G3X_RESIDENT_PRIORITY = 0x19
 
 LADDER_ENTRY_S = str(SUB_DIR / "loader_entry_breadcrumb.S")
 LADDER_LOADER_C = str(SUB_DIR / "loader_main_breadcrumb.c")
@@ -135,6 +144,97 @@ def generate_boot_prototype_ladder_c() -> str:
 BOOT_PROTOTYPE_LADDER_C = generate_boot_prototype_ladder_c()
 
 
+def generate_boot_prototype_resident_c() -> str:
+    """Generate boot_prototype C source with opt-in G3X_RESIDENT=1 blocks."""
+    src = generate_boot_prototype_ladder_c()
+
+    target_new_sa = "const char * const new_sa = &_end;\n"
+    repl_new_sa = (
+        "#if defined(G3X_RESIDENT) && (G3X_RESIDENT == 1)\n"
+        "/* Raised heap start 0x00368680 [docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json: PORT27-ROM-HEAP-SETUP] */\n"
+        "const char * const new_sa = (const char *)G3X_RESIDENT_HEAP_START;\n"
+        "#else\n"
+        "const char * const new_sa = &_end;\n"
+        "#endif\n"
+    )
+
+    target_heap_ldr = (
+        "        // Load shifted heap base from new_sa (&_end)\n"
+        '        "    ldr     r4, =new_sa\\n"\n'
+        '        "    ldr     r4, [r4]\\n"'
+    )
+    repl_heap_ldr = (
+        "#if defined(G3X_RESIDENT) && (G3X_RESIDENT == 1)\n"
+        "        /* Load raised heap base 0x00368680 [docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json: PORT27-ROM-HEAP-SETUP] */\n"
+        '        "    ldr     r4, =0x00368680\\n"\n'
+        "#else\n"
+        "        // Load shifted heap base from new_sa (&_end)\n"
+        '        "    ldr     r4, =new_sa\\n"\n'
+        '        "    ldr     r4, [r4]\\n"\n'
+        "#endif"
+    )
+
+    target_handoff = (
+        'CORE_LADDER_PULSE_44 "    pop.w   {r4, lr}\\n"\n'
+        '        "    b.w     sub_fc0d0126\\n"'
+    )
+    repl_handoff = (
+        "CORE_LADDER_PULSE_44\n"
+        "#if defined(G3X_RESIDENT) && (G3X_RESIDENT == 1)\n"
+        "        /* Spawn resident heartbeat task via CreateTask at 0xFCEF3488 after ladder\n"
+        "         * completes and at the sub_fc0d0126 (0xFC0D0126) handoff point\n"
+        "         * [evidence/port31_manifest.json: PORT29-ROM-CREATETASK;\n"
+        "         *  docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json: PORT27-ROM-FIRMWARE-CONT] */\n"
+        "        G3X_SPAWN_RESIDENT_HEARTBEAT\n"
+        "#endif\n"
+        '        "    pop.w   {r4, lr}\\n"\n'
+        '        "    b.w     sub_fc0d0126\\n"'
+    )
+
+    resident_replacements = [
+        (target_new_sa, repl_new_sa),
+        (target_heap_ldr, repl_heap_ldr),
+        (target_handoff, repl_handoff),
+    ]
+    for target, repl in resident_replacements:
+        if target not in src:
+            raise ValueError(f"Resident target pattern not found in ladder source: {target!r}")
+        src = src.replace(target, repl, 1)
+
+    resident_task_block = """
+#if defined(G3X_RESIDENT) && (G3X_RESIDENT == 1)
+/* =============================================================================
+ * PORT-32 Resident Heartbeat Task (G3X_RESIDENT=1)
+ * Blinks rear green LED (0xD20B0884, ON 0x004D0002, OFF 0x004C0003) at ~1 Hz
+ * in a double-short-blink pattern (100 ms ON, 100 ms OFF, 100 ms ON, 700 ms OFF)
+ * using manifest-cited SleepTask (0xFC31BF84 / 0xFCEF33B4; delay unit ms INFERRED).
+ * Stack alignment at task entry is INFERRED (no inline sp write in C task body).
+ * Manifest citations:
+ * - docs/agentbridge/PORT25_EVIDENCE_MANIFEST.json: PORT25-ROM-GPIO-WRITE-MMIO
+ * - docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json: PORT27-ROM-SLEEPTASK-VENEER
+ * - evidence/port31_manifest.json: PORT30-ROM-SLEEPTASK, PORT31-ROM-SLEEPTASK-BODY
+ * ============================================================================= */
+void __attribute__((noinline)) g3x_resident_heartbeat_task(void)
+{
+    for (;;) {
+        g3x_resident_led_write(G3X_LADDER_ON_VAL);
+        g3x_resident_sleep_inferred_ms(G3X_HEARTBEAT_ON_MS);
+        g3x_resident_led_write(G3X_LADDER_OFF_VAL);
+        g3x_resident_sleep_inferred_ms(G3X_HEARTBEAT_GAP_MS);
+        g3x_resident_led_write(G3X_LADDER_ON_VAL);
+        g3x_resident_sleep_inferred_ms(G3X_HEARTBEAT_ON_MS);
+        g3x_resident_led_write(G3X_LADDER_OFF_VAL);
+        g3x_resident_sleep_inferred_ms(G3X_HEARTBEAT_PAUSE_MS);
+    }
+}
+#endif
+"""
+    return src + resident_task_block
+
+
+BOOT_PROTOTYPE_RESIDENT_C = generate_boot_prototype_resident_c()
+
+
 
 def ensure_bootstrap():
     """Ensure platform bootstrap has populated platform headers if missing."""
@@ -148,12 +248,19 @@ def build_candidate_core_ladder_fix(
     ladder: bool = True,
     poweron_fix: bool = True,
     candidate_dir: str = CANDIDATE_LADDER_FIX_DIR,
+    resident: bool = False,
 ) -> tuple[str, str, int, int]:
-    """Compile candidate core with optional LED_LADDER and G3X_POWERON_FIX defines."""
-    print(f"--- Building Candidate Core (ladder={ladder}, poweron_fix={poweron_fix}) (@ 0x003489B4) ---")
+    """Compile candidate core with optional LED_LADDER, G3X_POWERON_FIX, and G3X_RESIDENT defines."""
+    print(
+        f"--- Building Candidate Core (ladder={ladder}, poweron_fix={poweron_fix}, resident={resident}) (@ 0x003489B4) ---"
+    )
     os.makedirs(candidate_dir, exist_ok=True)
 
-    if ladder:
+    if resident:
+        boot_proto_c = os.path.join(candidate_dir, "boot_prototype_resident.c")
+        with open(boot_proto_c, "w", encoding="utf-8") as f:
+            f.write(BOOT_PROTOTYPE_RESIDENT_C)
+    elif ladder:
         boot_proto_c = os.path.join(candidate_dir, "boot_prototype_ladder.c")
         with open(boot_proto_c, "w", encoding="utf-8") as f:
             f.write(BOOT_PROTOTYPE_LADDER_C)
@@ -215,6 +322,8 @@ def build_candidate_core_ladder_fix(
         cflags.append("-DG3X_POWERON_FIX=1")
     if ladder:
         cflags.append("-DLED_LADDER=1")
+    if resident:
+        cflags.append("-DG3X_RESIDENT=1")
     cflags.extend(["-c", "-o", boot_proto_o, boot_proto_c])
     run_cmd(cflags, cwd=str(CHDK_PORT))
 
@@ -415,16 +524,40 @@ def build_candidate_loader_ladder_fix(
     return loader_elf, loader_bin
 
 
+def _check_not_tracked_dir(candidate_dir: str) -> None:
+    """Refuse to write build outputs into tracked repository directories."""
+    abs_dir = Path(candidate_dir).resolve()
+    forbidden_roots = [
+        (REPO_ROOT / "chdk-port").resolve(),
+        (REPO_ROOT / "docs").resolve(),
+        (REPO_ROOT / "tools").resolve(),
+        (REPO_ROOT / "tests").resolve(),
+        (REPO_ROOT / "evidence").resolve(),
+        (REPO_ROOT / "firmware").resolve(),
+    ]
+    if abs_dir == REPO_ROOT.resolve():
+        raise ValueError(f"Refusing to emit candidate outputs directly into repository root: {candidate_dir}")
+    for root in forbidden_roots:
+        if abs_dir == root or root in abs_dir.parents:
+            raise ValueError(f"Refusing to emit candidate outputs into tracked path: {candidate_dir}")
+
+
 def build_candidate(
     ladder: bool = True,
     poweron_fix: bool = True,
     out_dir: str | None = None,
+    resident: bool | None = None,
 ) -> dict:
     """Execute complete combined candidate build pipeline."""
     ensure_bootstrap()
 
+    if resident is None:
+        resident = os.environ.get("G3X_RESIDENT", "0") == "1"
+
     if out_dir:
         candidate_dir = os.path.abspath(out_dir)
+    elif resident:
+        candidate_dir = CANDIDATE_PORT32_RESIDENT_DIR
     elif ladder and poweron_fix:
         candidate_dir = CANDIDATE_PORT25_LADDER_FIX_DIR
     elif ladder:
@@ -434,11 +567,15 @@ def build_candidate(
     else:
         candidate_dir = CANDIDATE_PORT25_DEFAULT_DIR
 
+    _check_not_tracked_dir(candidate_dir)
     os.makedirs(candidate_dir, exist_ok=True)
 
     # 1. Build core
     core_elf, core_bin, witness_addr, core_end_addr = build_candidate_core_ladder_fix(
-        ladder=ladder, poweron_fix=poweron_fix, candidate_dir=candidate_dir
+        ladder=ladder,
+        poweron_fix=poweron_fix,
+        candidate_dir=candidate_dir,
+        resident=resident,
     )
 
     # 2. Build loader
@@ -473,7 +610,7 @@ def build_candidate(
     manifest_path = generate_manifest(
         artifacts,
         witness_addr=witness_addr,
-        core_end_addr=core_end_addr,
+        core_end_addr=G3X_RESIDENT_HEAP_START if resident else core_end_addr,
         candidate_dir=candidate_dir,
         inspector_verified=True,
     )
@@ -494,6 +631,8 @@ def build_candidate(
         "manifest_path": manifest_path,
         "witness_addr": f"0x{witness_addr:08X}",
         "core_end_addr": f"0x{core_end_addr:08X}",
+        "heap_start_addr": f"0x{(G3X_RESIDENT_HEAP_START if resident else core_end_addr):08X}",
+        "resident": resident,
         "diskboot_sha256": diskboot_sha256,
         "diskboot_size": diskboot_size,
     }
@@ -501,7 +640,7 @@ def build_candidate(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="PORT-25 T3: Opt-in combined breadcrumb ladder + G3X_POWERON_FIX builder for G3 X (GM1.10C)"
+        description="PORT-25/32: Opt-in combined breadcrumb ladder + G3X_POWERON_FIX + G3X_RESIDENT builder for G3 X (GM1.10C)"
     )
     parser.add_argument(
         "--out-dir",
@@ -530,23 +669,38 @@ def main():
         action="store_true",
         help="Build combined ladder + poweron_fix candidate (ladder=1, poweron_fix=1)",
     )
+    parser.add_argument(
+        "--resident",
+        action="store_true",
+        help="Build opt-in G3X_RESIDENT=1 heartbeat candidate (ladder=1, poweron_fix=1, resident=1)",
+    )
     args = parser.parse_args()
+
+    resident = bool(args.resident or os.environ.get("G3X_RESIDENT", "0") == "1")
 
     if args.default:
         ladder = False
         poweron_fix = False
+        resident = False
     elif args.ladder:
         ladder = True
         poweron_fix = False
+        resident = False
     elif args.poweron_fix:
         ladder = False
         poweron_fix = True
+        resident = False
     else:
         # Default behavior: build combined candidate (ladder=1, poweron_fix=1)
         ladder = True
         poweron_fix = True
 
-    res = build_candidate(ladder=ladder, poweron_fix=poweron_fix, out_dir=args.out_dir)
+    res = build_candidate(
+        ladder=ladder,
+        poweron_fix=poweron_fix,
+        out_dir=args.out_dir,
+        resident=resident,
+    )
 
     print("\nSummary:")
     print(f"  Directory:    {res['candidate_dir']}")
@@ -555,6 +709,8 @@ def main():
     print(f"  Size:         {res['diskboot_size']} bytes")
     print(f"  boot_witness: {res['witness_addr']}")
     print(f"  _end:         {res['core_end_addr']}")
+    print(f"  heap_start:   {res['heap_start_addr']}")
+    print(f"  resident:     {res['resident']}")
 
 
 if __name__ == "__main__":

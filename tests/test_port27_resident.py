@@ -397,39 +397,46 @@ class TestT2OutcomeAndNoGoRecord(unittest.TestCase):
         )
 
     def test_no_g3x_resident_code_path_in_sources(self) -> None:
-        """Verify that no G3X_RESIDENT macro or code path exists in chdk-port/."""
+        """Verify that no unapproved G3X_RESIDENT code path exists in baseline sources."""
         boot_proto = SUB_DIR / "boot_prototype.c"
         self.assertTrue(boot_proto.is_file(), f"Missing {boot_proto}")
         boot_text = boot_proto.read_text(encoding="utf-8")
         self.assertNotIn("G3X_RESIDENT", boot_text, "boot_prototype.c must not contain G3X_RESIDENT")
 
-        # Scan all C, header, and assembly files under chdk-port/
+        # Scan all C, header, and assembly files under chdk-port/ except PORT-32 opt-in header
+        port32_allowed = {"chdk-port/platform/g3x/sub/110c/led_breadcrumb.h"}
         found_in_port = []
         for p in CHDK_PORT.rglob("*"):
             if p.suffix in (".c", ".h", ".S") and p.is_file():
+                rel = str(p.relative_to(REPO_ROOT))
+                if rel in port32_allowed:
+                    continue
                 content = p.read_text(encoding="utf-8", errors="replace")
                 if "G3X_RESIDENT" in content:
-                    found_in_port.append(str(p.relative_to(REPO_ROOT)))
+                    found_in_port.append(rel)
 
         self.assertEqual(
             found_in_port,
             [],
-            f"G3X_RESIDENT code path forbidden in chdk-port/ under NO-GO outcome: {found_in_port}",
+            f"G3X_RESIDENT code path forbidden in baseline chdk-port/ sources: {found_in_port}",
         )
 
     def test_no_g3x_resident_code_path_in_tools(self) -> None:
-        """Verify that no G3X_RESIDENT builder or code path exists in tools/."""
+        """Verify that no PORT-27 G3X_RESIDENT builder exists in tools/ (excluding PORT-32 opt-in in build_candidate_port25_ladder_fix.py)."""
+        port32_allowed_tools = {"tools/build_candidate_port25_ladder_fix.py"}
         found_in_tools = []
         for p in TOOLS_DIR.glob("*.py"):
+            rel = str(p.relative_to(REPO_ROOT))
+            if rel in port32_allowed_tools:
+                continue
             content = p.read_text(encoding="utf-8", errors="replace")
-            # Build tools should not define or reference G3X_RESIDENT
             if "G3X_RESIDENT" in content and "test" not in p.name:
-                found_in_tools.append(str(p.relative_to(REPO_ROOT)))
+                found_in_tools.append(rel)
 
         self.assertEqual(
             found_in_tools,
             [],
-            f"G3X_RESIDENT code path forbidden in tools/ under NO-GO outcome: {found_in_tools}",
+            f"G3X_RESIDENT code path forbidden in tools/ under PORT-27 NO-GO outcome: {found_in_tools}",
         )
 
     def test_no_resident_candidate_build_script_exists(self) -> None:

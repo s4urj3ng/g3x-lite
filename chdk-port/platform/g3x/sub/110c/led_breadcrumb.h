@@ -307,4 +307,142 @@ static inline __attribute__((always_inline)) void g3x_ladder_pulse_c(void)
 
 #endif /* LED_LADDER */
 
+#if defined(G3X_RESIDENT) && (G3X_RESIDENT == 1)
+
+/* ============================================================================
+ * PORT-32 Opt-In Resident Heartbeat Candidate (G3X_RESIDENT=1)
+ *
+ * Every firmware address is cited to a validated PORT-24/25/27/29/30/31 manifest:
+ * - 0x00368680: Raised DryOS heap start (new_sa)
+ *   Manifest: docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json (PORT27-ROM-HEAP-SETUP)
+ * - 0xFCEF3488: DryOS CreateTask ROM entry (Thumb-2, 0xFCEF3488..0xFCEF34F9)
+ *   Manifest: evidence/port31_manifest.json (PORT29-ROM-CREATETASK)
+ *             evidence/port29_manifest.json (PORT29-ROM-CREATETASK)
+ *             evidence/port30_manifest.json (PORT29-ROM-CREATETASK)
+ * - 0xFC0D0126: Stock task_Startup continuation handoff (sub_fc0d0126)
+ *   Manifest: docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json (PORT27-ROM-FIRMWARE-CONT)
+ *             docs/agentbridge/PORT25_EVIDENCE_MANIFEST.json (PORT25-ROM-FIRMWARE-CONT)
+ * - 0xFC31BF84: DryOS SleepTask ARM veneer (0xFC31BF84..0xFC31BF8F -> ATCM 0xBFE14969)
+ *   Manifest: docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json (PORT27-ROM-SLEEPTASK-VENEER,
+ *             PORT27-ROM-WATCHDOG-MODULE)
+ * - 0xFCEF33B4: DryOS SleepTask Thumb-2 ROM entry (0xFCEF33A0..0xFCEF345F)
+ *   Manifest: evidence/port31_manifest.json (PORT30-ROM-SLEEPTASK, PORT31-ROM-SLEEPTASK-BODY)
+ * - 0xD20B0884: Rear green LED MMIO register (ON 0x004D0002, OFF 0x004C0003)
+ *   Manifest: docs/agentbridge/PORT25_EVIDENCE_MANIFEST.json (PORT25-ROM-GPIO-WRITE-MMIO)
+ *             docs/agentbridge/PORT24_EVIDENCE_MANIFEST.json (PORT24-ROM-GPIO-WRITE-MMIO)
+ * ============================================================================ */
+
+/* Raised heap base under G3X_RESIDENT=1 only
+ * [VERIFIED exclusion / INFERRED runtime survival:
+ *  docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json: PORT27-ROM-HEAP-SETUP] */
+#define G3X_RESIDENT_HEAP_START          0x00368680
+
+/* DryOS CreateTask ROM entry
+ * [VERIFIED instruction body:
+ *  evidence/port31_manifest.json: PORT29-ROM-CREATETASK] */
+#define G3X_RESIDENT_CREATETASK_ADDR     0xFCEF3488
+
+/* Stock task_Startup handoff target sub_fc0d0126
+ * [VERIFIED instruction body:
+ *  docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json: PORT27-ROM-FIRMWARE-CONT;
+ *  docs/agentbridge/PORT25_EVIDENCE_MANIFEST.json: PORT25-ROM-FIRMWARE-CONT] */
+#define G3X_RESIDENT_HANDOFF_ADDR        0xFC0D0126
+
+/* DryOS SleepTask veneer & ROM entry
+ * [VERIFIED veneer & body; delay unit (ms) is INFERRED:
+ *  docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json: PORT27-ROM-SLEEPTASK-VENEER;
+ *  evidence/port31_manifest.json: PORT30-ROM-SLEEPTASK, PORT31-ROM-SLEEPTASK-BODY] */
+#define G3X_RESIDENT_SLEEPTASK_VENEER    0xFC31BF84
+#define G3X_RESIDENT_SLEEPTASK_ADDR      0xFCEF33B4
+
+/* Explicit stack size copied from DIGIC 6 ports (never r2=0).
+ * Stack alignment at task entry is INFERRED (no inline sp write in C task body).
+ * [VERIFIED byte-count forwarding in PORT31-ROM-STACK-CALLEES;
+ *  INFERRED adequacy & entry stack alignment from chdk-port/platform/g3x/sub/110c/boot.c:21-24,
+ *  chdk-port/platform/g3x/sub/110c/boot_prototype.c:75-79,
+ *  docs/PORT9A_RUNTIME_INTEGRATION_MAP.md:97,115,
+ *  docs/PORT5B_HISTORICAL_BOOT_COMPARISON.md:189] */
+#define G3X_RESIDENT_STACK_SIZE          0x2000
+
+/* Task priority numerically no higher-urgency than startup tasks (25 >= 25, 25 > 23)
+ * [VERIFIED range check 1..32 in PORT29-ROM-CREATETASK;
+ *  cited to task_Startup=25 in PORT27-ROM-STARTUP-TASKS,
+ *  task_PhySw=23 in PORT25-ROM-PHYSW-TASK,
+ *  chdk-port/platform/g3x/sub/110c/boot.c:21-24,
+ *  chdk-port/platform/g3x/sub/110c/boot_prototype.c:75-79, 368] */
+#define G3X_RESIDENT_PRIORITY            0x19
+
+/* ~1 Hz double-short-blink heartbeat timing (delay unit: milliseconds, INFERRED)
+ * Pattern: 100 ms ON, 100 ms OFF, 100 ms ON, 700 ms OFF = 1000 ms (1.0 Hz) period.
+ * Distinct from PORT-25 count-coded ladder (1..7, 11..44) and stock LED behaviour. */
+#define G3X_HEARTBEAT_ON_MS              100   /* INFERRED delay unit: milliseconds */
+#define G3X_HEARTBEAT_GAP_MS             100   /* INFERRED delay unit: milliseconds */
+#define G3X_HEARTBEAT_PAUSE_MS           700   /* INFERRED delay unit: milliseconds */
+
+#ifndef G3X_LADDER_MMIO_ADDR
+#define G3X_LADDER_MMIO_ADDR             0xD20B0884
+#endif
+#ifndef G3X_LADDER_ON_VAL
+#define G3X_LADDER_ON_VAL                0x004D0002
+#endif
+#ifndef G3X_LADDER_OFF_VAL
+#define G3X_LADDER_OFF_VAL               0x004C0003
+#endif
+
+static inline __attribute__((always_inline)) void g3x_resident_led_write(unsigned int val)
+{
+    /* Same LED MMIO register (0xD20B0884) and barrier routine as PORT-25 ladder
+     * [docs/agentbridge/PORT25_EVIDENCE_MANIFEST.json: PORT25-ROM-GPIO-WRITE-MMIO] */
+    asm volatile (
+        "    str     %1, [%0]\n"
+        "    dsb     sy\n"
+        :
+        : "r" (G3X_LADDER_MMIO_ADDR), "r" (val)
+        : "memory"
+    );
+}
+
+static inline __attribute__((always_inline)) void g3x_resident_sleep_inferred_ms(unsigned int delay_ms)
+{
+    /* Calls manifest-cited SleepTask veneer 0xFC31BF84 (PORT27-ROM-SLEEPTASK-VENEER)
+     * targeting SleepTask body 0xFCEF33B4 / ATCM 0xBFE14968 (PORT30-ROM-SLEEPTASK,
+     * PORT31-ROM-SLEEPTASK-BODY). Delay unit (milliseconds) is INFERRED. */
+    void (*sleep_fn)(unsigned int) = (void (*)(unsigned int))G3X_RESIDENT_SLEEPTASK_VENEER;
+    sleep_fn(delay_ms);
+}
+
+/* Spawned after CORE_LADDER_PULSE_44 at the sub_fc0d0126 handoff point:
+ * r0 = "Heartbeat" (INFERRED task name C-string role; VERIFIED TCB+0x24 store)
+ * r1 = 0x19 (25)   (VERIFIED priority role; INFERRED scheduling compatibility)
+ * r2 = 0x2000      (VERIFIED explicit stack byte count, never 0; INFERRED adequacy)
+ * r3 = g3x_resident_heartbeat_task | 1 (VERIFIED entry store; INFERRED dispatcher call)
+ * sp[0] = 0        (VERIFIED TCB+0x10 store; UNKNOWN delivery role to task entry)
+ * Callee: CreateTask at 0xFCEF3488 (evidence/port31_manifest.json: PORT29-ROM-CREATETASK)
+ * Register & stack preservation: saves and restores r0-r3 (push/pop {r0, r1, r2, r3})
+ * and balances sp (sub/add sp, #8) before pop.w {r4, lr}; b.w sub_fc0d0126
+ * (moreover sub_fc0d0126 takes no register arguments: PORT27-ROM-FIRMWARE-CONT). */
+#define G3X_SPAWN_RESIDENT_HEARTBEAT \
+    "    push    {r0, r1, r2, r3}\n" \
+    "    sub     sp, #8\n" \
+    "    movs    r3, #0\n" \
+    "    str     r3, [sp, #0]\n" \
+    "    ldr     r3, =g3x_resident_heartbeat_task\n" \
+    "    orr     r3, r3, #1\n" \
+    "    mov.w   r2, #0x2000\n" \
+    "    movs    r1, #0x19\n" \
+    "    adr     r0, 99f\n" \
+    "    ldr     r4, =0xFCEF3488\n" \
+    "    orr     r4, r4, #1\n" \
+    "    blx     r4\n" \
+    "    add     sp, #8\n" \
+    "    pop     {r0, r1, r2, r3}\n" \
+    "    b       97f\n" \
+    "    .align  2\n" \
+    "99:\n" \
+    "    .asciz  \"Heartbeat\"\n" \
+    "    .align  2\n" \
+    "97:\n"
+
+#endif /* G3X_RESIDENT */
+
 #endif /* LED_BREADCRUMB_H */

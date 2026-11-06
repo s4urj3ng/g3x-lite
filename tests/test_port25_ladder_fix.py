@@ -827,7 +827,7 @@ class TestPort25LadderFix(unittest.TestCase):
         addrs = re.findall(r"0x[0-9a-fA-F]{8}", content)
         for a in addrs:
             addr_int = int(a, 16)
-            if addr_int >= 0xC0000000:  # MMIO range
+            if 0xC0000000 <= addr_int < 0xFC000000:  # MMIO range (below ROMBASEADDR 0xFC000000)
                 self.assertEqual(
                     addr_int,
                     0xD20B0884,
