@@ -126,6 +126,9 @@ void __attribute__((noinline)) g3x_resident_osd_task(void)
     }
 }
 
+#define G3X_OSD_TASK_PRIORITY       0x19
+#define G3X_OSD_TASK_STACK_SIZE     0x2000
+
 static inline __attribute__((always_inline)) void g3x_spawn_osd_task(void)
 {
     /* Create second CHDK task to draw OSD overlay per include/lolevel.h:54
@@ -135,7 +138,7 @@ static inline __attribute__((always_inline)) void g3x_spawn_osd_task(void)
      * r3 = g3x_resident_osd_task
      * parm = 0
      * Callee: CreateTask via _CreateTask at 0xBFE14A3D */
-    _CreateTask("OSDOverlay", G3X_RESIDENT_PRIORITY, G3X_RESIDENT_STACK_SIZE, g3x_resident_osd_task, 0);
+    _CreateTask("OSDOverlay", G3X_OSD_TASK_PRIORITY, G3X_OSD_TASK_STACK_SIZE, g3x_resident_osd_task, 0);
 }
 
 #endif /* G3X_OSD */
