@@ -1,0 +1,80 @@
+{
+  "manifest_version": "1.0.0",
+  "authorization_scopes": [
+    {
+      "scope_id": "SCOPE-PORT34-KBD-TASK",
+      "firmware_revision": "GM1.10C",
+      "approved_ranges": [
+        {
+          "start_address": "0xFC087E88",
+          "end_address": "0xFC087EA7",
+          "label": "PORT34-ROM-SUB-FC087E88 sub_fc087e88 hardware pre-task check routine"
+        },
+        {
+          "start_address": "0xFC1283AC",
+          "end_address": "0xFC128413",
+          "label": "PORT34-ROM-PHYSW-TASKCREATE task_PhySw and sub_fc1283d2 (taskcreate_physw) in primary ROM"
+        },
+        {
+          "start_address": "0xFC12868C",
+          "end_address": "0xFC12872F",
+          "label": "PORT34-ROM-KBD-P1-F-LITERALS kbd_p1_f and literal pool in primary ROM"
+        }
+      ],
+      "max_bytes_total": 4096,
+      "allowed_classifications": [
+        "STATIC_VERIFIED",
+        "INFERRED",
+        "UNKNOWN"
+      ],
+      "description": "PORT-34 GM1.10C task_PhySw, kbd_p1_f and sub_fc087e88 verification scope"
+    }
+  ],
+  "evidence_entries": [
+    {
+      "evidence_id": "PORT34-ROM-SUB-FC087E88",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC087E88",
+      "end_address": "0xFC087EA7",
+      "expected_byte_count": 32,
+      "sha256": "c87575f94100d3b0e358c3e174640dd5e0be93b1331844db2436b827a1110866",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT34-KBD-TASK",
+      "classification": "STATIC_VERIFIED",
+      "notes": "sub_fc087e88 hardware pre-task check routine invoked by taskcreate_physw at 0xFC1283D4"
+    },
+    {
+      "evidence_id": "PORT34-ROM-PHYSW-TASKCREATE",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC1283AC",
+      "end_address": "0xFC128413",
+      "expected_byte_count": 104,
+      "sha256": "ac7d16ad69045ff89d81c71fba9305614b8df87d55397fa5ac096eb43f02a01c",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT34-KBD-TASK",
+      "classification": "STATIC_VERIFIED",
+      "notes": "task_PhySw (0xFC1283AC) and sub_fc1283d2 (taskcreate_physw, 0xFC1283D2) in GM1.10C primary ROM"
+    },
+    {
+      "evidence_id": "PORT34-ROM-KBD-P1-F-LITERALS",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC12868C",
+      "end_address": "0xFC12872F",
+      "expected_byte_count": 164,
+      "sha256": "bc6ca612429d161a14b2dee2d12599dbb8f9c824b4915ea8086371156f98aaee",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT34-KBD-TASK",
+      "classification": "STATIC_VERIFIED",
+      "notes": "kbd_p1_f (0xFC12868C) and literal pool at 0xFC128704 (physw_run 0x82BC, task_PhySw 0xFC1283AD, PhySw string 0xFC12870C, physw_status 0x40DAC)"
+    }
+  ]
+}
