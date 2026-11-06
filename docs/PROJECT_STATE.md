@@ -1,5 +1,5 @@
-# Project state
-Updated: 2026-10-28
+# Project state — Current milestone: PORT-33
+Updated: 2026-11-06
 
 PORT-11C Offline Evidence Validation Harness (2026-10-28; Worker 6, Gemini; `tools/port11c_evidence_validator.py`, `tests/test_port11c_evidence_validator.py`, `tests/fixtures/port11a_manifest.json`, `tests/fixtures/port11a_trusted_scopes.json`, `docs/PORT11C_EVIDENCE_HARNESS.md`):
 - **Status**: GitHub PR state **`UNKNOWN`** `[UNKNOWN: docs/agentbridge/PORT15_LEDGER.md:1084, 1090]` (deliverables `MERGED` on `origin/main` in commit `a028ef981542eeaddd3a317d9cdb8e908601724e` referencing `(#17)` `[VERIFIED: docs/agentbridge/PORT15_LEDGER.md:608, 1090]`; remote branch `origin/research/port11c-evidence-harness` exists `[VERIFIED: docs/agentbridge/PORT15_LEDGER.md:1083]`).

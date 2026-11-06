@@ -204,40 +204,147 @@ class TestPort33OsdCandidate(unittest.TestCase):
             self.assertIn("<vid_bitmap_refresh>", osd_body)
 
     def test_f_address_literals_appear_in_table_and_manifest(self) -> None:
-        """(f) Every address literal in osd_test_overlay.h appears in docs/PORT33_OSD_ADDRESSES.md."""
+        """(f) Every address literal in osd_test_overlay.h and build script appears in parsed table with verified source."""
         self.assertTrue(OSD_HEADER.is_file(), f"Missing {OSD_HEADER}")
+        self.assertTrue(OSD_DOC.is_file(), f"Missing {OSD_DOC}")
         header_src = OSD_HEADER.read_text(encoding="utf-8")
         doc_src = OSD_DOC.read_text(encoding="utf-8")
 
-        # Extract all 0x... hex literals in osd_test_overlay.h
-        hex_literals = set(re.findall(r"0x[0-9A-Fa-f]{6,8}", header_src))
-        self.assertGreater(len(hex_literals), 0, "Expected address literals in header")
+        # Parse Table 2 from docs/PORT33_OSD_ADDRESSES.md
+        table_rows = {}
+        valid_labels = {"FINSIG", "ROM_VERIFIED", "INFERRED", "HISTORICAL_CHDK"}
+        for line in doc_src.splitlines():
+            line = line.strip()
+            if not line.startswith("|") or not line.endswith("|"):
+                continue
+            cols = [c.strip().replace("`", "") for c in line.split("|")[1:-1]]
+            if len(cols) >= 3 and cols[1].startswith("0x"):
+                try:
+                    val_int = int(cols[1], 16)
+                    table_rows[val_int] = {
+                        "name": cols[0],
+                        "value_str": cols[1],
+                        "label": cols[2],
+                        "source": cols[5] if len(cols) >= 6 else "",
+                    }
+                except ValueError:
+                    pass
 
-        for lit in hex_literals:
-            upper_lit = f"0x{int(lit, 16):08X}"
+        self.assertGreater(len(table_rows), 0, "No address rows parsed from docs/PORT33_OSD_ADDRESSES.md")
+
+        # Extract address literals from code lines in osd_test_overlay.h
+        code_lines = [l for l in header_src.splitlines() if not l.strip().startswith(("*", "/*"))]
+        header_literals = set(re.findall(r"0x[0-9A-Fa-f]{6,8}", "\n".join(code_lines)))
+
+        # Extract address literals from new build-script code
+        build_script_path = TOOLS_DIR / "build_candidate_port25_ladder_fix.py"
+        self.assertTrue(build_script_path.is_file(), f"Missing {build_script_path}")
+        build_script_src = build_script_path.read_text(encoding="utf-8")
+        build_literals = set(re.findall(r"G3X_OSD_[A-Z0-9_]*ADDR\s*=\s*(0x[0-9A-Fa-f]{6,8})", build_script_src))
+
+        all_literals = {int(x, 16) for x in (header_literals | build_literals)}
+        self.assertGreater(len(all_literals), 0, "Expected address literals in header and build script")
+
+        # Load FINSIG sources
+        finsig_sources = [
+            REPO_ROOT / "reference" / "finsig_gm110c" / "stubs_entry.S",
+            REPO_ROOT / "reference" / "finsig_gm110c" / "funcs_by_name.csv",
+            REPO_ROOT / "reference" / "finsig_gm110c" / "funcs_by_address.csv",
+            SUB_DIR / "stubs_min.S",
+        ]
+        finsig_text = "\n".join(f.read_text(encoding="utf-8") for f in finsig_sources if f.is_file()).lower()
+
+        # Load evidence entries from manifest
+        self.assertTrue(MANIFEST_PATH.is_file(), f"Missing {MANIFEST_PATH}")
+        manifest_data = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+        evidence_ranges = [
+            (int(entry["start_address"], 16), int(entry["end_address"], 16))
+            for entry in manifest_data.get("evidence_entries", [])
+        ]
+
+        for lit_int in all_literals:
+            # Assert there is a table row whose label is FINSIG, ROM_VERIFIED, INFERRED or HISTORICAL_CHDK
             self.assertIn(
-                upper_lit,
-                doc_src,
-                f"Address literal {lit} ({upper_lit}) in osd_test_overlay.h missing from docs/PORT33_OSD_ADDRESSES.md",
+                lit_int,
+                table_rows,
+                f"Address literal 0x{lit_int:08X} missing from table in docs/PORT33_OSD_ADDRESSES.md",
+            )
+            row = table_rows[lit_int]
+            self.assertIn(
+                row["label"],
+                valid_labels,
+                f"Table row for 0x{lit_int:08X} has unexpected label '{row['label']}'",
             )
 
+            # For FINSIG rows, assert value appears in FINSIG sources or tracked stubs_min.S
+            if row["label"] == "FINSIG":
+                hex_lower = f"0x{lit_int:08x}"
+                self.assertIn(
+                    hex_lower,
+                    finsig_text,
+                    f"FINSIG address 0x{lit_int:08X} not found in finsig sources or stubs_min.S",
+                )
+
+            # For ROM_VERIFIED rows, assert address falls inside an evidence_entries range in port33_manifest.json
+            elif row["label"] == "ROM_VERIFIED":
+                in_range = any(start <= lit_int <= end for start, end in evidence_ranges)
+                self.assertTrue(
+                    in_range,
+                    f"ROM_VERIFIED address 0x{lit_int:08X} does not fall inside any evidence_entries range in {MANIFEST_PATH}",
+                )
+
     def test_g_zero_tracked_binaries(self) -> None:
-        """(g) Zero tracked binary files in git index."""
+        """(g) Zero tracked binary files under build/candidate paths and among new PORT-33 files."""
         proc = subprocess.run(
-            ["git", "status", "--porcelain"],
+            ["git", "ls-files"],
             cwd=str(REPO_ROOT),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             check=True,
         )
-        lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
-        for line in lines:
-            status, path = line[:2], line[3:]
-            self.assertFalse(
-                path.endswith((".bin", ".elf", ".o", ".a")),
-                f"Binary artifact must not be tracked: {path}",
-            )
+        tracked_files = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+
+        # Assert no tracked file matches DISKBOOT*.BIN, *.bin or *.elf under PORT-33 build output and candidate paths
+        candidate_prefixes = (
+            "candidate_port33_osd",
+            "candidate_port32_resident",
+            "candidate_port25",
+            "candidate_port2a",
+            "candidate_",
+            "chdk-port/platform/g3x/sub/110c",
+        )
+        binary_extensions = (".bin", ".elf", ".BIN", ".ELF", ".o", ".a")
+        for path_str in tracked_files:
+            p = Path(path_str)
+            for prefix in candidate_prefixes:
+                if path_str.startswith(prefix) or prefix in path_str:
+                    self.assertFalse(
+                        p.name.startswith("DISKBOOT") and p.name.endswith((".BIN", ".bin")),
+                        f"Tracked DISKBOOT binary file not permitted: {path_str}",
+                    )
+                    self.assertFalse(
+                        path_str.endswith(binary_extensions),
+                        f"Tracked binary file not permitted under candidate/output path: {path_str}",
+                    )
+
+        # Assert none of the new PORT-33 files is a binary
+        new_port33_files = [
+            OSD_HEADER,
+            OSD_DOC,
+            MANIFEST_PATH,
+            SCOPES_PATH,
+            REPO_ROOT / "docs" / "agentbridge" / "PORT33_EVIDENCE_MANIFEST.json",
+            Path(__file__),
+        ]
+        for f in new_port33_files:
+            if f.is_file():
+                content = f.read_bytes()
+                self.assertNotIn(
+                    b"\x00",
+                    content,
+                    f"New PORT-33 file must be a text file, found binary NUL byte: {f}",
+                )
 
     def test_h_manifest_passes_validator(self) -> None:
         """(h) PORT-33 evidence manifest passes tools/port11c_evidence_validator.py."""
@@ -249,6 +356,17 @@ class TestPort33OsdCandidate(unittest.TestCase):
         res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.assertEqual(res.returncode, 0, f"Validator failed: {res.stderr}\n{res.stdout}")
         self.assertIn("Result: VALID", res.stdout)
+
+    def test_i_manifest_duplicates_byte_identical(self) -> None:
+        """(i) evidence/port33_manifest.json and docs/agentbridge/PORT33_EVIDENCE_MANIFEST.json stay byte-identical."""
+        alt_manifest = REPO_ROOT / "docs" / "agentbridge" / "PORT33_EVIDENCE_MANIFEST.json"
+        self.assertTrue(MANIFEST_PATH.is_file(), f"Missing {MANIFEST_PATH}")
+        self.assertTrue(alt_manifest.is_file(), f"Missing {alt_manifest}")
+        self.assertEqual(
+            MANIFEST_PATH.read_bytes(),
+            alt_manifest.read_bytes(),
+            "evidence/port33_manifest.json and docs/agentbridge/PORT33_EVIDENCE_MANIFEST.json must remain byte-identical",
+        )
 
 
 if __name__ == "__main__":
