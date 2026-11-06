@@ -10,7 +10,7 @@ Verifies:
     (toolchains/gcc-arm-none-eabi-5_4-2016q3) produce the exact same SHA-256,
     matching docs/PORT32_RESIDENT_CANDIDATE.md, and disassembly confirms:
     - Heap start raised to 0x00368680 under the flag only.
-    - CreateTask (0xFCEF3488) called after ladder Code 44 at the sub_fc0d0126 handoff.
+    - CreateTask (0xBFE14A3D, FINSIG NHSTUB) called after ladder Code 44 at the sub_fc0d0126 handoff.
     - Explicit cited stack size r2 = 0x2000 (never 0) and priority r1 = 0x19 (25 >= 23/24/25).
     - ~1 Hz double-short-blink LED heartbeat (100/100/100/700 ms, unit labelled INFERRED)
       using PORT-25 LED register 0xD20B0884 (ON 0x004D0002, OFF 0x004C0003) and SleepTask (0xFC31BF84).
@@ -75,7 +75,7 @@ PINNED_PORT25_LADDER_ONLY_SIZE = 126081
 PINNED_PORT25_COMBINED_SHA256 = "9ba62067c17d654a3b8995fc6e8c26176321154054a138a465ca66f9ff763a15"
 PINNED_PORT25_COMBINED_SIZE = 124865
 
-PINNED_PORT32_RESIDENT_SHA256 = "d12beea5c4479bf5c41184f996fc5397cb8a30478b5ccedbdf8676fc72de5f42"
+PINNED_PORT32_RESIDENT_SHA256 = "63c7942f561242b55d8226bfefe7818dd5b959aee35eae0adb4f41a4783ece5a"
 PINNED_PORT32_RESIDENT_SIZE = 124561
 PINNED_PORT32_RESIDENT_MAIN_SIZE = 123120
 PINNED_PORT32_RESIDENT_END_ADDR = 0x00368550
@@ -194,7 +194,11 @@ class TestPort32ResidentCandidate(unittest.TestCase):
 
         # Expected firmware addresses used in the resident code and their manifest provenance
         expected_addresses = {
+            0x003489B4: ("docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json", "PORT27-ROM-HEAP-SETUP"),
             0x00368680: ("docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json", "PORT27-ROM-HEAP-SETUP"),
+            0xBFE14A3D: ("docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json", "PORT27-ROM-CREATETASK-VENEER"),
+            0xBFE14A3C: ("evidence/port31_manifest.json", "PORT29-ROM-CREATETASK"),
+            0xBFE14AF1: ("evidence/port31_manifest.json", "PORT29-ROM-CREATETASK"),
             0xFCEF3488: ("evidence/port31_manifest.json", "PORT29-ROM-CREATETASK"),
             0xFC0D0126: ("docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json", "PORT27-ROM-FIRMWARE-CONT"),
             0xFC31BF84: ("docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json", "PORT27-ROM-SLEEPTASK-VENEER"),
@@ -271,6 +275,11 @@ class TestPort32ResidentCandidate(unittest.TestCase):
             self.assertIn(res1["heap_start_addr"], doc_text)
             self.assertIn("toolchains/gcc-arm-none-eabi-5_4-2016q3", doc_text)
 
+            # Trial plan must also record the updated flag-on DISKBOOT.BIN SHA-256
+            trial_plan_path = DOCS_DIR / "PORT32_TRIAL_PLAN.md"
+            self.assertTrue(trial_plan_path.is_file(), f"Missing {trial_plan_path}")
+            self.assertIn(res1["diskboot_sha256"], trial_plan_path.read_text(encoding="utf-8"))
+
             # Disassemble candidate_main.elf to verify resident implementation details
             proc = subprocess.run(
                 [str(ARM_OBJDUMP), "-d", res1["core_elf"]],
@@ -321,29 +330,45 @@ class TestPort32ResidentCandidate(unittest.TestCase):
             self.assertIsNotNone(m_hb, "g3x_resident_heartbeat_task not found in candidate_main.elf disassembly")
             hb_body = m_hb.group(1)
 
+            self.assertEqual(G3X_RESIDENT_CREATETASK_ADDR, 0xBFE14A3D)
             self.assertIn("d20b0884", hb_body, "Heartbeat task must use PORT-25 LED MMIO 0xD20B0884")
             self.assertIn("004d0002", hb_body, "Heartbeat task must use PORT-25 LED ON value 0x004D0002")
             self.assertIn("004c0003", hb_body, "Heartbeat task must use PORT-25 LED OFF value 0x004C0003")
             self.assertIn("fc31bf84", hb_body, "Heartbeat task must use manifest-cited SleepTask veneer 0xFC31BF84")
-            self.assertIn("fcef3488", hb_body, "CreateTask 0xFCEF3488 literal must be present")
+            self.assertIn("bfe14a3d", hb_body, "CreateTask 0xBFE14A3D literal must be present")
             self.assertIn("#100", hb_body, "Heartbeat task must use 100 ms short pulse/gap delay")
             self.assertIn("#700", hb_body, "Heartbeat task must use 700 ms pause delay (100+100+100+700 = 1000 ms = 1 Hz)")
 
     def test_e_assumptions_table_and_repo_cleanliness(self) -> None:
-        """(e) docs/PORT32_RESIDENT_CANDIDATE.md has required assumptions table and no binaries are committed."""
+        """(e) docs/PORT32_RESIDENT_CANDIDATE.md has required assumptions and FINSIG cross-check tables and no binaries are committed."""
         doc_path = DOCS_DIR / "PORT32_RESIDENT_CANDIDATE.md"
         self.assertTrue(doc_path.is_file(), f"Missing {doc_path}")
         doc_text = doc_path.read_text(encoding="utf-8")
 
-        # Verify table header columns
+        # Verify assumptions table header columns and FINSIG cross-check table header columns
         self.assertIn(
             "| assumption | label (VERIFIED/INFERRED/UNKNOWN) | citation | owner observation that confirms/refutes |",
             doc_text,
         )
+        self.assertIn(
+            "| candidate value | FINSIG value (reference/finsig_gm110c/stubs_entry.S or funcs_by_name.csv, path:line) | closest sibling DIGIC 6 port usage (chdk-port/platform/<port>/...:line) | match/mismatch |",
+            doc_text,
+        )
 
-        # Verify required assumptions rows are covered
+        # Verify required assumptions and FINSIG cross-check rows are covered
         required_topics = [
+            "0xBFE14A3D",
+            "0xbfe14a3d",
+            "0xbfe14a3c",
             "0xFCEF3488",
+            "FINSIG",
+            "reference/finsig_gm110c/stubs_entry.S",
+            "reference/finsig_gm110c/funcs_by_name.csv",
+            "chdk-port/platform/g5x/sub/100c/boot.c",
+            "chdk-port/platform/g7x/sub/100d/boot.c",
+            "chdk-port/platform/sx710hs/sub/100a/boot.c",
+            "match",
+            "mismatch",
             "r0",
             "r1",
             "r2",

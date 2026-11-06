@@ -312,20 +312,29 @@ static inline __attribute__((always_inline)) void g3x_ladder_pulse_c(void)
 /* ============================================================================
  * PORT-32 Opt-In Resident Heartbeat Candidate (G3X_RESIDENT=1)
  *
- * Every firmware address is cited to a validated PORT-24/25/27/29/30/31 manifest:
- * - 0x00368680: Raised DryOS heap start (new_sa)
+ * Every firmware address is cited to FINSIG (reference/finsig_gm110c/) and a
+ * validated PORT-24/25/27/29/30/31 manifest:
+ * - 0x00368680: Raised DryOS heap start (new_sa) above FINSIG MEMISOSTART = 0x003489B4
+ *   FINSIG:   reference/finsig_gm110c/stubs_entry.S:12
  *   Manifest: docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json (PORT27-ROM-HEAP-SETUP)
- * - 0xFCEF3488: DryOS CreateTask ROM entry (Thumb-2, 0xFCEF3488..0xFCEF34F9)
- *   Manifest: evidence/port31_manifest.json (PORT29-ROM-CREATETASK)
+ * - 0xBFE14A3D: DryOS CreateTask runtime ATCM Thumb-2 entry (NHSTUB CreateTask 0xbfe14a3d,
+ *   ATCM 0xBFE14A3C..0xBFE14AF1 copied from ROM 0xFCEF3488..0xFCEF34F9)
+ *   FINSIG:   reference/finsig_gm110c/stubs_entry.S:20,200,343;
+ *             reference/finsig_gm110c/funcs_by_name.csv:199-200
+ *   Manifest: docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json (PORT27-ROM-CREATETASK-VENEER)
+ *             evidence/port31_manifest.json (PORT29-ROM-CREATETASK)
  *             evidence/port29_manifest.json (PORT29-ROM-CREATETASK)
  *             evidence/port30_manifest.json (PORT29-ROM-CREATETASK)
- * - 0xFC0D0126: Stock task_Startup continuation handoff (sub_fc0d0126)
+ * - 0xFC0D0126: Stock task_Startup continuation handoff (sub_fc0d0126 = task_ClockSave + 0x3A)
+ *   FINSIG:   reference/finsig_gm110c/funcs_by_name.csv:2377
  *   Manifest: docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json (PORT27-ROM-FIRMWARE-CONT)
  *             docs/agentbridge/PORT25_EVIDENCE_MANIFEST.json (PORT25-ROM-FIRMWARE-CONT)
- * - 0xFC31BF84: DryOS SleepTask ARM veneer (0xFC31BF84..0xFC31BF8F -> ATCM 0xBFE14969)
+ * - 0xFC31BF84: DryOS SleepTask ARM veneer (j_SleepTask 0xFC31BF84..0xFC31BF8F -> ATCM 0xBFE14969)
+ *   FINSIG:   reference/finsig_gm110c/funcs_by_name.csv:1392;
+ *             reference/finsig_gm110c/stubs_entry.S:279
  *   Manifest: docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json (PORT27-ROM-SLEEPTASK-VENEER,
  *             PORT27-ROM-WATCHDOG-MODULE)
- * - 0xFCEF33B4: DryOS SleepTask Thumb-2 ROM entry (0xFCEF33A0..0xFCEF345F)
+ * - 0xFCEF33B4: DryOS SleepTask Thumb-2 ROM copy source (0xFCEF33A0..0xFCEF345F -> ATCM 0xBFE14968)
  *   Manifest: evidence/port31_manifest.json (PORT30-ROM-SLEEPTASK, PORT31-ROM-SLEEPTASK-BODY)
  * - 0xD20B0884: Rear green LED MMIO register (ON 0x004D0002, OFF 0x004C0003)
  *   Manifest: docs/agentbridge/PORT25_EVIDENCE_MANIFEST.json (PORT25-ROM-GPIO-WRITE-MMIO)
@@ -337,10 +346,12 @@ static inline __attribute__((always_inline)) void g3x_ladder_pulse_c(void)
  *  docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json: PORT27-ROM-HEAP-SETUP] */
 #define G3X_RESIDENT_HEAP_START          0x00368680
 
-/* DryOS CreateTask ROM entry
- * [VERIFIED instruction body:
+/* DryOS CreateTask runtime ATCM Thumb-2 entry (FINSIG NHSTUB CreateTask 0xbfe14a3d)
+ * [FINSIG: reference/finsig_gm110c/stubs_entry.S:200,343;
+ *  reference/finsig_gm110c/funcs_by_name.csv:199-200;
+ *  docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json: PORT27-ROM-CREATETASK-VENEER;
  *  evidence/port31_manifest.json: PORT29-ROM-CREATETASK] */
-#define G3X_RESIDENT_CREATETASK_ADDR     0xFCEF3488
+#define G3X_RESIDENT_CREATETASK_ADDR     0xBFE14A3D
 
 /* Stock task_Startup handoff target sub_fc0d0126
  * [VERIFIED instruction body:
@@ -446,7 +457,9 @@ static inline __attribute__((always_inline)) void g3x_resident_sleep_inferred_ms
  * r2 = 0x2000      (VERIFIED explicit stack byte count, never 0; INFERRED adequacy)
  * r3 = g3x_resident_heartbeat_task | 1 (VERIFIED entry store; INFERRED dispatcher call)
  * sp[0] = 0        (VERIFIED TCB+0x10 store; UNKNOWN delivery role to task entry)
- * Callee: CreateTask at 0xFCEF3488 (evidence/port31_manifest.json: PORT29-ROM-CREATETASK)
+ * Callee: CreateTask at 0xBFE14A3D (FINSIG reference/finsig_gm110c/stubs_entry.S:200;
+ *         docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json: PORT27-ROM-CREATETASK-VENEER;
+ *         evidence/port31_manifest.json: PORT29-ROM-CREATETASK)
  * Register & stack preservation: saves and restores r0-r3 (push/pop {r0, r1, r2, r3})
  * and balances sp (sub/add sp, #8) before pop.w {r4, lr}; b.w sub_fc0d0126
  * (moreover sub_fc0d0126 takes no register arguments: PORT27-ROM-FIRMWARE-CONT). */
@@ -460,7 +473,7 @@ static inline __attribute__((always_inline)) void g3x_resident_sleep_inferred_ms
     "    mov.w   r2, #0x2000\n" \
     "    movs    r1, #0x19\n" \
     "    adr     r0, 99f\n" \
-    "    ldr     r4, =0xFCEF3488\n" \
+    "    ldr     r4, =0xBFE14A3D\n" \
     "    orr     r4, r4, #1\n" \
     "    blx     r4\n" \
     "    add     sp, #8\n" \
