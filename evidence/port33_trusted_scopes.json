@@ -1,0 +1,24 @@
+{
+  "policy_version": "1.0.0",
+  "policy_authority": "UNVERIFIED_EXTERNAL_POLICY (External consistency check fixture only; out-of-band owner approval required)",
+  "authorization_scopes": [
+    {
+      "scope_id": "SCOPE-PORT33-OSD-OVERLAY",
+      "firmware_revision": "GM1.10C",
+      "approved_ranges": [
+        {
+          "start_address": "0xFC1837F0",
+          "end_address": "0xFC18380F",
+          "label": "PORT33-ROM-OPACITY-BUFFER BmpDDev.c opacity buffer pointer table in primary ROM"
+        }
+      ],
+      "max_bytes_total": 4096,
+      "allowed_classifications": [
+        "STATIC_VERIFIED",
+        "INFERRED",
+        "UNKNOWN"
+      ],
+      "description": "PORT-33 GM1.10C OSD bitmap and opacity buffer verification scope"
+    }
+  ]
+}

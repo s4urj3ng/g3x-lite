@@ -60,6 +60,7 @@ CANDIDATE_PORT25_LADDER_DIR = os.path.join(REPO_ROOT, "candidate_port25_ladder")
 CANDIDATE_PORT25_POWERON_DIR = os.path.join(REPO_ROOT, "candidate_port25_poweron_fix")
 CANDIDATE_PORT25_DEFAULT_DIR = os.path.join(REPO_ROOT, "candidate_port25_default")
 CANDIDATE_PORT32_RESIDENT_DIR = os.path.join(REPO_ROOT, "candidate_port32_resident")
+CANDIDATE_PORT33_OSD_DIR = os.path.join(REPO_ROOT, "candidate_port33_osd")
 
 # Backward compatibility alias
 CANDIDATE_LADDER_FIX_DIR = CANDIDATE_PORT25_LADDER_FIX_DIR
@@ -71,6 +72,11 @@ G3X_RESIDENT_SLEEPTASK_VENEER = 0xFC31BF84
 G3X_RESIDENT_SLEEPTASK_ADDR = 0xFCEF33B4
 G3X_RESIDENT_STACK_SIZE = 0x2000
 G3X_RESIDENT_PRIORITY = 0x19
+
+G3X_OSD_ACTIVE_BITMAP_BUFFER_ADDR = 0x0000D2A4
+G3X_OSD_BITMAP_BUFFER_ADDR = 0x0000D2A8
+G3X_OSD_OPACITY_BUFFER_ADDR = 0xFC1837FC
+G3X_OSD_TRANSFER_SRC_OVERLAY_ADDR = 0xFC380635
 
 LADDER_ENTRY_S = str(SUB_DIR / "loader_entry_breadcrumb.S")
 LADDER_LOADER_C = str(SUB_DIR / "loader_main_breadcrumb.c")
@@ -205,6 +211,9 @@ def generate_boot_prototype_resident_c() -> str:
 
     resident_task_block = """
 #if defined(G3X_RESIDENT) && (G3X_RESIDENT == 1)
+#if defined(G3X_OSD) && (G3X_OSD == 1)
+#include "osd_test_overlay.h"
+#endif
 /* =============================================================================
  * PORT-32 Resident Heartbeat Task (G3X_RESIDENT=1)
  * Blinks rear green LED (0xD20B0884, ON 0x004D0002, OFF 0x004C0003) at ~1 Hz
@@ -218,6 +227,9 @@ def generate_boot_prototype_resident_c() -> str:
  * ============================================================================= */
 void __attribute__((noinline)) g3x_resident_heartbeat_task(void)
 {
+#if defined(G3X_OSD) && (G3X_OSD == 1)
+    g3x_spawn_osd_task();
+#endif
     for (;;) {
         g3x_resident_led_write(G3X_LADDER_ON_VAL);
         g3x_resident_sleep_inferred_ms(G3X_HEARTBEAT_ON_MS);
@@ -251,10 +263,11 @@ def build_candidate_core_ladder_fix(
     poweron_fix: bool = True,
     candidate_dir: str = CANDIDATE_LADDER_FIX_DIR,
     resident: bool = False,
+    osd: bool = False,
 ) -> tuple[str, str, int, int]:
-    """Compile candidate core with optional LED_LADDER, G3X_POWERON_FIX, and G3X_RESIDENT defines."""
+    """Compile candidate core with optional LED_LADDER, G3X_POWERON_FIX, G3X_RESIDENT, and G3X_OSD defines."""
     print(
-        f"--- Building Candidate Core (ladder={ladder}, poweron_fix={poweron_fix}, resident={resident}) (@ 0x003489B4) ---"
+        f"--- Building Candidate Core (ladder={ladder}, poweron_fix={poweron_fix}, resident={resident}, osd={osd}) (@ 0x003489B4) ---"
     )
     os.makedirs(candidate_dir, exist_ok=True)
 
@@ -326,6 +339,8 @@ def build_candidate_core_ladder_fix(
         cflags.append("-DLED_LADDER=1")
     if resident:
         cflags.append("-DG3X_RESIDENT=1")
+    if osd:
+        cflags.append("-DG3X_OSD=1")
     cflags.extend(["-c", "-o", boot_proto_o, boot_proto_c])
     run_cmd(cflags, cwd=str(CHDK_PORT))
 
@@ -553,15 +568,23 @@ def build_candidate(
     poweron_fix: bool = True,
     out_dir: str | None = None,
     resident: bool | None = None,
+    osd: bool | None = None,
 ) -> dict:
     """Execute complete combined candidate build pipeline."""
     ensure_bootstrap()
 
-    if resident is None:
+    if osd is None:
+        osd = os.environ.get("G3X_OSD", "0") == "1"
+
+    if osd:
+        resident = True
+    elif resident is None:
         resident = os.environ.get("G3X_RESIDENT", "0") == "1"
 
     if out_dir:
         candidate_dir = os.path.abspath(out_dir)
+    elif osd:
+        candidate_dir = CANDIDATE_PORT33_OSD_DIR
     elif resident:
         candidate_dir = CANDIDATE_PORT32_RESIDENT_DIR
     elif ladder and poweron_fix:
@@ -582,6 +605,7 @@ def build_candidate(
         poweron_fix=poweron_fix,
         candidate_dir=candidate_dir,
         resident=resident,
+        osd=osd,
     )
 
     # 2. Build loader
@@ -652,6 +676,7 @@ def build_candidate(
         "core_end_addr": f"0x{core_end_addr:08X}",
         "heap_start_addr": f"0x{(G3X_RESIDENT_HEAP_START if resident else core_end_addr):08X}",
         "resident": resident,
+        "osd": osd,
         "diskboot_sha256": diskboot_sha256,
         "diskboot_size": diskboot_size,
     }
@@ -659,7 +684,7 @@ def build_candidate(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="PORT-25/32: Opt-in combined breadcrumb ladder + G3X_POWERON_FIX + G3X_RESIDENT builder for G3 X (GM1.10C)"
+        description="PORT-25/32/33: Opt-in combined breadcrumb ladder + G3X_POWERON_FIX + G3X_RESIDENT + G3X_OSD builder for G3 X (GM1.10C)"
     )
     parser.add_argument(
         "--out-dir",
@@ -693,22 +718,31 @@ def main():
         action="store_true",
         help="Build opt-in G3X_RESIDENT=1 heartbeat candidate (ladder=1, poweron_fix=1, resident=1)",
     )
+    parser.add_argument(
+        "--osd",
+        action="store_true",
+        help="Build opt-in G3X_OSD=1 test overlay candidate (ladder=1, poweron_fix=1, resident=1, osd=1)",
+    )
     args = parser.parse_args()
 
-    resident = bool(args.resident or os.environ.get("G3X_RESIDENT", "0") == "1")
+    osd = bool(args.osd or os.environ.get("G3X_OSD", "0") == "1")
+    resident = bool(osd or args.resident or os.environ.get("G3X_RESIDENT", "0") == "1")
 
     if args.default:
         ladder = False
         poweron_fix = False
         resident = False
+        osd = False
     elif args.ladder:
         ladder = True
         poweron_fix = False
         resident = False
+        osd = False
     elif args.poweron_fix:
         ladder = False
         poweron_fix = True
         resident = False
+        osd = False
     else:
         # Default behavior: build combined candidate (ladder=1, poweron_fix=1)
         ladder = True
@@ -719,6 +753,7 @@ def main():
         poweron_fix=poweron_fix,
         out_dir=args.out_dir,
         resident=resident,
+        osd=osd,
     )
 
     print("\nSummary:")
@@ -730,6 +765,7 @@ def main():
     print(f"  _end:         {res['core_end_addr']}")
     print(f"  heap_start:   {res['heap_start_addr']}")
     print(f"  resident:     {res['resident']}")
+    print(f"  osd:          {res['osd']}")
 
 
 if __name__ == "__main__":
