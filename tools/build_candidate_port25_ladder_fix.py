@@ -65,7 +65,7 @@ CANDIDATE_PORT32_RESIDENT_DIR = os.path.join(REPO_ROOT, "candidate_port32_reside
 CANDIDATE_LADDER_FIX_DIR = CANDIDATE_PORT25_LADDER_FIX_DIR
 
 G3X_RESIDENT_HEAP_START = 0x00368680
-G3X_RESIDENT_CREATETASK_ADDR = 0xFCEF3488
+G3X_RESIDENT_CREATETASK_ADDR = 0xBFE14A3D
 G3X_RESIDENT_HANDOFF_ADDR = 0xFC0D0126
 G3X_RESIDENT_SLEEPTASK_VENEER = 0xFC31BF84
 G3X_RESIDENT_SLEEPTASK_ADDR = 0xFCEF33B4
@@ -181,9 +181,11 @@ def generate_boot_prototype_resident_c() -> str:
     repl_handoff = (
         "CORE_LADDER_PULSE_44\n"
         "#if defined(G3X_RESIDENT) && (G3X_RESIDENT == 1)\n"
-        "        /* Spawn resident heartbeat task via CreateTask at 0xFCEF3488 after ladder\n"
+        "        /* Spawn resident heartbeat task via CreateTask at 0xBFE14A3D after ladder\n"
         "         * completes and at the sub_fc0d0126 (0xFC0D0126) handoff point\n"
-        "         * [evidence/port31_manifest.json: PORT29-ROM-CREATETASK;\n"
+        "         * [reference/finsig_gm110c/stubs_entry.S:200;\n"
+        "         *  docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json: PORT27-ROM-CREATETASK-VENEER;\n"
+        "         *  evidence/port31_manifest.json: PORT29-ROM-CREATETASK;\n"
         "         *  docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json: PORT27-ROM-FIRMWARE-CONT] */\n"
         "        G3X_SPAWN_RESIDENT_HEARTBEAT\n"
         "#endif\n"
