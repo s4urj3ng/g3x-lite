@@ -61,17 +61,24 @@ CANDIDATE_PORT25_POWERON_DIR = os.path.join(REPO_ROOT, "candidate_port25_poweron
 CANDIDATE_PORT25_DEFAULT_DIR = os.path.join(REPO_ROOT, "candidate_port25_default")
 CANDIDATE_PORT32_RESIDENT_DIR = os.path.join(REPO_ROOT, "candidate_port32_resident")
 CANDIDATE_PORT33_OSD_DIR = os.path.join(REPO_ROOT, "candidate_port33_osd")
+CANDIDATE_PORT34_KBD_DIR = os.path.join(REPO_ROOT, "candidate_port34_kbd")
+CANDIDATE_PORT34_KBD_OSD_DIR = os.path.join(REPO_ROOT, "candidate_port34_kbd_osd")
 
 # Backward compatibility alias
 CANDIDATE_LADDER_FIX_DIR = CANDIDATE_PORT25_LADDER_FIX_DIR
 
 G3X_RESIDENT_HEAP_START = 0x00368680
+G3X_KBD_HEAP_START = 0x00368880
 G3X_RESIDENT_CREATETASK_ADDR = 0xBFE14A3D
 G3X_RESIDENT_HANDOFF_ADDR = 0xFC0D0126
 G3X_RESIDENT_SLEEPTASK_VENEER = 0xFC31BF84
 G3X_RESIDENT_SLEEPTASK_ADDR = 0xFCEF33B4
 G3X_RESIDENT_STACK_SIZE = 0x2000
 G3X_RESIDENT_PRIORITY = 0x19
+
+G3X_KBD_TASKCREATE_ADDR = 0xFC1283D2
+G3X_KBD_CREATETASK_STRICTLY = 0xFC31BE8C
+G3X_KBD_PHYSW_RUN = 0x000082BC
 
 G3X_OSD_ACTIVE_BITMAP_BUFFER_ADDR = 0x0000D2A4
 G3X_OSD_BITMAP_BUFFER_ADDR = 0x0000D2A8
@@ -156,7 +163,11 @@ def generate_boot_prototype_resident_c() -> str:
 
     target_new_sa = "const char * const new_sa = &_end;\n"
     repl_new_sa = (
-        "#if defined(G3X_RESIDENT) && (G3X_RESIDENT == 1)\n"
+        "#if defined(G3X_KBD) && (G3X_KBD == 1)\n"
+        "/* Raised heap start 0x00368880 [docs/port34_evidence_manifest.json: PORT34-ROM-HEAP-KBD] */\n"
+        "#define G3X_KBD_HEAP_START 0x00368880\n"
+        "const char * const new_sa = (const char *)G3X_KBD_HEAP_START;\n"
+        "#elif defined(G3X_RESIDENT) && (G3X_RESIDENT == 1)\n"
         "/* Raised heap start 0x00368680 [docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json: PORT27-ROM-HEAP-SETUP] */\n"
         "const char * const new_sa = (const char *)G3X_RESIDENT_HEAP_START;\n"
         "#else\n"
@@ -170,7 +181,10 @@ def generate_boot_prototype_resident_c() -> str:
         '        "    ldr     r4, [r4]\\n"'
     )
     repl_heap_ldr = (
-        "#if defined(G3X_RESIDENT) && (G3X_RESIDENT == 1)\n"
+        "#if defined(G3X_KBD) && (G3X_KBD == 1)\n"
+        "        /* Load raised heap base 0x00368880 [docs/port34_evidence_manifest.json: PORT34-ROM-HEAP-KBD] */\n"
+        '        "    ldr     r4, =0x00368880\\n"\n'
+        "#elif defined(G3X_RESIDENT) && (G3X_RESIDENT == 1)\n"
         "        /* Load raised heap base 0x00368680 [docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json: PORT27-ROM-HEAP-SETUP] */\n"
         '        "    ldr     r4, =0x00368680\\n"\n'
         "#else\n"
@@ -178,6 +192,17 @@ def generate_boot_prototype_resident_c() -> str:
         '        "    ldr     r4, =new_sa\\n"\n'
         '        "    ldr     r4, [r4]\\n"\n'
         "#endif"
+    )
+
+    target_task_physw = 'CORE_LADDER_PULSE_42 "    bl      sub_fc1283d2\\n" CORE_LADDER_PULSE_43'
+    repl_task_physw = (
+        'CORE_LADDER_PULSE_42\n'
+        '#if defined(G3X_KBD) && (G3X_KBD == 1)\n'
+        '        "    bl      sub_fc1283d2_my\\n"\n'
+        '#else\n'
+        '        "    bl      sub_fc1283d2\\n"\n'
+        '#endif\n'
+        '        CORE_LADDER_PULSE_43'
     )
 
     target_handoff = (
@@ -202,6 +227,7 @@ def generate_boot_prototype_resident_c() -> str:
     resident_replacements = [
         (target_new_sa, repl_new_sa),
         (target_heap_ldr, repl_heap_ldr),
+        (target_task_physw, repl_task_physw),
         (target_handoff, repl_handoff),
     ]
     for target, repl in resident_replacements:
@@ -213,6 +239,9 @@ def generate_boot_prototype_resident_c() -> str:
 #if defined(G3X_RESIDENT) && (G3X_RESIDENT == 1)
 #if defined(G3X_OSD) && (G3X_OSD == 1)
 #include "osd_test_overlay.h"
+#endif
+#if defined(G3X_KBD) && (G3X_KBD == 1)
+#include "kbd_candidate.h"
 #endif
 /* =============================================================================
  * PORT-32 Resident Heartbeat Task (G3X_RESIDENT=1)
@@ -231,6 +260,25 @@ void __attribute__((noinline)) g3x_resident_heartbeat_task(void)
     g3x_spawn_osd_task();
 #endif
     for (;;) {
+#if defined(G3X_KBD) && (G3X_KBD == 1)
+        if (kbd_is_blocked()) {
+            /* ALT mode ON: double blink per second */
+            g3x_resident_led_write(G3X_LADDER_ON_VAL);
+            g3x_resident_sleep_inferred_ms(G3X_HEARTBEAT_ON_MS);
+            g3x_resident_led_write(G3X_LADDER_OFF_VAL);
+            g3x_resident_sleep_inferred_ms(G3X_HEARTBEAT_GAP_MS);
+            g3x_resident_led_write(G3X_LADDER_ON_VAL);
+            g3x_resident_sleep_inferred_ms(G3X_HEARTBEAT_ON_MS);
+            g3x_resident_led_write(G3X_LADDER_OFF_VAL);
+            g3x_resident_sleep_inferred_ms(G3X_HEARTBEAT_PAUSE_MS);
+        } else {
+            /* ALT mode OFF: ~1 Hz single blink */
+            g3x_resident_led_write(G3X_LADDER_ON_VAL);
+            g3x_resident_sleep_inferred_ms(G3X_HEARTBEAT_ON_MS);
+            g3x_resident_led_write(G3X_LADDER_OFF_VAL);
+            g3x_resident_sleep_inferred_ms(G3X_HEARTBEAT_ON_MS + G3X_HEARTBEAT_GAP_MS + G3X_HEARTBEAT_PAUSE_MS);
+        }
+#else
         g3x_resident_led_write(G3X_LADDER_ON_VAL);
         g3x_resident_sleep_inferred_ms(G3X_HEARTBEAT_ON_MS);
         g3x_resident_led_write(G3X_LADDER_OFF_VAL);
@@ -239,6 +287,7 @@ void __attribute__((noinline)) g3x_resident_heartbeat_task(void)
         g3x_resident_sleep_inferred_ms(G3X_HEARTBEAT_ON_MS);
         g3x_resident_led_write(G3X_LADDER_OFF_VAL);
         g3x_resident_sleep_inferred_ms(G3X_HEARTBEAT_PAUSE_MS);
+#endif
     }
 }
 #endif
@@ -264,10 +313,11 @@ def build_candidate_core_ladder_fix(
     candidate_dir: str = CANDIDATE_LADDER_FIX_DIR,
     resident: bool = False,
     osd: bool = False,
+    kbd: bool = False,
 ) -> tuple[str, str, int, int]:
-    """Compile candidate core with optional LED_LADDER, G3X_POWERON_FIX, G3X_RESIDENT, and G3X_OSD defines."""
+    """Compile candidate core with optional LED_LADDER, G3X_POWERON_FIX, G3X_RESIDENT, G3X_OSD, and G3X_KBD defines."""
     print(
-        f"--- Building Candidate Core (ladder={ladder}, poweron_fix={poweron_fix}, resident={resident}, osd={osd}) (@ 0x003489B4) ---"
+        f"--- Building Candidate Core (ladder={ladder}, poweron_fix={poweron_fix}, resident={resident}, osd={osd}, kbd={kbd}) (@ 0x003489B4) ---"
     )
     os.makedirs(candidate_dir, exist_ok=True)
 
@@ -341,6 +391,8 @@ def build_candidate_core_ladder_fix(
         cflags.append("-DG3X_RESIDENT=1")
     if osd:
         cflags.append("-DG3X_OSD=1")
+    if kbd:
+        cflags.append("-DG3X_KBD=1")
     cflags.extend(["-c", "-o", boot_proto_o, boot_proto_c])
     run_cmd(cflags, cwd=str(CHDK_PORT))
 
@@ -425,9 +477,10 @@ def build_candidate_core_ladder_fix(
     proc = subprocess.run([NM, "-n", core_elf], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
     witness_addr = extract_symbol_addr_from_nm(proc.stdout, "boot_witness")
     core_end_addr = extract_symbol_addr_from_nm(proc.stdout, "_end")
-    if resident and core_end_addr > G3X_RESIDENT_HEAP_START:
+    heap_start = G3X_KBD_HEAP_START if kbd else G3X_RESIDENT_HEAP_START
+    if resident and core_end_addr > heap_start:
         raise ValueError(
-            f"Linked _end (0x{core_end_addr:08X}) overlaps resident heap start (0x{G3X_RESIDENT_HEAP_START:08X})"
+            f"Linked _end (0x{core_end_addr:08X}) overlaps resident heap start (0x{heap_start:08X})"
         )
     print(f"  [OK] boot_witness discovered at 0x{witness_addr:08X}, _end at 0x{core_end_addr:08X}")
 
@@ -569,20 +622,31 @@ def build_candidate(
     out_dir: str | None = None,
     resident: bool | None = None,
     osd: bool | None = None,
+    kbd: bool | None = None,
 ) -> dict:
     """Execute complete combined candidate build pipeline."""
     ensure_bootstrap()
 
+    if kbd is None:
+        kbd = os.environ.get("G3X_KBD", "0") == "1"
+
     if osd is None:
         osd = os.environ.get("G3X_OSD", "0") == "1"
 
-    if osd:
+    if kbd:
+        resident = True
+        poweron_fix = True
+    elif osd:
         resident = True
     elif resident is None:
         resident = os.environ.get("G3X_RESIDENT", "0") == "1"
 
     if out_dir:
         candidate_dir = os.path.abspath(out_dir)
+    elif kbd and osd:
+        candidate_dir = CANDIDATE_PORT34_KBD_OSD_DIR
+    elif kbd:
+        candidate_dir = CANDIDATE_PORT34_KBD_DIR
     elif osd:
         candidate_dir = CANDIDATE_PORT33_OSD_DIR
     elif resident:
@@ -606,6 +670,7 @@ def build_candidate(
         candidate_dir=candidate_dir,
         resident=resident,
         osd=osd,
+        kbd=kbd,
     )
 
     # 2. Build loader
@@ -637,7 +702,7 @@ def build_candidate(
         "witness_inspector_payload.bin": insp_bin,
     }
 
-    heap_start_addr = G3X_RESIDENT_HEAP_START if resident else core_end_addr
+    heap_start_addr = G3X_KBD_HEAP_START if kbd else (G3X_RESIDENT_HEAP_START if resident else core_end_addr)
     if core_end_addr > heap_start_addr:
         raise ValueError(
             f"Linked _end (0x{core_end_addr:08X}) exceeds heap start (0x{heap_start_addr:08X})"
@@ -674,9 +739,10 @@ def build_candidate(
         "manifest_path": manifest_path,
         "witness_addr": f"0x{witness_addr:08X}",
         "core_end_addr": f"0x{core_end_addr:08X}",
-        "heap_start_addr": f"0x{(G3X_RESIDENT_HEAP_START if resident else core_end_addr):08X}",
+        "heap_start_addr": f"0x{heap_start_addr:08X}",
         "resident": resident,
         "osd": osd,
+        "kbd": kbd,
         "diskboot_sha256": diskboot_sha256,
         "diskboot_size": diskboot_size,
     }
@@ -684,7 +750,7 @@ def build_candidate(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="PORT-25/32/33: Opt-in combined breadcrumb ladder + G3X_POWERON_FIX + G3X_RESIDENT + G3X_OSD builder for G3 X (GM1.10C)"
+        description="PORT-25/32/33/34: Opt-in combined breadcrumb ladder + G3X_POWERON_FIX + G3X_RESIDENT + G3X_OSD + G3X_KBD builder for G3 X (GM1.10C)"
     )
     parser.add_argument(
         "--out-dir",
@@ -723,26 +789,35 @@ def main():
         action="store_true",
         help="Build opt-in G3X_OSD=1 test overlay candidate (ladder=1, poweron_fix=1, resident=1, osd=1)",
     )
+    parser.add_argument(
+        "--kbd",
+        action="store_true",
+        help="Build opt-in G3X_KBD=1 keyboard candidate (ladder=1, poweron_fix=1, resident=1, kbd=1)",
+    )
     args = parser.parse_args()
 
+    kbd = bool(args.kbd or os.environ.get("G3X_KBD", "0") == "1")
     osd = bool(args.osd or os.environ.get("G3X_OSD", "0") == "1")
-    resident = bool(osd or args.resident or os.environ.get("G3X_RESIDENT", "0") == "1")
+    resident = bool(kbd or osd or args.resident or os.environ.get("G3X_RESIDENT", "0") == "1")
 
     if args.default:
         ladder = False
         poweron_fix = False
         resident = False
         osd = False
+        kbd = False
     elif args.ladder:
         ladder = True
         poweron_fix = False
         resident = False
         osd = False
+        kbd = False
     elif args.poweron_fix:
         ladder = False
         poweron_fix = True
         resident = False
         osd = False
+        kbd = False
     else:
         # Default behavior: build combined candidate (ladder=1, poweron_fix=1)
         ladder = True
@@ -754,6 +829,7 @@ def main():
         out_dir=args.out_dir,
         resident=resident,
         osd=osd,
+        kbd=kbd,
     )
 
     print("\nSummary:")
@@ -766,6 +842,7 @@ def main():
     print(f"  heap_start:   {res['heap_start_addr']}")
     print(f"  resident:     {res['resident']}")
     print(f"  osd:          {res['osd']}")
+    print(f"  kbd:          {res['kbd']}")
 
 
 if __name__ == "__main__":

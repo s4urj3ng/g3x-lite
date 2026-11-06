@@ -171,7 +171,7 @@ class TestPort24BreadcrumbLadder(unittest.TestCase):
             )
             self.assertIn(
                 status.strip(),
-                ("M", "AM"),
+                ("M", "AM", "A"),
                 f"Unexpected git status for file in sub/110c: {line}",
             )
 
@@ -189,6 +189,7 @@ class TestPort24BreadcrumbLadder(unittest.TestCase):
             "boot_witness.h",
             "g3x_trace.c",
             "g3x_trace.h",
+            "kbd_candidate.h",
             "led_breadcrumb.h",
             "loader_entry_breadcrumb.S",
             "loader_entry_led.S",

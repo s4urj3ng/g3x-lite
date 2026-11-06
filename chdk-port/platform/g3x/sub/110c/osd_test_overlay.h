@@ -72,6 +72,19 @@ static const unsigned short g3x_chdk_glyph_rows[5] = {
     0x7565  /* 0b0111_0101_0110_0101:  ***  * *  **   * * */
 };
 
+#if defined(G3X_KBD) && (G3X_KBD == 1)
+extern int kbd_is_blocked(void);
+/* Fixed "ALT" text bitmap rows: 5 rows x 11 columns (1 = pixel on, 0 = off)
+ * Glyphs: 'A' (3 cols), gap (1), 'L' (3 cols), gap (1), 'T' (3 cols) */
+static const unsigned short g3x_alt_glyph_rows[5] = {
+    0xE8E0, /* 0b1110_1000_1110_0000:  ***  *    *** */
+    0xA840, /* 0b1010_1000_0100_0000:  * *  *     *  */
+    0xE840, /* 0b1110_1000_0100_0000:  ***  *     *  */
+    0xA840, /* 0b1010_1000_0100_0000:  * *  *     *  */
+    0xAE40  /* 0b1010_1110_0100_0000:  * *  ***   *  */
+};
+#endif
+
 static inline __attribute__((always_inline)) void g3x_osd_draw_test_overlay(void)
 {
     unsigned char *op_buf = (unsigned char *)vid_get_opacity_active_buffer();
@@ -80,6 +93,10 @@ static inline __attribute__((always_inline)) void g3x_osd_draw_test_overlay(void
     if (!op_buf || !bm_buf) {
         return;
     }
+
+#if defined(G3X_KBD) && (G3X_KBD == 1)
+    int alt_active = kbd_is_blocked();
+#endif
 
     for (int y = 0; y < G3X_OSD_RECT_H; y++) {
         int py = G3X_OSD_RECT_Y + y;
@@ -95,6 +112,9 @@ static inline __attribute__((always_inline)) void g3x_osd_draw_test_overlay(void
         int text_row = (y - 10) >> 2; /* 5 font rows scaled 4x vertically (y in 10..29) */
         int in_text_y = (y >= 10 && y < 30);
         unsigned short row_mask = in_text_y ? g3x_chdk_glyph_rows[text_row] : 0;
+#if defined(G3X_KBD) && (G3X_KBD == 1)
+        unsigned short alt_mask = (in_text_y && alt_active) ? g3x_alt_glyph_rows[text_row] : 0;
+#endif
 
         for (int p = 0; p < (G3X_OSD_RECT_W / 2); p++) {
             if (border_y || p < 1 || p >= (G3X_OSD_RECT_W / 2) - 1) {
@@ -106,6 +126,10 @@ static inline __attribute__((always_inline)) void g3x_osd_draw_test_overlay(void
             int bit_idx = (p - 15) >> 1; /* Each glyph bit is 4 px wide = 2 pairs */
             if (in_text_y && p >= 15 && p < 45 && (row_mask & (1 << (14 - bit_idx)))) {
                 bm[p] = G3X_UYVY_WHITE; /* Bright white text "CHDK" */
+#if defined(G3X_KBD) && (G3X_KBD == 1)
+            } else if (alt_active && in_text_y && p >= 46 && p < 57 && (alt_mask & (1 << (15 - (p - 46))))) {
+                bm[p] = G3X_UYVY_WHITE; /* Bright white "ALT" marker when ALT mode active */
+#endif
             } else {
                 /* Checkerboard background in 8x8 blocks */
                 int cb = ((p >> 2) ^ (y >> 3)) & 1;
