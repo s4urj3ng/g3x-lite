@@ -1,0 +1,34 @@
+{
+  "policy_version": "1.0.0",
+  "policy_authority": "UNVERIFIED_EXTERNAL_POLICY (External consistency check fixture only; out-of-band owner approval required)",
+  "authorization_scopes": [
+    {
+      "scope_id": "SCOPE-PORT34-KBD-TASK",
+      "firmware_revision": "GM1.10C",
+      "approved_ranges": [
+        {
+          "start_address": "0xFC087E88",
+          "end_address": "0xFC087EA7",
+          "label": "PORT34-ROM-SUB-FC087E88 sub_fc087e88 hardware pre-task check routine"
+        },
+        {
+          "start_address": "0xFC1283AC",
+          "end_address": "0xFC128413",
+          "label": "PORT34-ROM-PHYSW-TASKCREATE task_PhySw and sub_fc1283d2 (taskcreate_physw) in primary ROM"
+        },
+        {
+          "start_address": "0xFC12868C",
+          "end_address": "0xFC12872F",
+          "label": "PORT34-ROM-KBD-P1-F-LITERALS kbd_p1_f and literal pool in primary ROM"
+        }
+      ],
+      "max_bytes_total": 4096,
+      "allowed_classifications": [
+        "STATIC_VERIFIED",
+        "INFERRED",
+        "UNKNOWN"
+      ],
+      "description": "PORT-34 GM1.10C task_PhySw, kbd_p1_f and sub_fc087e88 verification scope"
+    }
+  ]
+}
