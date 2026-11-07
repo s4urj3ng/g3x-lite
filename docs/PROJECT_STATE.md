@@ -1,4 +1,4 @@
-# Project state — Current milestone: PORT-33
+# Project state — Current milestone: PORT-35
 Updated: 2026-11-06
 
 PORT-11C Offline Evidence Validation Harness (2026-10-28; Worker 6, Gemini; `tools/port11c_evidence_validator.py`, `tests/test_port11c_evidence_validator.py`, `tests/fixtures/port11a_manifest.json`, `tests/fixtures/port11a_trusted_scopes.json`, `docs/PORT11C_EVIDENCE_HARNESS.md`):

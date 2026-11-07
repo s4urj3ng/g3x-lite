@@ -10,7 +10,7 @@ Design & Constraints:
   DISKBOOT.BIN SHA-256: 9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136 (118,001 B).
 - PORT-24 --poweron-fix build remains byte-identical:
   DISKBOOT.BIN SHA-256: faad4d8242fbf6f79a44b10a9956f7eb04de9b65f42221f82a3b69eb024cf056 (118,001 B).
-- Reuses verified green LED MMIO register 0xD20B0884 (ON: 0x004D0002, OFF: 0x004C0003). Adds no new addresses.
+- Reuses verified power / card-access LED MMIO register 0xD20B0884 (ON: 0x004D0002, OFF: 0x004C0003). Adds no new addresses.
 - All pulses use calibrated framed timing with preemption tolerance (>= 50 ms difference at slow bound):
   ON delay: 0x00100000 (1,048,576 iterations) -> 50.0 ms (slow <= 150 ms) / 20.97 ms (nom) / 15.73 ms (fast)
   Pulse OFF gap: 0x00050000 (327,680 iterations) -> 15.625 ms (slow) / 6.55 ms (nom) / 4.91 ms (fast)
@@ -63,12 +63,15 @@ CANDIDATE_PORT32_RESIDENT_DIR = os.path.join(REPO_ROOT, "candidate_port32_reside
 CANDIDATE_PORT33_OSD_DIR = os.path.join(REPO_ROOT, "candidate_port33_osd")
 CANDIDATE_PORT34_KBD_DIR = os.path.join(REPO_ROOT, "candidate_port34_kbd")
 CANDIDATE_PORT34_KBD_OSD_DIR = os.path.join(REPO_ROOT, "candidate_port34_kbd_osd")
+CANDIDATE_PORT35_OSD2_DIR = os.path.join(REPO_ROOT, "candidate_port35_osd2")
+CANDIDATE_PORT35_GUI_DIR = os.path.join(REPO_ROOT, "candidate_port35_gui")
 
 # Backward compatibility alias
 CANDIDATE_LADDER_FIX_DIR = CANDIDATE_PORT25_LADDER_FIX_DIR
 
 G3X_RESIDENT_HEAP_START = 0x00368680
 G3X_KBD_HEAP_START = 0x00368880
+G3X_GUI_HEAP_START = 0x00368880
 G3X_RESIDENT_CREATETASK_ADDR = 0xBFE14A3D
 G3X_RESIDENT_HANDOFF_ADDR = 0xFC0D0126
 G3X_RESIDENT_SLEEPTASK_VENEER = 0xFC31BF84
@@ -84,6 +87,24 @@ G3X_OSD_ACTIVE_BITMAP_BUFFER_ADDR = 0x0000D2A4
 G3X_OSD_BITMAP_BUFFER_ADDR = 0x0000D2A8
 G3X_OSD_OPACITY_BUFFER_ADDR = 0xFC1837FC
 G3X_OSD_TRANSFER_SRC_OVERLAY_ADDR = 0xFC380635
+
+G3X_OSD2_ACTIVE_BITMAP_BUFFER_ADDR = 0x0000D2A4
+G3X_OSD2_BITMAP_BUFFER_ADDR = 0x0000D2A8
+G3X_OSD2_DISPLAYTYPE_ADDR = 0x00009740
+G3X_OSD2_BITMAP_BUF0_ADDR = 0x5FE80000
+G3X_OSD2_BITMAP_BUF1_ADDR = 0x5FD00000
+G3X_OSD2_OPACITY_BUF0_ADDR = 0x5FC40000
+G3X_OSD2_OPACITY_BUF1_ADDR = 0x5FB80000
+G3X_OSD2_TRANSFER_SRC_OVERLAY_ADDR = 0xFC380635
+
+G3X_GUI_PALETTE_CONTROL_ADDR = 0x00015DA4
+G3X_GUI_ACTIVE_PALETTE_BUFFER_ADDR = 0x00015DB4
+G3X_GUI_PALETTE_BUFFER_PTR_ADDR = 0x00015DBC
+G3X_GUI_CANON_MENU_ACTIVE_ADDR = 0x0000D2E8
+G3X_GUI_FOCUS_BUSY_ADDR = 0x00014BC0
+G3X_GUI_ZOOM_BUSY_ADDR = 0x0000BEF8
+G3X_GUI_ZOOM_STATUS_ADDR = 0x00010D74
+G3X_GUI_RECREVIEW_HOLD_ADDR = 0x000095F0
 
 LADDER_ENTRY_S = str(SUB_DIR / "loader_entry_breadcrumb.S")
 LADDER_LOADER_C = str(SUB_DIR / "loader_main_breadcrumb.c")
@@ -240,12 +261,15 @@ def generate_boot_prototype_resident_c() -> str:
 #if defined(G3X_OSD) && (G3X_OSD == 1)
 #include "osd_test_overlay.h"
 #endif
+#if defined(G3X_OSD2) && (G3X_OSD2 == 1)
+#include "osd2_test_overlay.h"
+#endif
 #if defined(G3X_KBD) && (G3X_KBD == 1)
 #include "kbd_candidate.h"
 #endif
 /* =============================================================================
  * PORT-32 Resident Heartbeat Task (G3X_RESIDENT=1)
- * Blinks rear green LED (0xD20B0884, ON 0x004D0002, OFF 0x004C0003) at ~1 Hz
+ * Blinks power / card-access LED (0xD20B0884, ON 0x004D0002, OFF 0x004C0003) at ~1 Hz
  * in a double-short-blink pattern (100 ms ON, 100 ms OFF, 100 ms ON, 700 ms OFF)
  * using manifest-cited SleepTask (0xFC31BF84 / 0xFCEF33B4; delay unit ms INFERRED).
  * Stack alignment at task entry is INFERRED (no inline sp write in C task body).
@@ -256,6 +280,15 @@ def generate_boot_prototype_resident_c() -> str:
  * ============================================================================= */
 void __attribute__((noinline)) g3x_resident_heartbeat_task(void)
 {
+#if defined(G3X_GUI) && (G3X_GUI == 1)
+    /* Signal spytask/GUI start readiness after InitFileModules (0xFC0BB6FE) has
+     * completed in task_Startup_my, matching sibling boot sequence
+     * [chdk-port/platform/g7x/sub/100d/boot.c:423;
+     *  chdk-port/platform/g5x/sub/100c/boot.c:524;
+     *  chdk-port/platform/sx60hs/sub/100f/boot.c:556] (INFERRED) */
+    extern void core_spytask_can_start(void);
+    core_spytask_can_start();
+#endif
 #if defined(G3X_OSD) && (G3X_OSD == 1)
     g3x_spawn_osd_task();
 #endif
@@ -298,6 +331,799 @@ void __attribute__((noinline)) g3x_resident_heartbeat_task(void)
 BOOT_PROTOTYPE_RESIDENT_C = generate_boot_prototype_resident_c()
 
 
+def generate_gui_candidate_c() -> str:
+    """Generate kbd-task-driven CHDK GUI driver and RAM-only/no-op stubs for G3X_GUI=1."""
+    return r'''#include "platform.h"
+#include "core.h"
+#include "conf.h"
+#include "keyboard.h"
+#include "gui.h"
+#include "gui_draw.h"
+#include "gui_menu.h"
+#include "gui_lang.h"
+#include "gui_osd.h"
+#include "camera_info.h"
+#include "font.h"
+
+/* =============================================================================
+ * PORT-35 Part B: G3X_GUI=1 CHDK core GUI/ALT menu on the OSD2 draw path
+ *
+ * Sibling citations:
+ * - chdk-port/platform/g7x/kbd.c:70-82 (core_spytask / GUI driven from mykbd_task)
+ * - chdk-port/platform/g7x/lib.c:136-145, 171-225, 303-358 (DIGIC 6 YUV OSD2 + palette)
+ * - chdk-port/platform/g7x/sub/100d/boot.c:410-434 (core_spytask_can_start after InitFileModules)
+ * - chdk-port/platform/g5x/lib.c:9-33, 162-220; g5x/sub/100c/boot.c:524
+ * - chdk-port/platform/sx60hs/lib.c:14-20, 265-274; sx60hs/sub/100f/boot.c:556
+ * - chdk-port/core/main.c:236-337 (core_spytask startup & gui_redraw loop)
+ * ============================================================================= */
+
+extern void g3x_osd2_update_screen_dimensions(void);
+extern void gui_init(void);
+
+volatile long spytask_can_start = 0;
+int chdk_started_flag = 0;
+int no_modules_flag = 0;
+int memdmp_delay = 0;
+int raw_need_postprocess = 0;
+char *current_raw_addr = 0;
+
+void core_spytask_can_start(void)
+{
+    spytask_can_start = 1;
+}
+
+void core_spytask(void)
+{
+    /* Replaced by kbd-task-driven g3x_gui_kbd_redraw() */
+}
+
+/* Driven from mykbd_task -> g3x_osd2_kbd_redraw on every keyboard tick
+ * [chdk-port/platform/g7x/kbd.c:70-82; chdk-port/core/main.c:236-337] */
+void g3x_gui_kbd_redraw(int alt_active)
+{
+    static int gui_initialized = 0;
+    static int prev_alt_active = 0;
+    static unsigned int tick_cnt = 0;
+
+    if (!spytask_can_start) {
+        return;
+    }
+
+    if (!gui_initialized) {
+        gui_initialized = 1;
+        g3x_osd2_update_screen_dimensions();
+        camera_info_init();
+        conf_restore();
+        /* Ensure built-in fonts are initialized in RAM before gui_init() */
+        rbf_load_from_file("", FONT_CP_WIN);
+        rbf_load_symbol("");
+        gui_init();
+        chdk_started_flag = 1;
+    }
+
+    int entered_alt = (alt_active != 0) && (prev_alt_active == 0);
+    int left_alt = (alt_active == 0) && (prev_alt_active != 0);
+    prev_alt_active = (alt_active != 0);
+
+    g3x_osd2_update_screen_dimensions();
+
+    /* Process pending ALT mode transition (ALT_MODE_ENTER / ALT_MODE_LEAVE)
+     * [chdk-port/core/main.c:292; chdk-port/core/gui.c:3057-3101] */
+    gui_activate_alt_mode();
+
+    if (entered_alt) {
+        /* Open CHDK Main Menu immediately on ALT entry; d-pad and SET navigate
+         * [chdk-port/core/gui.c:2948-2958, 3078-3082; chdk-port/core/gui_menu.c:212-239] */
+        gui_menu_init(&root_menu);
+        gui_set_mode(&menuGuiHandler);
+    }
+
+    if (left_alt) {
+        /* Erase CHDK menu from both OSD2 buffers and return control to stock UI
+         * [chdk-port/core/gui.c:2983-2988, 3085-3096] */
+        gui_set_need_restore();
+        gui_redraw(1);
+        return;
+    }
+
+    if (alt_active) {
+        extern int check_gui_needs_redraw(void);
+        int force_redraw = entered_alt
+            || check_gui_needs_redraw()
+            || (kbd_get_clicked_key() != 0)
+            || (kbd_get_pressed_key() != 0)
+            || ((tick_cnt & 3u) == 0u);
+        tick_cnt++;
+        gui_redraw(force_redraw);
+    }
+}
+
+/* FINSIG palette pointers [reference/finsig_gm110c/stubs_entry.S:105-107]
+ * Sibling citations: chdk-port/platform/g7x/lib.c:303-358;
+ * chdk-port/platform/g5x/lib.c:186-210; chdk-port/platform/sx60hs/lib.c:265-274 */
+extern int active_palette_buffer;
+extern int **palette_buffer_ptr;
+
+void *vid_get_bitmap_active_palette(void)
+{
+    unsigned int idx = (unsigned int)active_palette_buffer;
+    if (palette_buffer_ptr == 0 || idx > 7u) {
+        return 0;
+    }
+    int *pal = palette_buffer_ptr[idx];
+    if (pal == 0) {
+        return 0;
+    }
+    return pal + 1;
+}
+
+int vid_get_palette_type(void)
+{
+    return 3;
+}
+
+int vid_get_palette_size(void)
+{
+    return 256 * 4;
+}
+
+/* Outside ALT mode, pass all keys to stock Canon UI without CHDK interception */
+int __wrap_gui_kbd_process(void)
+{
+    extern int kbd_is_blocked(void);
+    extern int __real_gui_kbd_process(void);
+    if (!kbd_is_blocked()) {
+        return 0;
+    }
+    return __real_gui_kbd_process();
+}
+
+/* Keep non-menu OSD drawing off so closing the menu leaves a clean screen */
+void __wrap_gui_draw_osd(void)
+{
+}
+
+const char *__wrap_gui_alt_mode_button_enum(int change, int arg)
+{
+    (void)change;
+    (void)arg;
+    conf.alt_mode_button = KEY_PLAYBACK;
+    return "Playback";
+}
+
+/* Add a selectable "Back" item (MENUITEM_UP) at the bottom of root_menu when
+ * user menu is not enabled so d-pad + SET can also close root_menu directly */
+void __wrap_set_usermenu_state(void)
+{
+    extern void __real_set_usermenu_state(void);
+    __real_set_usermenu_state();
+    if (!conf.user_menu_enable && root_menu.menu != 0) {
+        CMenuItem *items = (CMenuItem *)root_menu.menu;
+        items[9].symbol = 0x51;
+        items[9].opt_len = 0;
+        items[9].type = MENUITEM_UP;
+        items[9].text = LANG_MENU_BACK;
+        items[9].value = 0;
+        items[9].arg = 0;
+    }
+}
+
+int core_get_free_memory(void)
+{
+    cam_meminfo meminfo;
+    GetMemInfo(&meminfo);
+    return meminfo.free_size;
+}
+
+/* Compile out / stub script loading and execution (RAM-only menu) */
+char script_title[36] = "";
+_chdk_version_t script_version = { 0 };
+sc_param *script_params = 0;
+
+static CMenuItem g3x_script_submenu_items[] = {
+    { 0x51, 0, MENUITEM_UP, LANG_MENU_BACK, 0, 0 },
+    { 0 }
+};
+CMenu script_submenu = { 0x27, LANG_MENU_SCRIPT_TITLE, g3x_script_submenu_items };
+
+extern void gui_chdk_draw(int force_redraw);
+gui_handler scriptGuiHandler = { GUI_MODE_SCRIPT, gui_chdk_draw, 0, 0, 0, 0 };
+
+void script_load(const char *fn)
+{
+    (void)fn;
+}
+
+void __wrap_script_load(const char *fn)
+{
+    (void)fn;
+}
+
+long script_start_gui(int autostart)
+{
+    (void)autostart;
+    return 0;
+}
+
+long __wrap_script_start_gui(int autostart)
+{
+    (void)autostart;
+    return 0;
+}
+
+void save_params_values(int unconditional)
+{
+    (void)unconditional;
+}
+
+void __wrap_save_params_values(int unconditional)
+{
+    (void)unconditional;
+}
+
+void script_reset_to_default_params_values(void) {}
+void script_check_terminate(void) {}
+void script_console_add_line(long str_id) { (void)str_id; }
+void script_console_add_error(long str_id) { (void)str_id; }
+void script_end(void) {}
+int script_is_running(void) { return 0; }
+long script_stack_start(void) { return 0; }
+void script_wait_terminate(void) {}
+void script_print_screen_statement(int val) { (void)val; }
+void script_set_terminate_key(int key, const char *key_name) { (void)key; (void)key_name; }
+
+void script_get_alt_text(char *buf)
+{
+    if (buf) {
+        buf[0] = '<';
+        buf[1] = 'A';
+        buf[2] = 'L';
+        buf[3] = 'T';
+        buf[4] = '>';
+        buf[5] = '\0';
+    }
+}
+
+/* Compile out / stub fileutil, raw, ptp, remotecap, and card-write hooks */
+void make_pixel_list(char *ptr, int size) { (void)ptr; (void)size; }
+void patch_bad_pixel(unsigned int x, unsigned int y) { (void)x; (void)y; }
+void raw_prepare_develop(const char *filename, int prompt) { (void)filename; (void)prompt; }
+int raw_savefile(void) { return 0; }
+void raw_postprocess(void) {}
+void start_ptp_script(void) {}
+void __wrap_mark_filesystem_bootable(void) {}
+void schedule_memdump(void) {}
+
+char *load_file(const char *name, int *size, int add0)
+{
+    (void)name;
+    if (size) {
+        *size = 0;
+    }
+    (void)add0;
+    return 0;
+}
+
+char *__wrap_load_file(const char *name, int *size, int add0)
+{
+    return load_file(name, size, add0);
+}
+
+char *load_file_to_length(const char *name, int *size, int add0, int length)
+{
+    (void)name;
+    if (size) {
+        *size = 0;
+    }
+    (void)add0;
+    (void)length;
+    return 0;
+}
+
+char *__wrap_load_file_to_length(const char *name, int *size, int add0, int length)
+{
+    return load_file_to_length(name, size, add0, length);
+}
+
+int process_file(const char *name, void *callback, int add0)
+{
+    (void)name;
+    (void)callback;
+    (void)add0;
+    return 0;
+}
+
+int __wrap_process_file(const char *name, void *callback, int add0)
+{
+    return process_file(name, callback, add0);
+}
+
+int load_int_value_file(const char *name, int *value_p)
+{
+    (void)name;
+    (void)value_p;
+    return 0;
+}
+
+int __wrap_load_int_value_file(const char *name, int *value_p)
+{
+    return load_int_value_file(name, value_p);
+}
+
+int save_int_value_file(const char *name, int value)
+{
+    (void)name;
+    (void)value;
+    return 0;
+}
+
+int __wrap_save_int_value_file(const char *name, int value)
+{
+    return save_int_value_file(name, value);
+}
+
+/* Safe C replacements for stubs_entry_2.S so NULL_SUB (0xFC000011) is never linked */
+int _GetFocusLensSubjectDistanceFromLens(void)
+{
+    /* Delegate to FINSIG _GetFocusLensSubjectDistance (0xFC3821AF)
+     * [reference/finsig_gm110c/stubs_entry.S:233] */
+    extern int _GetFocusLensSubjectDistance(void);
+    return _GetFocusLensSubjectDistance();
+}
+
+int _GetDrive_TotalClusters(int drive) { (void)drive; return 0; }
+int _Feof_Fut(int fd) { (void)fd; return 1; }
+int _Fflush_Fut(int fd) { (void)fd; return 0; }
+int _PostLogicalEventToUI(int id, int x) { (void)id; (void)x; return 0; }
+int _PostLogicalEventForNotPowerType(int id, int x) { (void)id; (void)x; return 0; }
+void _LockMainPower(void) {}
+void _UnlockMainPower(void) {}
+void _SetAutoShutdownTime_FW(int t, void *cb) { (void)t; (void)cb; }
+void _EnterToCompensationEVF(void) {}
+void _ExitFromCompensationEVF(void) {}
+void _ExpCtrlTool_StartContiAE(int a, int b) { (void)a; (void)b; }
+void _ExpCtrlTool_StopContiAE(int a, int b) { (void)a; (void)b; }
+int _RenameFile_Fut(const char *oldname, const char *newname) { (void)oldname; (void)newname; return -1; }
+void _Restart(unsigned int opt) { (void)opt; }
+int _SetFileAttributes(const char *fn, int attr) { (void)fn; (void)attr; return 0; }
+int _SetFileTimeStamp(const char *fn, int t1, int t2) { (void)fn; (void)t1; (void)t2; return 0; }
+int _SetParameterData(int id, void *buf, int size) { (void)id; (void)buf; (void)size; return 0; }
+int _WriteSDCard(unsigned int d, unsigned int s, unsigned int n, void *b) { (void)d; (void)s; (void)n; (void)b; return 0; }
+int _apex2us(int apex_val) { (void)apex_val; return 0; }
+int _reboot_fw_update(const char *fw_update) { (void)fw_update; return 0; }
+int _CancelHPTimer(int h) { (void)h; return 0; }
+void _UnsetZoomForMovie(void) {}
+void _VTMLock(void) {}
+void _VTMUnlock(void) {}
+void _MakeSDCardBootable(int d) { (void)d; }
+int _GetImageFolder(void *a, int b, int c, int d) { (void)a; (void)b; (void)c; (void)d; return 0; }
+void _captseq_raw_addr_init(void) {}
+void _PutInNdFilter_FW(void) {}
+void _PutOutNdFilter_FW(void) {}
+void _MoveFocusLensToDistance_FW(short *d) { (void)d; }
+
+/* Safe RAM-only C stubs for uncalled wrappers.o / shooting.thm.o externs so
+ * stubs_entry_gui.S contains only the FINSIG entries the menu needs and no
+ * file-I/O, directory, or actuator firmware veneers are linked. */
+int _Close(int fd) { (void)fd; return -1; }
+int _close(int fd) { (void)fd; return -1; }
+int _closedir(void *d) { (void)d; return -1; }
+int _CreateBinarySemaphore(char *n, int v) { (void)n; (void)v; return 0; }
+int _CreateTask(const char *n, int p, int s, void *e, long a) { (void)n; (void)p; (void)s; (void)e; (void)a; return 0; }
+int _DeleteDirectory_Fut(const char *n) { (void)n; return -1; }
+int _DeleteFile_Fut(const char *n) { (void)n; return -1; }
+void _DoAELock(void) {}
+void _DoAFLock(void) {}
+int _ExecuteEventProcedure(const char *n, ...) { (void)n; return -1; }
+void _ExitTask(void) {}
+int _Fclose_Fut(void *f) { (void)f; return -1; }
+char *_Fgets_Fut(char *s, int n, void *f) { (void)s; (void)n; (void)f; return 0; }
+void *_Fopen_Fut(const char *n, const char *m) { (void)n; (void)m; return 0; }
+unsigned int _Fread_Fut(void *b, unsigned int s, unsigned int n, void *f) { (void)b; (void)s; (void)n; (void)f; return 0; }
+int _Fseek_Fut(void *f, long o, int w) { (void)f; (void)o; (void)w; return -1; }
+unsigned int _Fwrite_Fut(const void *b, unsigned int s, unsigned int n, void *f) { (void)b; (void)s; (void)n; (void)f; return 0; }
+int _GetAdChValue(int c) { (void)c; return 0; }
+unsigned int _GetDrive_ClusterSize(int d) { (void)d; return 0; }
+unsigned int _GetDrive_FreeClusters(int d) { (void)d; return 0; }
+void _LEDDrive(int l, int a) { (void)l; (void)a; }
+int _MakeDirectory_Fut(const char *n, int u) { (void)n; (void)u; return -1; }
+int _MoveOpticalZoomAt(int p) { (void)p; return 0; }
+int _Open(const char *n, int f, int m) { (void)n; (void)f; (void)m; return -1; }
+int _open(const char *n, int f, int m) { (void)n; (void)f; (void)m; return -1; }
+void *_OpenFastDir(const char *n) { (void)n; return 0; }
+void _PB2Rec(void) {}
+void _Rec2PB(void) {}
+int _PT_MFOff(void) { return 0; }
+int _PT_MFOn(void) { return 0; }
+int _PT_MoveDigitalZoomToWide(void) { return 0; }
+void _PT_PlaySound(short s, void *c, int u) { (void)s; (void)c; (void)u; }
+int _Read(int fd, void *b, unsigned int c) { (void)fd; (void)b; (void)c; return -1; }
+int _ReadFastDir(void *d, void *b) { (void)d; (void)b; return 0; }
+void _SetCurrentCaptureModeType(void) {}
+int _SetHPTimerAfterNow(int d, void *g, void *b, int p) { (void)d; (void)g; (void)b; (void)p; return 0; }
+void _SetLogicalEventActive(unsigned int id, unsigned int s) { (void)id; (void)s; }
+void _SetScriptMode(unsigned int m) { (void)m; }
+void _TurnOffBackLight(void) {}
+void _TurnOnBackLight(void) {}
+void _TurnOffDisplay(void) {}
+void _TurnOnDisplay(void) {}
+void _UnlockAE(void) {}
+void _UnlockAF(void) {}
+int _Write(int fd, const void *b, unsigned int c) { (void)fd; (void)b; (void)c; return -1; }
+int _add_ptp_handler(int o, void *h, int u) { (void)o; (void)h; (void)u; return 0; }
+void *_exmem_ualloc(unsigned int t, unsigned int s, void *a) { (void)t; (void)s; (void)a; return 0; }
+void _exmem_ufree(unsigned int t) { (void)t; }
+int _get_fstype(int d) { (void)d; return 0; }
+int _lseek(int fd, int o, int w) { (void)fd; (void)o; (void)w; return -1; }
+void _set_control_event(int e) { (void)e; }
+int _stat(const char *n, void *p) { (void)n; (void)p; return -1; }
+
+void __wrap_play_sound(unsigned int sound) { (void)sound; }
+void __wrap_camera_set_led(int led, int state, int bright) { (void)led; (void)state; (void)bright; }
+void __wrap_debug_led(int state) { (void)state; }
+
+/* Linker wrappers blocking all file open, write, directory, and SD card paths */
+int __wrap_write(int fd, const void *buf, unsigned int count) { (void)fd; (void)buf; (void)count; return -1; }
+int __wrap__Write(int fd, const void *buf, unsigned int count) { (void)fd; (void)buf; (void)count; return -1; }
+unsigned int __wrap_fwrite(const void *ptr, unsigned int size, unsigned int nmemb, void *stream) { (void)ptr; (void)size; (void)nmemb; (void)stream; return 0; }
+unsigned int __wrap__Fwrite_Fut(const void *ptr, unsigned int size, unsigned int nmemb, void *stream) { (void)ptr; (void)size; (void)nmemb; (void)stream; return 0; }
+int __wrap_open(const char *name, int flags, int mode) { (void)name; (void)flags; (void)mode; return -1; }
+int __wrap__open(const char *name, int flags, int mode) { (void)name; (void)flags; (void)mode; return -1; }
+int __wrap__Open(const char *name, int flags, int mode) { (void)name; (void)flags; (void)mode; return -1; }
+void *__wrap_fopen(const char *filename, const char *mode) { (void)filename; (void)mode; return 0; }
+void *__wrap__Fopen_Fut(const char *filename, const char *mode) { (void)filename; (void)mode; return 0; }
+int __wrap_mkdir(const char *name) { (void)name; return -1; }
+int __wrap_mkdir_if_not_exist(const char *dirname) { (void)dirname; return -1; }
+int __wrap__MakeDirectory_Fut(const char *name, int unk) { (void)name; (void)unk; return -1; }
+int __wrap_remove(const char *name) { (void)name; return -1; }
+int __wrap__DeleteFile_Fut(const char *name) { (void)name; return -1; }
+int __wrap__DeleteDirectory_Fut(const char *name) { (void)name; return -1; }
+int __wrap_rename(const char *oldname, const char *newname) { (void)oldname; (void)newname; return -1; }
+int __wrap__RenameFile_Fut(const char *oldname, const char *newname) { (void)oldname; (void)newname; return -1; }
+int __wrap_utime(const char *file, void *newTimes) { (void)file; (void)newTimes; return -1; }
+int __wrap_stat(const char *name, void *pStat) { (void)name; (void)pStat; return -1; }
+void *__wrap_opendir(const char *name) { (void)name; return 0; }
+void *__wrap_opendir_chdk(const char *name, unsigned int flags) { (void)name; (void)flags; return 0; }
+void *__wrap_readdir(void *d) { (void)d; return 0; }
+int __wrap_closedir(void *d) { (void)d; return 0; }
+int __wrap__WriteSDCard(unsigned int drive, unsigned int start_sect, unsigned int num_sect, void *buf) { (void)drive; (void)start_sect; (void)num_sect; (void)buf; return 0; }
+void __wrap__MakeSDCardBootable(int drive) { (void)drive; }
+int __wrap__SetFileAttributes(const char *fn, int attr) { (void)fn; (void)attr; return 0; }
+int __wrap__SetFileTimeStamp(const char *fn, int time1, int time2) { (void)fn; (void)time1; (void)time2; return 0; }
+int __wrap__ExecuteEventProcedure(const char *name, ...) { (void)name; return -1; }
+void __wrap_rbf_load_from_file(char *file, int codepage)
+{
+    (void)file;
+    extern void __real_rbf_load_from_file(char *f, int cp);
+    __real_rbf_load_from_file("", codepage);
+}
+int __wrap_rbf_load_symbol(char *file)
+{
+    (void)file;
+    extern int __real_rbf_load_symbol(char *f);
+    return __real_rbf_load_symbol("");
+}
+void __wrap_lang_load_from_file(const char *file) { (void)file; }
+int __wrap_read(int fd, void *buf, unsigned int count) { (void)fd; (void)buf; (void)count; return -1; }
+int __wrap__Read(int fd, void *buf, unsigned int count) { (void)fd; (void)buf; (void)count; return -1; }
+int __wrap_lseek(int fd, int offset, int whence) { (void)fd; (void)offset; (void)whence; return -1; }
+int __wrap__lseek(int fd, int offset, int whence) { (void)fd; (void)offset; (void)whence; return -1; }
+int __wrap_close(int fd) { (void)fd; return -1; }
+int __wrap__close(int fd) { (void)fd; return -1; }
+int __wrap__Close(int fd) { (void)fd; return -1; }
+'''
+
+
+def generate_stubs_entry_gui_s() -> str:
+    """Generate minimal stubs_entry_gui.S with only the FINSIG entries the menu needs."""
+    return r'''/* =============================================================================
+ * PORT-35 Part B: G3X_GUI=1 minimal FINSIG stubs_entry table
+ * Every entry below is from reference/finsig_gm110c/stubs_entry.S (label FINSIG)
+ * or chdk-port/platform/g3x/sub/110c/stubs_entry.S.
+ * File-write, file-open, file-delete, and directory firmware veneers are omitted.
+ * ============================================================================= */
+#include "stubs_asm.h"
+
+DEF(ctypes                            ,0xfc616f54) // reference/finsig_gm110c/stubs_entry.S:170
+DEF(physw_run                         ,0x000082bc) // reference/finsig_gm110c/stubs_entry.S:171
+DEF(physw_sleep_delay                 ,0x000082c4) // reference/finsig_gm110c/stubs_entry.S:172
+DEF(physw_status                      ,0x00040dac) // reference/finsig_gm110c/stubs_entry.S:173
+DEF(fileio_semaphore                  ,0x000149c0) // reference/finsig_gm110c/stubs_entry.S:174
+DEF(focus_len_table                   ,0xfdf317d8) // chdk-port/platform/g3x/sub/110c/stubs_entry.S:179
+DEF(FlashParamsTable                  ,0xfca9129c) // reference/finsig_gm110c/stubs_entry.S:176
+DEF(playrec_mode                      ,0x0000c4d4) // reference/finsig_gm110c/stubs_entry.S:177
+DEF(jpeg_count_str                    ,0x0012c39c) // reference/finsig_gm110c/stubs_entry.S:178
+DEF(zoom_busy                         ,0x0000bef8) // reference/finsig_gm110c/stubs_entry.S:179
+DEF(focus_busy                        ,0x00014bc0) // reference/finsig_gm110c/stubs_entry.S:180
+DEF(imager_active                     ,0x000086bc) // reference/finsig_gm110c/stubs_entry.S:181
+DEF(canon_menu_active                 ,0x0000d2e8) // reference/finsig_gm110c/stubs_entry.S:182
+DEF(file_counter_var                  ,0x00014864) // reference/finsig_gm110c/stubs_entry.S:183
+DEF(active_bitmap_buffer              ,0x0000d2a4) // reference/finsig_gm110c/stubs_entry.S:186
+DEF(displaytype                       ,0x00009740) // reference/finsig_gm110c/stubs_entry.S:187
+DEF(bitmap_buffer                     ,0x0000d2a8) // reference/finsig_gm110c/stubs_entry.S:188
+DEF(palette_control                   ,0x00015da4) // reference/finsig_gm110c/stubs_entry.S:189
+DEF(palette_buffer_ptr                ,0x00015dbc) // reference/finsig_gm110c/stubs_entry.S:190
+DEF(active_palette_buffer             ,0x00015db4) // reference/finsig_gm110c/stubs_entry.S:191
+DEF_CONST(uiprop_count                ,0x000000d1) // reference/finsig_gm110c/stubs_entry.S:192
+DEF(exmem_alloc_table                 ,0x00049040) // reference/finsig_gm110c/stubs_entry.S:193
+DEF(exmem_types_table                 ,0xfce955fc) // reference/finsig_gm110c/stubs_entry.S:194
+DEF_CONST(exmem_type_count            ,0x00000024) // reference/finsig_gm110c/stubs_entry.S:195
+
+NHSTUB(AllocateUncacheableMemory              ,0xfc144471) // reference/finsig_gm110c/stubs_entry.S:197
+NHSTUB(DebugAssert                            ,0x010e1001) // reference/finsig_gm110c/stubs_entry.S:201
+NHSTUB(FreeUncacheableMemory                  ,0xfc14449d) // reference/finsig_gm110c/stubs_entry.S:218
+NHSTUB(GetBatteryTemperature                  ,0xfc12da91) // reference/finsig_gm110c/stubs_entry.S:221
+NHSTUB(GetCCDTemperature                      ,0xfc12da35) // reference/finsig_gm110c/stubs_entry.S:222
+NHSTUB(GetCurrentAvValue                      ,0xfc0d8e55) // reference/finsig_gm110c/stubs_entry.S:223
+NHSTUB(GetCurrentShutterSpeed                 ,0xfc144dd3) // reference/finsig_gm110c/stubs_entry.S:224
+NHSTUB(GetUsableMaxAv                         ,0xfc555d21) // reference/finsig_gm110c/stubs_entry.S:225
+NHSTUB(GetUsableMinAv                         ,0xfc555d0f) // reference/finsig_gm110c/stubs_entry.S:226
+NHSTUB(get_nd_value                           ,0xfc493a51) // reference/finsig_gm110c/stubs_entry.S:227
+NHSTUB(get_current_nd_value                   ,0xfc493a2b) // reference/finsig_gm110c/stubs_entry.S:228
+NHSTUB(GetFocusLensSubjectDistance            ,0xfc3821af) // reference/finsig_gm110c/stubs_entry.S:232
+NHSTUB(GetKbdState                            ,0xfc08ef67) // reference/finsig_gm110c/stubs_entry.S:234
+NHSTUB(GetMemInfo                             ,0xfc610ab9) // reference/finsig_gm110c/stubs_entry.S:235
+NHSTUB(GetOpticalTemperature                  ,0xfc12daeb) // reference/finsig_gm110c/stubs_entry.S:236
+NHSTUB(GetParameterData                       ,0xfc275feb) // reference/finsig_gm110c/stubs_entry.S:237
+NHSTUB(GetPropertyCase                        ,0xfc362f91) // reference/finsig_gm110c/stubs_entry.S:238
+NHSTUB(GetSystemTime                          ,0xfc60243d) // reference/finsig_gm110c/stubs_entry.S:239
+NHSTUB(GetVRAMHPixelsSize                     ,0xfc0d360b) // reference/finsig_gm110c/stubs_entry.S:240
+NHSTUB(GetVRAMVPixelsSize                     ,0xfc0d3613) // reference/finsig_gm110c/stubs_entry.S:241
+NHSTUB(GetZoomLensCurrentPoint                ,0xfc37deeb) // reference/finsig_gm110c/stubs_entry.S:242
+NHSTUB(GetZoomLensCurrentPosition             ,0xfc37decb) // reference/finsig_gm110c/stubs_entry.S:243
+NHSTUB(GiveSemaphore                          ,0xbfe15459) // reference/finsig_gm110c/stubs_entry.S:244
+NHSTUB(IsStrobeChargeCompleted                ,0xfc0bcaaf) // reference/finsig_gm110c/stubs_entry.S:245
+NHSTUB(LocalTime                              ,0x010e1581) // reference/finsig_gm110c/stubs_entry.S:247
+NHSTUB(SetPropertyCase                        ,0xfc362e5d) // reference/finsig_gm110c/stubs_entry.S:277
+NHSTUB(SleepTask                              ,0xbfe14969) // reference/finsig_gm110c/stubs_entry.S:279
+NHSTUB(TakeSemaphore                          ,0xbfe153e1) // reference/finsig_gm110c/stubs_entry.S:280
+NHSTUB(VbattGet                               ,0xfc0bb591) // reference/finsig_gm110c/stubs_entry.S:288
+NHSTUB(_log                                   ,0x011032f8) // reference/finsig_gm110c/stubs_entry.S:291
+NHSTUB(_log10                                 ,0x01103818) // reference/finsig_gm110c/stubs_entry.S:292
+NHSTUB(_pow                                   ,0x01103980) // reference/finsig_gm110c/stubs_entry.S:293
+NHSTUB(_sqrt                                  ,0x01105a00) // reference/finsig_gm110c/stubs_entry.S:294
+NHSTUB(free                                   ,0xfc38155b) // reference/finsig_gm110c/stubs_entry.S:301
+NHSTUB(kbd_p1_f                               ,0xfc12868d) // reference/finsig_gm110c/stubs_entry.S:302
+NHSTUB(kbd_p1_f_cont                          ,0xfc128695) // reference/finsig_gm110c/stubs_entry.S:303
+NHSTUB(kbd_p2_f                               ,0xfc12811f) // reference/finsig_gm110c/stubs_entry.S:304
+NHSTUB(kbd_read_keys_r2                       ,0xfc08ee0d) // reference/finsig_gm110c/stubs_entry.S:306
+NHSTUB(malloc                                 ,0xfc381525) // reference/finsig_gm110c/stubs_entry.S:308
+NHSTUB(memcmp                                 ,0xfc382c01) // reference/finsig_gm110c/stubs_entry.S:309
+NHSTUB(memcpy                                 ,0xfc13d68d) // reference/finsig_gm110c/stubs_entry.S:310
+NHSTUB(memset                                 ,0xfc5591c9) // reference/finsig_gm110c/stubs_entry.S:311
+NHSTUB(mktime_ext                             ,0xfc420545) // reference/finsig_gm110c/stubs_entry.S:312
+NHSTUB(qsort                                  ,0xfc468519) // reference/finsig_gm110c/stubs_entry.S:317
+NHSTUB(rand                                   ,0xfc42094f) // reference/finsig_gm110c/stubs_entry.S:318
+NHSTUB(srand                                  ,0xfc420949) // reference/finsig_gm110c/stubs_entry.S:321
+NHSTUB(strcat                                 ,0xfc381489) // reference/finsig_gm110c/stubs_entry.S:323
+NHSTUB(strchr                                 ,0xfc13d721) // reference/finsig_gm110c/stubs_entry.S:324
+NHSTUB(strcmp                                 ,0xfc382a2d) // reference/finsig_gm110c/stubs_entry.S:325
+NHSTUB(strcpy                                 ,0xfc382a09) // reference/finsig_gm110c/stubs_entry.S:326
+NHSTUB(strftime                               ,0x010e1689) // reference/finsig_gm110c/stubs_entry.S:327
+NHSTUB(strlen                                 ,0xfc382aed) // reference/finsig_gm110c/stubs_entry.S:328
+NHSTUB(strncmp                                ,0xfc420997) // reference/finsig_gm110c/stubs_entry.S:329
+NHSTUB(strncpy                                ,0xfc381465) // reference/finsig_gm110c/stubs_entry.S:330
+NHSTUB(strrchr                                ,0xfc13d733) // reference/finsig_gm110c/stubs_entry.S:331
+NHSTUB(strtol                                 ,0xfc13d67f) // reference/finsig_gm110c/stubs_entry.S:332
+NHSTUB(strtolx                                ,0xfc13d53d) // reference/finsig_gm110c/stubs_entry.S:333
+NHSTUB(time                                   ,0x010e11e3) // reference/finsig_gm110c/stubs_entry.S:344
+NHSTUB(vsprintf                               ,0xfc0dcc67) // reference/finsig_gm110c/stubs_entry.S:345
+NHSTUB(EngDrvRead                             ,0xfc382b41) // reference/finsig_gm110c/stubs_entry.S:346
+NHSTUB(PTM_GetCurrentItem                     ,0xfc35f5cb) // reference/finsig_gm110c/stubs_entry.S:347
+NHSTUB(transfer_src_overlay                   ,0xfc380635) // reference/finsig_gm110c/stubs_entry.S:352
+NHSTUB(bzero                                  ,0x01100b40) // reference/finsig_gm110c/stubs_entry.S:353
+NHSTUB(memset32                               ,0x01100b44) // reference/finsig_gm110c/stubs_entry.S:354
+NHSTUB(get_dial_hw_position                   ,0xfc118149) // reference/finsig_gm110c/stubs_entry.S:355
+'''
+
+
+def generate_module_candidate_c() -> str:
+    """Generate RAM-only no-op module stubs for G3X_GUI=1 (no card module loading)."""
+    return r'''/* =============================================================================
+ * PORT-35 Part B: G3X_GUI=1 RAM-only module stubs
+ * Replaces core/modules.c and core/module_load.c so no module is ever loaded
+ * from the SD card while keeping all lib* pointers valid in RAM.
+ * ============================================================================= */
+
+static int stub_ret0(void) { return 0; }
+static void stub_void(void) {}
+
+typedef struct {
+    const void *lib;
+    void *h;
+    unsigned int flags;
+    const char *name;
+} module_handler_t;
+
+typedef struct {
+    void *hdr;
+    void *f1;
+    void *f2;
+    void *f3;
+    void *f4;
+    void *f5;
+    void *f6;
+    void *f7;
+    void *f8;
+    void *f9;
+    void *f10;
+} stub_lib_t;
+
+static const stub_lib_t g3x_stub_lib = {
+    0,
+    (void *)stub_ret0,
+    (void *)stub_ret0,
+    (void *)stub_ret0,
+    (void *)stub_ret0,
+    (void *)stub_ret0,
+    (void *)stub_ret0,
+    (void *)stub_ret0,
+    (void *)stub_ret0,
+    (void *)stub_ret0,
+    (void *)stub_ret0,
+};
+
+const stub_lib_t *libscriptapi = &g3x_stub_lib;
+const stub_lib_t *libtextbox = &g3x_stub_lib;
+const stub_lib_t *libgrids = &g3x_stub_lib;
+const stub_lib_t *librawop = &g3x_stub_lib;
+const stub_lib_t *libmotiondetect = &g3x_stub_lib;
+const stub_lib_t *libcurves = &g3x_stub_lib;
+const stub_lib_t *libdng = &g3x_stub_lib;
+const stub_lib_t *libfselect = &g3x_stub_lib;
+const stub_lib_t *libmpopup = &g3x_stub_lib;
+const stub_lib_t *libtxtread = &g3x_stub_lib;
+const stub_lib_t *libeyefi = &g3x_stub_lib;
+const stub_lib_t *libhisto = &g3x_stub_lib;
+const stub_lib_t *libshothisto = &g3x_stub_lib;
+const stub_lib_t *libzebra = &g3x_stub_lib;
+const stub_lib_t *libedgeovr = &g3x_stub_lib;
+const stub_lib_t *libhexbox = &g3x_stub_lib;
+const stub_lib_t *libpalette = &g3x_stub_lib;
+
+int module_load(module_handler_t *hMod)
+{
+    if (hMod && !hMod->lib) {
+        hMod->lib = &g3x_stub_lib;
+    }
+    return 0;
+}
+
+void module_unload(const char *name) { (void)name; }
+int module_run(char *module, void *callback, int count, int *params, int unload)
+{
+    (void)module;
+    (void)callback;
+    (void)count;
+    (void)params;
+    (void)unload;
+    return -1;
+}
+void module_preload(const char *path, const char *name, int flags) { (void)path; (void)name; (void)flags; }
+void module_exit_alt(void) {}
+void module_tick_unloader(void) {}
+void module_log_clear(void) {}
+void *module_get_adr(unsigned int idx) { (void)idx; return (void *)stub_void; }
+int get_module_info(int idx, const char **name, int *size, unsigned int *base, int *flags)
+{
+    (void)idx;
+    (void)name;
+    (void)size;
+    (void)base;
+    (void)flags;
+    return 0;
+}
+void module_restore_edge(void *buf, int state) { (void)buf; (void)state; }
+void module_save_edge(const char *fn) { (void)fn; }
+void module_set_script_lang(const char *fn) { (void)fn; }
+'''
+
+
+def generate_conf_candidate_c() -> str:
+    """Generate conf.c with card writes, config file I/O, and script loading compiled out."""
+    conf_path = CHDK_PORT / "core" / "conf.c"
+    with open(conf_path, "r", encoding="utf-8") as f:
+        src = f.read()
+
+    # 1. Make conf_update_prevent_shutdown a safe no-op so ALT transitions do not call unverified power-lock stubs
+    target_prevent = """void conf_update_prevent_shutdown(void) {
+    if(conf.alt_prevent_shutdown == ALT_PREVENT_SHUTDOWN_ALWAYS 
+        || (conf.alt_prevent_shutdown == ALT_PREVENT_SHUTDOWN_ALT && !camera_info.state.gui_mode_none)
+        || (conf.alt_prevent_shutdown == ALT_PREVENT_SHUTDOWN_ALT_SCRIPT && camera_info.state.state_kbd_script_run)) {
+        disable_shutdown();
+    } else {
+        enable_shutdown();
+    }
+}"""
+    repl_prevent = """void conf_update_prevent_shutdown(void) {
+    /* No-op in G3X_GUI=1 candidate */
+}"""
+    if target_prevent not in src:
+        raise ValueError("Target conf_update_prevent_shutdown not found in core/conf.c")
+    src = src.replace(target_prevent, repl_prevent, 1)
+
+    # 2. Remove script_load call from conf_change_param
+    src = src.replace("script_load(conf.script_file);", "/* script_load compiled out */")
+    src = src.replace('ptr:DEFAULT_SYMBOL_FILE', 'ptr:""')
+
+    # 3. Truncate at config_save so save_config_file / conf_save / load_config_file / conf_restore are replaced with RAM-only versions
+    marker = "void config_save(ConfInfo *ci, const char *filename, int config_base)"
+    idx = src.find(marker)
+    if idx < 0:
+        raise ValueError("Marker config_save not found in core/conf.c")
+    tail_marker = "// Find ConfInfo entry index for given ID"
+    tail_idx = src.find(tail_marker)
+    if tail_idx < 0:
+        raise ValueError("Marker resetColors not found in core/conf.c")
+    src_head = src[:idx]
+    src_tail = src[tail_idx:]
+    src_tail = src_tail.replace(
+        "if (config_autosave)\n            conf_save();",
+        "/* conf_save compiled out */",
+    )
+
+    ram_only_mid = r'''
+void config_save(ConfInfo *ci, const char *filename, int config_base)
+{
+    (void)ci;
+    (void)filename;
+    (void)config_base;
+}
+
+int save_config_file(int config_base, const char *filename)
+{
+    (void)config_base;
+    (void)filename;
+    return 0;
+}
+
+void conf_save(void)
+{
+}
+
+void __wrap_conf_save(void)
+{
+}
+
+void config_restore(ConfInfo *ci, const char *filename, void (*info_func)(unsigned short id))
+{
+    (void)ci;
+    (void)filename;
+    (void)info_func;
+}
+
+int load_config_file(int config_base, const char *filename)
+{
+    (void)config_base;
+    (void)filename;
+    return 0;
+}
+
+void conf_restore(void)
+{
+    init_user_menu(USER_MENU_ITEMS);
+    conf_load_defaults();
+    clear_values();
+    conf.menu_rbf_file[0] = '\0';
+    conf.menu_symbol_rbf_file[0] = '\0';
+    conf.menu_symbol_enable = 0;
+    conf.alt_mode_button = KEY_PLAYBACK;
+    conf.show_osd = 0;
+    conf.hide_osd = 1;
+    conf.splash_show = 0;
+    conf.start_sound = 0;
+    conf.show_alt_helper = 0;
+    conf.script_startup = 0;
+}
+
+void __wrap_conf_restore(void)
+{
+    conf_restore();
+}
+'''
+    return src_head + ram_only_mid + src_tail
+
+
 
 def ensure_bootstrap():
     """Ensure platform bootstrap has populated platform headers if missing."""
@@ -314,10 +1140,12 @@ def build_candidate_core_ladder_fix(
     resident: bool = False,
     osd: bool = False,
     kbd: bool = False,
+    osd2: bool = False,
+    gui: bool = False,
 ) -> tuple[str, str, int, int]:
-    """Compile candidate core with optional LED_LADDER, G3X_POWERON_FIX, G3X_RESIDENT, G3X_OSD, and G3X_KBD defines."""
+    """Compile candidate core with optional LED_LADDER, G3X_POWERON_FIX, G3X_RESIDENT, G3X_OSD, G3X_KBD, G3X_OSD2, and G3X_GUI defines."""
     print(
-        f"--- Building Candidate Core (ladder={ladder}, poweron_fix={poweron_fix}, resident={resident}, osd={osd}, kbd={kbd}) (@ 0x003489B4) ---"
+        f"--- Building Candidate Core (ladder={ladder}, poweron_fix={poweron_fix}, resident={resident}, osd={osd}, kbd={kbd}, osd2={osd2}, gui={gui}) (@ 0x003489B4) ---"
     )
     os.makedirs(candidate_dir, exist_ok=True)
 
@@ -339,7 +1167,7 @@ def build_candidate_core_ladder_fix(
     core_bin = os.path.join(candidate_dir, "candidate_main.bin")
 
     # 1. Compile boot_prototype.c
-    cflags = [
+    base_cflags = [
         CC,
         "-fno-inline",
         "-Os",
@@ -384,16 +1212,20 @@ def build_candidate_core_ladder_fix(
         "-nostdinc",
     ]
     if poweron_fix:
-        cflags.append("-DG3X_POWERON_FIX=1")
+        base_cflags.append("-DG3X_POWERON_FIX=1")
     if ladder:
-        cflags.append("-DLED_LADDER=1")
+        base_cflags.append("-DLED_LADDER=1")
     if resident:
-        cflags.append("-DG3X_RESIDENT=1")
+        base_cflags.append("-DG3X_RESIDENT=1")
     if osd:
-        cflags.append("-DG3X_OSD=1")
+        base_cflags.append("-DG3X_OSD=1")
     if kbd:
-        cflags.append("-DG3X_KBD=1")
-    cflags.extend(["-c", "-o", boot_proto_o, boot_proto_c])
+        base_cflags.append("-DG3X_KBD=1")
+    if osd2:
+        base_cflags.append("-DG3X_OSD2=1")
+    if gui:
+        base_cflags.append("-DG3X_GUI=1")
+    cflags = list(base_cflags) + ["-c", "-o", boot_proto_o, boot_proto_c]
     run_cmd(cflags, cwd=str(CHDK_PORT))
 
     # 2. Compile stubs_prototype.S
@@ -416,35 +1248,148 @@ def build_candidate_core_ladder_fix(
     # 3. Create candidate libplatformsub archive
     if os.path.exists(lib_proto_a):
         os.remove(lib_proto_a)
-    obj_files = [
-        boot_proto_o,
-        stubs_proto_o,
-        str(SUB_DIR / "stubs_min.o"),
-        str(SUB_DIR / "stubs_entry.o"),
-        str(SUB_DIR / "stubs_entry_2.o"),
-        str(SUB_DIR / "capt_seq.o"),
-        str(SUB_DIR / "movie_rec.o"),
-        str(SUB_DIR / "filewrite.o"),
-        str(SUB_DIR / "main.thm.o"),
-        str(SUB_DIR / "gui_draw.thm.o"),
-        str(SUB_DIR / "memmgmt.thm.o"),
-        str(SUB_DIR / "gui.thm.o"),
-        str(SUB_DIR / "kbd_process.thm.o"),
-        str(SUB_DIR / "kbd_common.thm.o"),
-        str(SUB_DIR / "conf.thm.o"),
-        str(SUB_DIR / "gui_osd.thm.o"),
-        str(SUB_DIR / "raw.thm.o"),
-        str(SUB_DIR / "usb_sync.thm.o"),
-        str(SUB_DIR / "shooting.thm.o"),
-        str(SUB_DIR / "camera_info.thm.o"),
-        str(SUB_DIR / "remotecap.thm.o"),
-        str(SUB_DIR / "lib_thumb.thm.o"),
-        str(SUB_DIR / "lang_str.thm.o"),
-        str(SUB_DIR / "ptp.thm.o"),
-    ]
+    stubs_min_obj = str(SUB_DIR / "stubs_min.o")
+    if osd2:
+        stubs_min_osd2_o = os.path.join(candidate_dir, "stubs_min_osd2.o")
+        run_cmd([OBJCOPY, "--strip-symbol=opacity_buffer", stubs_min_obj, stubs_min_osd2_o], cwd=str(CHDK_PORT))
+        stubs_min_obj = stubs_min_osd2_o
+
+    if gui:
+        stubs_entry_gui_s = os.path.join(candidate_dir, "stubs_entry_gui.S")
+        stubs_entry_gui_o = os.path.join(candidate_dir, "stubs_entry_gui.o")
+        with open(stubs_entry_gui_s, "w", encoding="utf-8") as f:
+            f.write(generate_stubs_entry_gui_s())
+        run_cmd(
+            [
+                CC,
+                "-march=armv7-r",
+                "-mthumb",
+                "-DTHUMB_FW",
+                "-Iinclude",
+                "-Icore",
+                "-Iplatform/g3x",
+                "-Iplatform/g3x/sub/110c",
+                "-c",
+                "-o",
+                stubs_entry_gui_o,
+                stubs_entry_gui_s,
+            ],
+            cwd=str(CHDK_PORT),
+        )
+
+        gui_cand_c = os.path.join(candidate_dir, "gui_candidate.c")
+        gui_cand_o = os.path.join(candidate_dir, "gui_candidate.o")
+        with open(gui_cand_c, "w", encoding="utf-8") as f:
+            f.write(generate_gui_candidate_c())
+        run_cmd(list(base_cflags) + ["-c", "-o", gui_cand_o, gui_cand_c], cwd=str(CHDK_PORT))
+
+        mod_cand_c = os.path.join(candidate_dir, "module_candidate.c")
+        mod_cand_o = os.path.join(candidate_dir, "module_candidate.o")
+        with open(mod_cand_c, "w", encoding="utf-8") as f:
+            f.write(generate_module_candidate_c())
+        run_cmd(list(base_cflags) + ["-c", "-o", mod_cand_o, mod_cand_c], cwd=str(CHDK_PORT))
+
+        conf_cand_c = os.path.join(candidate_dir, "conf_candidate.c")
+        conf_cand_o = os.path.join(candidate_dir, "conf_candidate.o")
+        with open(conf_cand_c, "w", encoding="utf-8") as f:
+            f.write(generate_conf_candidate_c())
+        run_cmd(list(base_cflags) + ["-c", "-o", conf_cand_o, conf_cand_c], cwd=str(CHDK_PORT))
+
+        obj_files = [
+            boot_proto_o,
+            stubs_proto_o,
+            stubs_min_obj,
+            stubs_entry_gui_o,
+            gui_cand_o,
+            mod_cand_o,
+            conf_cand_o,
+            str(SUB_DIR / "gui_draw.thm.o"),
+            str(SUB_DIR / "memmgmt.thm.o"),
+            str(SUB_DIR / "gui.thm.o"),
+            str(SUB_DIR / "kbd_process.thm.o"),
+            str(SUB_DIR / "kbd_common.thm.o"),
+            str(SUB_DIR / "gui_osd.thm.o"),
+            str(SUB_DIR / "usb_sync.thm.o"),
+            str(SUB_DIR / "shooting.thm.o"),
+            str(SUB_DIR / "camera_info.thm.o"),
+            str(SUB_DIR / "lib_thumb.thm.o"),
+            str(SUB_DIR / "lang_str.thm.o"),
+        ]
+    else:
+        obj_files = [
+            boot_proto_o,
+            stubs_proto_o,
+            stubs_min_obj,
+            str(SUB_DIR / "stubs_entry.o"),
+            str(SUB_DIR / "stubs_entry_2.o"),
+            str(SUB_DIR / "capt_seq.o"),
+            str(SUB_DIR / "movie_rec.o"),
+            str(SUB_DIR / "filewrite.o"),
+            str(SUB_DIR / "main.thm.o"),
+            str(SUB_DIR / "gui_draw.thm.o"),
+            str(SUB_DIR / "memmgmt.thm.o"),
+            str(SUB_DIR / "gui.thm.o"),
+            str(SUB_DIR / "kbd_process.thm.o"),
+            str(SUB_DIR / "kbd_common.thm.o"),
+            str(SUB_DIR / "conf.thm.o"),
+            str(SUB_DIR / "gui_osd.thm.o"),
+            str(SUB_DIR / "raw.thm.o"),
+            str(SUB_DIR / "usb_sync.thm.o"),
+            str(SUB_DIR / "shooting.thm.o"),
+            str(SUB_DIR / "camera_info.thm.o"),
+            str(SUB_DIR / "remotecap.thm.o"),
+            str(SUB_DIR / "lib_thumb.thm.o"),
+            str(SUB_DIR / "lang_str.thm.o"),
+            str(SUB_DIR / "ptp.thm.o"),
+        ]
     run_cmd([AR, "cr", lib_proto_a] + obj_files, cwd=str(CHDK_PORT))
 
     # 4. Link candidate_main.elf
+    libplatform_a = str(CHDK_PORT / "platform" / "g3x" / "libplatform.a")
+    if osd2:
+        libplatform_cand_a = os.path.join(candidate_dir, "libplatform_candidate.a")
+        shutil.copyfile(libplatform_a, libplatform_cand_a)
+        lib_osd2_o = os.path.join(candidate_dir, "lib.o")
+        run_cmd([AR, "x", libplatform_cand_a, "lib.o"], cwd=candidate_dir)
+        run_cmd(
+            [
+                OBJCOPY,
+                "--weaken-symbol=vid_get_bitmap_fb",
+                "--weaken-symbol=vid_get_opacity_active_buffer",
+                "--weaken-symbol=vid_bitmap_refresh",
+                lib_osd2_o,
+            ],
+            cwd=candidate_dir,
+        )
+        run_cmd([AR, "r", libplatform_cand_a, lib_osd2_o], cwd=candidate_dir)
+        libplatform_a = libplatform_cand_a
+
+    liblang_a = str(CHDK_PORT / "lib" / "lang" / ".o2" / "liblang.a")
+    libcore_a = str(CHDK_PORT / "lib" / "core" / ".o2" / "libcore.a")
+    if gui:
+        liblang_cand_a = os.path.join(candidate_dir, "liblang_candidate.a")
+        shutil.copyfile(liblang_a, liblang_cand_a)
+        run_cmd([AR, "d", liblang_cand_a, "fileutil.o"], cwd=candidate_dir)
+        liblang_a = liblang_cand_a
+
+        libcore_cand_a = os.path.join(candidate_dir, "libcore_candidate.a")
+        shutil.copyfile(libcore_a, libcore_cand_a)
+        run_cmd(
+            [
+                AR,
+                "d",
+                libcore_cand_a,
+                "modules.o",
+                "module_load.o",
+                "module_hashlist.o",
+                "gui_script.o",
+                "script.o",
+                "gps.o",
+            ],
+            cwd=candidate_dir,
+        )
+        libcore_a = libcore_cand_a
+
     ld_script = "tools/link-boot.ld"
     ld_cmd = [
         CC,
@@ -454,18 +1399,83 @@ def build_candidate_core_ladder_fix(
         "-Wl,-N,-Ttext,0x3489b4",
         "-o",
         core_elf,
-        "-Wl,--start-group",
-        str(SUB_DIR / "entry.o"),
-        str(CHDK_PORT / "platform" / "g3x" / "libplatform.a"),
-        lib_proto_a,
-        str(CHDK_PORT / "lib" / "font" / ".o2" / "libfont.a"),
-        str(CHDK_PORT / "lib" / "math" / ".o2" / "libmath.a"),
-        str(CHDK_PORT / "lib" / "lang" / ".o2" / "liblang.a"),
-        str(CHDK_PORT / "lib" / "armutil" / ".o2" / "libarmutil.a"),
-        str(CHDK_PORT / "lib" / "core" / ".o2" / "libcore.a"),
-        "-lgcc",
-        "-Wl,--end-group",
     ]
+    if gui:
+        gui_wraps = [
+            "gui_kbd_process",
+            "gui_draw_osd",
+            "gui_alt_mode_button_enum",
+            "set_usermenu_state",
+            "conf_save",
+            "conf_restore",
+            "script_load",
+            "script_start_gui",
+            "save_params_values",
+            "load_file",
+            "load_file_to_length",
+            "process_file",
+            "load_int_value_file",
+            "save_int_value_file",
+            "play_sound",
+            "camera_set_led",
+            "debug_led",
+            "mark_filesystem_bootable",
+            "write",
+            "_Write",
+            "fwrite",
+            "_Fwrite_Fut",
+            "open",
+            "_open",
+            "_Open",
+            "fopen",
+            "_Fopen_Fut",
+            "mkdir",
+            "mkdir_if_not_exist",
+            "_MakeDirectory_Fut",
+            "remove",
+            "_DeleteFile_Fut",
+            "_DeleteDirectory_Fut",
+            "rename",
+            "_RenameFile_Fut",
+            "utime",
+            "stat",
+            "opendir",
+            "opendir_chdk",
+            "readdir",
+            "closedir",
+            "_WriteSDCard",
+            "_MakeSDCardBootable",
+            "_SetFileAttributes",
+            "_SetFileTimeStamp",
+            "_ExecuteEventProcedure",
+            "rbf_load_from_file",
+            "rbf_load_symbol",
+            "lang_load_from_file",
+            "read",
+            "_Read",
+            "lseek",
+            "_lseek",
+            "close",
+            "_close",
+            "_Close",
+        ]
+        for sym in gui_wraps:
+            ld_cmd.append(f"-Wl,--wrap={sym}")
+    ld_cmd.extend(
+        [
+            "-Wl,--start-group",
+            str(SUB_DIR / "entry.o"),
+            libplatform_a,
+            lib_proto_a,
+            str(CHDK_PORT / "lib" / "font" / ".o2" / "libfont.a"),
+            str(CHDK_PORT / "lib" / "math" / ".o2" / "libmath.a"),
+            liblang_a,
+            str(CHDK_PORT / "lib" / "armutil" / ".o2" / "libarmutil.a"),
+            libcore_a,
+            "-lgcc",
+            "-Wl,--end-group",
+        ]
+    )
     run_cmd(ld_cmd, cwd=str(CHDK_PORT))
 
     # 5. Extract binary
@@ -623,9 +1633,17 @@ def build_candidate(
     resident: bool | None = None,
     osd: bool | None = None,
     kbd: bool | None = None,
+    osd2: bool | None = None,
+    gui: bool | None = None,
 ) -> dict:
     """Execute complete combined candidate build pipeline."""
     ensure_bootstrap()
+
+    if gui is None:
+        gui = os.environ.get("G3X_GUI", "0") == "1"
+
+    if osd2 is None:
+        osd2 = os.environ.get("G3X_OSD2", "0") == "1"
 
     if kbd is None:
         kbd = os.environ.get("G3X_KBD", "0") == "1"
@@ -633,7 +1651,16 @@ def build_candidate(
     if osd is None:
         osd = os.environ.get("G3X_OSD", "0") == "1"
 
-    if kbd:
+    if gui:
+        osd2 = True
+        kbd = True
+        resident = True
+        poweron_fix = True
+    elif osd2:
+        kbd = True
+        resident = True
+        poweron_fix = True
+    elif kbd:
         resident = True
         poweron_fix = True
     elif osd:
@@ -643,6 +1670,10 @@ def build_candidate(
 
     if out_dir:
         candidate_dir = os.path.abspath(out_dir)
+    elif gui:
+        candidate_dir = CANDIDATE_PORT35_GUI_DIR
+    elif osd2:
+        candidate_dir = CANDIDATE_PORT35_OSD2_DIR
     elif kbd and osd:
         candidate_dir = CANDIDATE_PORT34_KBD_OSD_DIR
     elif kbd:
@@ -671,6 +1702,8 @@ def build_candidate(
         resident=resident,
         osd=osd,
         kbd=kbd,
+        osd2=osd2,
+        gui=gui,
     )
 
     # 2. Build loader
@@ -743,6 +1776,8 @@ def build_candidate(
         "resident": resident,
         "osd": osd,
         "kbd": kbd,
+        "osd2": osd2,
+        "gui": gui,
         "diskboot_sha256": diskboot_sha256,
         "diskboot_size": diskboot_size,
     }
@@ -750,7 +1785,7 @@ def build_candidate(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="PORT-25/32/33/34: Opt-in combined breadcrumb ladder + G3X_POWERON_FIX + G3X_RESIDENT + G3X_OSD + G3X_KBD builder for G3 X (GM1.10C)"
+        description="PORT-25/32/33/34/35: Opt-in combined breadcrumb ladder + G3X_POWERON_FIX + G3X_RESIDENT + G3X_OSD + G3X_KBD + G3X_OSD2 + G3X_GUI builder for G3 X (GM1.10C)"
     )
     parser.add_argument(
         "--out-dir",
@@ -794,11 +1829,23 @@ def main():
         action="store_true",
         help="Build opt-in G3X_KBD=1 keyboard candidate (ladder=1, poweron_fix=1, resident=1, kbd=1)",
     )
+    parser.add_argument(
+        "--osd2",
+        action="store_true",
+        help="Build opt-in G3X_OSD2=1 overlay fix candidate (ladder=1, poweron_fix=1, resident=1, kbd=1, osd2=1)",
+    )
+    parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="Build opt-in G3X_GUI=1 CHDK core GUI/ALT menu candidate (ladder=1, poweron_fix=1, resident=1, kbd=1, osd2=1, gui=1)",
+    )
     args = parser.parse_args()
 
-    kbd = bool(args.kbd or os.environ.get("G3X_KBD", "0") == "1")
+    gui = bool(args.gui or os.environ.get("G3X_GUI", "0") == "1")
+    osd2 = bool(gui or args.osd2 or os.environ.get("G3X_OSD2", "0") == "1")
+    kbd = bool(osd2 or args.kbd or os.environ.get("G3X_KBD", "0") == "1")
     osd = bool(args.osd or os.environ.get("G3X_OSD", "0") == "1")
-    resident = bool(kbd or osd or args.resident or os.environ.get("G3X_RESIDENT", "0") == "1")
+    resident = bool(osd2 or kbd or osd or args.resident or os.environ.get("G3X_RESIDENT", "0") == "1")
 
     if args.default:
         ladder = False
@@ -806,18 +1853,24 @@ def main():
         resident = False
         osd = False
         kbd = False
+        osd2 = False
+        gui = False
     elif args.ladder:
         ladder = True
         poweron_fix = False
         resident = False
         osd = False
         kbd = False
+        osd2 = False
+        gui = False
     elif args.poweron_fix:
         ladder = False
         poweron_fix = True
         resident = False
         osd = False
         kbd = False
+        osd2 = False
+        gui = False
     else:
         # Default behavior: build combined candidate (ladder=1, poweron_fix=1)
         ladder = True
@@ -830,6 +1883,8 @@ def main():
         resident=resident,
         osd=osd,
         kbd=kbd,
+        osd2=osd2,
+        gui=gui,
     )
 
     print("\nSummary:")
@@ -843,6 +1898,8 @@ def main():
     print(f"  resident:     {res['resident']}")
     print(f"  osd:          {res['osd']}")
     print(f"  kbd:          {res['kbd']}")
+    print(f"  osd2:         {res['osd2']}")
+    print(f"  gui:          {res['gui']}")
 
 
 if __name__ == "__main__":
