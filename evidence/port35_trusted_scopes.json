@@ -1,0 +1,34 @@
+{
+  "policy_version": "1.0.0",
+  "policy_authority": "UNVERIFIED_EXTERNAL_POLICY (External consistency check fixture only; out-of-band owner approval required)",
+  "authorization_scopes": [
+    {
+      "scope_id": "SCOPE-PORT35-OSD2-GUI",
+      "firmware_revision": "GM1.10C",
+      "approved_ranges": [
+        {
+          "start_address": "0xFC18347E",
+          "end_address": "0xFC18381F",
+          "label": "PORT35-ROM-BMPDDEV BmpDDev.c displaytype switch, bitmap_buffer and opacity_buffer setup in primary ROM"
+        },
+        {
+          "start_address": "0xFC380634",
+          "end_address": "0xFC38073F",
+          "label": "PORT35-ROM-TRANSFER-SRC-OVERLAY VramTransferManager.c transfer_src_overlay in primary ROM"
+        },
+        {
+          "start_address": "0xFC3810F0",
+          "end_address": "0xFC38119B",
+          "label": "PORT35-ROM-VTM-BITMAP-BUFFERS VramTransferManager.c ScreenLock, ScreenUnlock, active_bitmap_buffer and bitmap_buffer references in primary ROM"
+        }
+      ],
+      "max_bytes_total": 4096,
+      "allowed_classifications": [
+        "STATIC_VERIFIED",
+        "INFERRED",
+        "UNKNOWN"
+      ],
+      "description": "PORT-35 GM1.10C OSD2 and GUI display buffer, opacity buffer, displaytype geometry, and overlay transfer verification scope"
+    }
+  ]
+}
