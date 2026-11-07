@@ -1,0 +1,80 @@
+{
+  "manifest_version": "1.0.0",
+  "authorization_scopes": [
+    {
+      "scope_id": "SCOPE-PORT35-OSD2-GUI",
+      "firmware_revision": "GM1.10C",
+      "approved_ranges": [
+        {
+          "start_address": "0xFC18347E",
+          "end_address": "0xFC18381F",
+          "label": "PORT35-ROM-BMPDDEV BmpDDev.c displaytype switch, bitmap_buffer and opacity_buffer setup in primary ROM"
+        },
+        {
+          "start_address": "0xFC380634",
+          "end_address": "0xFC38073F",
+          "label": "PORT35-ROM-TRANSFER-SRC-OVERLAY VramTransferManager.c transfer_src_overlay in primary ROM"
+        },
+        {
+          "start_address": "0xFC3810F0",
+          "end_address": "0xFC38119B",
+          "label": "PORT35-ROM-VTM-BITMAP-BUFFERS VramTransferManager.c ScreenLock, ScreenUnlock, active_bitmap_buffer and bitmap_buffer references in primary ROM"
+        }
+      ],
+      "max_bytes_total": 4096,
+      "allowed_classifications": [
+        "STATIC_VERIFIED",
+        "INFERRED",
+        "UNKNOWN"
+      ],
+      "description": "PORT-35 GM1.10C OSD2 and GUI display buffer, opacity buffer, displaytype geometry, and overlay transfer verification scope"
+    }
+  ],
+  "evidence_entries": [
+    {
+      "evidence_id": "PORT35-ROM-BMPDDEV",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC18347E",
+      "end_address": "0xFC18381F",
+      "expected_byte_count": 930,
+      "sha256": "5b04719fde94ae9a967beb93e1f64836fd417de35d0cc613536c3c79b07fcadf",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT35-OSD2-GUI",
+      "classification": "STATIC_VERIFIED",
+      "notes": "BmpDDev.c sub_fc18347e and sub_fc183608 (including sub-slice 0xFC183600..0xFC18381F, 544 bytes, sha256 d0827e15c2deb8c1eace949c85c395bb0c75455f7e88ce3c1a0f9b3477b78647): proves bitmap_buffer[0]=0x5FE80000 (@0xFC1837FC), bitmap_buffer[1]=0x5FD00000 (@0xFC183818), opacity_buffer[0]=0x5FC40000 (@0xFC183800), opacity_buffer[1]=0x5FB80000 (@0xFC183804), and displaytype switch 0..12 geometry (640x480 stride 640, 720x480 stride 736, 960x540 stride 960, 1024x768 stride 1024, 900x600 stride 928)."
+    },
+    {
+      "evidence_id": "PORT35-ROM-TRANSFER-SRC-OVERLAY",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC380634",
+      "end_address": "0xFC38073F",
+      "expected_byte_count": 268,
+      "sha256": "336d235df668ca1d9e05c010545ccf417c3b57a572326fb6dd35506c45d533ab",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT35-OSD2-GUI",
+      "classification": "STATIC_VERIFIED",
+      "notes": "VramTransferManager.c transfer_src_overlay (0xFC380634, Thumb entry 0xFC380635): transfers overlay buffer index r0 (0 or 1) using bitmap_buffer at 0x0000D2A8."
+    },
+    {
+      "evidence_id": "PORT35-ROM-VTM-BITMAP-BUFFERS",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC3810F0",
+      "end_address": "0xFC38119B",
+      "expected_byte_count": 172,
+      "sha256": "188ac7d596935c5b3a6d4c04f91a15e9202676d70ef6712ef7d49e18f90dfcc0",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT35-OSD2-GUI",
+      "classification": "STATIC_VERIFIED",
+      "notes": "VramTransferManager.c ScreenLock (0xFC3810F0), ScreenUnlock (0xFC381126), and sub_fc38113e reading active_bitmap_buffer (0x0000D2A4 at 0xFC38116C) and bitmap_buffer (0x0000D2A8 at 0xFC381174)."
+    }
+  ]
+}

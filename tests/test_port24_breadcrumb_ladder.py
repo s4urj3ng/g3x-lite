@@ -194,6 +194,7 @@ class TestPort24BreadcrumbLadder(unittest.TestCase):
             "loader_entry_breadcrumb.S",
             "loader_entry_led.S",
             "loader_main_breadcrumb.c",
+            "osd2_test_overlay.h",
             "osd_test_overlay.h",
             "stubs_prototype.S",
         }

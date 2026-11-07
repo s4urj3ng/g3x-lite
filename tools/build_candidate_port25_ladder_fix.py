@@ -10,7 +10,7 @@ Design & Constraints:
   DISKBOOT.BIN SHA-256: 9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136 (118,001 B).
 - PORT-24 --poweron-fix build remains byte-identical:
   DISKBOOT.BIN SHA-256: faad4d8242fbf6f79a44b10a9956f7eb04de9b65f42221f82a3b69eb024cf056 (118,001 B).
-- Reuses verified green LED MMIO register 0xD20B0884 (ON: 0x004D0002, OFF: 0x004C0003). Adds no new addresses.
+- Reuses verified power / card-access LED MMIO register 0xD20B0884 (ON: 0x004D0002, OFF: 0x004C0003). Adds no new addresses.
 - All pulses use calibrated framed timing with preemption tolerance (>= 50 ms difference at slow bound):
   ON delay: 0x00100000 (1,048,576 iterations) -> 50.0 ms (slow <= 150 ms) / 20.97 ms (nom) / 15.73 ms (fast)
   Pulse OFF gap: 0x00050000 (327,680 iterations) -> 15.625 ms (slow) / 6.55 ms (nom) / 4.91 ms (fast)
@@ -63,6 +63,7 @@ CANDIDATE_PORT32_RESIDENT_DIR = os.path.join(REPO_ROOT, "candidate_port32_reside
 CANDIDATE_PORT33_OSD_DIR = os.path.join(REPO_ROOT, "candidate_port33_osd")
 CANDIDATE_PORT34_KBD_DIR = os.path.join(REPO_ROOT, "candidate_port34_kbd")
 CANDIDATE_PORT34_KBD_OSD_DIR = os.path.join(REPO_ROOT, "candidate_port34_kbd_osd")
+CANDIDATE_PORT35_OSD2_DIR = os.path.join(REPO_ROOT, "candidate_port35_osd2")
 
 # Backward compatibility alias
 CANDIDATE_LADDER_FIX_DIR = CANDIDATE_PORT25_LADDER_FIX_DIR
@@ -84,6 +85,15 @@ G3X_OSD_ACTIVE_BITMAP_BUFFER_ADDR = 0x0000D2A4
 G3X_OSD_BITMAP_BUFFER_ADDR = 0x0000D2A8
 G3X_OSD_OPACITY_BUFFER_ADDR = 0xFC1837FC
 G3X_OSD_TRANSFER_SRC_OVERLAY_ADDR = 0xFC380635
+
+G3X_OSD2_ACTIVE_BITMAP_BUFFER_ADDR = 0x0000D2A4
+G3X_OSD2_BITMAP_BUFFER_ADDR = 0x0000D2A8
+G3X_OSD2_DISPLAYTYPE_ADDR = 0x00009740
+G3X_OSD2_BITMAP_BUF0_ADDR = 0x5FE80000
+G3X_OSD2_BITMAP_BUF1_ADDR = 0x5FD00000
+G3X_OSD2_OPACITY_BUF0_ADDR = 0x5FC40000
+G3X_OSD2_OPACITY_BUF1_ADDR = 0x5FB80000
+G3X_OSD2_TRANSFER_SRC_OVERLAY_ADDR = 0xFC380635
 
 LADDER_ENTRY_S = str(SUB_DIR / "loader_entry_breadcrumb.S")
 LADDER_LOADER_C = str(SUB_DIR / "loader_main_breadcrumb.c")
@@ -240,12 +250,15 @@ def generate_boot_prototype_resident_c() -> str:
 #if defined(G3X_OSD) && (G3X_OSD == 1)
 #include "osd_test_overlay.h"
 #endif
+#if defined(G3X_OSD2) && (G3X_OSD2 == 1)
+#include "osd2_test_overlay.h"
+#endif
 #if defined(G3X_KBD) && (G3X_KBD == 1)
 #include "kbd_candidate.h"
 #endif
 /* =============================================================================
  * PORT-32 Resident Heartbeat Task (G3X_RESIDENT=1)
- * Blinks rear green LED (0xD20B0884, ON 0x004D0002, OFF 0x004C0003) at ~1 Hz
+ * Blinks power / card-access LED (0xD20B0884, ON 0x004D0002, OFF 0x004C0003) at ~1 Hz
  * in a double-short-blink pattern (100 ms ON, 100 ms OFF, 100 ms ON, 700 ms OFF)
  * using manifest-cited SleepTask (0xFC31BF84 / 0xFCEF33B4; delay unit ms INFERRED).
  * Stack alignment at task entry is INFERRED (no inline sp write in C task body).
@@ -314,10 +327,11 @@ def build_candidate_core_ladder_fix(
     resident: bool = False,
     osd: bool = False,
     kbd: bool = False,
+    osd2: bool = False,
 ) -> tuple[str, str, int, int]:
-    """Compile candidate core with optional LED_LADDER, G3X_POWERON_FIX, G3X_RESIDENT, G3X_OSD, and G3X_KBD defines."""
+    """Compile candidate core with optional LED_LADDER, G3X_POWERON_FIX, G3X_RESIDENT, G3X_OSD, G3X_KBD, and G3X_OSD2 defines."""
     print(
-        f"--- Building Candidate Core (ladder={ladder}, poweron_fix={poweron_fix}, resident={resident}, osd={osd}, kbd={kbd}) (@ 0x003489B4) ---"
+        f"--- Building Candidate Core (ladder={ladder}, poweron_fix={poweron_fix}, resident={resident}, osd={osd}, kbd={kbd}, osd2={osd2}) (@ 0x003489B4) ---"
     )
     os.makedirs(candidate_dir, exist_ok=True)
 
@@ -393,6 +407,8 @@ def build_candidate_core_ladder_fix(
         cflags.append("-DG3X_OSD=1")
     if kbd:
         cflags.append("-DG3X_KBD=1")
+    if osd2:
+        cflags.append("-DG3X_OSD2=1")
     cflags.extend(["-c", "-o", boot_proto_o, boot_proto_c])
     run_cmd(cflags, cwd=str(CHDK_PORT))
 
@@ -416,10 +432,16 @@ def build_candidate_core_ladder_fix(
     # 3. Create candidate libplatformsub archive
     if os.path.exists(lib_proto_a):
         os.remove(lib_proto_a)
+    stubs_min_obj = str(SUB_DIR / "stubs_min.o")
+    if osd2:
+        stubs_min_osd2_o = os.path.join(candidate_dir, "stubs_min_osd2.o")
+        run_cmd([OBJCOPY, "--strip-symbol=opacity_buffer", stubs_min_obj, stubs_min_osd2_o], cwd=str(CHDK_PORT))
+        stubs_min_obj = stubs_min_osd2_o
+
     obj_files = [
         boot_proto_o,
         stubs_proto_o,
-        str(SUB_DIR / "stubs_min.o"),
+        stubs_min_obj,
         str(SUB_DIR / "stubs_entry.o"),
         str(SUB_DIR / "stubs_entry_2.o"),
         str(SUB_DIR / "capt_seq.o"),
@@ -445,6 +467,25 @@ def build_candidate_core_ladder_fix(
     run_cmd([AR, "cr", lib_proto_a] + obj_files, cwd=str(CHDK_PORT))
 
     # 4. Link candidate_main.elf
+    libplatform_a = str(CHDK_PORT / "platform" / "g3x" / "libplatform.a")
+    if osd2:
+        libplatform_cand_a = os.path.join(candidate_dir, "libplatform_candidate.a")
+        shutil.copyfile(libplatform_a, libplatform_cand_a)
+        lib_osd2_o = os.path.join(candidate_dir, "lib.o")
+        run_cmd([AR, "x", libplatform_cand_a, "lib.o"], cwd=candidate_dir)
+        run_cmd(
+            [
+                OBJCOPY,
+                "--weaken-symbol=vid_get_bitmap_fb",
+                "--weaken-symbol=vid_get_opacity_active_buffer",
+                "--weaken-symbol=vid_bitmap_refresh",
+                lib_osd2_o,
+            ],
+            cwd=candidate_dir,
+        )
+        run_cmd([AR, "r", libplatform_cand_a, lib_osd2_o], cwd=candidate_dir)
+        libplatform_a = libplatform_cand_a
+
     ld_script = "tools/link-boot.ld"
     ld_cmd = [
         CC,
@@ -456,7 +497,7 @@ def build_candidate_core_ladder_fix(
         core_elf,
         "-Wl,--start-group",
         str(SUB_DIR / "entry.o"),
-        str(CHDK_PORT / "platform" / "g3x" / "libplatform.a"),
+        libplatform_a,
         lib_proto_a,
         str(CHDK_PORT / "lib" / "font" / ".o2" / "libfont.a"),
         str(CHDK_PORT / "lib" / "math" / ".o2" / "libmath.a"),
@@ -623,9 +664,13 @@ def build_candidate(
     resident: bool | None = None,
     osd: bool | None = None,
     kbd: bool | None = None,
+    osd2: bool | None = None,
 ) -> dict:
     """Execute complete combined candidate build pipeline."""
     ensure_bootstrap()
+
+    if osd2 is None:
+        osd2 = os.environ.get("G3X_OSD2", "0") == "1"
 
     if kbd is None:
         kbd = os.environ.get("G3X_KBD", "0") == "1"
@@ -633,7 +678,11 @@ def build_candidate(
     if osd is None:
         osd = os.environ.get("G3X_OSD", "0") == "1"
 
-    if kbd:
+    if osd2:
+        kbd = True
+        resident = True
+        poweron_fix = True
+    elif kbd:
         resident = True
         poweron_fix = True
     elif osd:
@@ -643,6 +692,8 @@ def build_candidate(
 
     if out_dir:
         candidate_dir = os.path.abspath(out_dir)
+    elif osd2:
+        candidate_dir = CANDIDATE_PORT35_OSD2_DIR
     elif kbd and osd:
         candidate_dir = CANDIDATE_PORT34_KBD_OSD_DIR
     elif kbd:
@@ -671,6 +722,7 @@ def build_candidate(
         resident=resident,
         osd=osd,
         kbd=kbd,
+        osd2=osd2,
     )
 
     # 2. Build loader
@@ -743,6 +795,7 @@ def build_candidate(
         "resident": resident,
         "osd": osd,
         "kbd": kbd,
+        "osd2": osd2,
         "diskboot_sha256": diskboot_sha256,
         "diskboot_size": diskboot_size,
     }
@@ -750,7 +803,7 @@ def build_candidate(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="PORT-25/32/33/34: Opt-in combined breadcrumb ladder + G3X_POWERON_FIX + G3X_RESIDENT + G3X_OSD + G3X_KBD builder for G3 X (GM1.10C)"
+        description="PORT-25/32/33/34/35: Opt-in combined breadcrumb ladder + G3X_POWERON_FIX + G3X_RESIDENT + G3X_OSD + G3X_KBD + G3X_OSD2 builder for G3 X (GM1.10C)"
     )
     parser.add_argument(
         "--out-dir",
@@ -794,11 +847,17 @@ def main():
         action="store_true",
         help="Build opt-in G3X_KBD=1 keyboard candidate (ladder=1, poweron_fix=1, resident=1, kbd=1)",
     )
+    parser.add_argument(
+        "--osd2",
+        action="store_true",
+        help="Build opt-in G3X_OSD2=1 overlay fix candidate (ladder=1, poweron_fix=1, resident=1, kbd=1, osd2=1)",
+    )
     args = parser.parse_args()
 
-    kbd = bool(args.kbd or os.environ.get("G3X_KBD", "0") == "1")
+    osd2 = bool(args.osd2 or os.environ.get("G3X_OSD2", "0") == "1")
+    kbd = bool(osd2 or args.kbd or os.environ.get("G3X_KBD", "0") == "1")
     osd = bool(args.osd or os.environ.get("G3X_OSD", "0") == "1")
-    resident = bool(kbd or osd or args.resident or os.environ.get("G3X_RESIDENT", "0") == "1")
+    resident = bool(osd2 or kbd or osd or args.resident or os.environ.get("G3X_RESIDENT", "0") == "1")
 
     if args.default:
         ladder = False
@@ -806,18 +865,21 @@ def main():
         resident = False
         osd = False
         kbd = False
+        osd2 = False
     elif args.ladder:
         ladder = True
         poweron_fix = False
         resident = False
         osd = False
         kbd = False
+        osd2 = False
     elif args.poweron_fix:
         ladder = False
         poweron_fix = True
         resident = False
         osd = False
         kbd = False
+        osd2 = False
     else:
         # Default behavior: build combined candidate (ladder=1, poweron_fix=1)
         ladder = True
@@ -830,6 +892,7 @@ def main():
         resident=resident,
         osd=osd,
         kbd=kbd,
+        osd2=osd2,
     )
 
     print("\nSummary:")
@@ -843,6 +906,7 @@ def main():
     print(f"  resident:     {res['resident']}")
     print(f"  osd:          {res['osd']}")
     print(f"  kbd:          {res['kbd']}")
+    print(f"  osd2:         {res['osd2']}")
 
 
 if __name__ == "__main__":

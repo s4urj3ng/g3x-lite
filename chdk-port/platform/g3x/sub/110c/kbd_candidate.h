@@ -106,6 +106,9 @@ void __attribute__((noinline)) mykbd_task(void)
         if (wrap_kbd_p1_f_candidate() == 1) {
             _kbd_p2_f();
         }
+#if defined(G3X_OSD2) && (G3X_OSD2 == 1)
+        g3x_osd2_kbd_redraw(kbd_is_blocked());
+#endif
     }
 
     _ExitTask();
