@@ -276,10 +276,18 @@ void __attribute__((noinline)) g3x_osd2_draw_test_overlay(int alt_active)
     }
 }
 
+#if defined(G3X_GUI) && (G3X_GUI == 1)
+extern void g3x_gui_kbd_redraw(int alt_active);
+#endif
+
 /* Called from mykbd_task() on every keyboard tick */
 static inline __attribute__((always_inline)) void g3x_osd2_kbd_redraw(int alt_active)
 {
+#if defined(G3X_GUI) && (G3X_GUI == 1)
+    g3x_gui_kbd_redraw(alt_active);
+#else
     g3x_osd2_draw_test_overlay(alt_active);
+#endif
 }
 
 #endif /* defined(G3X_OSD2) && (G3X_OSD2 == 1) */
