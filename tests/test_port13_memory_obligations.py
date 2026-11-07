@@ -543,11 +543,11 @@ class TestContentAuthenticationAndDigestPinning(unittest.TestCase):
         self.assertEqual(PINNED_ORIGIN_MAIN_PREFIX_LENGTHS["docs/HANDOFF.md"], 244393)
         self.assertEqual(
             PINNED_ORIGIN_MAIN_FILE_HASHES["docs/PROJECT_STATE.md"],
-            "64d1c7eeba9e22abb2952214e502b874dd2947b806c3445e0295115e3ea89587",
+            "908b2f599e257f474f00dfa61fc25e4ce25d52f247b04814a02ac9dcaf52389e",
         )
         self.assertEqual(
             PINNED_ORIGIN_MAIN_FILE_HASHES["docs/HANDOFF.md"],
-            "5a4a7e9855f1893b7518d60548340ef8e382b47c27751786805357f1ded7266c",
+            "b16b244524e2814fc797d5b7624cccc5c0fddc4921b65fe1b4782c81965347ee",
         )
 
     def test_append_tolerant_prefix_modified_byte_truncated_and_appended(self):

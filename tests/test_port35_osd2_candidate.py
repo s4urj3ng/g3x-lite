@@ -318,7 +318,7 @@ class TestPort35Osd2Candidate(unittest.TestCase):
         self.assertEqual(state_first, "# Project state — Current milestone: PORT-35")
 
         diff_proc = subprocess.run(
-            ["git", "diff", "-U0", "docs/HANDOFF.md", "docs/PROJECT_STATE.md"],
+            ["git", "diff", "-U0", "1c33fd7", "--", "docs/HANDOFF.md", "docs/PROJECT_STATE.md"],
             cwd=str(REPO_ROOT),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
