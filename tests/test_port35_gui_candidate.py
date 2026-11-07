@@ -92,11 +92,11 @@ PINNED_PORT34_KBD_OSD_SIZE = 125121
 PINNED_PORT35_OSD2_SHA256 = "20d65a7d9be954d5caafe2f78751429ea388a37ca570f0bbd0d620609eb31a57"
 PINNED_PORT35_OSD2_SIZE = 125329
 
-PINNED_PORT35_GUI_SHA256 = "25677e764d922652d5230703eda25f355415b43b9ac9958e49116d63466c316b"
-PINNED_PORT35_GUI_SIZE = 103009
-PINNED_PORT35_GUI_MAIN_SIZE = 101568
-PINNED_PORT35_GUI_WITNESS_ADDR = 0x0035CCA0
-PINNED_PORT35_GUI_END_ADDR = 0x00362CE0
+PINNED_PORT35_GUI_SHA256 = "1f6494cd8e7fd7629b82ed33ba1ec4fa939aa1aa2ff22f541c28a28c742e4272"
+PINNED_PORT35_GUI_SIZE = 103057
+PINNED_PORT35_GUI_MAIN_SIZE = 101616
+PINNED_PORT35_GUI_WITNESS_ADDR = 0x0035CCD0
+PINNED_PORT35_GUI_END_ADDR = 0x00362D10
 
 
 def _parse_port35_address_table(doc_text: str) -> list[dict[str, str]]:
@@ -207,7 +207,7 @@ class TestPort35GuiCandidate(unittest.TestCase):
             self.assertLessEqual(core_end, heap_start)
             clearance = heap_start - core_end
             self.assertGreater(clearance, 0, f"Expected positive clearance, got {clearance} bytes")
-            self.assertEqual(clearance, 0x00368880 - 0x00362CE0)
+            self.assertEqual(clearance, 0x00368880 - 0x00362D10)
 
     @unittest.skipUnless(HAVE_TOOLCHAIN, "Pinned ARM toolchain required")
     def test_d_kbd_task_gui_wiring(self) -> None:
@@ -487,6 +487,130 @@ class TestPort35GuiCandidate(unittest.TestCase):
                         path_str.endswith(binary_extensions),
                         f"Tracked binary file not permitted under candidate/output path: {path_str}",
                     )
+
+    @unittest.skipUnless(HAVE_TOOLCHAIN, "Pinned ARM toolchain required")
+    def test_j_font_init_ram_only_regression(self) -> None:
+        """(10) Regression: GUI init path reaches RAM-only font initialization before gui_menu_init / rbf_font_height.
+
+        Codex reviewer blocking defect: no-op __wrap_rbf_load_from_file previously left rbf_font NULL (0),
+        causing gui_menu_init() -> rbf_font_height() to dereference NULL and crash on ALT entry.
+        Verifies:
+        1. __wrap_rbf_load_from_file and __wrap_rbf_load_symbol are NOT stubs (bx lr); they branch to
+           rbf_load_from_file and rbf_load_symbol respectively.
+        2. Both wrappers pass an empty filename pointer ("") into r0, ensuring rbf_font_load's *file == 0
+           check returns 0 without calling guarded file-open wrappers (__wrap_open, etc.).
+        3. rbf_load_from_file calls init_fonts, rbf_font_load, alloc_cTable, and rbf_set_codepage,
+           establishing non-NULL rbf_font and valid metrics (height 16, width 8) in RAM.
+        4. rbf_load_symbol calls init_fonts, establishing non-NULL rbf_symbol_font in RAM.
+        5. g3x_gui_kbd_redraw reaches rbf_load_from_file / rbf_load_symbol before gui_init / gui_menu_init.
+        6. gui_menu_init calls rbf_font_height, which safely dereferences the initialized rbf_font.
+        7. No branch in the font loading path targets any file-open wrapper with a non-empty filename.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            res = build_candidate(ladder=True, poweron_fix=True, out_dir=tmpdir, gui=True)
+            elf = res["core_elf"]
+
+            objdump_proc = subprocess.run(
+                [str(ARM_OBJDUMP), "-d", elf],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True,
+            )
+            disasm = objdump_proc.stdout
+
+            nm_proc = subprocess.run(
+                [str(ARM_NM), elf],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True,
+            )
+            nm_output = nm_proc.stdout
+
+            # 1. __wrap_rbf_load_from_file and __wrap_rbf_load_symbol are active dispatchers, not bx lr stubs
+            m_wrap_font = re.search(r"<__wrap_rbf_load_from_file>:(.*?)(?:\n\n|\Z)", disasm, re.DOTALL)
+            self.assertIsNotNone(m_wrap_font, "__wrap_rbf_load_from_file must exist in disassembly")
+            wrap_font_body = m_wrap_font.group(1)
+            self.assertIn("<rbf_load_from_file>", wrap_font_body, "__wrap_rbf_load_from_file must branch to real rbf_load_from_file")
+            self.assertNotIn("movs\tr0, #0\n  34ba", wrap_font_body, "__wrap_rbf_load_from_file must not be a no-op stub")
+
+            m_wrap_sym = re.search(r"<__wrap_rbf_load_symbol>:(.*?)(?:\n\n|\Z)", disasm, re.DOTALL)
+            self.assertIsNotNone(m_wrap_sym, "__wrap_rbf_load_symbol must exist in disassembly")
+            wrap_sym_body = m_wrap_sym.group(1)
+            self.assertIn("<rbf_load_symbol>", wrap_sym_body, "__wrap_rbf_load_symbol must branch to real rbf_load_symbol")
+
+            # 2. Both wrappers pass empty string pointer ("") into r0 (short-circuiting rbf_font_load without file open)
+            m_pool_font = re.search(r"\.word\s+(0x[0-9a-fA-F]+)", wrap_font_body)
+            self.assertIsNotNone(m_pool_font, "__wrap_rbf_load_from_file literal pool must exist")
+            str_addr = int(m_pool_font.group(1), 16)
+
+            # Dump .data section to verify byte at str_addr is 0x00 (empty string "")
+            sec_proc = subprocess.run(
+                [str(ARM_OBJDUMP), "-s", "-j", ".data", elf],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True,
+            )
+            # Find the hex dump line covering str_addr
+            line_base = str_addr & ~0xF
+            target_offset = str_addr & 0xF
+            found_empty_str = False
+            for line in sec_proc.stdout.splitlines():
+                parts = line.strip().split()
+                if len(parts) >= 5 and parts[0] == f"{line_base:x}":
+                    # Reconstruct bytes from the 4 32-bit hex words (little-endian)
+                    raw_bytes = bytearray()
+                    for word_hex in parts[1:5]:
+                        if len(word_hex) == 8:
+                            raw_bytes.extend(bytes.fromhex(word_hex))
+                    if target_offset < len(raw_bytes) and raw_bytes[target_offset] == 0:
+                        found_empty_str = True
+                        break
+            self.assertTrue(found_empty_str, f"Wrapper string argument at 0x{str_addr:08X} must be empty string (0x00)")
+
+            # 3. Real rbf_load_from_file calls init_fonts, rbf_font_load, alloc_cTable, and rbf_set_codepage
+            m_rbf_load = re.search(r"<rbf_load_from_file>:(.*?)(?:\n\n|\Z)", disasm, re.DOTALL)
+            self.assertIsNotNone(m_rbf_load, "rbf_load_from_file must exist")
+            rbf_load_body = m_rbf_load.group(1)
+            self.assertIn("<init_fonts>", rbf_load_body)
+            self.assertIn("<rbf_font_load>", rbf_load_body)
+            self.assertIn("<alloc_cTable>", rbf_load_body)
+            self.assertIn("<rbf_set_codepage>", rbf_load_body)
+
+            # 4. Real rbf_load_symbol calls init_fonts
+            m_rbf_sym = re.search(r"<rbf_load_symbol>:(.*?)(?:\n\n|\Z)", disasm, re.DOTALL)
+            self.assertIsNotNone(m_rbf_sym, "rbf_load_symbol must exist")
+            rbf_sym_body = m_rbf_sym.group(1)
+            self.assertIn("<init_fonts>", rbf_sym_body)
+
+            # 5. g3x_gui_kbd_redraw reaches font initialization before gui_init and gui_menu_init
+            m_redraw = re.search(r"<g3x_gui_kbd_redraw>:(.*?)(?:\n\n|\Z)", disasm, re.DOTALL)
+            self.assertIsNotNone(m_redraw, "g3x_gui_kbd_redraw must exist")
+            redraw_body = m_redraw.group(1)
+            self.assertIn("<__wrap_rbf_load_from_file>", redraw_body)
+            self.assertIn("<__wrap_rbf_load_symbol>", redraw_body)
+            idx_font = redraw_body.find("<__wrap_rbf_load_from_file>")
+            idx_init = redraw_body.find("<gui_init>")
+            self.assertLess(idx_font, idx_init, "Font init must precede gui_init in g3x_gui_kbd_redraw")
+
+            # 6. gui_menu_init calls rbf_font_height
+            m_menu_init = re.search(r"<gui_menu_init>:(.*?)(?:\n\n|\Z)", disasm, re.DOTALL)
+            self.assertIsNotNone(m_menu_init, "gui_menu_init must exist")
+            self.assertIn("<rbf_font_height>", m_menu_init.group(1))
+
+            # 7. No file open wrapper is called on font load path
+            open_wrappers = ["<__wrap_open>", "<__wrap__open>", "<__wrap__Open>", "<__wrap_fopen>", "<__wrap__Fopen_Fut>"]
+            for w in open_wrappers:
+                self.assertNotIn(w, wrap_font_body)
+                self.assertNotIn(w, wrap_sym_body)
+                self.assertNotIn(w, rbf_load_body)
+                self.assertNotIn(w, rbf_sym_body)
+
+            # 8. rbf_font and rbf_symbol_font BSS variables exist
+            self.assertRegex(nm_output, r"[0-9a-fA-F]+\s+[bB]\s+rbf_font\b")
+            self.assertRegex(nm_output, r"[0-9a-fA-F]+\s+[bB]\s+rbf_symbol_font\b")
 
 
 if __name__ == "__main__":

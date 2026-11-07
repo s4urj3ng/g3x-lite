@@ -343,6 +343,7 @@ def generate_gui_candidate_c() -> str:
 #include "gui_lang.h"
 #include "gui_osd.h"
 #include "camera_info.h"
+#include "font.h"
 
 /* =============================================================================
  * PORT-35 Part B: G3X_GUI=1 CHDK core GUI/ALT menu on the OSD2 draw path
@@ -393,6 +394,9 @@ void g3x_gui_kbd_redraw(int alt_active)
         g3x_osd2_update_screen_dimensions();
         camera_info_init();
         conf_restore();
+        /* Ensure built-in fonts are initialized in RAM before gui_init() */
+        rbf_load_from_file("", FONT_CP_WIN);
+        rbf_load_symbol("");
         gui_init();
         chdk_started_flag = 1;
     }
@@ -787,8 +791,18 @@ void __wrap__MakeSDCardBootable(int drive) { (void)drive; }
 int __wrap__SetFileAttributes(const char *fn, int attr) { (void)fn; (void)attr; return 0; }
 int __wrap__SetFileTimeStamp(const char *fn, int time1, int time2) { (void)fn; (void)time1; (void)time2; return 0; }
 int __wrap__ExecuteEventProcedure(const char *name, ...) { (void)name; return -1; }
-int __wrap_rbf_load_from_file(const char *file, int codepage) { (void)file; (void)codepage; return 0; }
-int __wrap_rbf_load_symbol(const char *file) { (void)file; return 0; }
+void __wrap_rbf_load_from_file(char *file, int codepage)
+{
+    (void)file;
+    extern void __real_rbf_load_from_file(char *f, int cp);
+    __real_rbf_load_from_file("", codepage);
+}
+int __wrap_rbf_load_symbol(char *file)
+{
+    (void)file;
+    extern int __real_rbf_load_symbol(char *f);
+    return __real_rbf_load_symbol("");
+}
 void __wrap_lang_load_from_file(const char *file) { (void)file; }
 int __wrap_read(int fd, void *buf, unsigned int count) { (void)fd; (void)buf; (void)count; return -1; }
 int __wrap__Read(int fd, void *buf, unsigned int count) { (void)fd; (void)buf; (void)count; return -1; }
@@ -1030,6 +1044,7 @@ def generate_conf_candidate_c() -> str:
 
     # 2. Remove script_load call from conf_change_param
     src = src.replace("script_load(conf.script_file);", "/* script_load compiled out */")
+    src = src.replace('ptr:DEFAULT_SYMBOL_FILE', 'ptr:""')
 
     # 3. Truncate at config_save so save_config_file / conf_save / load_config_file / conf_restore are replaced with RAM-only versions
     marker = "void config_save(ConfInfo *ci, const char *filename, int config_base)"
@@ -1089,6 +1104,9 @@ void conf_restore(void)
     init_user_menu(USER_MENU_ITEMS);
     conf_load_defaults();
     clear_values();
+    conf.menu_rbf_file[0] = '\0';
+    conf.menu_symbol_rbf_file[0] = '\0';
+    conf.menu_symbol_enable = 0;
     conf.alt_mode_button = KEY_PLAYBACK;
     conf.show_osd = 0;
     conf.hide_osd = 1;
