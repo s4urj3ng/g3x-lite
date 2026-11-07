@@ -5,8 +5,8 @@
  * PORT-35 Part A: Opt-in OSD2 Test Overlay (G3X_OSD2=1)
  *
  * Adapted from DIGIC 6 siblings:
- * - chdk-port/platform/g7x/lib.c:272-373
- * - chdk-port/platform/g5x/lib.c:295-403
+ * - chdk-port/platform/g7x/lib.c:5-20,261-358
+ * - chdk-port/platform/g5x/lib.c:6-34,162-204
  * - chdk-port/platform/g7x/platform_camera.h:47-65
  * - chdk-port/core/gui_draw.c:13-38,71-95,120-141,420-425
  *
@@ -30,7 +30,7 @@
  *   PORT-33/34 drew to vid_get_bitmap_fb() (bitmap_buffer[0]) and did not mask
  *   active_bitmap_buffer & 1. OSD2 adapts vid_get_bitmap_active_buffer() and
  *   vid_get_opacity_active_buffer() from chdk-port/platform/g7x/lib.c:279-296
- *   and chdk-port/platform/g5x/lib.c:302-319 using (active_bitmap_buffer & 1).
+ *   and chdk-port/platform/g5x/lib.c:21-33 using (active_bitmap_buffer & 1).
  *
  * - h3 (INFERRED): No redraw from the kbd loop and post-draw refresh wipe.
  *   PORT-33/34 redrew only every 1000 ms from a separate task and called
@@ -48,17 +48,24 @@
 /* Uncached RAM alias bit [chdk-port/platform/g3x/sub/110c/makefile.inc:20, INFERRED] */
 #define G3X_OSD2_UNCACHED_BIT 0x40000000u
 
-/* Default LCD screen dimensions [evidence/port35_manifest.json: PORT35-ROM-BMPDDEV;
- * chdk-port/platform/g7x/platform_camera.h:61-65; chdk-port/platform/g7x/lib.c:337-343] */
+/* Default LCD screen dimensions (displaytype 1, 2, 8, 9, 10)
+ * [evidence/port35_manifest.json: PORT35-ROM-BMPDDEV (jump table at 0xFC1834F8);
+ *  chdk-port/platform/g7x/platform_camera.h:61-65; chdk-port/platform/g7x/lib.c:323-332] */
 #define G3X_OSD2_DEFAULT_WIDTH         720
 #define G3X_OSD2_DEFAULT_HEIGHT        480
 #define G3X_OSD2_DEFAULT_BUFFER_WIDTH  736
 #define G3X_OSD2_DEFAULT_BUFFER_HEIGHT 480
+#define G3X_OSD2_DEFAULT_SIZE          345600
 #define G3X_OSD2_DEFAULT_BUFFER_SIZE   353280
 
-/* Alternate displaytype dimensions in GM1.10C BmpDDev.c sub_fc18347e
+/* Alternate displaytype dimensions in GM1.10C BmpDDev.c sub_fc18347e (jump table at 0xFC1834F8)
  * [evidence/port35_manifest.json: PORT35-ROM-BMPDDEV;
- *  chdk-port/platform/g7x/lib.c:319-358; chdk-port/platform/g5x/lib.c:341-390] */
+ *  chdk-port/platform/g7x/lib.c:313-347; chdk-port/platform/g5x/lib.c:171-203] */
+#define G3X_OSD2_VGA_WIDTH             640
+#define G3X_OSD2_VGA_HEIGHT            480
+#define G3X_OSD2_VGA_BUFFER_WIDTH      640
+#define G3X_OSD2_VGA_BUFFER_SIZE       307200
+
 #define G3X_OSD2_HDMI_WIDTH            960
 #define G3X_OSD2_HDMI_HEIGHT           540
 #define G3X_OSD2_HDMI_BUFFER_WIDTH     960
@@ -69,15 +76,11 @@
 #define G3X_OSD2_EVF_BUFFER_WIDTH      1024
 #define G3X_OSD2_EVF_BUFFER_SIZE       786432
 
-#define G3X_OSD2_MODE11_WIDTH          900
-#define G3X_OSD2_MODE11_HEIGHT         600
-#define G3X_OSD2_MODE11_BUFFER_WIDTH   928
-#define G3X_OSD2_MODE11_BUFFER_SIZE    556800
-
-#define G3X_OSD2_VGA_WIDTH             640
-#define G3X_OSD2_VGA_HEIGHT            480
-#define G3X_OSD2_VGA_BUFFER_WIDTH      640
-#define G3X_OSD2_VGA_BUFFER_SIZE       307200
+#define G3X_OSD2_MODE12_WIDTH          900
+#define G3X_OSD2_MODE12_HEIGHT         600
+#define G3X_OSD2_MODE12_BUFFER_WIDTH   928
+#define G3X_OSD2_MODE12_SIZE           540000
+#define G3X_OSD2_MODE12_BUFFER_SIZE    556800
 
 /* Test box geometry (INFERRED) [chdk-port/platform/g3x/sub/110c/osd_test_overlay.h:40-45] */
 #define G3X_OSD2_BOX_X                 16
@@ -111,7 +114,7 @@ extern void _transfer_src_overlay(int);
 /* GM1.10C bitmap_buffer and opacity_buffer pointers from BmpDDev.c sub_fc183608 literal pool
  * at 0xFC1837FC (0x5FE80000), 0xFC183800 (0x5FC40000), 0xFC183804 (0x5FB80000), and
  * 0xFC183818 (0x5FD00000) [evidence/port35_manifest.json: PORT35-ROM-BMPDDEV;
- * adapted from chdk-port/platform/g7x/lib.c:275,280,291 and chdk-port/platform/g5x/lib.c:298,303,314] */
+ * adapted from chdk-port/platform/g7x/lib.c:263-265,279-281,291 and chdk-port/platform/g5x/lib.c:21-33] */
 #define G3X_OSD2_BITMAP_BUF0_ADDR  0x5FE80000u
 #define G3X_OSD2_BITMAP_BUF1_ADDR  0x5FD00000u
 #define G3X_OSD2_OPACITY_BUF0_ADDR 0x5FC40000u
@@ -122,35 +125,35 @@ volatile char *opacity_buffer[2] = {
     (void *)G3X_OSD2_OPACITY_BUF1_ADDR,
 };
 
-/* Adapted from chdk-port/platform/g7x/lib.c:274-277 and chdk-port/platform/g5x/lib.c:297-300 */
+/* Adapted from chdk-port/platform/g7x/lib.c:263-265 and chdk-port/platform/g5x/lib.c:21-25 */
 void *vid_get_bitmap_fb(void)
 {
     return (void *)bitmap_buffer[0];
 }
 
-/* Adapted from chdk-port/platform/g7x/lib.c:279-282 and chdk-port/platform/g5x/lib.c:302-305 */
+/* Adapted from chdk-port/platform/g7x/lib.c:279-281 and chdk-port/platform/g5x/lib.c:21-25 */
 void *vid_get_bitmap_active_buffer(void)
 {
     return bitmap_buffer[active_bitmap_buffer & 1];
 }
 
-/* Adapted from chdk-port/platform/g7x/lib.c:293-296 and chdk-port/platform/g5x/lib.c:316-319 */
+/* Adapted from chdk-port/platform/g7x/lib.c:294-296 and chdk-port/platform/g5x/lib.c:30-33 */
 void *vid_get_opacity_active_buffer(void)
 {
     return (void *)opacity_buffer[active_bitmap_buffer & 1];
 }
 
-/* Adapted from chdk-port/platform/g7x/lib.c:367-373 and chdk-port/platform/g5x/lib.c:399-403 */
+/* Adapted from chdk-port/platform/g7x/lib.c:7-20 and chdk-port/platform/g5x/lib.c:9-19 */
 void vid_bitmap_refresh(void)
 {
     _transfer_src_overlay(0);
     _transfer_src_overlay(1);
 }
 
-/* Update camera_screen width/height/buffer_width/size from displaytype
- * Adapted from chdk-port/platform/g7x/lib.c:310-360, chdk-port/platform/g5x/lib.c:332-391,
- * and GM1.10C BmpDDev.c sub_fc18347e (0xFC18347E..0xFC18381F)
- * [evidence/port35_manifest.json: PORT35-ROM-BMPDDEV] */
+/* Update camera_screen width/height/buffer_width/size/buffer_size from displaytype
+ * Adapted from chdk-port/platform/g7x/lib.c:303-358 (LCD case 1,2,8,9,10 at lines 323-332),
+ * chdk-port/platform/g5x/lib.c:162-204, and GM1.10C BmpDDev.c sub_fc18347e jump table at
+ * 0xFC1834F8 (0xFC18347E..0xFC18381F) [evidence/port35_manifest.json: PORT35-ROM-BMPDDEV] */
 void g3x_osd2_update_screen_dimensions(void)
 {
     static int old_displaytype = -1;
@@ -164,34 +167,50 @@ void g3x_osd2_update_screen_dimensions(void)
     int w = G3X_OSD2_DEFAULT_WIDTH;
     int bw = G3X_OSD2_DEFAULT_BUFFER_WIDTH;
     int h = G3X_OSD2_DEFAULT_HEIGHT;
-    int sz = G3X_OSD2_DEFAULT_BUFFER_SIZE;
 
-    if (dt == 1 || dt == 2 || (dt >= 6 && dt <= 9)) {
-        w = G3X_OSD2_HDMI_WIDTH;
-        bw = G3X_OSD2_HDMI_BUFFER_WIDTH;
-        h = G3X_OSD2_HDMI_HEIGHT;
-        sz = G3X_OSD2_HDMI_BUFFER_SIZE;
-    } else if (dt == 10) {
-        w = G3X_OSD2_EVF_WIDTH;
-        bw = G3X_OSD2_EVF_BUFFER_WIDTH;
-        h = G3X_OSD2_EVF_HEIGHT;
-        sz = G3X_OSD2_EVF_BUFFER_SIZE;
-    } else if (dt == 11) {
-        w = G3X_OSD2_MODE11_WIDTH;
-        bw = G3X_OSD2_MODE11_BUFFER_WIDTH;
-        h = G3X_OSD2_MODE11_HEIGHT;
-        sz = G3X_OSD2_MODE11_BUFFER_SIZE;
-    } else if (dt == 12) {
-        w = G3X_OSD2_VGA_WIDTH;
-        bw = G3X_OSD2_VGA_BUFFER_WIDTH;
-        h = G3X_OSD2_VGA_HEIGHT;
-        sz = G3X_OSD2_VGA_BUFFER_SIZE;
+    switch (dt) {
+        case 0:
+        case 3:
+        case 4:
+        case 5:
+            w = G3X_OSD2_VGA_WIDTH;
+            bw = G3X_OSD2_VGA_BUFFER_WIDTH;
+            h = G3X_OSD2_VGA_HEIGHT;
+            break;
+        case 1:
+        case 2:
+        case 8:
+        case 9:
+        case 10:
+            w = G3X_OSD2_DEFAULT_WIDTH;
+            bw = G3X_OSD2_DEFAULT_BUFFER_WIDTH;
+            h = G3X_OSD2_DEFAULT_HEIGHT;
+            break;
+        case 6:
+        case 7:
+            w = G3X_OSD2_HDMI_WIDTH;
+            bw = G3X_OSD2_HDMI_BUFFER_WIDTH;
+            h = G3X_OSD2_HDMI_HEIGHT;
+            break;
+        case 11:
+            w = G3X_OSD2_EVF_WIDTH;
+            bw = G3X_OSD2_EVF_BUFFER_WIDTH;
+            h = G3X_OSD2_EVF_HEIGHT;
+            break;
+        case 12:
+            w = G3X_OSD2_MODE12_WIDTH;
+            bw = G3X_OSD2_MODE12_BUFFER_WIDTH;
+            h = G3X_OSD2_MODE12_HEIGHT;
+            break;
+        default:
+            break;
     }
 
     camera_screen.width = camera_screen.physical_width = w;
     camera_screen.buffer_width = bw;
     camera_screen.height = camera_screen.buffer_height = h;
-    camera_screen.size = camera_screen.buffer_size = sz;
+    camera_screen.size = w * h;
+    camera_screen.buffer_size = bw * h;
 }
 
 /* Fixed "CHDK" text bitmap rows: 5 rows x 15 columns (1 = pixel on, 0 = off) */

@@ -44,7 +44,7 @@
       },
       "authorization_scope_id": "SCOPE-PORT35-OSD2-GUI",
       "classification": "STATIC_VERIFIED",
-      "notes": "BmpDDev.c sub_fc18347e and sub_fc183608 (including sub-slice 0xFC183600..0xFC18381F, 544 bytes, sha256 d0827e15c2deb8c1eace949c85c395bb0c75455f7e88ce3c1a0f9b3477b78647): proves bitmap_buffer[0]=0x5FE80000 (@0xFC1837FC), bitmap_buffer[1]=0x5FD00000 (@0xFC183818), opacity_buffer[0]=0x5FC40000 (@0xFC183800), opacity_buffer[1]=0x5FB80000 (@0xFC183804), and displaytype switch 0..12 geometry (640x480 stride 640, 720x480 stride 736, 960x540 stride 960, 1024x768 stride 1024, 900x600 stride 928)."
+      "notes": "BmpDDev.c sub_fc18347e (jump table at 0xFC1834F8) and sub_fc183608 (including sub-slice 0xFC183600..0xFC18381F, 544 bytes, sha256 d0827e15c2deb8c1eace949c85c395bb0c75455f7e88ce3c1a0f9b3477b78647): proves bitmap_buffer[0]=0x5FE80000 (@0xFC1837FC), bitmap_buffer[1]=0x5FD00000 (@0xFC183818), opacity_buffer[0]=0x5FC40000 (@0xFC183800), opacity_buffer[1]=0x5FB80000 (@0xFC183804), and displaytype switch 0..12 geometry (0,3,4,5 -> 640x480 stride 640; 1,2,8,9,10 -> 720x480 stride 736; 6,7 -> 960x540 stride 960; 11 -> 1024x768 stride 1024; 12 -> 900x600 stride 928)."
     },
     {
       "evidence_id": "PORT35-ROM-TRANSFER-SRC-OVERLAY",

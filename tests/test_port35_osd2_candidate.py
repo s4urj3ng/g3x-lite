@@ -60,11 +60,27 @@ PINNED_PORT33_OSD_SHA256 = "683751539979f3e8956fd6c1794683c062f54385e6e1a3261b02
 PINNED_PORT34_KBD_SHA256 = "a750253feb0cd9bb3bb1addb4cede5585bef29a0bf26bd86d3f577fdbf41be33"
 PINNED_PORT34_KBD_OSD_SHA256 = "686c4e4688f74cccd2b7a21e7000eb574672635cfd4d17c885d86bbf52eb99a8"
 
-PINNED_PORT35_OSD2_SHA256 = "ff64993cd0ff39f99da702c66fad3692012bdda79c3d254a8ce9f30828822712"
-PINNED_PORT35_OSD2_DISKBOOT_SIZE = 125313
-PINNED_PORT35_OSD2_MAIN_SIZE = 123872
-PINNED_PORT35_OSD2_WITNESS_ADDR = 0x00361330
-PINNED_PORT35_OSD2_END_ADDR = 0x00368840
+PINNED_PORT35_OSD2_SHA256 = "20d65a7d9be954d5caafe2f78751429ea388a37ca570f0bbd0d620609eb31a57"
+PINNED_PORT35_OSD2_DISKBOOT_SIZE = 125329
+PINNED_PORT35_OSD2_MAIN_SIZE = 123888
+PINNED_PORT35_OSD2_WITNESS_ADDR = 0x00361340
+PINNED_PORT35_OSD2_END_ADDR = 0x00368850
+
+EXPECTED_DISPLAYTYPE_GEOMETRY: dict[int, tuple[int, int, int, int, int]] = {
+    0: (640, 480, 640, 640 * 480, 640 * 480),
+    1: (720, 480, 736, 720 * 480, 736 * 480),
+    2: (720, 480, 736, 720 * 480, 736 * 480),
+    3: (640, 480, 640, 640 * 480, 640 * 480),
+    4: (640, 480, 640, 640 * 480, 640 * 480),
+    5: (640, 480, 640, 640 * 480, 640 * 480),
+    6: (960, 540, 960, 960 * 540, 960 * 540),
+    7: (960, 540, 960, 960 * 540, 960 * 540),
+    8: (720, 480, 736, 720 * 480, 736 * 480),
+    9: (720, 480, 736, 720 * 480, 736 * 480),
+    10: (720, 480, 736, 720 * 480, 736 * 480),
+    11: (1024, 768, 1024, 1024 * 768, 1024 * 768),
+    12: (900, 600, 928, 900 * 600, 928 * 600),
+}
 
 OSD2_HEADER = SUB_DIR / "osd2_test_overlay.h"
 KBD_HEADER = SUB_DIR / "kbd_candidate.h"
@@ -353,6 +369,166 @@ class TestPort35Osd2Candidate(unittest.TestCase):
                 filepath.endswith((".bin", ".elf", ".o", ".a", "DISKBOOT.BIN")),
                 f"Binary artifact must not be untracked/modified in worktree: {filepath}",
             )
+
+    def test_g1_displaytype_geometry_static_switch_parser(self) -> None:
+        """Statically parse g3x_osd2_update_screen_dimensions switch and verify width, height, buffer_width, size, and buffer_size for displaytype 0..12."""
+        header_text = OSD2_HEADER.read_text(encoding="utf-8")
+        doc_text = PORT35_DOC.read_text(encoding="utf-8")
+
+        # Verify citations to 0xFC1834F8 jump table and chdk-port/platform/g7x/lib.c:323-332
+        self.assertIn("0xFC1834F8", header_text)
+        self.assertIn("chdk-port/platform/g7x/lib.c:323-332", header_text)
+        self.assertIn("0xFC1834F8", doc_text)
+        self.assertIn("chdk-port/platform/g7x/lib.c:323-332", doc_text)
+
+        # Verify camera_screen.size = w * h and camera_screen.buffer_size = bw * h, and row_off uses buf_w
+        self.assertIn("camera_screen.size = w * h;", header_text)
+        self.assertIn("camera_screen.buffer_size = bw * h;", header_text)
+        self.assertIn("int buf_w = camera_screen.buffer_width;", header_text)
+        self.assertIn("int row_off = py * buf_w + G3X_OSD2_BOX_X;", header_text)
+
+        # Parse all integer #define macros
+        macros: dict[str, int] = {}
+        for m in re.finditer(r"^\s*#define\s+(G3X_OSD2_[A-Z0-9_]+)\s+(\d+)\b", header_text, re.M):
+            macros[m.group(1)] = int(m.group(2), 10)
+
+        # Extract switch (dt) block in g3x_osd2_update_screen_dimensions
+        m_fn = re.search(
+            r"void\s+g3x_osd2_update_screen_dimensions\s*\(\s*void\s*\)\s*\{(.*?)\n\}",
+            header_text,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(m_fn, "g3x_osd2_update_screen_dimensions not found")
+        fn_body = m_fn.group(1)
+
+        m_sw = re.search(r"switch\s*\(\s*dt\s*\)\s*\{(.*?)\n\s*\}", fn_body, re.DOTALL)
+        self.assertIsNotNone(m_sw, "switch (dt) block not found in g3x_osd2_update_screen_dimensions")
+        sw_body = m_sw.group(1)
+
+        # Parse case groups and their assignments to w, bw, h
+        case_map: dict[int, tuple[int, int, int, int, int]] = {}
+        pending_cases: list[int] = []
+        cur_assigns: dict[str, int] = {}
+        for raw_line in sw_body.splitlines():
+            line = raw_line.strip()
+            m_case = re.match(r"^case\s+(\d+)\s*:$", line)
+            if m_case:
+                pending_cases.append(int(m_case.group(1), 10))
+                continue
+            m_assign = re.match(r"^(w|bw|h)\s*=\s*(G3X_OSD2_[A-Z0-9_]+)\s*;$", line)
+            if m_assign:
+                var_name, macro_name = m_assign.group(1), m_assign.group(2)
+                self.assertIn(macro_name, macros, f"Unknown macro {macro_name}")
+                cur_assigns[var_name] = macros[macro_name]
+                continue
+            if line == "break;":
+                if pending_cases:
+                    w = cur_assigns["w"]
+                    h = cur_assigns["h"]
+                    bw = cur_assigns["bw"]
+                    for dt_val in pending_cases:
+                        self.assertNotIn(dt_val, case_map, f"Duplicate case {dt_val}")
+                        case_map[dt_val] = (w, h, bw, w * h, bw * h)
+                pending_cases = []
+                cur_assigns = {}
+
+        for dt in range(13):
+            with self.subTest(displaytype=dt):
+                self.assertIn(dt, case_map, f"displaytype {dt} missing from switch (dt)")
+                self.assertEqual(
+                    case_map[dt],
+                    EXPECTED_DISPLAYTYPE_GEOMETRY[dt],
+                    f"Mismatch for displaytype {dt}: got {case_map[dt]}, expected {EXPECTED_DISPLAYTYPE_GEOMETRY[dt]}",
+                )
+
+    def test_g2_displaytype_geometry_host_compiled_harness(self) -> None:
+        """Compile a host C harness of g3x_osd2_update_screen_dimensions and verify displaytype 0..12 runtime behavior."""
+        host_cc = "gcc"
+        try:
+            subprocess.run([host_cc, "--version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            self.skipTest("Host C compiler (gcc) not available")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            (tmp_path / "lolevel.h").write_text("/* stub lolevel.h */\n", encoding="utf-8")
+            (tmp_path / "platform.h").write_text(
+                "#ifndef PLATFORM_H\n"
+                "#define PLATFORM_H\n"
+                "typedef struct {\n"
+                "    int width;\n"
+                "    int physical_width;\n"
+                "    int height;\n"
+                "    int buffer_width;\n"
+                "    int buffer_height;\n"
+                "    int size;\n"
+                "    int buffer_size;\n"
+                "} t_camera_screen;\n"
+                "extern t_camera_screen camera_screen;\n"
+                "#endif\n",
+                encoding="utf-8",
+            )
+            harness_c = tmp_path / "harness.c"
+            harness_bin = tmp_path / "harness"
+            harness_c.write_text(
+                '#include <stdio.h>\n'
+                '#include "platform.h"\n'
+                "t_camera_screen camera_screen;\n"
+                "char *bitmap_buffer[2] = { 0, 0 };\n"
+                "int active_bitmap_buffer = 0;\n"
+                "int displaytype = 0;\n"
+                "void _transfer_src_overlay(int n) { (void)n; }\n"
+                '#include "osd2_test_overlay.h"\n'
+                "int main(void) {\n"
+                "    for (int dt = 0; dt <= 12; dt++) {\n"
+                "        displaytype = dt;\n"
+                "        g3x_osd2_update_screen_dimensions();\n"
+                '        printf("%d:%d,%d,%d,%d,%d,%d,%d\\n",\n'
+                "            dt,\n"
+                "            camera_screen.width,\n"
+                "            camera_screen.physical_width,\n"
+                "            camera_screen.height,\n"
+                "            camera_screen.buffer_height,\n"
+                "            camera_screen.buffer_width,\n"
+                "            camera_screen.size,\n"
+                "            camera_screen.buffer_size);\n"
+                "    }\n"
+                "    return 0;\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            subprocess.run(
+                [
+                    host_cc,
+                    "-DG3X_OSD2=1",
+                    "-Wno-pointer-to-int-cast",
+                    "-Wno-int-to-pointer-cast",
+                    f"-I{tmpdir}",
+                    f"-I{SUB_DIR}",
+                    str(harness_c),
+                    "-o",
+                    str(harness_bin),
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            out = subprocess.check_output([str(harness_bin)], text=True)
+
+        results: dict[int, tuple[int, ...]] = {}
+        for line in out.strip().splitlines():
+            dt_str, vals_str = line.split(":")
+            results[int(dt_str)] = tuple(int(v) for v in vals_str.split(","))
+
+        for dt in range(13):
+            with self.subTest(displaytype=dt):
+                exp_w, exp_h, exp_bw, exp_sz, exp_bsz = EXPECTED_DISPLAYTYPE_GEOMETRY[dt]
+                self.assertEqual(
+                    results[dt],
+                    (exp_w, exp_w, exp_h, exp_h, exp_bw, exp_sz, exp_bsz),
+                    f"Host harness mismatch for displaytype {dt}",
+                )
 
 
 if __name__ == "__main__":
