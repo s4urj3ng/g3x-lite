@@ -220,7 +220,6 @@ void g3x_osd2_update_screen_dimensions(void)
 #endif
 }
 
-
 /* Fixed "CHDK" text bitmap rows: 5 rows x 15 columns (1 = pixel on, 0 = off) */
 static const unsigned short g3x_osd2_chdk_glyph_rows[5] = {
     0x7565, /* 0b0111_0101_0110_0101:  ***  * *  **   * * */

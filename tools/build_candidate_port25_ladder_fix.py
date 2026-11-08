@@ -435,9 +435,28 @@ void g3x_gui_kbd_redraw(int alt_active)
             || (kbd_get_pressed_key() != 0)
             || ((tick_cnt & 3u) == 0u);
         tick_cnt++;
+
+#if defined(G3X_GUI2) && (G3X_GUI2 == 1)
+        /* PORT-36 F2/F3: Fill solid opaque background box for the menu.
+         * In PORT-35, gui_menu_draw() drew only per-row text backgrounds (gui_menu.c:967-1077)
+         * without an outer box (gui_menu.c:731-752), leaving lines 9..13 and margins at opacity 0.
+         * Filling the menu rectangle ensures all 14 lines have solid opacity 255. */
+        if (force_redraw) {
+            int bx = camera_screen.disp_left + camera_screen.menu_border_width;
+            int bw = camera_screen.disp_width - camera_screen.menu_border_width * 2;
+            int num_l = (camera_screen.height - camera_screen.ts_menu_border * 2) / rbf_font_height() - 1;
+            int by = (camera_screen.height - ((num_l - 1) * rbf_font_height())) >> 1;
+            int header_y = by - rbf_font_height();
+            int total_h = (num_l + 1) * rbf_font_height();
+            draw_rectangle(bx, header_y, bx + bw - 1, header_y + total_h - 1, MAKE_COLOR(COLOR_BLACK, COLOR_BLACK), RECT_BORDER0 | DRAW_FILLED);
+        }
+#endif
+
         gui_redraw(force_redraw);
 
 #if defined(G3X_GUI2) && (G3X_GUI2 == 1)
+        extern int displaytype;
+        char diag[64];
         /* Draw 1-px border at (0,0)-(width-1, height-1) [PORT-36 TRIAL DIAGNOSTIC] */
         int w1 = camera_screen.width - 1;
         int h1 = camera_screen.height - 1;
@@ -447,8 +466,6 @@ void g3x_gui_kbd_redraw(int alt_active)
         draw_line(w1, 0, w1, h1, COLOR_WHITE);
 
         /* Show live displaytype plus camera_screen width/buffer_width/height [PORT-36 TRIAL DIAGNOSTIC] */
-        char diag[64];
-        extern int displaytype;
         sprintf(diag, "dt=%d w=%d bw=%d h=%d", displaytype, camera_screen.width, camera_screen.buffer_width, camera_screen.height);
         draw_string(2, 2, diag, MAKE_COLOR(COLOR_BLACK, COLOR_WHITE));
 #endif
@@ -1131,6 +1148,11 @@ void conf_restore(void)
     conf.start_sound = 0;
     conf.show_alt_helper = 0;
     conf.script_startup = 0;
+#if defined(G3X_GUI2) && (G3X_GUI2 == 1)
+    /* PORT-36 F3: Set menu background color to COLOR_BLACK (0xff, opaque black) */
+    conf.menu_color.bg.col = 1; /* COLOR_BLACK index in ply_colors */
+    conf.menu_color.bg.type = 1;
+#endif
 }
 
 void __wrap_conf_restore(void)
@@ -1139,68 +1161,6 @@ void __wrap_conf_restore(void)
 }
 '''
     return src_head + ram_only_mid + src_tail
-
-
-def generate_platform_camera_gui2_h() -> str:
-    """Generate candidate platform_camera.h for G3X_GUI2=1."""
-    return r'''#ifndef PLATFORM_CAMERA_GUI2_H
-#define PLATFORM_CAMERA_GUI2_H
-
-#include_next "platform_camera.h"
-
-/* DIGIC 6 Mode 12 screen resolution and buffer geometry (900x600, stride 928)
- * Evidence & sibling citations:
- * - evidence/port35_manifest.json: PORT35-ROM-BMPDDEV (sub_fc18347e case 12 @ 0xFC18352A) [ROM]
- * - chdk-port/platform/g5x/platform_camera.h:84,91-94; lib.c:162-204
- * - chdk-port/platform/g7x/lib.c:303-358 */
-#undef  CAM_BITMAP_WIDTH
-#undef  CAM_BITMAP_HEIGHT
-#undef  CAM_SCREEN_WIDTH
-#undef  CAM_SCREEN_HEIGHT
-#define CAM_BITMAP_WIDTH                    928
-#define CAM_BITMAP_HEIGHT                   600
-#define CAM_SCREEN_WIDTH                    900
-#define CAM_SCREEN_HEIGHT                   600
-
-#endif /* PLATFORM_CAMERA_GUI2_H */
-'''
-
-
-def generate_gui_draw_candidate_c() -> str:
-    """Generate gui_draw.c for G3X_GUI2=1 with opacity 255 for non-transparent menu colors."""
-    gui_draw_path = CHDK_PORT / "core" / "gui_draw.c"
-    with open(gui_draw_path, "r", encoding="utf-8") as f:
-        src = f.read()
-
-    target = """#define CALC_YUV_LUMA_OPACITY_FOR_COLOR(color,luma,opacity) \\
-    { \\
-        luma = ((color-1)^0xffffffff)&0xf0; \\
-        opacity = (color&0xf)?255:color; \\
-    }"""
-
-    replacement = """/* PORT-36 F3: Force opacity 255 for non-transparent colors (G3X_GUI2=1)
- * Note: CALC_YUV_LUMA_OPACITY_FOR_COLOR affects only color 0xb0 (IDX_COLOR_GREY_DK_TRANS);
- * all other non-transparent colors in ply_colors[] already produce opacity 255 in stock macro.
- * INFERRED: no sibling overrides this macro (g7x/g5x/sx60hs use stock core/gui_draw.c:15-19).
- * Hardware trial observation to distinguish: background solid black/dark grey (confirms F3 fixed)
- * vs translucent background remaining (refutes F3 fix). */
-#if defined(G3X_GUI2) && (G3X_GUI2 == 1)
-#define CALC_YUV_LUMA_OPACITY_FOR_COLOR(color,luma,opacity) \\
-    { \\
-        luma = ((color-1)^0xffffffff)&0xf0; \\
-        opacity = (color == COLOR_TRANSPARENT) ? 0 : 255; \\
-    }
-#else
-#define CALC_YUV_LUMA_OPACITY_FOR_COLOR(color,luma,opacity) \\
-    { \\
-        luma = ((color-1)^0xffffffff)&0xf0; \\
-        opacity = (color&0xf)?255:color; \\
-    }
-#endif"""
-
-    if target not in src:
-        raise ValueError("Target CALC_YUV_LUMA_OPACITY_FOR_COLOR not found in core/gui_draw.c")
-    return src.replace(target, replacement, 1)
 
 
 def ensure_bootstrap():
@@ -1306,10 +1266,6 @@ def build_candidate_core_ladder_fix(
         base_cflags.append("-DG3X_GUI=1")
     if gui2:
         base_cflags.append("-DG3X_GUI2=1")
-        cand_cam_h = os.path.join(candidate_dir, "platform_camera.h")
-        with open(cand_cam_h, "w", encoding="utf-8") as f:
-            f.write(generate_platform_camera_gui2_h())
-        base_cflags.insert(base_cflags.index("-Iinclude"), f"-I{candidate_dir}")
     cflags = list(base_cflags) + ["-c", "-o", boot_proto_o, boot_proto_c]
     run_cmd(cflags, cwd=str(CHDK_PORT))
 
@@ -1382,26 +1338,6 @@ def build_candidate_core_ladder_fix(
 
         gui_draw_obj = str(SUB_DIR / "gui_draw.thm.o")
         camera_info_obj = str(SUB_DIR / "camera_info.thm.o")
-        if gui2:
-            cand_gui_draw_c = os.path.join(candidate_dir, "gui_draw_candidate.c")
-            gui_draw_cand_o = os.path.join(candidate_dir, "gui_draw_candidate.o")
-            with open(cand_gui_draw_c, "w", encoding="utf-8") as f:
-                f.write(generate_gui_draw_candidate_c())
-            run_cmd(list(base_cflags) + ["-c", "-o", gui_draw_cand_o, cand_gui_draw_c], cwd=str(CHDK_PORT))
-            gui_draw_obj = gui_draw_cand_o
-
-            camera_info_cand_o = os.path.join(candidate_dir, "camera_info_candidate.o")
-            cam_cflags = list(base_cflags) + [
-                "-Wno-builtin-macro-redefined",
-                '-D__DATE__="Oct 24 2026"',
-                '-D__TIME__="15:43:43"',
-                "-c",
-                "-o",
-                camera_info_cand_o,
-                "core/camera_info.c",
-            ]
-            run_cmd(cam_cflags, cwd=str(CHDK_PORT))
-            camera_info_obj = camera_info_cand_o
 
         obj_files = [
             boot_proto_o,

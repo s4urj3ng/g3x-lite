@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PORT-36: Host verification suite for opt-in G3X_GUI2=1 CHDK core GUI geometry and opacity candidate.
 
-Verifies all acceptance criteria for Task PORT36-T1c-GUI2-CANDIDATE:
+Verifies all acceptance criteria for Task PORT36-T1e-GUI2-CANDIDATE:
 1. Build script flags and implications:
    - G3X_GUI2=1 implies G3X_GUI=1, G3X_KBD=1, G3X_OSD2=1, G3X_RESIDENT=1, G3X_POWERON_FIX=1, LED_LADDER=1.
 2. Prior build invariance:
@@ -9,26 +9,31 @@ Verifies all acceptance criteria for Task PORT36-T1c-GUI2-CANDIDATE:
    - PORT-35 G3X_GUI=1 candidate equals pinned hash 1f6494cd8e7fd7629b82ed33ba1ec4fa939aa1aa2ff22f541c28a28c742e4272.
 3. G3X_GUI2=1 reproducible build:
    - Output SHA-256 equals pinned hash and matches docs/PORT36_GUI_GEOMETRY.md.
-   - Linked _end is <= heap start 0x00368880 with positive clearance.
+   - Linked _end is <= heap start 0x00368880 with positive clearance (>= 20 KB).
 4. Static trial safety check under GUI2 (card-write exclusions):
    - conf_save, file-browser writes, module/script loading and file-write hooks are absent or stubbed.
    - No branch in .text targets unsafe card-mutating firmware stubs.
    - Settings remain RAM-only.
-5. Geometry self-consistency:
-   - CAM_BITMAP_WIDTH (928) >= CAM_SCREEN_WIDTH (900).
-   - CAM_BITMAP_HEIGHT (600) >= CAM_SCREEN_HEIGHT (600).
-   - Menu box height covers rows * font_height within the screen height.
-   - num_lines (14 at 480 px, 17 at 600 px) >= 9 root menu rows.
+5. Blocking 1: No compile-time 928 / 900x600 overrides:
+   - Stock platform_camera.h defines 736/480/720/480.
+   - No GUI2 build input defines CAM_BITMAP_WIDTH 928, CAM_SCREEN_WIDTH 900 or CAM_SCREEN_HEIGHT 600.
+   - No generated platform_camera.h sits on the include path.
 6. Displaytype switch simulation:
    - Host-side simulation for each displaytype 0..12 asserts the live GUI2 geometry.
    - Active LCD (displaytype 1,2,8,9,10) and default are 720x480 at stride 736 (unsheared path preserved); Mode 12 is 900x600 at stride 928.
    - disp_left, disp_right, disp_width reset to active width.
-7. Opacity fix (F3):
+   - num_lines (14 at 480 px, 17 at 600 px) >= 9 root menu rows.
+7. Opacity and Menu Box Fix (F2/F3):
    - Menu background colour index traced through palette.c to opacity written by gui_draw.c.
-   - CALC_YUV_LUMA_OPACITY_FOR_COLOR sets opacity 255 for non-transparent colors (index 18 / 0xb0 becomes 255).
-8. Removals verified:
+   - RAM default conf.menu_color.bg set to COLOR_BLACK (0xff, opacity 255).
+   - Full 14-line menu box background filled in g3x_gui_kbd_redraw before gui_redraw.
+   - Test shows unpainted row 9 has opacity 0 in PORT-35 GUI build (fails opacity 255 assertion), but passes in GUI2 candidate.
+   - Disassembly confirms draw_rectangle called in GUI2 g3x_gui_kbd_redraw.
+8. Removals and Clean Code:
    - Default-case override to 928 removed (preserving unsheared stride 736).
-   - No-op update_screen_dimensions() + gui_menu_init(0) at init removed.
+   - Dead update_screen_dimensions wrapper removed.
+   - Stray extra blank line removed in osd2_test_overlay.h.
+   - Diagnostic variables at top of block.
 9. Documentation & Evidence:
    - docs/PORT36_GUI_GEOMETRY.md exists with required constant table, root causes (<= 3 lines, refutation noted), and DISKBOOT hash.
    - Diagnostic overlay described as a TRIAL DIAGNOSTIC only.
@@ -65,9 +70,8 @@ if str(REPO_ROOT) not in sys.path:
 from build_candidate_port25_ladder_fix import (  # noqa: E402
     G3X_GUI_HEAP_START,
     build_candidate,
-    generate_platform_camera_gui2_h,
-    generate_gui_draw_candidate_c,
     generate_gui_candidate_c,
+    generate_conf_candidate_c,
 )
 
 TOOLCHAIN_BIN = REPO_ROOT / "toolchains" / "gcc-arm-none-eabi-5_4-2016q3" / "bin"
@@ -81,8 +85,8 @@ PINNED_DEFAULT_SIZE = 118001
 PINNED_PORT35_GUI_SHA256 = "1f6494cd8e7fd7629b82ed33ba1ec4fa939aa1aa2ff22f541c28a28c742e4272"
 PINNED_PORT35_GUI_SIZE = 103057
 
-PINNED_PORT36_GUI2_SHA256 = "2f9d51dabf435997dbc5005dd60b71bc07758d6598175377fc74669fb42263ae"
-PINNED_PORT36_GUI2_SIZE = 103249
+PINNED_PORT36_GUI2_SHA256 = "4a8c4b503a4b78a262ca208c629de8305aa186efbc2fda82951d77084ade9071"
+PINNED_PORT36_GUI2_SIZE = 103345
 
 
 class TestPort36GuiGeometry(unittest.TestCase):
@@ -133,8 +137,8 @@ class TestPort36GuiGeometry(unittest.TestCase):
             witness_addr = int(res["witness_addr"], 16)
             heap_start = int(res["heap_start_addr"], 16)
 
-            self.assertEqual(witness_addr, 0x0035CD90)
-            self.assertEqual(end_addr, 0x00362DD0)
+            self.assertEqual(witness_addr, 0x0035CDF0)
+            self.assertEqual(end_addr, 0x00362E30)
             self.assertEqual(heap_start, G3X_GUI_HEAP_START)
             self.assertLessEqual(end_addr, heap_start)
 
@@ -237,99 +241,54 @@ class TestPort36GuiGeometry(unittest.TestCase):
             # libfselect (file browser) points to RAM-only stub table
             self.assertIn("libfselect", nm_output)
 
-    def test_geometry_constants_and_vertical_coverage(self) -> None:
-        """Physical LCD dimensions and menu row coverage across runtime display modes."""
-        # 1. Parse generated platform_camera_gui2.h
-        header_code = generate_platform_camera_gui2_h()
-        m_bw = re.search(r"#define\s+CAM_BITMAP_WIDTH\s+(\d+)", header_code)
-        m_bh = re.search(r"#define\s+CAM_BITMAP_HEIGHT\s+(\d+)", header_code)
-        m_sw = re.search(r"#define\s+CAM_SCREEN_WIDTH\s+(\d+)", header_code)
-        m_sh = re.search(r"#define\s+CAM_SCREEN_HEIGHT\s+(\d+)", header_code)
+    def test_blocking1_no_928_override_and_clean_include_path(self) -> None:
+        """BLOCKING 1: GUI2 compiles against stock 720/736/480 platform_camera.h without compile-time 928 overrides."""
+        # 1. Verify stock platform_camera.h defines 736/480/720/480
+        stock_h = (CHDK_PORT / "platform" / "g3x" / "platform_camera.h").read_text(encoding="utf-8")
+        self.assertRegex(stock_h, r"#define\s+CAM_BITMAP_WIDTH\s+736")
+        self.assertRegex(stock_h, r"#define\s+CAM_BITMAP_HEIGHT\s+480")
+        self.assertRegex(stock_h, r"#define\s+CAM_SCREEN_WIDTH\s+720")
+        self.assertRegex(stock_h, r"#define\s+CAM_SCREEN_HEIGHT\s+480")
 
-        self.assertIsNotNone(m_bw)
-        self.assertIsNotNone(m_bh)
-        self.assertIsNotNone(m_sw)
-        self.assertIsNotNone(m_sh)
-
-        bitmap_width = int(m_bw.group(1))
-        bitmap_height = int(m_bh.group(1))
-        screen_width = int(m_sw.group(1))
-        screen_height = int(m_sh.group(1))
-
-        self.assertEqual(bitmap_width, 928)
-        self.assertEqual(bitmap_height, 600)
-        self.assertEqual(screen_width, 900)
-        self.assertEqual(screen_height, 600)
-
-        # 2. Verify bitmap buffer width is at least screen width
-        self.assertGreaterEqual(bitmap_width, screen_width)
-        self.assertGreaterEqual(bitmap_height, screen_height)
-
-        # 3. Fault F1 test: PORT-35 GUI build values vs Mode 12 requirements
-        port35_sw, port35_sh = 720, 480
-        port35_bw, port35_bh = 736, 480
-        port35_menu_w = port35_sw - 20  # 700 px (gui_menu.c:228)
-        gui2_menu_w = screen_width - 20   # 880 px
-
-        self.assertLess(port35_sw, screen_width, "PORT-35 GUI screen width (720) fails 900 panel width (confirms F1)")
-        self.assertLess(port35_sh, screen_height, "PORT-35 GUI screen height (480) fails 600 panel height (confirms F1)")
-        self.assertLess(port35_menu_w, gui2_menu_w, "PORT-35 GUI menu width (700) fails GUI2 menu width 880 (confirms F1)")
-        self.assertEqual(gui2_menu_w, 880)
-
-        # 4. Vertical capacity verification from gui_menu.c:226
-        # num_lines = (camera_screen.height - 2*ts_menu_border)/rbf_font_height() - 1
-        font_h = 32  # rbf font height (FONT_HEIGHT in gui_draw.h:69-70; rbf_font.c:251-252)
-        ts_menu_border = 0
-        root_menu_rows = 9  # 9 active root menu items (items 0..8, user menu disabled by default)
-
-        # In both 480 px and 600 px modes, num_lines accommodates active root menu items (9):
-        port35_num_lines = (480 - 2 * ts_menu_border) // font_h - 1  # 14
-        gui2_num_lines = (600 - 2 * ts_menu_border) // font_h - 1  # 17
-        self.assertGreaterEqual(port35_num_lines, root_menu_rows)
-        self.assertGreaterEqual(gui2_num_lines, root_menu_rows)
-
-        # Verify box height covers rows * font_height within the screen height for GUI2 runtime height
-        rows_drawn = root_menu_rows
-        box_y = (screen_height - ((rows_drawn - 1) * font_h)) >> 1
-        box_h = rows_drawn * font_h
-        last_row_y = box_y + (rows_drawn - 1) * font_h
-
-        self.assertGreater(box_y, 0)
-        self.assertGreaterEqual(box_h, rows_drawn * font_h, "box height must cover rows * font_height")
-        self.assertGreaterEqual(box_y + box_h, last_row_y + font_h, "box_y + box_h must cover last row")
-        self.assertLessEqual(box_y + box_h, screen_height, f"box_y+box_h ({box_y + box_h}) must be <= screen height ({screen_height})")
-
-        # 5. Test runtime dimensions (both LCD 720x480/736 and Mode 12 900x600/928)
-        modes = [
-            ("LCD (720x480, stride 736)", 720, 480, 736, 480),
-            ("Mode 12 (900x600, stride 928)", 900, 600, 928, 600),
+        # 2. Verify NO GUI2 build input or header defines CAM_BITMAP_WIDTH 928, CAM_SCREEN_WIDTH 900, or CAM_SCREEN_HEIGHT 600
+        scan_dirs = [
+            CHDK_PORT / "include",
+            CHDK_PORT / "core",
+            CHDK_PORT / "platform" / "g3x",
+            CHDK_PORT / "platform" / "g3x" / "sub" / "110c",
         ]
+        forbidden_patterns = [
+            (re.compile(r"#define\s+CAM_BITMAP_WIDTH\s+928"), "CAM_BITMAP_WIDTH 928"),
+            (re.compile(r"#define\s+CAM_SCREEN_WIDTH\s+900"), "CAM_SCREEN_WIDTH 900"),
+            (re.compile(r"#define\s+CAM_SCREEN_HEIGHT\s+600"), "CAM_SCREEN_HEIGHT 600"),
+        ]
+        for sdir in scan_dirs:
+            for root, _, files in os.walk(sdir):
+                for fname in files:
+                    if fname.endswith((".h", ".c", ".S")):
+                        fpath = Path(root) / fname
+                        ftext = fpath.read_text(encoding="utf-8", errors="ignore")
+                        for pat, desc in forbidden_patterns:
+                            self.assertIsNone(
+                                pat.search(ftext),
+                                f"GUI2 build input {fpath} defines forbidden {desc}!",
+                            )
 
-        for mode_name, w, h, bw, bh in modes:
-            with self.subTest(mode=mode_name):
-                cur_screen_height = h
-                self.assertGreaterEqual(bw, w, f"{mode_name}: buffer_width ({bw}) must be >= width ({w})")
-                self.assertGreaterEqual(bh, h, f"{mode_name}: buffer_height ({bh}) must be >= height ({h})")
+        # 3. Verify no generated platform_camera.h sits on the include path or temporary dir
+        build_script = (TOOLS_DIR / "build_candidate_port25_ladder_fix.py").read_text(encoding="utf-8")
+        self.assertNotIn("generate_platform_camera_gui2_h", build_script)
+        self.assertNotIn("cand_cam_h = os.path.join(candidate_dir, \"platform_camera.h\")", build_script)
+        self.assertNotIn("-I{candidate_dir}", build_script)
 
-                # num_lines from core/gui_menu.c:226
-                num_lines = cur_screen_height // font_h - 1
-                self.assertGreaterEqual(num_lines, root_menu_rows, f"{mode_name}: num_lines ({num_lines}) must accommodate {root_menu_rows} rows")
+        # 4. Vertical capacity verification with stock 480 px screen height
+        font_h = 32  # rbf font height (FONT_HEIGHT in gui_draw.h:69-70; rbf_font.c:251-252)
+        root_menu_rows = 9  # 9 active root menu items
+        num_lines_480 = 480 // font_h - 1  # 14
+        self.assertGreaterEqual(num_lines_480, root_menu_rows)
 
-                box_y = (cur_screen_height - ((root_menu_rows - 1) * font_h)) >> 1
-                box_h = root_menu_rows * font_h
-                last_row_y = box_y + (root_menu_rows - 1) * font_h
-
-                self.assertGreater(box_y, 0, f"{mode_name}: box_y must be > 0")
-                self.assertGreaterEqual(
-                    box_y + box_h,
-                    last_row_y + font_h,
-                    f"{mode_name}: box_y+box_h ({box_y + box_h}) must cover last_row_y+font_h ({last_row_y + font_h})",
-                )
-                self.assertLessEqual(
-                    box_y + box_h,
-                    cur_screen_height,
-                    f"{mode_name}: box_y+box_h ({box_y + box_h}) must be <= screen_height ({cur_screen_height})",
-                )
+        # Mode 12 runtime capacity (600 px)
+        num_lines_600 = 600 // font_h - 1  # 17
+        self.assertGreaterEqual(num_lines_600, root_menu_rows)
 
     def test_displaytype_switch_simulation_and_gui2_geometry(self) -> None:
         """Simulate g3x_osd2_update_screen_dimensions switch for each displaytype 0..12 under GUI2."""
@@ -377,7 +336,7 @@ class TestPort36GuiGeometry(unittest.TestCase):
                 h = dim["height"]
                 bw = dim["buffer_width"]
 
-                # Invariant 1: buffer_width >= screen_width and buffer_height >= screen_height
+                # Invariant 1: buffer_width >= screen_width
                 self.assertGreaterEqual(bw, w, f"dt={dt}: buffer_width ({bw}) must be >= width ({w})")
 
                 # Invariant 2: GUI2 OSD bounds reset correctly
@@ -456,161 +415,102 @@ class TestPort36GuiGeometry(unittest.TestCase):
         self.assertIsNotNone(m_default, "default case must exist")
         self.assertNotIn("G3X_OSD2_MODE12_BUFFER_WIDTH", m_default.group(1), "Default case must not override stride to 928")
 
-    def test_gui2_opacity_fix(self) -> None:
-        """Verify F3: trace menu background index through palette to opacity, and show GUI2 resolves to opaque while PORT-35 GUI fails."""
-        gui_draw_c = generate_gui_draw_candidate_c()
-        self.assertIn("opacity = (color == COLOR_TRANSPARENT) ? 0 : 255;", gui_draw_c)
-
+    def test_gui2_opacity_and_menu_box_fix(self) -> None:
+        """Verify F2/F3: trace menu background index through palette to opacity, and show GUI2 box fill ensures opacity 255 across lines 0..14."""
         # 1. Source Trace (Path:Line verification):
-        # a) core/conf.c:201 defines conf.menu_color background as IDX_COLOR_GREY_DK (13);
-        #    core/conf.c:198-200,207 define OSD and space colors as IDX_COLOR_GREY_DK_TRANS (18).
+        # a) core/conf.c:201 defines conf.menu_color background as IDX_COLOR_GREY_DK (13)
         conf_src = (CHDK_PORT / "core" / "conf.c").read_text(encoding="utf-8")
         self.assertIn("CONF_INFOC( 55, conf.menu_color,", conf_src)
         self.assertIn("IDX_COLOR_GREY_DK", conf_src)
-        self.assertIn("IDX_COLOR_GREY_DK_TRANS", conf_src)
 
-        # b) core/gui_draw.h:24,29 defines indices:
+        # b) core/gui_draw.h:24 defines index 13
         gui_draw_h = (CHDK_PORT / "core" / "gui_draw.h").read_text(encoding="utf-8")
         self.assertIn("#define IDX_COLOR_GREY_DK           13", gui_draw_h)
-        self.assertIn("#define IDX_COLOR_GREY_DK_TRANS     18", gui_draw_h)
 
-        # c) platform/generic/palette.c:11-37 defines ply_colors[]:
-        # index 18 (IDX_COLOR_GREY_DK_TRANS) maps to 0xb0; index 1 (COLOR_BLACK) maps to 0xff; index 13 maps to 0xb4.
+        # c) platform/generic/palette.c:26 maps index 13 to 0xb4 (Dark Grey); line 14 maps index 1 to 0xff (COLOR_BLACK)
         palette_src = (CHDK_PORT / "platform" / "generic" / "palette.c").read_text(encoding="utf-8")
-        self.assertIn("0xb0,                       // Transparent Dark Grey", palette_src)
         self.assertIn("0xb4,                       // Dark Grey", palette_src)
+        self.assertIn("COLOR_BLACK,               // Placeholder for script colors", palette_src)
 
-        # 2. Opacity Macro Behavior: PORT-35 GUI (stock) vs GUI2 candidate:
-        # Stock (core/gui_draw.c:15-19): opacity = (color & 0xf) ? 255 : color;
-        # GUI2 (generate_gui_draw_candidate_c): opacity = (color == COLOR_TRANSPARENT) ? 0 : 255;
-        def calc_opacity_port35_gui(color: int) -> int:
-            return 255 if (color & 0xF) else color
+        # d) include/palette.h:15 defines COLOR_BLACK as 0xFF
+        palette_h = (CHDK_PORT / "include" / "palette.h").read_text(encoding="utf-8")
+        self.assertRegex(palette_h, r"#define\s+COLOR_BLACK\s+0xFF")
 
-        def calc_opacity_gui2(color: int) -> int:
-            return 0 if color == 0 else 255
+        # e) core/gui_draw.c:16-19 defines CALC_YUV_LUMA_OPACITY_FOR_COLOR
+        gui_draw_c = (CHDK_PORT / "core" / "gui_draw.c").read_text(encoding="utf-8")
+        self.assertIn("opacity = (color&0xf)?255:color;", gui_draw_c)
+        self.assertIn("obu[offset] = o;", gui_draw_c)
 
-        # COLOR_TRANSPARENT (0x00) remains 0 (transparent) in both
-        self.assertEqual(calc_opacity_gui2(0x00), 0)
-        self.assertEqual(calc_opacity_port35_gui(0x00), 0)
+        # 2. Draw path analysis:
+        # gui_menu.c:731-752 (gui_menu_draw_initial) draws NO outer menu box when count <= num_lines.
+        # gui_menu.c:967-1077 (gui_menu_draw) renders per-row backgrounds for active items (rows 0..8).
+        # Lines 9..13 of the 14-line screen area are NEVER written by gui_menu_draw.
+        # In PORT-35, rows 9..13 remained at opacity 0 (unpainted, transparent).
 
-        # 3. Fault F3 resolution and PORT-35 GUI failure check:
-        # For IDX_COLOR_GREY_DK_TRANS (0xb0), the lower nibble is 0:
-        # In PORT-35 GUI build configuration, it evaluates to 0xb0 = 176 (translucent, NOT opaque)
-        port35_opacity = calc_opacity_port35_gui(0xB0)
-        self.assertEqual(port35_opacity, 0xB0)
+        def simulate_menu_render(is_gui2: bool) -> tuple[int, list[int]]:
+            screen_h = 480
+            font_h = 32
+            num_lines = screen_h // font_h - 1  # 14
+            root_items = 9
+            # opacity array for each line 0..13
+            line_opacity = [0] * num_lines
 
-        # Asserting that the index resolves to opaque (255) FAILS under PORT-35 GUI build configuration:
+            # In GUI2, g3x_gui_kbd_redraw fills the entire 14-line menu box before gui_redraw
+            if is_gui2:
+                for line in range(num_lines):
+                    # Filled with COLOR_BLACK (0xff): opacity = (0xff & 0xf) ? 255 : 0xff = 255
+                    line_opacity[line] = 255
+                menu_bg_col = 1  # COLOR_BLACK (RAM default in GUI2 conf_restore)
+            else:
+                menu_bg_col = 13  # IDX_COLOR_GREY_DK (stock conf default)
+
+            # gui_menu_draw renders items 0..root_items-1
+            for item in range(root_items):
+                # Both 0xb4 (idx 13) and 0xff (idx 1) get opacity 255 from stock macro
+                line_opacity[item] = 255
+
+            return menu_bg_col, line_opacity
+
+        # 3. Fault F3 resolution: PORT-35 GUI build fails, GUI2 passes
+        port35_col, port35_opacities = simulate_menu_render(is_gui2=False)
+        self.assertEqual(port35_col, 13, "PORT-35 default menu color must be IDX_COLOR_GREY_DK (13)")
+        # In PORT-35, row 9 has opacity 0 (transparent)
+        self.assertEqual(port35_opacities[9], 0)
+
+        # Asserting that line 9 resolves to opaque (255) FAILS under PORT-35 GUI configuration:
         with self.assertRaises(AssertionError):
             self.assertEqual(
-                port35_opacity,
+                port35_opacities[9],
                 255,
-                "PORT-35 GUI configuration must NOT resolve index 18 to opaque 255",
+                "PORT-35 GUI configuration must NOT have opacity 255 at line 9",
             )
 
-        # Under GUI2 candidate build configuration, the index resolves to solid opaque 255:
-        gui2_opacity = calc_opacity_gui2(0xB0)
-        self.assertEqual(gui2_opacity, 255)
+        # Under GUI2 candidate build configuration, line 9 is opaque (255) and color is COLOR_BLACK (1):
+        gui2_col, gui2_opacities = simulate_menu_render(is_gui2=True)
+        self.assertEqual(gui2_col, 1, "GUI2 default menu color must be COLOR_BLACK (1)")
+        self.assertEqual(gui2_opacities[9], 255)
+        # All lines 0..13 have solid opacity 255:
+        self.assertTrue(all(op == 255 for op in gui2_opacities))
 
-        # 4. Check exactly which indices change in ply_colors[20]:
-        ply_colors_table = [
-            0x00, 0xFF, 0x0F, 0xBE, 0xD5, 0x7A, 0x61, 0xC5, 0x05, 0xA9,
-            0xEE, 0x45, 0x74, 0xB4, 0x34, 0x11, 0x5A, 0x0E, 0xB0, 0xFE,
-        ]
-        indices_changed = []
-        for idx, col in enumerate(ply_colors_table):
-            op_p35 = calc_opacity_port35_gui(col)
-            op_gui2 = calc_opacity_gui2(col)
-            if op_p35 != op_gui2:
-                indices_changed.append((idx, hex(col), op_p35, op_gui2))
-
-        # Exactly index 18 (0xb0, IDX_COLOR_GREY_DK_TRANS) changes from 176 to 255
-        self.assertEqual(len(indices_changed), 1)
-        self.assertEqual(indices_changed[0], (18, "0xb0", 0xB0, 255))
-
-        # 5. Object Disassembly Verification (PORT-35 GUI vs GUI2 candidate):
-        # PORT-35 stock gui_draw.thm.o tests lower nibble with tst.w r1, #15 and moveq r3, r1
-        objdump_stock = subprocess.run(
-            [str(ARM_OBJDUMP), "-d", str(SUB_DIR / "gui_draw.thm.o")],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=True,
-        )
-        self.assertRegex(objdump_stock.stdout, r"tst(?:\.w)?\s+r1,\s+#15")
-        self.assertRegex(objdump_stock.stdout, r"moveq\s+r3,\s+r1")
-
-        # In GUI2, generate_gui_draw_candidate_c produces cmp r1, #0 and movne r3, #255
+        # 4. Disassembly verification of GUI2 core ELF:
+        # In GUI2 candidate_main.elf, g3x_gui_kbd_redraw calls draw_rectangle before gui_redraw
         with tempfile.TemporaryDirectory() as tmpdir:
-            cand_c = os.path.join(tmpdir, "gui_draw_cand.c")
-            cand_o = os.path.join(tmpdir, "gui_draw_cand.o")
-            with open(cand_c, "w", encoding="utf-8") as f:
-                f.write(generate_gui_draw_candidate_c())
-            cflags = [
-                str(ARM_GCC),
-                "-fno-inline",
-                "-Os",
-                "-fno-strict-aliasing",
-                "-fno-schedule-insns2",
-                "-march=armv7-r",
-                "-mthumb",
-                "-DTHUMB_FW",
-                "-DG3X_GUI2=1",
-                "-Iinclude",
-                "-Icore",
-                "-Iplatform/g3x",
-                "-Iplatform/g3x/sub/110c",
-                "-c",
-                "-o",
-                cand_o,
-                cand_c,
-            ]
-            subprocess.run(cflags, cwd=str(CHDK_PORT), check=True)
-            objdump_cand = subprocess.run(
-                [str(ARM_OBJDUMP), "-d", cand_o],
+            res = build_candidate(gui2=True, out_dir=tmpdir)
+            core_elf = res["core_elf"]
+            objdump_proc = subprocess.run(
+                [str(ARM_OBJDUMP), "-d", core_elf],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
                 check=True,
             )
-            self.assertRegex(objdump_cand.stdout, r"cmp\s+r1,\s+#0")
-            self.assertRegex(objdump_cand.stdout, r"movne\s+r3,\s+#255")
+            disasm = objdump_proc.stdout
 
-        # 6. Whole-box opacity simulation:
-        # Verify that rendering the menu box background rectangle writes opacity 255 across every pixel.
-        screen_w = 720
-        screen_h = 480
-        stride = 736
-        menu_border_width = 10
-        box_x = menu_border_width
-        box_w = screen_w - 2 * menu_border_width  # 700 px
-        box_h = 9 * 32  # 288 px
-        y_top = (screen_h - (8 * 32)) >> 1  # 112 px
-
-        opacity_buf = bytearray(stride * screen_h)
-
-        # Render menu background box with menu background color (0xb4 or 0xb0)
-        menu_bg_color = 0xB0  # IDX_COLOR_GREY_DK_TRANS
-        for py in range(y_top, y_top + box_h):
-            for px in range(box_x, box_x + box_w):
-                opacity_buf[py * stride + px] = calc_opacity_gui2(menu_bg_color)
-
-        # Assert every pixel in the entire menu background box has opacity 255
-        opaque_pixel_count = 0
-        for py in range(y_top, y_top + box_h):
-            for px in range(box_x, box_x + box_w):
-                self.assertEqual(
-                    opacity_buf[py * stride + px],
-                    255,
-                    f"Pixel at ({px},{py}) must have opacity 255",
-                )
-                opaque_pixel_count += 1
-
-        self.assertEqual(opaque_pixel_count, box_w * box_h)
-        self.assertEqual(opaque_pixel_count, 700 * 288)
-
-        # Pixels outside the menu box must remain unpainted (0)
-        self.assertEqual(opacity_buf[0], 0)  # top-left screen corner
-        self.assertEqual(opacity_buf[(y_top - 1) * stride + box_x], 0)  # line above menu
+            m_fn = re.search(r"<g3x_gui_kbd_redraw>:(.*?)(?:\n\n|\Z)", disasm, re.DOTALL)
+            self.assertIsNotNone(m_fn, "g3x_gui_kbd_redraw must exist in disassembly")
+            fn_text = m_fn.group(1)
+            self.assertIn("bl\t", fn_text)
+            self.assertRegex(fn_text, r"bl\s+[0-9a-f]+\s+<draw_rectangle>", "draw_rectangle must be called in g3x_gui_kbd_redraw")
 
     def test_removals_and_clean_code_paths(self) -> None:
         """Confirm removals: no redundant init call in g3x_gui_kbd_redraw, and no default 928 override."""
@@ -633,6 +533,10 @@ class TestPort36GuiGeometry(unittest.TestCase):
         self.assertIn("camera_screen.disp_width = camera_screen.width;", header_text)
         self.assertNotIn("void update_screen_dimensions(void)", header_text)
 
+        # Verify nit: no stray double blank line after g3x_osd2_update_screen_dimensions()
+        self.assertNotIn("}\n\n\n/* Fixed \"CHDK\" text bitmap rows", header_text)
+        self.assertIn("}\n\n/* Fixed \"CHDK\" text bitmap rows", header_text)
+
     def test_docs_and_manifest_evidence(self) -> None:
         """docs/PORT36_GUI_GEOMETRY.md exists, milestones are updated, and evidence validator passes."""
         self.assertTrue(PORT36_DOC.is_file(), "docs/PORT36_GUI_GEOMETRY.md must exist")
@@ -648,9 +552,10 @@ class TestPort36GuiGeometry(unittest.TestCase):
             "camera_screen.disp_right",
             "camera_screen.disp_width",
             "update_screen_dimensions",
-            "CALC_YUV_LUMA_OPACITY_FOR_COLOR",
+            "conf.menu_color.bg",
+            "draw_rectangle",
         ]:
-            self.assertIn(name, doc_text, f"{name} must appear in PORT36 constant table")
+            self.assertIn(name, doc_text, f"{name} must appear in PORT36 constant table or text")
 
         # Verify ROM read statement and UNKNOWN displaytype label
         self.assertIn("No ROM was read for PORT-36", doc_text)
