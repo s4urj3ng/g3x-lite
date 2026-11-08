@@ -330,8 +330,8 @@ class TestPort35Osd2Candidate(unittest.TestCase):
 
         handoff_first = (DOCS_DIR / "HANDOFF.md").read_text(encoding="utf-8").splitlines()[0]
         state_first = (DOCS_DIR / "PROJECT_STATE.md").read_text(encoding="utf-8").splitlines()[0]
-        self.assertEqual(handoff_first, "# Agent handoff — Current milestone: PORT-35")
-        self.assertEqual(state_first, "# Project state — Current milestone: PORT-35")
+        self.assertEqual(handoff_first, "# Agent handoff — Current milestone: PORT-36")
+        self.assertEqual(state_first, "# Project state — Current milestone: PORT-36")
 
         diff_proc = subprocess.run(
             ["git", "diff", "-U0", "1c33fd7", "--", "docs/HANDOFF.md", "docs/PROJECT_STATE.md"],
@@ -349,9 +349,9 @@ class TestPort35Osd2Candidate(unittest.TestCase):
             changed_lines,
             [
                 "-# Agent handoff — Current milestone: PORT-33",
-                "+# Agent handoff — Current milestone: PORT-35",
+                "+# Agent handoff — Current milestone: PORT-36",
                 "-# Project state — Current milestone: PORT-33",
-                "+# Project state — Current milestone: PORT-35",
+                "+# Project state — Current milestone: PORT-36",
             ],
         )
 

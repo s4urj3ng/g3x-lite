@@ -65,6 +65,7 @@ CANDIDATE_PORT34_KBD_DIR = os.path.join(REPO_ROOT, "candidate_port34_kbd")
 CANDIDATE_PORT34_KBD_OSD_DIR = os.path.join(REPO_ROOT, "candidate_port34_kbd_osd")
 CANDIDATE_PORT35_OSD2_DIR = os.path.join(REPO_ROOT, "candidate_port35_osd2")
 CANDIDATE_PORT35_GUI_DIR = os.path.join(REPO_ROOT, "candidate_port35_gui")
+CANDIDATE_PORT36_GUI2_DIR = os.path.join(REPO_ROOT, "candidate_port36_gui2")
 
 # Backward compatibility alias
 CANDIDATE_LADDER_FIX_DIR = CANDIDATE_PORT25_LADDER_FIX_DIR
@@ -435,6 +436,22 @@ void g3x_gui_kbd_redraw(int alt_active)
             || ((tick_cnt & 3u) == 0u);
         tick_cnt++;
         gui_redraw(force_redraw);
+
+#if defined(G3X_GUI2) && (G3X_GUI2 == 1)
+        /* Draw 1-px border at (0,0)-(width-1, height-1) [PORT-36 TRIAL DIAGNOSTIC] */
+        int w1 = camera_screen.width - 1;
+        int h1 = camera_screen.height - 1;
+        draw_line(0, 0, w1, 0, COLOR_WHITE);
+        draw_line(0, h1, w1, h1, COLOR_WHITE);
+        draw_line(0, 0, 0, h1, COLOR_WHITE);
+        draw_line(w1, 0, w1, h1, COLOR_WHITE);
+
+        /* Show live displaytype plus camera_screen width/buffer_width/height [PORT-36 TRIAL DIAGNOSTIC] */
+        char diag[64];
+        extern int displaytype;
+        sprintf(diag, "dt=%d w=%d bw=%d h=%d", displaytype, camera_screen.width, camera_screen.buffer_width, camera_screen.height);
+        draw_string(2, 2, diag, MAKE_COLOR(COLOR_BLACK, COLOR_WHITE));
+#endif
     }
 }
 
@@ -1124,6 +1141,67 @@ void __wrap_conf_restore(void)
     return src_head + ram_only_mid + src_tail
 
 
+def generate_platform_camera_gui2_h() -> str:
+    """Generate candidate platform_camera.h for G3X_GUI2=1."""
+    return r'''#ifndef PLATFORM_CAMERA_GUI2_H
+#define PLATFORM_CAMERA_GUI2_H
+
+#include_next "platform_camera.h"
+
+/* DIGIC 6 Mode 12 screen resolution and buffer geometry (900x600, stride 928)
+ * Evidence & sibling citations:
+ * - evidence/port35_manifest.json: PORT35-ROM-BMPDDEV (sub_fc18347e case 12 @ 0xFC18352A) [ROM]
+ * - chdk-port/platform/g5x/platform_camera.h:84,91-94; lib.c:162-204
+ * - chdk-port/platform/g7x/lib.c:303-358 */
+#undef  CAM_BITMAP_WIDTH
+#undef  CAM_BITMAP_HEIGHT
+#undef  CAM_SCREEN_WIDTH
+#undef  CAM_SCREEN_HEIGHT
+#define CAM_BITMAP_WIDTH                    928
+#define CAM_BITMAP_HEIGHT                   600
+#define CAM_SCREEN_WIDTH                    900
+#define CAM_SCREEN_HEIGHT                   600
+
+#endif /* PLATFORM_CAMERA_GUI2_H */
+'''
+
+
+def generate_gui_draw_candidate_c() -> str:
+    """Generate gui_draw.c for G3X_GUI2=1 with opacity 255 for non-transparent menu colors."""
+    gui_draw_path = CHDK_PORT / "core" / "gui_draw.c"
+    with open(gui_draw_path, "r", encoding="utf-8") as f:
+        src = f.read()
+
+    target = """#define CALC_YUV_LUMA_OPACITY_FOR_COLOR(color,luma,opacity) \\
+    { \\
+        luma = ((color-1)^0xffffffff)&0xf0; \\
+        opacity = (color&0xf)?255:color; \\
+    }"""
+
+    replacement = """/* PORT-36 F3: Force opacity 255 for non-transparent colors (G3X_GUI2=1)
+ * Note: CALC_YUV_LUMA_OPACITY_FOR_COLOR affects only color 0xb0 (IDX_COLOR_GREY_DK_TRANS);
+ * all other non-transparent colors in ply_colors[] already produce opacity 255 in stock macro.
+ * INFERRED: no sibling overrides this macro (g7x/g5x/sx60hs use stock core/gui_draw.c:15-19).
+ * Hardware trial observation to distinguish: background solid black/dark grey (confirms F3 fixed)
+ * vs translucent background remaining (refutes F3 fix). */
+#if defined(G3X_GUI2) && (G3X_GUI2 == 1)
+#define CALC_YUV_LUMA_OPACITY_FOR_COLOR(color,luma,opacity) \\
+    { \\
+        luma = ((color-1)^0xffffffff)&0xf0; \\
+        opacity = (color == COLOR_TRANSPARENT) ? 0 : 255; \\
+    }
+#else
+#define CALC_YUV_LUMA_OPACITY_FOR_COLOR(color,luma,opacity) \\
+    { \\
+        luma = ((color-1)^0xffffffff)&0xf0; \\
+        opacity = (color&0xf)?255:color; \\
+    }
+#endif"""
+
+    if target not in src:
+        raise ValueError("Target CALC_YUV_LUMA_OPACITY_FOR_COLOR not found in core/gui_draw.c")
+    return src.replace(target, replacement, 1)
+
 
 def ensure_bootstrap():
     """Ensure platform bootstrap has populated platform headers if missing."""
@@ -1142,10 +1220,11 @@ def build_candidate_core_ladder_fix(
     kbd: bool = False,
     osd2: bool = False,
     gui: bool = False,
+    gui2: bool = False,
 ) -> tuple[str, str, int, int]:
-    """Compile candidate core with optional LED_LADDER, G3X_POWERON_FIX, G3X_RESIDENT, G3X_OSD, G3X_KBD, G3X_OSD2, and G3X_GUI defines."""
+    """Compile candidate core with optional LED_LADDER, G3X_POWERON_FIX, G3X_RESIDENT, G3X_OSD, G3X_KBD, G3X_OSD2, G3X_GUI, and G3X_GUI2 defines."""
     print(
-        f"--- Building Candidate Core (ladder={ladder}, poweron_fix={poweron_fix}, resident={resident}, osd={osd}, kbd={kbd}, osd2={osd2}, gui={gui}) (@ 0x003489B4) ---"
+        f"--- Building Candidate Core (ladder={ladder}, poweron_fix={poweron_fix}, resident={resident}, osd={osd}, kbd={kbd}, osd2={osd2}, gui={gui}, gui2={gui2}) (@ 0x003489B4) ---"
     )
     os.makedirs(candidate_dir, exist_ok=True)
 
@@ -1225,6 +1304,12 @@ def build_candidate_core_ladder_fix(
         base_cflags.append("-DG3X_OSD2=1")
     if gui:
         base_cflags.append("-DG3X_GUI=1")
+    if gui2:
+        base_cflags.append("-DG3X_GUI2=1")
+        cand_cam_h = os.path.join(candidate_dir, "platform_camera.h")
+        with open(cand_cam_h, "w", encoding="utf-8") as f:
+            f.write(generate_platform_camera_gui2_h())
+        base_cflags.insert(base_cflags.index("-Iinclude"), f"-I{candidate_dir}")
     cflags = list(base_cflags) + ["-c", "-o", boot_proto_o, boot_proto_c]
     run_cmd(cflags, cwd=str(CHDK_PORT))
 
@@ -1295,6 +1380,29 @@ def build_candidate_core_ladder_fix(
             f.write(generate_conf_candidate_c())
         run_cmd(list(base_cflags) + ["-c", "-o", conf_cand_o, conf_cand_c], cwd=str(CHDK_PORT))
 
+        gui_draw_obj = str(SUB_DIR / "gui_draw.thm.o")
+        camera_info_obj = str(SUB_DIR / "camera_info.thm.o")
+        if gui2:
+            cand_gui_draw_c = os.path.join(candidate_dir, "gui_draw_candidate.c")
+            gui_draw_cand_o = os.path.join(candidate_dir, "gui_draw_candidate.o")
+            with open(cand_gui_draw_c, "w", encoding="utf-8") as f:
+                f.write(generate_gui_draw_candidate_c())
+            run_cmd(list(base_cflags) + ["-c", "-o", gui_draw_cand_o, cand_gui_draw_c], cwd=str(CHDK_PORT))
+            gui_draw_obj = gui_draw_cand_o
+
+            camera_info_cand_o = os.path.join(candidate_dir, "camera_info_candidate.o")
+            cam_cflags = list(base_cflags) + [
+                "-Wno-builtin-macro-redefined",
+                '-D__DATE__="Oct 24 2026"',
+                '-D__TIME__="15:43:43"',
+                "-c",
+                "-o",
+                camera_info_cand_o,
+                "core/camera_info.c",
+            ]
+            run_cmd(cam_cflags, cwd=str(CHDK_PORT))
+            camera_info_obj = camera_info_cand_o
+
         obj_files = [
             boot_proto_o,
             stubs_proto_o,
@@ -1303,7 +1411,7 @@ def build_candidate_core_ladder_fix(
             gui_cand_o,
             mod_cand_o,
             conf_cand_o,
-            str(SUB_DIR / "gui_draw.thm.o"),
+            gui_draw_obj,
             str(SUB_DIR / "memmgmt.thm.o"),
             str(SUB_DIR / "gui.thm.o"),
             str(SUB_DIR / "kbd_process.thm.o"),
@@ -1311,7 +1419,7 @@ def build_candidate_core_ladder_fix(
             str(SUB_DIR / "gui_osd.thm.o"),
             str(SUB_DIR / "usb_sync.thm.o"),
             str(SUB_DIR / "shooting.thm.o"),
-            str(SUB_DIR / "camera_info.thm.o"),
+            camera_info_obj,
             str(SUB_DIR / "lib_thumb.thm.o"),
             str(SUB_DIR / "lang_str.thm.o"),
         ]
@@ -1635,9 +1743,13 @@ def build_candidate(
     kbd: bool | None = None,
     osd2: bool | None = None,
     gui: bool | None = None,
+    gui2: bool | None = None,
 ) -> dict:
     """Execute complete combined candidate build pipeline."""
     ensure_bootstrap()
+
+    if gui2 is None:
+        gui2 = os.environ.get("G3X_GUI2", "0") == "1"
 
     if gui is None:
         gui = os.environ.get("G3X_GUI", "0") == "1"
@@ -1651,7 +1763,14 @@ def build_candidate(
     if osd is None:
         osd = os.environ.get("G3X_OSD", "0") == "1"
 
-    if gui:
+    if gui2:
+        gui = True
+        osd2 = True
+        kbd = True
+        resident = True
+        poweron_fix = True
+        ladder = True
+    elif gui:
         osd2 = True
         kbd = True
         resident = True
@@ -1670,6 +1789,8 @@ def build_candidate(
 
     if out_dir:
         candidate_dir = os.path.abspath(out_dir)
+    elif gui2:
+        candidate_dir = CANDIDATE_PORT36_GUI2_DIR
     elif gui:
         candidate_dir = CANDIDATE_PORT35_GUI_DIR
     elif osd2:
@@ -1704,6 +1825,7 @@ def build_candidate(
         kbd=kbd,
         osd2=osd2,
         gui=gui,
+        gui2=gui2,
     )
 
     # 2. Build loader
@@ -1778,6 +1900,7 @@ def build_candidate(
         "kbd": kbd,
         "osd2": osd2,
         "gui": gui,
+        "gui2": gui2,
         "diskboot_sha256": diskboot_sha256,
         "diskboot_size": diskboot_size,
     }
@@ -1785,7 +1908,7 @@ def build_candidate(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="PORT-25/32/33/34/35: Opt-in combined breadcrumb ladder + G3X_POWERON_FIX + G3X_RESIDENT + G3X_OSD + G3X_KBD + G3X_OSD2 + G3X_GUI builder for G3 X (GM1.10C)"
+        description="PORT-25/32/33/34/35/36: Opt-in combined breadcrumb ladder + G3X_POWERON_FIX + G3X_RESIDENT + G3X_OSD + G3X_KBD + G3X_OSD2 + G3X_GUI + G3X_GUI2 builder for G3 X (GM1.10C)"
     )
     parser.add_argument(
         "--out-dir",
@@ -1839,9 +1962,15 @@ def main():
         action="store_true",
         help="Build opt-in G3X_GUI=1 CHDK core GUI/ALT menu candidate (ladder=1, poweron_fix=1, resident=1, kbd=1, osd2=1, gui=1)",
     )
+    parser.add_argument(
+        "--gui2",
+        action="store_true",
+        help="Build opt-in G3X_GUI2=1 CHDK core GUI/ALT menu candidate (ladder=1, poweron_fix=1, resident=1, kbd=1, osd2=1, gui=1, gui2=1)",
+    )
     args = parser.parse_args()
 
-    gui = bool(args.gui or os.environ.get("G3X_GUI", "0") == "1")
+    gui2 = bool(args.gui2 or os.environ.get("G3X_GUI2", "0") == "1")
+    gui = bool(gui2 or args.gui or os.environ.get("G3X_GUI", "0") == "1")
     osd2 = bool(gui or args.osd2 or os.environ.get("G3X_OSD2", "0") == "1")
     kbd = bool(osd2 or args.kbd or os.environ.get("G3X_KBD", "0") == "1")
     osd = bool(args.osd or os.environ.get("G3X_OSD", "0") == "1")
@@ -1855,6 +1984,7 @@ def main():
         kbd = False
         osd2 = False
         gui = False
+        gui2 = False
     elif args.ladder:
         ladder = True
         poweron_fix = False
@@ -1863,6 +1993,7 @@ def main():
         kbd = False
         osd2 = False
         gui = False
+        gui2 = False
     elif args.poweron_fix:
         ladder = False
         poweron_fix = True
@@ -1871,6 +2002,7 @@ def main():
         kbd = False
         osd2 = False
         gui = False
+        gui2 = False
     else:
         # Default behavior: build combined candidate (ladder=1, poweron_fix=1)
         ladder = True
@@ -1885,6 +2017,7 @@ def main():
         kbd=kbd,
         osd2=osd2,
         gui=gui,
+        gui2=gui2,
     )
 
     print("\nSummary:")
@@ -1900,6 +2033,7 @@ def main():
     print(f"  kbd:          {res['kbd']}")
     print(f"  osd2:         {res['osd2']}")
     print(f"  gui:          {res['gui']}")
+    print(f"  gui2:         {res['gui2']}")
 
 
 if __name__ == "__main__":
