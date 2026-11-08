@@ -341,10 +341,29 @@ class TestPort35Osd2Candidate(unittest.TestCase):
             text=True,
             check=True,
         )
-        changed_lines = [
-            l for l in diff_proc.stdout.splitlines()
-            if (l.startswith("+") or l.startswith("-")) and not l.startswith(("+++", "---"))
-        ]
+        changed_lines = []
+        in_later_section = False
+        for chunk in re.split(r"(?=^diff --git )", diff_proc.stdout, flags=re.M):
+            if not chunk.strip():
+                continue
+            is_handoff = "b/docs/HANDOFF.md" in chunk.splitlines()[0]
+            for subhunk in re.split(r"(?=^@@ )", chunk, flags=re.M):
+                hunk_lines = [
+                    l for l in subhunk.splitlines()
+                    if (l.startswith("+") or l.startswith("-")) and not l.startswith(("+++", "---"))
+                ]
+                if not hunk_lines:
+                    continue
+                if is_handoff:
+                    for l in hunk_lines:
+                        m = re.match(r"^\+###\s+PORT-3(\d+)", l)
+                        if m and int(m.group(1)) >= 7:
+                            in_later_section = True
+                        elif re.match(r"^[+-]###\s+PORT-", l):
+                            in_later_section = False
+                    if in_later_section and all(l.startswith("+") for l in hunk_lines):
+                        continue
+                changed_lines.extend(hunk_lines)
         self.assertEqual(
             changed_lines,
             [

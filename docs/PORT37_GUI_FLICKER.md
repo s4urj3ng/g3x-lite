@@ -112,3 +112,32 @@ Built with pinned toolchain `toolchains/gcc-arm-none-eabi-5_4-2016q3` via `scrip
 - **New ROM Ranges Read**: `0`
 - No new firmware ROM ranges or slices were read for PORT-37. All symbol addresses are derived from existing FINSIG exports (`reference/finsig_gm110c/stubs_entry.S`) or verified evidence manifests (`port34_evidence_manifest.json`, `port35_manifest.json`).
 
+## Owner Trial and Recovery Plan (G3X_GUI3 Candidate)
+
+**Safety & Scope**: Canon PowerShot G3 X (`GM1.10C`, PID `0x32A8`). Phase 0 read-only rules apply (`docs/SAFETY.md`): offline host builds only, owner executes trial by hand. Binary execution is strictly RAM-only (`DISKBOOT.BIN` in DRAM; zero flash ROM/NVRAM writes; default build unchanged: `9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136`, 118,001 B). Recovery: battery pull (remove NB-10L battery $\ge 10\text{ s}$ to clear DRAM; short tap $<0.5\text{ s}$ boots stock Canon firmware). Boot method: held press (press & hold Power ~1–2 s through ladder until stock UI loads; $\le 2$ power-ons/session).
+
+### Candidate Binaries (Sources at Commit `4a06f75`)
+Built via `scripts/build_candidate_gui3.py` with pinned toolchain `toolchains/gcc-arm-none-eabi-5_4-2016q3`:
+- **`G3X_GUI3=1` (plain candidate)**: Commit `4a06f75`, 103,569 B, SHA-256 `4aded2d2abbe0c3101583c79708d084ffe93101fc9b889a76970e66a175be638` (witness `0x0035CED0`, clearance `22,896` B, build: `python3 -B scripts/build_candidate_gui3.py --gui3 --out-dir candidate_port37_gui3`)
+- **`G3X_GUI3=1` + `G3X_GUI_DIAG=1` (DIAG variant)**: Commit `4a06f75`, 103,745 B, SHA-256 `de066f7198ed8f56e055807eb25880c394386eaeab5aac6384cb1fa607308ed4` (witness `0x0035CF80`, clearance `22,720` B, build: `python3 -B scripts/build_candidate_gui3.py --gui3 --gui-diag --out-dir candidate_port37_gui3_diag`)
+
+### Numbered Trial Checklist
+1. `[ ] PASS  [ ] FAIL` **Heartbeat as in PORT-36**: Release Power after held press; rear green LED blinks ~1.0 Hz single blink (`100 ms ON / 900 ms OFF`), stock Canon UI loads. Expected: steady heartbeat, stock UI operational.
+2. `[ ] PASS  [ ] FAIL` **ALT on/off**: Press Playback (`KEY_PLAYBACK`); rear LED switches to ~1.0 Hz double blink (ALT on). Press again; returns to single blink. Expected: ALT toggles reliably.
+3. `[ ] PASS  [ ] FAIL` **Open the menu**: In ALT mode, press Menu (`KEY_MENU`); CHDK Main Menu opens. Expected: menu displays promptly on LCD.
+4. `[ ] PASS  [ ] FAIL` **No flicker (idle & nav)**: Menu holds still for $\ge 10\text{ s}$ with no key pressed; repaints only on navigation. Expected: zero periodic flicker/tearing at idle; smooth redraw on D-pad Up/Down.
+5. `[ ] PASS  [ ] FAIL` **F1 (large font & dimensions)**: Menu fills most of 900x600 LCD (~880x576 px, 17 rows); 16x32 text is readable at arm's length. Expected: large crisp font filling panel without margin clipping.
+6. `[ ] PASS  [ ] FAIL` **F3 (opaque black background)**: Menu background is solid black (`COLOR_BLACK`); zero stock Canon UI showing through text or unpainted rows. Expected: 100% opaque black background.
+7. `[ ] PASS  [ ] FAIL` **F2 (box covers all items)**: Outer box completely encloses all items, including bottom entries (*Script*, *CHDK Settings*, *Miscellaneous Stuff*). Expected: zero items clipped outside box.
+8. `[ ] PASS  [ ] FAIL` **Redraw recovery after stock overwrite**: After stock Canon UI redraws (toggle DISP button or half-press shutter), menu comes back promptly. Expected: prompt menu restore via sentinel check.
+9. `[ ] PASS  [ ] FAIL` **Close menu and leave ALT**: Press Menu to close CHDK menu, press Playback to leave ALT. Expected: clean OSD erase, full stock Canon controls restore.
+10. `[ ] PASS  [ ] FAIL` **DIAG variant only**: Outer frame sits precisely on LCD physical edges; marker reads `dt=12 w=900 bw=928 h=600`; neither frame nor text flickers. Expected: perimeter aligned, marker static.
+
+### INFERRED Assumptions Mapping & Owner Observation Notes
+- **B1/B2 (Sentinel repaint & idle stability)**: Confirmed by Step 4 (static idle $\ge 10\text{ s}$) and Step 8 (prompt redraw on stock overwrite); refuted if idle flicker persists or menu fails to recover.
+- **F1 (Integer 2x font scaling 16x32)**: Confirmed by Step 5 (fills 900x600, readable at arm's length); refuted if text is tiny/illegible or clipped.
+- **F3 (Opacity not written root cause & solid black)**: Confirmed by Step 6 (opaque black background, zero stock UI show-through); refuted if menu remains translucent.
+- **F2 (Full bounding box coverage)**: Confirmed by Step 7 (all 17 items inside box); refuted if bottom items escape.
+- **B2 (DIAG edge alignment & static marker)**: Confirmed by Step 10 (frame at LCD boundary, marker readable, no flicker); refuted if offset or blinking.
+- **Owner Notes**: Record PASS/FAIL for each step. Note text legibility at arm's length, background opacity, navigation responsiveness, and redraw speed after DISP toggle. A short phone video (~10–20 s) capturing idle stillness, navigation, and DISP toggle is preferred.
+
