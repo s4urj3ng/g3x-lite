@@ -68,3 +68,47 @@ Driven from `mykbd_task()` (`chdk-port/platform/g3x/sub/110c/kbd_candidate.h:110
 - **Display Geometry**: `dt=12`, `900x600`, `buffer_width 928` recorded as **`VERIFIED`** based on owner trial PORT-36 video evidence (`docs/PORT36_GUI_GEOMETRY.md:4,10,82`).
 - **Dropped Assumption**: The historical G7X/G5X assumption of `displaytype 1,2,8,9,10` (`720x480`, `buffer_width 736`) is formally **DROPPED** for the G3X LCD panel.
 - **Firmware Addresses**: All hardware symbols verified from `reference/finsig_gm110c/stubs_entry.S` (`displaytype` line 187, `active_bitmap_buffer` line 186, `bitmap_buffer` line 188, `transfer_src_overlay` line 352 `[FINSIG]`). No new ROM ranges read.
+
+## Adapted-Address Table (PORT-37)
+
+The candidate `G3X_GUI3=1` implementation reuses existing verified and FINSIG addresses from PORT-35 and PORT-36. Zero new ROM ranges were read.
+
+| Address | Name | Source FINSIG / Sibling path:line | Label | Purpose in GUI3 |
+|---|---|---|---|---|
+| `0x00009740` | `displaytype` | `reference/finsig_gm110c/stubs_entry.S:187` | FINSIG | Queried in Mode 12 resolution detection and diagnostic overlay |
+| `0x0000D2A4` | `active_bitmap_buffer` | `reference/finsig_gm110c/stubs_entry.S:186` | FINSIG | Active buffer index tracking in `check_gui_needs_redraw` & guard pixel |
+| `0x0000D2A8` | `bitmap_buffer` | `reference/finsig_gm110c/stubs_entry.S:188` | FINSIG | Base pointer array for bitmap overlay drawing buffers |
+| `0xFC380635` | `_transfer_src_overlay` | `reference/finsig_gm110c/stubs_entry.S:352`; `g7x/lib.c:15` | FINSIG | Refresh trigger called during `draw_restore()` on ALT exit |
+| `0x5FC40000` | `opacity_buffer[0]` | `evidence/port35_manifest.json` (`PORT35-ROM-BMPDDEV`) | VERIFIED | Target for guard sentinel `0x42` at offset 0; hardware opacity buffer 0 |
+| `0x5FB80000` | `opacity_buffer[1]` | `evidence/port35_manifest.json` (`PORT35-ROM-BMPDDEV`) | VERIFIED | Hardware opacity buffer 1 |
+| `0x5FE80000` | `bitmap_buffer[0]` | `evidence/port35_manifest.json` (`PORT35-ROM-BMPDDEV`) | VERIFIED | Hardware UYVY bitmap overlay buffer 0 |
+| `0x5FD00000` | `bitmap_buffer[1]` | `evidence/port35_manifest.json` (`PORT35-ROM-BMPDDEV`) | VERIFIED | Hardware UYVY bitmap overlay buffer 1 |
+| `0x00368880` | `G3X_GUI_HEAP_START` | `docs/port34_evidence_manifest.json: PORT34-ROM-HEAP-KBD` | VERIFIED | Raised DryOS heap base providing >22 KB clearance for linked `_end` |
+| `0xD20B0884` | GPIO LED MMIO | `docs/agentbridge/PORT25_EVIDENCE_MANIFEST.json` | VERIFIED | Power / card-access LED MMIO register for resident heartbeat |
+| `0xBFE14A3D` | `CreateTask` | `reference/finsig_gm110c/stubs_entry.S:200` | FINSIG | Firmware task creation veneer for resident heartbeat task |
+| `0xFC0D0126` | `sub_fc0d0126` | `docs/agentbridge/PORT27_EVIDENCE_MANIFEST.json` | VERIFIED | Handoff point where heartbeat task is spawned |
+| `0xFC31BF84` | `SleepTask` | `reference/finsig_gm110c/stubs_entry.S:307` | FINSIG | Heartbeat task cadence delay veneer |
+| `0xFC1283D2` | `taskcreate_physw` | `reference/finsig_gm110c/stubs_entry.S:335` | FINSIG | Keyboard PhySw replacement entry point |
+
+## Candidate Build Artifacts (PORT-37)
+
+Built with pinned toolchain `toolchains/gcc-arm-none-eabi-5_4-2016q3` via `scripts/build_candidate_gui3.py`:
+
+| Candidate Flag | DISKBOOT Size | DISKBOOT SHA-256 | Witness Addr | Linked `_end` | Heap Clearance |
+|---|---|---|---|---|---|
+| `G3X_GUI3=1` (plain) | 103,569 B | `4aded2d2abbe0c3101583c79708d084ffe93101fc9b889a76970e66a175be638` | `0x0035CED0` | `0x00362F10` | 22,896 B |
+| `G3X_GUI3=1` + `G3X_GUI_DIAG=1` | 103,745 B | `de066f7198ed8f56e055807eb25880c394386eaeab5aac6384cb1fa607308ed4` | `0x0035CF80` | `0x00362FC0` | 22,720 B |
+
+### Invariance of Prior Builds
+- **Default**: `9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136` (118,001 B) — **BYTE-IDENTICAL**
+- **RESIDENT**: `63c7942f561242b55d8226bfefe7818dd5b959aee35eae0adb4f41a4783ece5a` (124,561 B) — **BYTE-IDENTICAL**
+- **OSD**: `683751539979f3e8956fd6c1794683c062f54385e6e1a3261b02ed8d63cc9855` (124,833 B) — **BYTE-IDENTICAL**
+- **KBD**: `a750253feb0cd9bb3bb1addb4cede5585bef29a0bf26bd86d3f577fdbf41be33` (124,801 B) — **BYTE-IDENTICAL**
+- **OSD2**: `20d65a7d9be954d5caafe2f78751429ea388a37ca570f0bbd0d620609eb31a57` (125,329 B) — **BYTE-IDENTICAL**
+- **GUI**: `1f6494cd8e7fd7629b82ed33ba1ec4fa939aa1aa2ff22f541c28a28c742e4272` (103,057 B) — **BYTE-IDENTICAL**
+- **GUI2**: `4a8c4b503a4b78a262ca208c629de8305aa186efbc2fda82951d77084ade9071` (103,345 B) — **BYTE-IDENTICAL**
+
+## Evidence Manifest Check
+- **New ROM Ranges Read**: `0`
+- No new firmware ROM ranges or slices were read for PORT-37. All symbol addresses are derived from existing FINSIG exports (`reference/finsig_gm110c/stubs_entry.S`) or verified evidence manifests (`port34_evidence_manifest.json`, `port35_manifest.json`).
+
