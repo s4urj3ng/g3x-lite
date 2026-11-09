@@ -81,3 +81,24 @@ All GUI4 behaviors that passed the owner trial remain completely untouched in th
 - **Step 8 Sentinel Recovery**: Re-arm sentinel via `draw_set_guard()` and immediate refill with `g3x_fill_menu_opaque_black()` upon stock Canon overwrite while in menu mode (`scripts/build_candidate_gui3.py:738-742`).
 - **Step 9 Clean ALT Exit**: `gui_set_need_restore()` followed by `gui_redraw(1)` on `left_alt` to clear CHDK overlay and return full control to stock Canon UI without lingering background redraws (`scripts/build_candidate_gui3.py:723-728`).
 - **disp_left Reset**: `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:224` retains `#if (defined(G3X_GUI2) && (G3X_GUI2 == 1)) || (defined(G3X_GUI3) && (G3X_GUI3 == 1))`. Because GUI4 and GUI5 always define `G3X_GUI3=1`, the reset applies identically to GUI4 and GUI5 without needing redundant macro terms.
+
+---
+
+## Owner Trial Plan
+
+RAM-only trial of the combined candidate build `G3X_GUI5=1 G3X_SHORTPRESS=1` (the combined build, `DISKBOOT.BIN` SHA-256 `86e12a2cfe792a8901fa2e0ec5a98f019290593e35d5c4c2e66fd3e073f16ff1`, size `102,369` B). Candidate executes in DRAM; recovery is a battery pull.
+
+### PASS/FAIL Checklist
+
+1. `[ ] PASS  [ ] FAIL` **Step (a): Held-Press Menu Layout Checks**
+   - *Action*: Held press (about 5 s, through the LED ladder) over a bright photo in Playback, then press Playback for ALT (and Menu for CHDK menu).
+   - *Expected*: The menu box is about 880x576 with even margins, no bright strip at the top, no green line on the right, opaque black down to the bottom, rows filling the box (or a centred item block), the F1 2x text and title bar unchanged, no flicker, and steps 8/9 unchanged.
+
+2. `[ ] PASS  [ ] FAIL` **Step (b): Short-Press Stay-On & Power-Off**
+   - *Action*: Short press Power button (<0.5 s); wait past ladder/margin polls (~30 s), then press Power button again.
+   - *Expected*: The camera stays on, and pressing Power later turns it off normally.
+   - *Defect Note*: Start mode is still a known defect (boots into Playback instead of shooting mode); deferred and fixed in PORT-41 (see [docs/PORT41_SHORTPRESS_HANDOFF.md](PORT41_SHORTPRESS_HANDOFF.md)).
+
+3. `[ ] PASS  [ ] FAIL` **Step (c): Recovery**
+   - *Action*: Battery pull (remove NB-10L battery >= 10 s), then remove the card and boot stock.
+   - *Expected*: Clean boot into stock Canon firmware without CHDK resident.
