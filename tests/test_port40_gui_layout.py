@@ -620,27 +620,24 @@ class TestPort40GuiLayout(unittest.TestCase):
         self.assertIn("anchor not found", str(ctx.exception).lower())
 
     def test_patch_file_exists_and_matches_transform(self) -> None:
-        """The GUI5 menu patch file exists, is tracked, and applies cleanly to pristine gui_menu.c."""
-        from build_candidate_gui3 import GUI5_MENU_PATCH_PATH, apply_gui5_menu_patch
-        self.assertTrue(GUI5_MENU_PATCH_PATH.exists(), f"Patch file {GUI5_MENU_PATCH_PATH} must exist")
-        # Ensure patch is tracked in git index
-        tracked = subprocess.run(
-            ["git", "ls-files", str(GUI5_MENU_PATCH_PATH.relative_to(REPO_ROOT))],
-            cwd=str(REPO_ROOT),
-            stdout=subprocess.PIPE,
-            text=True,
-            check=True,
-        ).stdout.strip()
-        self.assertTrue(tracked, "GUI5 menu patch must be tracked in git index")
+        """Embedded GUI5 menu transform applies cleanly, generated gui_menu.c contains reservation, and worktree remains unmodified."""
+        from build_candidate_gui3 import apply_gui5_menu_patch
 
-        # Ensure core/gui_menu.c in worktree is pristine
+        # Ensure core/gui_menu.c in worktree is pristine and unmodified
         worktree_core_menu = (CHDK_PORT / "core" / "gui_menu.c").read_text(encoding="utf-8")
         self.assertNotIn("w -= wplus", worktree_core_menu, "chdk-port/core/gui_menu.c must remain pristine and unpatched")
 
-        # Verify apply_gui5_menu_patch transforms pristine source to include wplus reservation
+        # Verify apply_gui5_menu_patch transforms pristine source cleanly to include wplus reservation
         transformed = apply_gui5_menu_patch(worktree_core_menu)
         self.assertIn("w -= wplus", transformed)
         self.assertIn("wplus = 8;", transformed)
+
+        # Verify generated gui_menu.c in candidate build contains the GUI5 wplus/w reservation
+        gui_menu_compiled = Path(self.gui5_dir) / "gui_menu.c"
+        self.assertTrue(gui_menu_compiled.exists(), f"Generated {gui_menu_compiled} must exist from GUI5 build")
+        compiled_menu = gui_menu_compiled.read_text(encoding="utf-8")
+        self.assertIn("w -= wplus", compiled_menu)
+        self.assertIn("wplus = 8;", compiled_menu)
 
 
 if __name__ == "__main__":

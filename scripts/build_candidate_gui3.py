@@ -61,7 +61,6 @@ CANDIDATE_PORT38_GUI4_DIAG_DIR = str(BUILD_DIR / "candidate_port38_gui4_diag")
 CANDIDATE_PORT39_SHORTPRESS_GUI4_DIR = str(BUILD_DIR / "candidate_port39_shortpress_gui4")
 CANDIDATE_PORT40_GUI5_DIR = str(BUILD_DIR / "candidate_port40_gui5")
 CANDIDATE_PORT40_GUI5_SHORTPRESS_DIR = str(BUILD_DIR / "candidate_port40_gui5_shortpress")
-GUI5_MENU_PATCH_PATH = SUB_DIR / "patches" / "gui_menu_gui5.patch"
 
 GUI5_MENU_DRAW_INITIAL_ANCHOR = """\
     if (count > num_lines)
