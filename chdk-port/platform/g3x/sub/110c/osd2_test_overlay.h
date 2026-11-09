@@ -58,6 +58,14 @@
 #define G3X_OSD2_DEFAULT_SIZE          345600
 #define G3X_OSD2_DEFAULT_BUFFER_SIZE   353280
 
+#if defined(G3X_GUI5) && (G3X_GUI5 == 1)
+/* Initial camera_screen dimensions for G3X_GUI5 before first g3x_osd2_update_screen_dimensions() */
+#define G3X_GUI5_INITIAL_WIDTH         900
+#define G3X_GUI5_INITIAL_HEIGHT        600
+#define G3X_GUI5_INITIAL_BUFFER_WIDTH  928
+#define G3X_GUI5_INITIAL_BUFFER_HEIGHT 600
+#endif
+
 /* Alternate displaytype dimensions in GM1.10C BmpDDev.c sub_fc18347e (jump table at 0xFC1834F8)
  * [evidence/port35_manifest.json: PORT35-ROM-BMPDDEV;
  *  chdk-port/platform/g7x/lib.c:313-347; chdk-port/platform/g5x/lib.c:171-203] */
@@ -213,7 +221,8 @@ void g3x_osd2_update_screen_dimensions(void)
     camera_screen.buffer_size = bw * h;
 
 #if (defined(G3X_GUI2) && (G3X_GUI2 == 1)) || (defined(G3X_GUI3) && (G3X_GUI3 == 1))
-    /* Reset OSD offset and width for active resolution (adapting chdk-port/platform/g5x/lib.c:195-196) */
+    /* Reset OSD offset and width for active resolution (adapting chdk-port/platform/g5x/lib.c:195-196).
+     * Note: G3X_GUI4 and G3X_GUI5 inherit -DG3X_GUI3=1, so disp_left/right/width resets apply to all. */
     camera_screen.disp_left = 0;
     camera_screen.disp_right = camera_screen.width - 1;
     camera_screen.disp_width = camera_screen.width;
