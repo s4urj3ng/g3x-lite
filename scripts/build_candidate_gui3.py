@@ -758,6 +758,87 @@ void g3x_gui_kbd_redraw(int alt_active)
  * Menu rectangle computed from shared layout matching chdk-port/core/gui_menu.c.
  * ============================================================================= */
 
+#if defined(G3X_GUI5) && (G3X_GUI5 == 1)
+void g3x_get_menu_layout(int *out_x, int *out_y, int *out_w, int *out_h)
+{
+    int fh = rbf_font_height();
+    int num_l = (camera_screen.height - camera_screen.ts_menu_border * 2) / fh - 1;
+    int x = camera_screen.disp_left + camera_screen.menu_border_width;
+    int w = camera_screen.disp_width - camera_screen.menu_border_width * 2;
+
+    /* Enforce 2-pixel even alignment for UYVY word packing (adapting chdk-port/core/gui_draw.c:79-84) */
+    x &= ~1;
+    w &= ~1;
+
+    /* Check current menu row count to determine scrollbar presence (wplus) */
+    CMenu *cm = get_curr_menu();
+    int count = 0;
+    if (cm && cm->menu) {
+        while (cm->menu[count].text) count++;
+    }
+
+    int wplus = (count > num_l) ? 8 : 0;
+
+    int by = (camera_screen.height - ((num_l - 1) * fh)) >> 1;
+    int header_y = by - fh;
+    int total_h = (num_l + 1) * fh;
+
+    /* When scrollbar is present, scrollbar draws to (x + w) + wplus inclusive.
+     * When scrollbar is absent, list and header draw to x + w - 1 (x=889),
+     * so total width from x is w (880 px). */
+    int total_w = w + wplus + (wplus ? 1 : 0);
+    /* Enforce even width for UYVY 2-pixel word packing */
+    total_w = (total_w + 1) & ~1;
+
+    /* Clamp to display dimensions (900x600) */
+    if (x < 0) x = 0;
+    if (header_y < 0) header_y = 0;
+    if (x + total_w > camera_screen.disp_width) {
+        total_w = camera_screen.disp_width - x;
+    }
+    if (header_y + total_h > camera_screen.height) {
+        total_h = camera_screen.height - header_y;
+    }
+
+    if (out_x) *out_x = x;
+    if (out_y) *out_y = header_y;
+    if (out_w) *out_w = total_w;
+    if (out_h) *out_h = total_h;
+}
+
+static void g3x_fill_menu_opaque_black(void)
+{
+    extern volatile char *opacity_buffer[];
+    extern char *bitmap_buffer[];
+    extern int active_bitmap_buffer;
+
+    int active = active_bitmap_buffer & 1;
+    volatile unsigned char *obu = (volatile unsigned char *)opacity_buffer[active];
+    volatile unsigned char *bbu = (volatile unsigned char *)bitmap_buffer[active];
+    if (!obu || !bbu) return;
+
+    int bx, by, bw, bh;
+    g3x_get_menu_layout(&bx, &by, &bw, &bh);
+
+    /* Enforce 2-pixel even word alignment for DIGIC 6 UYVY overlay (chdk-port/core/gui_draw.c:79-93, 134-142) */
+    bx &= ~1;
+    bw = (bw + 1) & ~1;
+    int count_pairs = bw >> 1;
+
+    int y;
+    for (y = by; y < by + bh; y++) {
+        unsigned int offset = y * camera_screen.buffer_width + bx;
+        unsigned char *o_ptr = (unsigned char *)&obu[offset];
+        memset(o_ptr, 0xFF, bw);
+
+        unsigned int *b_ptr = (unsigned int *)&bbu[(offset >> 1) << 2];
+        int i;
+        for (i = 0; i < count_pairs; i++) {
+            b_ptr[i] = 0x00800080;
+        }
+    }
+}
+#else
 void g3x_get_menu_layout(int *out_x, int *out_y, int *out_w, int *out_h)
 {
     int fh = rbf_font_height();
@@ -828,6 +909,7 @@ static void g3x_fill_menu_opaque_black(void)
         }
     }
 }
+#endif
 
 /* =============================================================================
  * PORT-38 (F1): Direct 2x Integer Font Scaling (16x32) Driver
@@ -994,7 +1076,11 @@ int rbf_draw_string_len(int x, int y, int len, const char *str, twoColors cl)
 {
     int l = rbf_draw_clipped_string(x, y, str, cl, 0, len);
     if (l < len) {
+#if defined(G3X_GUI5) && (G3X_GUI5 == 1)
+        draw_rectangle(x + l, y, x + len - 1, y + 31, MAKE_COLOR(COLOR_BLACK, COLOR_BLACK), RECT_BORDER0 | DRAW_FILLED);
+#else
         draw_rectangle(x + l, y, x + len - 1, y + 31, MAKE_COLOR(BG_COLOR(cl), BG_COLOR(cl)), RECT_BORDER0 | DRAW_FILLED);
+#endif
     }
     return len;
 }
@@ -1005,7 +1091,11 @@ int rbf_draw_string_right_len(int x, int y, int len, const char *str, twoColors 
     int pad = len - str_w;
     if (pad < 0) pad = 0;
     if (pad > 0) {
+#if defined(G3X_GUI5) && (G3X_GUI5 == 1)
+        draw_rectangle(x, y, x + pad - 1, y + 31, MAKE_COLOR(COLOR_BLACK, COLOR_BLACK), RECT_BORDER0 | DRAW_FILLED);
+#else
         draw_rectangle(x, y, x + pad - 1, y + 31, MAKE_COLOR(BG_COLOR(cl), BG_COLOR(cl)), RECT_BORDER0 | DRAW_FILLED);
+#endif
     }
     rbf_draw_clipped_string(x, y, str, cl, pad, len);
     return len;
@@ -1528,50 +1618,12 @@ def build_candidate_gui3_core(
 
     gui_draw_obj = str(SUB_DIR / "gui_draw.thm.o")
     if gui5:
-        camera_info_cand_c = os.path.join(candidate_dir, "camera_info.c")
-        with open(str(CHDK_PORT / "core" / "camera_info.c"), "r", encoding="utf-8") as f:
-            cam_info_src = f.read()
-        # In GUI5, camera_screen is statically compiled with Mode 12 LCD panel dimensions (900x600, stride 928)
-        cam_info_src = cam_info_src.replace(
-            "_cam_screen camera_screen =",
-            """#undef CAM_BITMAP_WIDTH
-#undef CAM_BITMAP_HEIGHT
-#undef CAM_SCREEN_WIDTH
-#undef CAM_SCREEN_HEIGHT
-#define CAM_BITMAP_WIDTH 928
-#define CAM_BITMAP_HEIGHT 600
-#define CAM_SCREEN_WIDTH 900
-#define CAM_SCREEN_HEIGHT 600
-_cam_screen camera_screen =""",
-        )
-        with open(camera_info_cand_c, "w", encoding="utf-8") as f:
-            f.write(cam_info_src)
         camera_info_cand_o = os.path.join(candidate_dir, "camera_info.o")
-        run_cmd(list(base_cflags) + ["-c", "-o", camera_info_cand_o, camera_info_cand_c], cwd=str(CHDK_PORT))
+        run_cmd(list(base_cflags) + ["-c", "-o", camera_info_cand_o, str(CHDK_PORT / "core" / "camera_info.c")], cwd=str(CHDK_PORT))
         camera_info_obj = camera_info_cand_o
 
-        gui_menu_cand_c = os.path.join(candidate_dir, "gui_menu.c")
-        with open(str(CHDK_PORT / "core" / "gui_menu.c"), "r", encoding="utf-8") as f:
-            gui_menu_src = f.read()
-        if "Fill remaining rows down to num_lines" not in gui_menu_src:
-            target_str = "// scrollbar\n        if (count > num_lines)"
-            fill_code = """#if defined(G3X_GUI5) && (G3X_GUI5 == 1)
-        /* PORT-40: Fill remaining rows down to num_lines with solid opaque black */
-        for (; i < num_lines; ++i, yy += rbf_font_height())
-        {
-            draw_rectangle(x, yy, x + w - 1, yy + rbf_font_height() - 1,
-                           MAKE_COLOR(COLOR_BLACK, COLOR_BLACK),
-                           RECT_BORDER0 | DRAW_FILLED);
-        }
-#endif
-
-        // scrollbar
-        if (count > num_lines)"""
-            gui_menu_src = gui_menu_src.replace(target_str, fill_code)
-        with open(gui_menu_cand_c, "w", encoding="utf-8") as f:
-            f.write(gui_menu_src)
         gui_menu_cand_o = os.path.join(candidate_dir, "gui_menu.o")
-        run_cmd(list(base_cflags) + ["-c", "-o", gui_menu_cand_o, gui_menu_cand_c], cwd=str(CHDK_PORT))
+        run_cmd(list(base_cflags) + ["-c", "-o", gui_menu_cand_o, str(CHDK_PORT / "core" / "gui_menu.c")], cwd=str(CHDK_PORT))
     else:
         camera_info_obj = str(SUB_DIR / "camera_info.thm.o")
 

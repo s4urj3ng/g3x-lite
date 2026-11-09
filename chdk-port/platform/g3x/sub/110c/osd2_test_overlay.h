@@ -221,8 +221,9 @@ void g3x_osd2_update_screen_dimensions(void)
     camera_screen.size = w * h;
     camera_screen.buffer_size = bw * h;
 
-#if (defined(G3X_GUI2) && (G3X_GUI2 == 1)) || (defined(G3X_GUI3) && (G3X_GUI3 == 1)) || (defined(G3X_GUI4) && (G3X_GUI4 == 1)) || (defined(G3X_GUI5) && (G3X_GUI5 == 1))
-    /* Reset OSD offset and width for active resolution (adapting chdk-port/platform/g5x/lib.c:195-196) */
+#if (defined(G3X_GUI2) && (G3X_GUI2 == 1)) || (defined(G3X_GUI3) && (G3X_GUI3 == 1))
+    /* Reset OSD offset and width for active resolution (adapting chdk-port/platform/g5x/lib.c:195-196).
+     * Note: G3X_GUI4 and G3X_GUI5 inherit -DG3X_GUI3=1, so disp_left/right/width resets apply to all. */
     camera_screen.disp_left = 0;
     camera_screen.disp_right = camera_screen.width - 1;
     camera_screen.disp_width = camera_screen.width;

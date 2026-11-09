@@ -1,7 +1,7 @@
 # PORT-40: Opt-In G3X_GUI5=1 Candidate Menu Box Geometry, Edge Leaks, and Row Count
 
 ## Overview
-The `G3X_GUI5=1` opt-in candidate builds upon `G3X_GUI4=1` (preserving 2x font scaling, high-contrast title bar, zero-flicker kbd driver, and Step 8/9 sentinel guards) to resolve all four symptoms observed in the PORT-38 owner trial. It aligns the menu background fill rectangle and the painted menu rectangle at `(10, 12)-(889, 587)` (880x576 px) with even 10-px horizontal and 12-px vertical margins on the 900x600 LCD, eliminates edge leaks, and fills all unpainted rows down to the bottom with solid opaque black.
+The `G3X_GUI5=1` opt-in candidate builds upon `G3X_GUI4=1` (preserving 2x font scaling, high-contrast title bar, zero-flicker kbd driver, and Step 8/9 sentinel guards) to resolve all four symptoms observed in the PORT-38 owner trial. It aligns the menu background fill rectangle and the painted menu rectangle at `(10, 12)-(889, 587)` (880x576 px) with even 10-px horizontal and 12-px vertical margins on the 900x600 LCD, eliminates edge leaks via UYVY 2-pixel word packing, and fills unpainted rows down to the bottom with solid opaque black.
 
 ---
 
@@ -9,32 +9,51 @@ The `G3X_GUI5=1` opt-in candidate builds upon `G3X_GUI4=1` (preserving 2x font s
 
 | Symbol / Parameter | Old Value (GUI4) | New Value (GUI5) | Source Path:Line | Label | Evidence & Rationale |
 |---|---|---|---|---|---|
-| `CAM_BITMAP_WIDTH` | `736` | `928` | `scripts/build_candidate_gui3.py:1532-1540` | `VERIFIED` | Mode 12 LCD buffer stride in GM1.10C `BmpDDev.c` (`PORT35-ROM-BMPDDEV` `0xFC18347E..0xFC18381F`). |
-| `CAM_BITMAP_HEIGHT` | `480` | `600` | `scripts/build_candidate_gui3.py:1532-1540` | `VERIFIED` | Mode 12 LCD buffer height in GM1.10C `BmpDDev.c` (`PORT35-ROM-BMPDDEV`). |
-| `CAM_SCREEN_WIDTH` | `720` | `900` | `scripts/build_candidate_gui3.py:1532-1540` | `VERIFIED` | Mode 12 LCD visible pixel width in GM1.10C `BmpDDev.c` (`PORT35-ROM-BMPDDEV`); confirmed PORT-36. |
-| `CAM_SCREEN_HEIGHT` | `480` | `600` | `scripts/build_candidate_gui3.py:1532-1540` | `VERIFIED` | Mode 12 LCD visible pixel height in GM1.10C `BmpDDev.c` (`PORT35-ROM-BMPDDEV`); confirmed PORT-36. |
+| `CAM_BITMAP_WIDTH` | `736` | `928` | `chdk-port/platform/g3x/platform_camera.h:74` | `VERIFIED` | Mode 12 LCD buffer stride in GM1.10C `BmpDDev.c` (`PORT35-ROM-BMPDDEV` jump table at `0xFC1834F8`, SHA-256 `d0827e15c2deb8c1eace949c85c395bb0c75455f7e88ce3c1a0f9b3477b78647`). |
+| `CAM_BITMAP_HEIGHT` | `480` | `600` | `chdk-port/platform/g3x/platform_camera.h:75` | `VERIFIED` | Mode 12 LCD buffer height in GM1.10C `BmpDDev.c` (`PORT35-ROM-BMPDDEV` jump table at `0xFC1834F8`). |
+| `CAM_SCREEN_WIDTH` | `720` | `900` | `chdk-port/platform/g3x/platform_camera.h:76` | `VERIFIED` | Mode 12 LCD visible pixel width in GM1.10C `BmpDDev.c`; verified by PORT-36 1-px frame test at `(0,0)-(899,599)`. |
+| `CAM_SCREEN_HEIGHT` | `480` | `600` | `chdk-port/platform/g3x/platform_camera.h:77` | `VERIFIED` | Mode 12 LCD visible pixel height in GM1.10C `BmpDDev.c`; verified by PORT-36 1-px frame test at `(0,0)-(899,599)`. |
 | `G3X_OSD2_DEFAULT_WIDTH` | `720` | `900` | `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:54` | `VERIFIED` | Default OSD2 screen width matching Mode 12 LCD resolution. |
 | `G3X_OSD2_DEFAULT_HEIGHT` | `480` | `600` | `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:55` | `VERIFIED` | Default OSD2 screen height matching Mode 12 LCD resolution. |
-| `G3X_OSD2_DEFAULT_BUFFER_WIDTH` | `736` | `928` | `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:56` | `VERIFIED` | Default OSD2 buffer stride matching Mode 12 LCD buffer stride. |
+| `G3X_OSD2_DEFAULT_BUFFER_WIDTH` | `736` | `928` | `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:56` | `VERIFIED` | Default OSD2 buffer stride matching Mode 12 LCD buffer stride (`PORT35-ROM-BMPDDEV`). |
 | `G3X_OSD2_DEFAULT_BUFFER_HEIGHT` | `480` | `600` | `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:57` | `VERIFIED` | Default OSD2 buffer height matching Mode 12 LCD buffer height. |
 | `G3X_OSD2_DEFAULT_SIZE` | `345600` | `540000` | `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:58` | `VERIFIED` | 900 * 600 visible pixels. |
-| `G3X_OSD2_DEFAULT_BUFFER_SIZE` | `353280` | `556800` | `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:59` | `VERIFIED` | 928 * 600 buffer pixels. |
-| `camera_screen.disp_width` reset | unreset in GUI4 | `camera_screen.width` (900) | `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:224` | `INFERRED` | Adapts `chdk-port/platform/g5x/lib.c:195-196`; gates reset under `G3X_GUI4` and `G3X_GUI5`. |
-| `camera_screen` static .data | 720x480 stride 736 | 900x600 stride 928 | `chdk-port/core/camera_info.c:95-100` | `VERIFIED` | Statically recompiled in GUI5 with `CAM_SCREEN_WIDTH=900` / `CAM_BITMAP_WIDTH=928`. |
-| Unpainted rows fill | unpainted (exposed) | solid opaque black | `chdk-port/core/gui_menu.c:1080-1087` | `HISTORICAL_CHDK` | Rows `i < num_lines` filled with `draw_rectangle` using `MAKE_COLOR(COLOR_BLACK, COLOR_BLACK)`. |
+| `G3X_OSD2_DEFAULT_BUFFER_SIZE` | `353280` | `556800` | `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:59` | `VERIFIED` | 928 * 600 buffer pixels (`PORT35-ROM-BMPDDEV` `0x87F00`). |
+| `conf.menu_color` default background | `IDX_COLOR_GREY_DK` | `IDX_COLOR_BLACK` | `chdk-port/core/conf.c:201-205` | `HISTORICAL_CHDK` | Changes default menu background from dark grey to solid black so text padding and scrollbar use black. |
+| Scrollbar background color | `conf.menu_color` | `COLOR_BLACK` | `chdk-port/core/gui_menu.c:740-745` | `HISTORICAL_CHDK` | Explicitly draws scrollbar background rectangle using `MAKE_COLOR(COLOR_BLACK, COLOR_BLACK)`. |
+| `conf.menu_center` vertical offset | centered count | fixed y=44 (num_lines) | `chdk-port/core/gui_menu.c:749-754` | `INFERRED` | Bypasses `conf.menu_center` under GUI5 so header is anchored at y=12, perfectly matching `g3x_get_menu_layout`. |
+| Unpainted rows fill | unpainted (exposed) | solid opaque black | `chdk-port/core/gui_menu.c:1086-1094` | `HISTORICAL_CHDK` | Loop `for (; i < num_lines; ++i, yy += fh)` draws filled black rectangles down to `y=587`. |
+| UYVY even-word alignment | unaligned | 2-pixel word aligned | `scripts/build_candidate_gui3.py:768-771, 790-791, 822-824` | `INFERRED` | Enforces `x &= ~1; w &= ~1; bw = (bw + 1) & ~1;` and writes 32-bit `0x00800080` (Y=0, U=128, V=128). Adapts `gui_draw.c:79-93, 134-142`. |
+| String padding background | `BG_COLOR(cl)` | `COLOR_BLACK` | `scripts/build_candidate_gui3.py:1079, 1094` | `INFERRED` | In `rbf_draw_string_len` / `right_len`, pad rectangle filled with solid black instead of theme color. |
 
 ---
 
 ## Root Cause Analysis for PORT-38 Symptoms
 
-1. **Symptom 1 (Box covers ~80% width, ~85% height; left margin uncovered, right margin ~1/10 width, photo shows at top)**:
-   - *Root cause*: `platform_camera.h:73-77` defined `CAM_SCREEN_WIDTH=720` (80.0% of 900) and `CAM_SCREEN_HEIGHT=480` (80.0% of 600), and `camera_info.thm.o` was bundled from stock precompiled objects with static 720x480 dimensions. In Mode 12 (900x600), a 720-wide box with `disp_width=720` resulted in `w = 700` px. When centered, it left `(900 - 720) / 2 = 90` px margins on both left and right (exactly 1/10 of LCD width), and photo show-through above `y = 12`.
+1. **Symptom 1 (Box covers only ~80% width, ~85% height; left uncovered, right ~1/10 width, photo shows at top)**:
+   - *Root cause*: `CAM_SCREEN_WIDTH` was 720 (80.0% of 900) and `CAM_SCREEN_HEIGHT` was 480 (80.0% of 600) in `platform_camera.h:73-83` and static `camera_info.thm.o`. In Mode 12 (900x600), `disp_width=720` produced `w = 700 px`. Centering left `(900 - 720) / 2 = 90 px` margins on both sides (exactly 1/10 LCD width), and photo show-through above `y = 12`.
+   - *Code fix*: `chdk-port/platform/g3x/platform_camera.h:73-83` (`CAM_SCREEN_WIDTH: 720 -> 900`, `CAM_SCREEN_HEIGHT: 480 -> 600`, `CAM_BITMAP_WIDTH: 736 -> 928`, `CAM_BITMAP_HEIGHT: 480 -> 600`) and `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:51-60` (`G3X_OSD2_DEFAULT_WIDTH: 720 -> 900`, etc.), setting `disp_width = 900` and `w = 880 px` centered with even 10 px margins.
 2. **Symptom 2 (Thin bright strip along top edge, thin green line along right edge; fill rect and painted area out of line)**:
-   - *Root cause*: Discrepancies between compile-time 720x480 and runtime 900x600 caused fill and paint boundaries to diverge. In addition, DIGIC 6 16-bpp UYVY packs 2 horizontal pixels per word (`chdk-port/core/gui_draw.c:79-93`); any odd width or unwritten odd pixel leaves chroma `U=0, V=0` with `opacity=255`, which decodes in YUV to pure green (`G = Y + 135`, `R = 0`, `B = 0`). In GUI5, starting at even `x=10` with even `w=880` guarantees complete 2-pixel UYVY word pairs (`440` words = `880` px) with `U=128, V=128`, eliminating chroma leaks.
+   - *Root cause*:
+     - Top bright strip: `conf.menu_center = 1` shifted `gui_menu_draw()` `y` to 96 (header to 64) when `count=10`, while `g3x_fill_menu_opaque_black()` filled from `header_y = 12`, creating a vertical mismatch.
+     - Right green line: In DIGIC 6 16-bpp UYVY (`chdk-port/core/gui_draw.c:79-93`), each 32-bit word packs 2 horizontal pixels `[U0, Y0, V0, Y1]`. An odd width or unaligned boundary leaves chroma `U=0, V=0` with `opacity=255`, decoding in YUV to pure bright green (`G = Y + 135`, `R = 0`, `B = 0`).
+   - *Code fix*:
+     - `chdk-port/core/gui_menu.c:749-754`: Bypasses `conf.menu_center` under GUI5 so `y` is unconditionally 44 and header is at `y = 12`, exactly matching `g3x_get_menu_layout: header_y = 12` and eliminating the top strip.
+     - `scripts/build_candidate_gui3.py:768-771, 790-791, 822-824`: Enforces 2-pixel even word alignment (`bx &= ~1; bw = (bw + 1) & ~1; total_w = (total_w + 1) & ~1;`) and writes 32-bit `0x00800080` (`Y0=0, U=128, Y1=0, V=128`), adapting `chdk-port/core/gui_draw.c:79-93, 134-142` and eliminating chroma leaks.
 3. **Symptom 3 (Area below last item is dark grey, not black)**:
-   - *Root cause*: `core/gui_menu.c:967` only looped over `curr_menu->menu[imenu].text` (10 items in `root_menu`), terminating at `i = 10`. Rows 10..16 were never drawn by `gui_menu.c`, leaving the underlying Canon UI buffer (default dark grey `IDX_COLOR_GREY_DK`) exposed. In GUI5, rows `i < num_lines` (10..16) are explicitly filled with `draw_rectangle(..., MAKE_COLOR(COLOR_BLACK, COLOR_BLACK), RECT_BORDER0 | DRAW_FILLED)`.
+   - *Root cause*:
+     - `chdk-port/core/conf.c:201-205`: `conf.menu_color` default background was `IDX_COLOR_GREY_DK` (dark grey).
+     - `chdk-port/core/gui_menu.c:743`: Scrollbar background was drawn with `conf.menu_color` (`IDX_COLOR_GREY_DK`).
+     - `scripts/build_candidate_gui3.py:1079, 1094`: String padding rectangles were drawn with `BG_COLOR(cl)` (`IDX_COLOR_GREY_DK`).
+     - `chdk-port/core/gui_menu.c:1005-1084`: `gui_menu_draw()` stopped at `i == count` (10 items), leaving rows 10..16 unpainted and exposing the underlying Canon UI buffer.
+   - *Code fix*:
+     - `chdk-port/core/conf.c:201-205`: `conf.menu_color` default background changed to `IDX_COLOR_BLACK`.
+     - `chdk-port/core/gui_menu.c:740-745`: Scrollbar background drawn with `MAKE_COLOR(COLOR_BLACK, COLOR_BLACK)`.
+     - `scripts/build_candidate_gui3.py:1079, 1094`: String padding drawn with `MAKE_COLOR(COLOR_BLACK, COLOR_BLACK)`.
+     - `chdk-port/core/gui_menu.c:1086-1094`: Adds loop `for (; i < num_lines; ++i, yy += rbf_font_height()) draw_rectangle(x, yy, x + w - 1, yy + rbf_font_height() - 1, MAKE_COLOR(COLOR_BLACK, COLOR_BLACK), RECT_BORDER0 | DRAW_FILLED);` to paint rows 10..16 solid opaque black.
 4. **Symptom 4 (Items use only upper half of box)**:
-   - *Root cause*: `root_menu` has only 10 items (`count = 10`), while a 900x600 screen at a 32-px font pitch allocates `num_lines = (600 / 32) - 1 = 17` rows. In GUI4, `conf.menu_center = 0` anchored items at `y = 44..363` (`10 * 32 = 320` px), using only 55.6% of the 576-px box height. In GUI5, the remaining 7 rows (224 px) are filled with opaque black down to `y = 587`, perfectly completing the 576-px box.
+   - *Root cause*: Menu row capacity is calculated as `num_lines = (camera_screen.height - camera_screen.ts_menu_border*2)/rbf_font_height()-1` (`chdk-port/core/gui_menu.c:226`). Under GUI5 with `camera_screen.height = 600`, `num_lines = (600 - 0)/32 - 1 = 17` visible rows. For submenus with >= 17 items, all 17 visible rows are filled (544 px + 32 px title = 576 px box). For shorter menus like `root_menu` (`count = 10`), items occupy rows 0..9 (320 px), leaving rows 10..16 unpainted in GUI4.
+   - *Code fix*: `chdk-port/core/gui_menu.c:1086-1094` fills remaining rows 10..16 with solid black down to `y = 587`, so the entire 576-px box is solid black, filling the full box height.
 
 ---
 
@@ -43,16 +62,16 @@ The `G3X_GUI5=1` opt-in candidate builds upon `G3X_GUI4=1` (preserving 2x font s
 1. **PowerShot G7 X (`chdk-port/platform/g7x/`)**:
    - `platform_camera.h:61-65`: `CAM_BITMAP_WIDTH 736`, `CAM_BITMAP_HEIGHT 480`, `CAM_SCREEN_WIDTH 720`, `CAM_SCREEN_HEIGHT 480`. (G7 X built-in LCD is standard 720x480).
    - `lib.c:289-296`: `vid_get_opacity_active_buffer` indexes `opacity_buffer[active_bitmap_buffer & 1]`.
-   - `lib.c:303-358`: `update_screen_dimensions()` switches on `displaytype`; for LCD (cases 1, 2, 8, 9, 10), sets `width=720, buffer_width=736, height=480`.
+   - `lib.c:303-358`: `update_screen_dimensions()` switches on `displaytype`; for LCD (cases 1, 2, 8, 9, 10), sets `width=720, buffer_width=736, height=480`. Case 12 sets `900x600`, stride `928`.
 2. **PowerShot G5 X (`chdk-port/platform/g5x/`)**:
    - `platform_camera.h:88-94`: `CAM_BITMAP_WIDTH 736`, `CAM_BITMAP_HEIGHT 480`, `CAM_SCREEN_WIDTH 720`, `CAM_SCREEN_HEIGHT 480`.
    - `lib.c:21-33`: active buffer indexing with `& 1`.
-   - `lib.c:162-204`: `update_screen_dimensions()` handles displaytype switching; lines 194-197 reset `camera_screen.disp_right = camera_screen.width - 1; camera_screen.disp_width = camera_screen.width;`.
+   - `lib.c:162-204`: `update_screen_dimensions()` handles displaytype switching; lines 194-197 reset `camera_screen.disp_right = camera_screen.width - 1; camera_screen.disp_width = camera_screen.width;`. Case 12 sets `900x600`, stride `928`.
 3. **PowerShot SX60 HS (`chdk-port/platform/sx60hs/`)**:
    - `platform_camera.h:127-133`: `CAM_BITMAP_WIDTH 640`, `CAM_BITMAP_HEIGHT 480`, `CAM_SCREEN_WIDTH 640`, `CAM_SCREEN_HEIGHT 480`.
    - `lib.c:289-332`: `update_screen_dimensions()` for 640x480 LCD.
 
-*G3 X distinction*: Unlike its 720x480 and 640x480 siblings, the G3 X features a 3.2" 1.62M-dot panel operating in Mode 12 (`900x600`, buffer stride `928`). GUI5 is the first build to supply these true panel dimensions at both compile time and runtime.
+*G3 X distinction*: Unlike its 720x480 and 640x480 siblings, the G3 X features a 3.2" 1.62M-dot panel operating in Mode 12 (`900x600`, buffer stride `928`). The buffer dimensions `buffer_width 928` / `buffer_size 556800` are sourced directly from GM1.10C ROM slice `PORT35-ROM-BMPDDEV` (`0xFC18347E..0xFC18381F`, SHA-256 `d0827e15c2deb8c1eace949c85c395bb0c75455f7e88ce3c1a0f9b3477b78647` in `evidence/port35_manifest.json`), `BmpDDev.c` `sub_fc18347e` jump table at `0xFC1834F8` displaytype 12 (labeled `VERIFIED`).
 
 ---
 
@@ -61,16 +80,18 @@ The `G3X_GUI5=1` opt-in candidate builds upon `G3X_GUI4=1` (preserving 2x font s
 | Build Target | Build Flags | DISKBOOT SHA-256 | Size (Bytes) | Boot Witness Addr | Linked `_end` | Heap Clearance |
 |---|---|---|---|---|---|---|
 | Default Baseline | (no flags) | `9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136` | `118001` (118,001) | `0x0035F7A0` | `0x00366CB0` | 7,120 B |
-| `G3X_GUI5=1` Plain | `-DG3X_GUI5=1` | `b88855c138cc4992a85aded8c7f91b2bacf7001b6d0d9ac89345d9e596251f08` | `102257` (102,257) | `0x0035C9B0` | `0x003629E0` | 24,224 B |
-| `G3X_GUI5=1` Combined | `-DG3X_GUI5=1 -DG3X_SHORTPRESS=1` | `7ed211105640ff429269825ccdab079e1fd92089ce88e8a49a3eb915b1f891ec` | `102417` (102,417) | `0x0035CA50` | `0x00362A90` | 24,048 B |
+| `G3X_GUI4=1` Trial Baseline | `-DG3X_GUI4=1` | `14456b08fca82758262c26ad6105f784ebacaa080b7a059a622ded5a8d505fdd` | `102241` (102,241) | `0x0035C9A0` | `0x003629D0` | 24,240 B |
+| `G3X_GUI5=1` Plain | `-DG3X_GUI5=1` | `ae4358432948231d634b33d10c0c92677a1763274d51bee7a74d4ed71270791d` | `102225` (102,225) | `0x0035C990` | `0x003629C0` | 24,256 B |
+| `G3X_GUI5=1` Combined | `-DG3X_GUI5=1 -DG3X_SHORTPRESS=1` | `5819c5f6a8d448310b3ed7dece34ed6b62263b88896232b4c8704db5080f3195` | `102385` (102,385) | `0x0035CA30` | `0x00362A70` | 24,080 B |
 
 ---
 
 ## Untouched GUI4 Behaviors Under GUI5
 
 All GUI4 behaviors that passed the owner trial remain completely untouched in the GUI5 build:
-- **F1 2x Font Scaling (`g3x_draw_char_16x32`)**: Native integer scaling from 8x16 font data to 16x32 glyphs with 16-px advance (`scripts/build_candidate_gui3.py:835-980`).
-- **High-Contrast Title Bar**: Crisp white text on solid black background (`MAKE_COLOR(COLOR_BLACK, COLOR_WHITE)`) in `rbf_draw_menu_header` (`scripts/build_candidate_gui3.py:1031-1059`).
+- **F1 2x Font Scaling (`g3x_draw_char_16x32`)**: Native integer scaling from 8x16 font data to 16x32 glyphs with 16-px advance (`scripts/build_candidate_gui3.py:917-995`).
+- **High-Contrast Title Bar**: Crisp white text on solid black background (`MAKE_COLOR(COLOR_BLACK, COLOR_WHITE)`) in `rbf_draw_menu_header` (`scripts/build_candidate_gui3.py:1120-1145`).
 - **Zero-Flicker Kbd Driver**: Repaint only on ALT entry, buffer toggle (`check_gui_needs_redraw()`), or sentinel guard overwrite (`!draw_test_guard()`). No periodic timer force redraw (`scripts/build_candidate_gui3.py:730-746`).
 - **Step 8 Sentinel Recovery**: Re-arm sentinel via `draw_set_guard()` and immediate refill with `g3x_fill_menu_opaque_black()` upon stock Canon overwrite while in menu mode (`scripts/build_candidate_gui3.py:738-742`).
 - **Step 9 Clean ALT Exit**: `gui_set_need_restore()` followed by `gui_redraw(1)` on `left_alt` to clear CHDK overlay and return full control to stock Canon UI without lingering background redraws (`scripts/build_candidate_gui3.py:723-728`).
+- **disp_left Reset**: `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:224` retains `#if (defined(G3X_GUI2) && (G3X_GUI2 == 1)) || (defined(G3X_GUI3) && (G3X_GUI3 == 1))`. Because GUI4 and GUI5 always define `G3X_GUI3=1`, the reset applies identically to GUI4 and GUI5 without needing redundant macro terms.

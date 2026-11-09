@@ -5,14 +5,15 @@ Verifies:
 (a) The default build (no flags) is strictly byte-identical to main:
     DISKBOOT.BIN SHA-256: 9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136 (118,001 B).
 (b) G3X_GUI5=1 builds cleanly and implies G3X_GUI4=1:
-    - DISKBOOT.BIN SHA-256: b88855c138cc4992a85aded8c7f91b2bacf7001b6d0d9ac89345d9e596251f08 (102,257 B)
-    - Boot witness: 0x0035C9B0
-    - Linked _end: 0x003629E0 <= heap start 0x00368880 (24,224 B clearance)
+    - DISKBOOT.BIN SHA-256: ae4358432948231d634b33d10c0c92677a1763274d51bee7a74d4ed71270791d (102,225 B)
+    - Boot witness: 0x0035C990
+    - Linked _end: 0x003629C0 <= heap start 0x00368880 (24,256 B clearance)
 (c) Combined G3X_GUI5=1 + G3X_SHORTPRESS=1 builds cleanly:
-    - DISKBOOT.BIN SHA-256: 7ed211105640ff429269825ccdab079e1fd92089ce88e8a49a3eb915b1f891ec (102,417 B)
-    - Boot witness: 0x0035CA50
-    - Linked _end: 0x00362A90 <= heap start 0x00368880 (24,048 B clearance)
-(d) Host-side geometry check:
+    - DISKBOOT.BIN SHA-256: 5819c5f6a8d448310b3ed7dece34ed6b62263b88896232b4c8704db5080f3195 (102,385 B)
+    - Boot witness: 0x0035CA30
+    - Linked _end: 0x00362A70 <= heap start 0x00368880 (24,080 B clearance)
+(d) Host-side geometry check (using preprocessed compiled constants):
+    - Preprocessed CAM_SCREEN_WIDTH (900), CAM_SCREEN_HEIGHT (600), CAM_BITMAP_WIDTH (928), CAM_BITMAP_HEIGHT (600).
     - Fill rect and menu rect derived from compiled constants match exactly: (10, 12, 880, 576).
     - Stay strictly inside 900x600 screen: 0..899 x 0..599.
     - Even margins: 10 px horizontal ((900 - 880) / 2), 12 px vertical ((600 - 576) / 2).
@@ -23,10 +24,11 @@ Verifies:
     - camera_screen in candidate .data matches width=900, height=600, buffer_width=928, disp_left=0, disp_right=899, disp_width=900.
 (g) Disassembly verification:
     - gui_menu_draw contains black fill loop for rows i down to num_lines with draw_rectangle.
-(h) GUI4 behavior preservation:
+(h) GUI4 regression and behavior preservation:
+    - The trialled GUI4 candidate DISKBOOT.BIN matches 14456b08fca82758262c26ad6105f784ebacaa080b7a059a622ded5a8d505fdd (102,241 B).
     - F1 2x font scaling (16x32), title bar (white on black), zero-flicker idle, Step 8 sentinel recovery, Step 9 clean ALT exit.
 (i) Documentation verification:
-    - docs/PORT40_GUI_LAYOUT.md contains table of changed values, root-cause lines, sibling citations, SHA-256/sizes, untouched paths.
+    - docs/PORT40_GUI_LAYOUT.md contains table of changed values, root-cause lines pointing to changed code, sibling citations, SHA-256/sizes, untouched paths.
 """
 
 from __future__ import annotations
@@ -69,15 +71,18 @@ import build_candidate_port25_ladder_fix as legacy_builder
 PINNED_DEFAULT_SHA256 = "9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136"
 PINNED_DEFAULT_SIZE = 118001
 
-PINNED_GUI5_SHA256 = "b88855c138cc4992a85aded8c7f91b2bacf7001b6d0d9ac89345d9e596251f08"
-PINNED_GUI5_SIZE = 102257
-PINNED_GUI5_WITNESS = 0x0035C9B0
-PINNED_GUI5_END = 0x003629E0
+PINNED_GUI4_SHA256 = "14456b08fca82758262c26ad6105f784ebacaa080b7a059a622ded5a8d505fdd"
+PINNED_GUI4_SIZE = 102241
 
-PINNED_GUI5_SHORTPRESS_SHA256 = "7ed211105640ff429269825ccdab079e1fd92089ce88e8a49a3eb915b1f891ec"
-PINNED_GUI5_SHORTPRESS_SIZE = 102417
-PINNED_GUI5_SHORTPRESS_WITNESS = 0x0035CA50
-PINNED_GUI5_SHORTPRESS_END = 0x00362A90
+PINNED_GUI5_SHA256 = "ae4358432948231d634b33d10c0c92677a1763274d51bee7a74d4ed71270791d"
+PINNED_GUI5_SIZE = 102225
+PINNED_GUI5_WITNESS = 0x0035C990
+PINNED_GUI5_END = 0x003629C0
+
+PINNED_GUI5_SHORTPRESS_SHA256 = "5819c5f6a8d448310b3ed7dece34ed6b62263b88896232b4c8704db5080f3195"
+PINNED_GUI5_SHORTPRESS_SIZE = 102385
+PINNED_GUI5_SHORTPRESS_WITNESS = 0x0035CA30
+PINNED_GUI5_SHORTPRESS_END = 0x00362A70
 
 HEAP_START = 0x00368880
 
@@ -104,6 +109,30 @@ class TestPort40GuiLayout(unittest.TestCase):
                 PINNED_DEFAULT_SIZE,
                 "Default build size diverged from pinned baseline",
             )
+
+    def test_gui4_bytes_unaffected_by_gui5_additions(self) -> None:
+        """The trialled GUI4 candidate is byte-identical to pinned hash (14456b...); GUI4 implies GUI3."""
+        # 1. Verify build_candidate_gui(gui4=True) produces identical bytes
+        res = build_candidate_gui(gui4=True)
+        self.assertEqual(
+            res["diskboot_sha256"],
+            PINNED_GUI4_SHA256,
+            "GUI4 candidate DISKBOOT.BIN SHA-256 diverged from pinned baseline",
+        )
+        self.assertEqual(
+            res["diskboot_size"],
+            PINNED_GUI4_SIZE,
+            "GUI4 candidate DISKBOOT.BIN size diverged from pinned baseline",
+        )
+
+        # 2. Verify that G3X_GUI4 and G3X_GUI5 builds both inherit G3X_GUI3=1
+        build_py = (SCRIPTS_DIR / "build_candidate_gui3.py").read_text(encoding="utf-8")
+        self.assertIn('"-DG3X_GUI3=1"', build_py)
+        idx_gui3 = build_py.find('"-DG3X_GUI3=1"')
+        idx_gui4 = build_py.find('"-DG3X_GUI4=1"')
+        idx_gui5 = build_py.find('"-DG3X_GUI5=1"')
+        self.assertGreater(idx_gui4, idx_gui3, "GUI4 build must inherit GUI3")
+        self.assertGreater(idx_gui5, idx_gui3, "GUI5 build must inherit GUI3")
 
     def test_gui5_plain_candidate_build(self) -> None:
         """G3X_GUI5=1 builds cleanly, matches pinned SHA-256 in canonical dir, and has positive heap clearance."""
@@ -153,15 +182,89 @@ class TestPort40GuiLayout(unittest.TestCase):
 
     def test_geometry_constants_fill_rect_equals_menu_rect(self) -> None:
         """Geometry assertion: fill rect equals menu rect, fits 900x600, with even margins."""
-        # Constants compiled under G3X_GUI5=1
-        screen_w = 900
-        screen_h = 600
-        buffer_w = 928
-        disp_left = 0
-        disp_width = 900
+        # 1. Preprocess real header with pinned toolchain under -DG3X_GUI5=1
+        cmd = [
+            str(ARM_GCC),
+            "-E",
+            "-dM",
+            "-DG3X_GUI5=1",
+            "-Iinclude",
+            "-Icore",
+            "-Iplatform/g3x",
+            "-Iplatform/g3x/sub/110c",
+            str(CHDK_PORT / "platform" / "g3x" / "platform_camera.h"),
+        ]
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+            text=True,
+            cwd=str(CHDK_PORT),
+        )
+        defines = {}
+        for line in proc.stdout.splitlines():
+            m = re.match(r"^#define\s+(\w+)\s+(.+)$", line.strip())
+            if m:
+                defines[m.group(1)] = m.group(2).strip()
+
+        screen_w = int(defines["CAM_SCREEN_WIDTH"].strip("() "))
+        screen_h = int(defines["CAM_SCREEN_HEIGHT"].strip("() "))
+        buffer_w = int(defines["CAM_BITMAP_WIDTH"].strip("() "))
+        buffer_h = int(defines["CAM_BITMAP_HEIGHT"].strip("() "))
+
+        self.assertEqual(screen_w, 900, "CAM_SCREEN_WIDTH must be 900")
+        self.assertEqual(screen_h, 600, "CAM_SCREEN_HEIGHT must be 600")
+        self.assertEqual(buffer_w, 928, "CAM_BITMAP_WIDTH must be 928")
+        self.assertEqual(buffer_h, 600, "CAM_BITMAP_HEIGHT must be 600")
+
+        # 2. Extract camera_screen values from compiled candidate_main.elf
+        elf_path = os.path.join(CANDIDATE_PORT40_GUI5_DIR, "candidate_main.elf")
+        if not os.path.isfile(elf_path):
+            build_candidate_gui(gui5=True)
+
+        nm_proc = subprocess.run(
+            [str(ARM_NM), "-n", elf_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+            text=True,
+        )
+        m = re.search(r"^([0-9a-fA-F]+)\s+[dD]\s+camera_screen$", nm_proc.stdout, re.MULTILINE)
+        self.assertIsNotNone(m, "camera_screen symbol must be in .data")
+        cs_addr = int(m.group(1), 16)
+
+        objdump_proc = subprocess.run(
+            [
+                str(ARM_OBJDUMP),
+                "-s",
+                f"--start-address=0x{cs_addr:x}",
+                f"--stop-address=0x{cs_addr + 48:x}",
+                elf_path,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+            text=True,
+        )
+        hex_bytes = []
+        for line in objdump_proc.stdout.splitlines():
+            line = line.strip()
+            if not line or line.startswith("Contents of section") or line.endswith(":"):
+                continue
+            parts = line.split()
+            if len(parts) >= 2:
+                for w in parts[1:5]:
+                    if len(w) == 8 and re.match(r"^[0-9a-fA-F]{8}$", w):
+                        hex_bytes.extend(bytes.fromhex(w))
+
+        ints = struct.unpack("<12I", bytes(hex_bytes[:48]))
+        disp_left = ints[7]
+        disp_right = ints[8]
+        disp_width = ints[9]
         menu_border = 10
         ts_menu_border = 0
-        font_h = 32
+        font_h = 32  # F1 2x font: 16x32
 
         # Core CHDK gui_menu.c equations:
         num_lines = (screen_h - ts_menu_border * 2) // font_h - 1  # 17

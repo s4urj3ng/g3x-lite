@@ -1,0 +1,77 @@
+{
+  "milestone": "CHDK-PORT-2A",
+  "target": "Canon PowerShot G3 X (GM1.10C)",
+  "platform_id": "0x32A8 (12968)",
+  "chdk_revision": "r5491",
+  "toolchain": "ARM GNU-RM 5.4.1 2016q3",
+  "status": "OFFLINE_CANDIDATE_BUILT",
+  "independent_review": "PENDING",
+  "hardware_readiness": "NO-GO",
+  "production_invariance": {
+    "DISKBOOT.BIN": "3b2a0d5fe786933bb218f99de7acd5bb53276459f88e7cbeb2fa0e8085494d72",
+    "loader/g3x/main.c": "2678341e18cf55db0eba2ec50d55bebcca33ae189ce67fed839e3a43ed9b21f8",
+    "platform/g3x/sub/110c/boot.c": "13105e4cbc1dec6d997f15c2ff1b37305d309d83269239a8d2b0456f559e50b1"
+  },
+  "architectural_invariants": {
+    "loader_entry": "0x00008000",
+    "loader_stack": "0x00007FE0..0x00008000",
+    "core_destination": "0x003489B4",
+    "core_thumb_entry": "0x003489B5",
+    "core_boot_stack": "0x00003F00..0x00004000",
+    "core_end_symbol": "0x003629C0",
+    "boot_witness_addr": "0x0035C990",
+    "boot_witness_magic": "0x5749544E",
+    "boot_witness_version": "0x00010001",
+    "fixed_nonce": "0x32A80001",
+    "dryos_heap_base": "0x00368880",
+    "dryos_heap_upper": "0x00600014",
+    "continuation_target": "0xFC0D0126",
+    "encoding_row": 13,
+    "encoding_type": "dancingbits",
+    "spytask_active": false,
+    "gui_hooks_active": false,
+    "keyboard_hooks_active": false,
+    "gui3_active": true,
+    "gui4_active": true,
+    "gui5_active": true,
+    "gui_diag_active": false,
+    "shortpress_active": false
+  },
+  "candidate_artifacts": {
+    "candidate_main.elf": {
+      "path": "build/candidate_port40_gui5/candidate_main.elf",
+      "size_bytes": 178528,
+      "sha256": "39d2a42a9451ddf9633c5e4ee519d6d8f69db360e37d0a35c292bb6778753eaa"
+    },
+    "candidate_main.bin": {
+      "path": "build/candidate_port40_gui5/candidate_main.bin",
+      "size_bytes": 100784,
+      "sha256": "cf16c125c5800ac4bbaf265faf04ef6475ddd7fb4d9b64d467b31bee1d6c8f2a"
+    },
+    "candidate_loader.elf": {
+      "path": "build/candidate_port40_gui5/candidate_loader.elf",
+      "size_bytes": 104440,
+      "sha256": "11744ad0af70e6409cbf7f0e7a1b6a0def5ae7d158842b70c701ad75842de6c3"
+    },
+    "candidate_loader.bin": {
+      "path": "build/candidate_port40_gui5/candidate_loader.bin",
+      "size_bytes": 102224,
+      "sha256": "477604316eaac34e17601202566e01e3e4db8bb7eb5d57a72219c548429ae369"
+    },
+    "DISKBOOT.BIN": {
+      "path": "build/candidate_port40_gui5/DISKBOOT.BIN",
+      "size_bytes": 102225,
+      "sha256": "ae4358432948231d634b33d10c0c92677a1763274d51bee7a74d4ed71270791d"
+    },
+    "witness_inspector_gm110c.m": {
+      "path": "build/candidate_port40_gui5/witness_inspector_gm110c.m",
+      "size_bytes": 5580,
+      "sha256": "7a53835f7048b3c9e8be3c545efb9b14a85676a7b856de7899ae00dcd697c28f"
+    },
+    "witness_inspector_payload.bin": {
+      "path": "build/candidate_port40_gui5/witness_inspector_payload.bin",
+      "size_bytes": 444,
+      "sha256": "3f741722806335db6faf4d81e0b780fe15bbed84333013874f5878fb09938b9a"
+    }
+  }
+}
