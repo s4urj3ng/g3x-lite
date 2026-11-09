@@ -66,6 +66,7 @@ CANDIDATE_PORT34_KBD_OSD_DIR = os.path.join(REPO_ROOT, "candidate_port34_kbd_osd
 CANDIDATE_PORT35_OSD2_DIR = os.path.join(REPO_ROOT, "candidate_port35_osd2")
 CANDIDATE_PORT35_GUI_DIR = os.path.join(REPO_ROOT, "candidate_port35_gui")
 CANDIDATE_PORT36_GUI2_DIR = os.path.join(REPO_ROOT, "candidate_port36_gui2")
+CANDIDATE_PORT39_SHORTPRESS_DIR = os.path.join(REPO_ROOT, "candidate_port39_shortpress")
 
 # Backward compatibility alias
 CANDIDATE_LADDER_FIX_DIR = CANDIDATE_PORT25_LADDER_FIX_DIR
@@ -246,11 +247,50 @@ def generate_boot_prototype_resident_c() -> str:
         '        "    b.w     sub_fc0d0126\\n"'
     )
 
+    target_early = '"    mov     sp, r0\\n" CORE_LADDER_PULSE_11'
+    repl_early = (
+        '        "    mov     sp, r0\\n"\n'
+        '#if defined(G3X_SHORTPRESS) && (G3X_SHORTPRESS == 1)\n'
+        '        "    push    {r0, r1, r2, r3, r12, lr}\\n"\n'
+        '        "    bl      g3x_shortpress_boot_entry_hook\\n"\n'
+        '        "    pop     {r0, r1, r2, r3, r12, lr}\\n"\n'
+        '#endif\n'
+        '        CORE_LADDER_PULSE_11'
+    )
+
+    target_post_bss = '"    blo     loc_zero_bss\\n" CORE_LADDER_PULSE_12'
+    repl_post_bss = (
+        '"    blo     loc_zero_bss\\n" CORE_LADDER_PULSE_12\n'
+        '#if defined(G3X_SHORTPRESS) && (G3X_SHORTPRESS == 1)\n'
+        '        "    push    {r0, r1, r2, r3, r12, lr}\\n"\n'
+        '        "    bl      g3x_shortpress_post_bss_hook\\n"\n'
+        '        "    pop     {r0, r1, r2, r3, r12, lr}\\n"\n'
+        '#endif'
+    )
+
+    target_pwr_fix = '"    bl      sub_fc1284ac\\n" "    movs    r0, #1\\n" "    b       loc_fc05b978\\n" "    nop\\n"'
+    repl_pwr_fix = (
+        '#if defined(G3X_SHORTPRESS) && (G3X_SHORTPRESS == 1)\n'
+        '        "    bl      sub_fc1284ac\\n"\n'
+        '        "    ldr     r0, =g3x_saved_start_cause\\n"\n'
+        '        "    ldr     r1, [r0]\\n"\n'
+        '        "    ldr     r0, =0x00009bd0\\n"\n'
+        '        "    str     r1, [r0]\\n"\n'
+        '        "    movs    r0, #1\\n"\n'
+        '        "    b       loc_fc05b978\\n"\n'
+        '#else\n'
+        '        "    bl      sub_fc1284ac\\n" "    movs    r0, #1\\n" "    b       loc_fc05b978\\n" "    nop\\n"\n'
+        '#endif'
+    )
+
     resident_replacements = [
         (target_new_sa, repl_new_sa),
         (target_heap_ldr, repl_heap_ldr),
         (target_task_physw, repl_task_physw),
         (target_handoff, repl_handoff),
+        (target_early, repl_early),
+        (target_post_bss, repl_post_bss),
+        (target_pwr_fix, repl_pwr_fix),
     ]
     for target, repl in resident_replacements:
         if target not in src:
@@ -1190,10 +1230,11 @@ def build_candidate_core_ladder_fix(
     osd2: bool = False,
     gui: bool = False,
     gui2: bool = False,
+    shortpress: bool = False,
 ) -> tuple[str, str, int, int]:
-    """Compile candidate core with optional LED_LADDER, G3X_POWERON_FIX, G3X_RESIDENT, G3X_OSD, G3X_KBD, G3X_OSD2, G3X_GUI, and G3X_GUI2 defines."""
+    """Compile candidate core with optional LED_LADDER, G3X_POWERON_FIX, G3X_RESIDENT, G3X_OSD, G3X_KBD, G3X_OSD2, G3X_GUI, G3X_GUI2, and G3X_SHORTPRESS defines."""
     print(
-        f"--- Building Candidate Core (ladder={ladder}, poweron_fix={poweron_fix}, resident={resident}, osd={osd}, kbd={kbd}, osd2={osd2}, gui={gui}, gui2={gui2}) (@ 0x003489B4) ---"
+        f"--- Building Candidate Core (ladder={ladder}, poweron_fix={poweron_fix}, resident={resident}, osd={osd}, kbd={kbd}, osd2={osd2}, gui={gui}, gui2={gui2}, shortpress={shortpress}) (@ 0x003489B4) ---"
     )
     os.makedirs(candidate_dir, exist_ok=True)
 
@@ -1275,6 +1316,8 @@ def build_candidate_core_ladder_fix(
         base_cflags.append("-DG3X_GUI=1")
     if gui2:
         base_cflags.append("-DG3X_GUI2=1")
+    if shortpress:
+        base_cflags.append("-DG3X_SHORTPRESS=1")
     cflags = list(base_cflags) + ["-c", "-o", boot_proto_o, boot_proto_c]
     run_cmd(cflags, cwd=str(CHDK_PORT))
 
@@ -1689,9 +1732,13 @@ def build_candidate(
     osd2: bool | None = None,
     gui: bool | None = None,
     gui2: bool | None = None,
+    shortpress: bool | None = None,
 ) -> dict:
     """Execute complete combined candidate build pipeline."""
     ensure_bootstrap()
+
+    if shortpress is None:
+        shortpress = os.environ.get("G3X_SHORTPRESS", "0") == "1"
 
     if gui2 is None:
         gui2 = os.environ.get("G3X_GUI2", "0") == "1"
@@ -1708,7 +1755,12 @@ def build_candidate(
     if osd is None:
         osd = os.environ.get("G3X_OSD", "0") == "1"
 
-    if gui2:
+    if shortpress:
+        kbd = True
+        resident = True
+        poweron_fix = True
+        ladder = True
+    elif gui2:
         gui = True
         osd2 = True
         kbd = True
@@ -1734,6 +1786,8 @@ def build_candidate(
 
     if out_dir:
         candidate_dir = os.path.abspath(out_dir)
+    elif shortpress:
+        candidate_dir = CANDIDATE_PORT39_SHORTPRESS_DIR
     elif gui2:
         candidate_dir = CANDIDATE_PORT36_GUI2_DIR
     elif gui:
@@ -1771,6 +1825,7 @@ def build_candidate(
         osd2=osd2,
         gui=gui,
         gui2=gui2,
+        shortpress=shortpress,
     )
 
     # 2. Build loader
@@ -1820,6 +1875,7 @@ def build_candidate(
             manifest_data = json.load(f)
         manifest_data["architectural_invariants"]["core_end_symbol"] = f"0x{core_end_addr:08X}"
         manifest_data["architectural_invariants"]["dryos_heap_base"] = f"0x{heap_start_addr:08X}"
+        manifest_data["architectural_invariants"]["shortpress_active"] = shortpress
         with open(manifest_path, "w", encoding="utf-8") as f:
             json.dump(manifest_data, f, indent=2)
 
@@ -1846,6 +1902,7 @@ def build_candidate(
         "osd2": osd2,
         "gui": gui,
         "gui2": gui2,
+        "shortpress": shortpress,
         "diskboot_sha256": diskboot_sha256,
         "diskboot_size": diskboot_size,
     }
@@ -1912,8 +1969,14 @@ def main():
         action="store_true",
         help="Build opt-in G3X_GUI2=1 CHDK core GUI/ALT menu candidate (ladder=1, poweron_fix=1, resident=1, kbd=1, osd2=1, gui=1, gui2=1)",
     )
+    parser.add_argument(
+        "--shortpress",
+        action="store_true",
+        help="Build opt-in G3X_SHORTPRESS=1 candidate (shortpress=1, kbd=1, resident=1, ladder=1, poweron_fix=1)",
+    )
     args = parser.parse_args()
 
+    shortpress = bool(args.shortpress or os.environ.get("G3X_SHORTPRESS", "0") == "1")
     gui2 = bool(args.gui2 or os.environ.get("G3X_GUI2", "0") == "1")
     gui = bool(gui2 or args.gui or os.environ.get("G3X_GUI", "0") == "1")
     osd2 = bool(gui or args.osd2 or os.environ.get("G3X_OSD2", "0") == "1")
@@ -1963,6 +2026,7 @@ def main():
         osd2=osd2,
         gui=gui,
         gui2=gui2,
+        shortpress=shortpress,
     )
 
     print("\nSummary:")
@@ -1979,6 +2043,7 @@ def main():
     print(f"  osd2:         {res['osd2']}")
     print(f"  gui:          {res['gui']}")
     print(f"  gui2:         {res['gui2']}")
+    print(f"  shortpress:   {res['shortpress']}")
 
 
 if __name__ == "__main__":
