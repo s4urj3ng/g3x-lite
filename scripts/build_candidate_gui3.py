@@ -58,6 +58,7 @@ CANDIDATE_PORT37_GUI3_DIR = str(BUILD_DIR / "candidate_port37_gui3")
 CANDIDATE_PORT37_GUI3_DIAG_DIR = str(BUILD_DIR / "candidate_port37_gui3_diag")
 CANDIDATE_PORT38_GUI4_DIR = str(BUILD_DIR / "candidate_port38_gui4")
 CANDIDATE_PORT38_GUI4_DIAG_DIR = str(BUILD_DIR / "candidate_port38_gui4_diag")
+CANDIDATE_PORT39_SHORTPRESS_GUI4_DIR = str(BUILD_DIR / "candidate_port39_shortpress_gui4")
 
 G3X_GUI3_HEAP_START = legacy_builder.G3X_GUI_HEAP_START
 G3X_GUI4_HEAP_START = legacy_builder.G3X_GUI_HEAP_START
@@ -1365,6 +1366,7 @@ def build_candidate_gui3_core(
     candidate_dir: str,
     gui_diag: bool = False,
     gui4: bool = False,
+    shortpress: bool = False,
 ) -> tuple[str, str, int, int]:
     """Compile and link candidate core for G3X_GUI3=1 or G3X_GUI4=1."""
     legacy_builder.ensure_bootstrap()
@@ -1436,6 +1438,8 @@ def build_candidate_gui3_core(
     ]
     if gui4:
         base_cflags.append("-DG3X_GUI4=1")
+    if shortpress:
+        base_cflags.append("-DG3X_SHORTPRESS=1")
     if gui_diag:
         base_cflags.append("-DG3X_GUI_DIAG=1")
 
@@ -1718,8 +1722,12 @@ def build_candidate(
     gui3: bool | None = None,
     gui4: bool | None = None,
     gui_diag: bool | None = None,
+    shortpress: bool | None = None,
 ) -> dict:
     """Execute candidate build pipeline supporting G3X_GUI4=1, G3X_GUI3=1 and prior flags."""
+    if shortpress is None:
+        shortpress = os.environ.get("G3X_SHORTPRESS", "0") == "1"
+
     if gui4 is None:
         gui4 = os.environ.get("G3X_GUI4", "0") == "1"
 
@@ -1744,6 +1752,7 @@ def build_candidate(
             osd2=osd2,
             gui=gui,
             gui2=gui2,
+            shortpress=shortpress,
         )
 
     # G3X_GUI4=1 and G3X_GUI3=1 imply GUI2, GUI, OSD2, KBD, RESIDENT, POWERON_FIX, LED_LADDER
@@ -1757,6 +1766,8 @@ def build_candidate(
 
     if out_dir:
         candidate_dir = os.path.abspath(out_dir)
+    elif gui4 and shortpress:
+        candidate_dir = CANDIDATE_PORT39_SHORTPRESS_GUI4_DIR
     elif gui4:
         candidate_dir = CANDIDATE_PORT38_GUI4_DIAG_DIR if gui_diag else CANDIDATE_PORT38_GUI4_DIR
     elif gui_diag:
@@ -1773,6 +1784,7 @@ def build_candidate(
         candidate_dir=candidate_dir,
         gui_diag=gui_diag,
         gui4=gui4,
+        shortpress=shortpress,
     )
 
     core_bin_size = os.path.getsize(core_bin)
@@ -1825,6 +1837,7 @@ def build_candidate(
     manifest_data["architectural_invariants"]["gui3_active"] = True
     manifest_data["architectural_invariants"]["gui4_active"] = gui4
     manifest_data["architectural_invariants"]["gui_diag_active"] = gui_diag
+    manifest_data["architectural_invariants"]["shortpress_active"] = shortpress
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest_data, f, indent=2)
 
@@ -1848,6 +1861,7 @@ def build_candidate(
         "diskboot_size": diskboot_size,
         "diskboot_sha256": diskboot_sha256,
         "manifest": manifest_path,
+        "shortpress": shortpress,
         "boot_witness": boot_witness_addr,
         "end_addr": end_addr,
         "ladder": ladder,

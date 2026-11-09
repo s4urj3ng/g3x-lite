@@ -11,7 +11,7 @@
 #ifndef KBD_CANDIDATE_H
 #define KBD_CANDIDATE_H
 
-#if defined(G3X_KBD) && (G3X_KBD == 1)
+#if (defined(G3X_KBD) && (G3X_KBD == 1)) || (defined(G3X_SHORTPRESS) && (G3X_SHORTPRESS == 1))
 
 #include "lolevel.h"
 #include "platform.h"
@@ -56,12 +56,131 @@ extern void _kbd_p2_f(void);
 extern int kbd_is_blocked(void);
 
 /*
+ * PORT-39: Opt-in G3X_SHORTPRESS=1 candidate
+ * Adapted DIGIC 6 Sibling Short-Press Power-On Handling:
+ * - g7x: chdk-port/platform/g7x/kbd.c:48, 50 (Playback / Power physw bits);
+ *        chdk-port/platform/g7x/kbd.c:70-82 (PhySw polling task loop)
+ * - g5x: chdk-port/platform/g5x/kbd.c:118-126 (physw override);
+ *        chdk-port/platform/g5x/sub/100c/boot.c:172-182 (start-mode write);
+ *        chdk-port/platform/g5x/sub/100c/boot.c:411-420 (power-cut bypass sub_fc0ecf20_my);
+ *        chdk-port/platform/g5x/sub/100c/boot.c:479-506 (taskcreate_physw stack 0x2000)
+ *
+ * Timing reference & time base:
+ * - What starts the timer: early boot entry hook g3x_shortpress_boot_entry_hook()
+ *   placed before the first ladder stage (CORE_LADDER_PULSE_11) at boot entry (t = 0).
+ * - Pre-task window: early boot sequence and complete LED ladder run synchronously
+ *   from boot entry to mykbd_task creation (~5.0 s / 5000 ms), verified on physical
+ *   camera (owner trial observation, PORT-38, 2026-11: holding Power for ~5 s until
+ *   LED ladder finishes powers on into CHDK candidate). [VERIFIED]
+ * - Post-task margin: in mykbd_task, polling delay is paced by physw_sleep_delay loaded
+ *   from 0x000082C4, where ROM literal 0xFC1283B2 initializes sleep time to 10 ms.
+ *   [FINSIG/VERIFIED] Thus 1 poll in mykbd_task = 10 ms.
+ * - Margin duration: 200 polls @ 10 ms/poll = 2000 ms (2.0 s, 40%) safety margin beyond the
+ *   ~5 s LED ladder window, yielding total hold coverage of ~7000 ms (~7.0 s) from boot entry. [INFERRED]
+ * - Release: once margin polls reach 0, g3x_shortpress_active is cleared (0) and override is
+ *   released so subsequent button presses (e.g. normal Power button press to shut down) work natively. [VERIFIED]
+ */
+#if defined(G3X_SHORTPRESS) && (G3X_SHORTPRESS == 1)
+
+#define G3X_SHORTPRESS_LADDER_TIME_MS   5000    /* ~5 s LED ladder duration from boot entry [VERIFIED] */
+#define G3X_SHORTPRESS_MARGIN_MS        2000    /* 2.0 s safety margin beyond ladder [INFERRED] */
+#define G3X_SHORTPRESS_POLL_INTERVAL_MS 10      /* physw_sleep_delay = 10 ms [FINSIG/VERIFIED] */
+#define G3X_SHORTPRESS_MARGIN_POLLS     (G3X_SHORTPRESS_MARGIN_MS / G3X_SHORTPRESS_POLL_INTERVAL_MS) /* 200 polls [INFERRED] */
+#define G3X_SHORTPRESS_HOLD_POLLS       G3X_SHORTPRESS_MARGIN_POLLS
+
+/*
+ * Addresses and bit constants for shortpress candidate:
+ * - G3X_ADDR_STARTCAUSE: 0x00009BD0 = *(0x9BC4 + 12) startup cause word [VERIFIED]
+ * - G3X_STARTCAUSE_POWER: 0x00080000 = (1u << 19) Power button start cause [VERIFIED]
+ * - G3X_STARTCAUSE_PLAYBACK: 0x00100000 = (1u << 20) Playback button start cause [VERIFIED]
+ */
+#define G3X_ADDR_STARTCAUSE             0x00009BD0
+#define G3X_STARTCAUSE_POWER            (1u << 19)
+#define G3X_STARTCAUSE_PLAYBACK         (1u << 20)
+
+/* CHDK-owned state variables in .data section to survive low-RAM reinit and BSS zeroing */
+volatile unsigned int g3x_saved_start_cause = 0;
+volatile int g3x_shortpress_active = 0;
+volatile int g3x_shortpress_margin_polls = 0;
+volatile unsigned int g3x_selected_button_bit = 0;
+
+/*
+ * Discrimination function:
+ * Evaluates start cause captured before low-RAM reinitialization:
+ * - If Playback button bit 20 (0x00100000) is set: returns G3X_KEY_PLAYBACK_BIT (0x00010000, bit 16).
+ * - Otherwise (Power button bit 19 0x00080000 set, 0, or default): returns G3X_KEY_POWER_BIT (0x00020000, bit 17).
+ */
+unsigned int g3x_shortpress_discriminate(unsigned int raw_cause)
+{
+    if (raw_cause & G3X_STARTCAUSE_PLAYBACK) {
+        return G3X_KEY_PLAYBACK_BIT;
+    } else {
+        return G3X_KEY_POWER_BIT;
+    }
+}
+
+/*
+ * Early boot hook executed at boot entry before first ladder stage (CORE_LADDER_PULSE_11):
+ * 1. Captures original start-cause word from 0x00009BD0 before Copy Loop 3 overwrites low RAM.
+ * 2. Discriminates start cause into Playback vs Power button.
+ * 3. Starts coverage window: active flag = 1, margin polls = 200.
+ */
+void __attribute__((noinline)) g3x_shortpress_boot_entry_hook(void)
+{
+    volatile unsigned int * const raw_cause = (volatile unsigned int *)G3X_ADDR_STARTCAUSE;
+    g3x_saved_start_cause = *raw_cause;
+
+    /* If neither button was recorded (e.g. 0), default to Power start */
+    if ((g3x_saved_start_cause & (G3X_STARTCAUSE_PLAYBACK | G3X_STARTCAUSE_POWER)) == 0) {
+        g3x_saved_start_cause = G3X_STARTCAUSE_POWER;
+    }
+
+    g3x_selected_button_bit = g3x_shortpress_discriminate(g3x_saved_start_cause);
+    g3x_shortpress_active = 1;
+    g3x_shortpress_margin_polls = G3X_SHORTPRESS_MARGIN_POLLS;
+}
+
+/*
+ * Post-BSS hook executed right after Canon BSS is zeroed:
+ * Restores saved start cause into low RAM 0x00009BD0 and clears active-low button bit in physw_status[0].
+ */
+void __attribute__((noinline)) g3x_shortpress_post_bss_hook(void)
+{
+    *(volatile unsigned int *)G3X_ADDR_STARTCAUSE = g3x_saved_start_cause;
+    physw_status[0] &= ~g3x_selected_button_bit;
+}
+
+static inline void g3x_shortpress_read_keys(void)
+{
+    kbd_update_key_state();
+    kbd_update_physw_bits();
+
+    if (g3x_shortpress_active) {
+        if (g3x_shortpress_margin_polls > 0) {
+            g3x_shortpress_margin_polls--;
+            /* Active-low key logic: clear bit (&= ~mask) to fake button held */
+            physw_status[0] &= ~g3x_selected_button_bit;
+            /* Keep start cause word populated */
+            *(volatile unsigned int *)G3X_ADDR_STARTCAUSE = g3x_saved_start_cause;
+        } else {
+            /* Hold window expired: release override so normal Power button press turns off camera */
+            g3x_shortpress_active = 0;
+        }
+    }
+}
+
+#endif /* G3X_SHORTPRESS */
+
+/*
  * Short-press shutdown fix: hold power button state (bit 17 = 0x00020000)
  * in physw_status[0] during initial startup polls so Canon firmware completes
  * power-on initialization without cutting power. Held press continues to work.
  */
 void __attribute__((noinline)) my_kbd_read_keys_candidate(void)
 {
+#if defined(G3X_SHORTPRESS) && (G3X_SHORTPRESS == 1)
+    g3x_shortpress_read_keys();
+#else
     static int pwr_hold_count = G3X_POWERON_HOLD_POLLS;
 
     kbd_update_key_state();
@@ -71,6 +190,7 @@ void __attribute__((noinline)) my_kbd_read_keys_candidate(void)
         pwr_hold_count--;
         physw_status[0] |= G3X_KEY_POWER_BIT;
     }
+#endif
 }
 
 /*
