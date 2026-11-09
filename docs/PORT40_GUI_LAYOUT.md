@@ -15,12 +15,10 @@ Both scrolling menus (e.g. Visual Settings with 31 items > 17 visible rows) and 
 | `CAM_BITMAP_HEIGHT` | `480` | `600` | `scripts/build_candidate_gui3.py:1707` (injected GUI5 override in `camera_info.c`) | `VERIFIED` | Mode 12 LCD buffer height in GM1.10C `BmpDDev.c` (`PORT35-ROM-BMPDDEV` jump table at `0xFC1834F8`). |
 | `CAM_SCREEN_WIDTH` | `720` | `900` | `scripts/build_candidate_gui3.py:1708` (injected GUI5 override in `camera_info.c`) | `VERIFIED` | Mode 12 LCD visible pixel width in GM1.10C `BmpDDev.c`; verified by PORT-36 1-px frame test at `(0,0)-(899,599)`. |
 | `CAM_SCREEN_HEIGHT` | `480` | `600` | `scripts/build_candidate_gui3.py:1709` (injected GUI5 override in `camera_info.c`) | `VERIFIED` | Mode 12 LCD visible pixel height in GM1.10C `BmpDDev.c`; verified by PORT-36 1-px frame test at `(0,0)-(899,599)`. |
-| `G3X_OSD2_DEFAULT_WIDTH` | `720` | `900` | `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:54` | `VERIFIED` | Default OSD2 screen width matching Mode 12 LCD resolution. |
-| `G3X_OSD2_DEFAULT_HEIGHT` | `480` | `600` | `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:55` | `VERIFIED` | Default OSD2 screen height matching Mode 12 LCD resolution. |
-| `G3X_OSD2_DEFAULT_BUFFER_WIDTH` | `736` | `928` | `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:56` | `VERIFIED` | Default OSD2 buffer stride matching Mode 12 LCD buffer stride (`PORT35-ROM-BMPDDEV`). |
-| `G3X_OSD2_DEFAULT_BUFFER_HEIGHT` | `480` | `600` | `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:57` | `VERIFIED` | Default OSD2 buffer height matching Mode 12 LCD buffer height. |
-| `G3X_OSD2_DEFAULT_SIZE` | `345600` | `540000` | `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:58` | `VERIFIED` | 900 * 600 visible pixels. |
-| `G3X_OSD2_DEFAULT_BUFFER_SIZE` | `353280` | `556800` | `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:59` | `VERIFIED` | 928 * 600 buffer pixels (`PORT35-ROM-BMPDDEV` `0x87F00`). |
+| `G3X_GUI5_INITIAL_WIDTH` | `720` | `900` | `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:60` | `INFERRED` | Initial GUI5 width before first `g3x_osd2_update_screen_dimensions()`; `G3X_OSD2_DEFAULT_*` remain 720x480/736 defaults for displaytypes 1, 2, 8, 9, 10 per `PORT35-ROM-BMPDDEV`. |
+| `G3X_GUI5_INITIAL_HEIGHT` | `480` | `600` | `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:61` | `INFERRED` | Initial GUI5 height before first `g3x_osd2_update_screen_dimensions()`. |
+| `G3X_GUI5_INITIAL_BUFFER_WIDTH` | `736` | `928` | `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:62` | `INFERRED` | Initial GUI5 buffer stride before first `g3x_osd2_update_screen_dimensions()`. |
+| `G3X_GUI5_INITIAL_BUFFER_HEIGHT` | `480` | `600` | `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:63` | `INFERRED` | Initial GUI5 buffer height before first `g3x_osd2_update_screen_dimensions()`. |
 | GUI5 Scrollbar Layout & Width Reservation | `wplus = 8` outside `w` (box widened to 890, 10/0 margins) | `wplus = 8` reserved inside 880 box (`w -= wplus` -> `872`, scrollbar `882..889`, 8 px even) | `scripts/build_candidate_gui3.py:81-112, 1718-1725` | `VERIFIED` | Embedded transform applied to `gui_menu.c` copy during candidate build; keeps worktree `chdk-port/core/gui_menu.c` pristine. Reserves 8-px scrollbar inside 880 box, aligns fill rect and menu rect at `(10,12,880,576)` with even margins in both scrolling and non-scrolling menus. |
 | `conf.menu_color` default background | `IDX_COLOR_GREY_DK` | `IDX_COLOR_BLACK` | `scripts/build_candidate_gui3.py:1685-1692` (injected GUI5 override in `conf_candidate.c`) | `HISTORICAL_CHDK` | Overrides default menu background from dark grey to solid black so text padding and scrollbar use black, keeping `chdk-port/core/conf.c` pristine. |
 | Scrollbar background color | `conf.menu_color` | `COLOR_BLACK` | `scripts/build_candidate_gui3.py:91, 1718-1725` | `HISTORICAL_CHDK` | Explicitly draws scrollbar background rectangle using `MAKE_COLOR(COLOR_BLACK, COLOR_BLACK)`. |
@@ -34,29 +32,13 @@ Both scrolling menus (e.g. Visual Settings with 31 items > 17 visible rows) and 
 ## Root Cause Analysis for PORT-38 Symptoms
 
 1. **Symptom 1 (Box covers only ~80% width, ~85% height; left uncovered, right ~1/10 width, photo shows at top)**:
-   - *Root cause*: `CAM_SCREEN_WIDTH` was 720 (80.0% of 900) and `CAM_SCREEN_HEIGHT` was 480 (80.0% of 600) in `platform_camera.h:73-83` and static `camera_info.thm.o`. In Mode 12 (900x600), `disp_width=720` produced `w = 700 px`. Centering left `(900 - 720) / 2 = 90 px` margins on both sides (exactly 1/10 LCD width), and photo show-through above `y = 12`. Furthermore, in scrolling menus like Visual Settings (`count = 31 > 17`), standard CHDK placed `wplus = 8` outside `w`, which widened the box and destroyed margin symmetry (giving 10 px left and 0 px right margin when clamped/widened).
-   - *Code fix*: Candidate build glue in `scripts/build_candidate_gui3.py` (`CAM_SCREEN_WIDTH: 720 -> 900`, `CAM_SCREEN_HEIGHT: 480 -> 600`, `CAM_BITMAP_WIDTH: 736 -> 928`, `CAM_BITMAP_HEIGHT: 480 -> 600`) and `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:51-68` (`G3X_OSD2_DEFAULT_WIDTH: 720 -> 900`, etc.), setting `disp_width = 900` and outer `w = 880 px` centered with even 10 px margins. In `scripts/build_candidate_gui3.py:81-112, 1718-1725` (embedded menu transform applied during build to candidate copy of `gui_menu.c`), scrollbar width (`wplus = 8`) is reserved inside the 880-px box by reducing `w` from 880 to 872 px when `count > num_lines`, keeping the outer box strictly at `880x576` at `(10,12)-(889,587)` with even 10-px margins in both scrolling and non-scrolling cases.
+   - *Root cause* `[INFERRED]`: Initial `camera_screen` dimensions before the first runtime update were 720x480 (80% of 900x600 LCD), and unaligned scrollbar layout expanded outside the base width rather than reserving space inside the 880x576 box.
 2. **Symptom 2 (Thin bright strip along top edge, thin green line along right edge; fill rect and painted area out of line)**:
-   - *Root cause*:
-     - Top bright strip: `conf.menu_center = 1` shifted `gui_menu_draw()` `y` to 96 (header to 64) when `count=10`, while `g3x_fill_menu_opaque_black()` filled from `header_y = 12`, creating a vertical mismatch.
-     - Right green line: In DIGIC 6 16-bpp UYVY (`chdk-port/core/gui_draw.c:79-93`), each 32-bit word packs 2 horizontal pixels `[U0, Y0, V0, Y1]`. An odd width or unaligned boundary leaves chroma `U=0, V=0` with `opacity=255`, decoding in YUV to pure bright green (`G = Y + 135`, `R = 0`, `B = 0`).
-   - *Code fix*:
-     - `scripts/build_candidate_gui3.py:82-96, 1718-1725`: Bypasses `conf.menu_center` under GUI5 so `y` is unconditionally 44 and header is at `y = 12`, exactly matching `g3x_get_menu_layout: header_y = 12` and eliminating the top strip.
-     - `scripts/build_candidate_gui3.py:768-771, 780-791, 822-824` and `scripts/build_candidate_gui3.py:81-112`: Enforces 2-pixel even word alignment (`bx &= ~1; bw = (bw + 1) & ~1; total_w = w; w = 872; scrollbar = 8 px [882..889]`) and writes 32-bit `0x00800080` (`Y0=0, U=128, Y1=0, V=128`), adapting `chdk-port/core/gui_draw.c:79-93, 134-142` and eliminating chroma leaks.
+   - *Root cause* `[INFERRED]`: Asymmetric scrollbar width reservation (`wplus = 8` drawn outside `w` to `x = 898`) and odd 1-pixel boundary alignment in 16-bpp UYVY macropixels created coordinate mismatch and green chroma leaks at the edges.
 3. **Symptom 3 (Area below last item is dark grey, not black)**:
-   - *Root cause*:
-     - `chdk-port/core/conf.c:201-205`: `conf.menu_color` default background was `IDX_COLOR_GREY_DK` (dark grey).
-     - `chdk-port/core/gui_menu.c:743`: Scrollbar background was drawn with `conf.menu_color` (`IDX_COLOR_GREY_DK`).
-     - `scripts/build_candidate_gui3.py:1079, 1094`: String padding rectangles were drawn with `BG_COLOR(cl)` (`IDX_COLOR_GREY_DK`).
-     - `chdk-port/core/gui_menu.c:1005-1084`: `gui_menu_draw()` stopped at `i == count` (10 items), leaving rows 10..16 unpainted and exposing the underlying Canon UI buffer.
-   - *Code fix*:
-     - `scripts/build_candidate_gui3.py:1685-1692`: Overrides `conf.menu_color` default background to `IDX_COLOR_BLACK` in generated `conf_candidate.c`.
-     - `scripts/build_candidate_gui3.py:91, 1718-1725`: Scrollbar background drawn with `MAKE_COLOR(COLOR_BLACK, COLOR_BLACK)`.
-     - `scripts/build_candidate_gui3.py:1079, 1094`: String padding drawn with `MAKE_COLOR(COLOR_BLACK, COLOR_BLACK)`.
-     - `scripts/build_candidate_gui3.py:116-125, 1718-1725`: Adds loop `for (; i < num_lines; ++i, yy += rbf_font_height()) draw_rectangle(x, yy, x + w - 1, yy + rbf_font_height() - 1, MAKE_COLOR(COLOR_BLACK, COLOR_BLACK), RECT_BORDER0 | DRAW_FILLED);` to paint rows 10..16 solid opaque black.
+   - *Root cause* `[INFERRED]`: `gui_menu_draw()` stops at `i == count` (row 9 for `root_menu`), leaving remaining rows down to `num_lines` unpainted so unrefreshed buffer content / padding shows below the items.
 4. **Symptom 4 (Items use only upper half of box)**:
-   - *Root cause*: Menu row capacity is calculated as `num_lines = (camera_screen.height - camera_screen.ts_menu_border*2)/rbf_font_height()-1` (`chdk-port/core/gui_menu.c:226`). Under GUI5 with `camera_screen.height = 600`, `num_lines = (600 - 0)/32 - 1 = 17` visible rows. For submenus with >= 17 items, all 17 visible rows are filled (544 px + 32 px title = 576 px box). For shorter menus like `root_menu` (`count = 10`), items occupy rows 0..9 (320 px), leaving rows 10..16 unpainted in GUI4.
-   - *Code fix*: `chdk-port/core/gui_menu.c:1086-1094` fills remaining rows 10..16 with solid black down to `y = 587`, so the entire 576-px box is solid black, filling the full box height.
+   - *Root cause* `[VERIFIED]`: Menu row capacity `num_lines` is 17 rows at 32 px pitch (544 px items), but `root_menu` only contains 10 items (320 px), naturally occupying only the upper ~55% of the 576-px box.
 
 ---
 
@@ -85,8 +67,8 @@ Both scrolling menus (e.g. Visual Settings with 31 items > 17 visible rows) and 
 |---|---|---|---|---|---|---|
 | Default Baseline | (no flags) | `9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136` | `118001` (118,001) | `0x0035F7A0` | `0x00366CB0` | 7,120 B |
 | `G3X_GUI4=1` Trial Baseline | `-DG3X_GUI4=1` | `14456b08fca82758262c26ad6105f784ebacaa080b7a059a622ded5a8d505fdd` | `102241` (102,241) | `0x0035C9A0` | `0x003629D0` | 24,240 B |
-| `G3X_GUI5=1` Plain | `-DG3X_GUI5=1` | `aff912e317c007208d00dc78dca966aada10256dcf5ecb734c1b6b610a7e91fa` | `102161` (102,161) | `0x0035C950` | `0x00362980` | 24,320 B |
-| `G3X_GUI5=1` Combined | `-DG3X_GUI5=1 -DG3X_SHORTPRESS=1` | `5c5d4ef4bbecd09b31a73cb461c80674fef268fc5c5993f38f18e91231860ed4` | `102321` (102,321) | `0x0035C9F0` | `0x00362A30` | 24,144 B |
+| `G3X_GUI5=1` Plain | `-DG3X_GUI5=1` | `dd96357c050cf3b9116dcf089a731ef159477b505351f46436f983fdbf090b64` | `102209` (102,209) | `0x0035C980` | `0x003629B0` | 24,272 B |
+| `G3X_GUI5=1` Combined | `-DG3X_GUI5=1 -DG3X_SHORTPRESS=1` | `86e12a2cfe792a8901fa2e0ec5a98f019290593e35d5c4c2e66fd3e073f16ff1` | `102369` (102,369) | `0x0035CA20` | `0x00362A60` | 24,096 B |
 
 ---
 

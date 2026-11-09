@@ -5,13 +5,13 @@ Verifies:
 (a) The default build (no flags) is strictly byte-identical to main:
     DISKBOOT.BIN SHA-256: 9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136 (118,001 B).
 (b) G3X_GUI5=1 builds cleanly and implies G3X_GUI4=1:
-    - DISKBOOT.BIN SHA-256: ae4358432948231d634b33d10c0c92677a1763274d51bee7a74d4ed71270791d (102,225 B)
-    - Boot witness: 0x0035C990
-    - Linked _end: 0x003629C0 <= heap start 0x00368880 (24,256 B clearance)
+    - DISKBOOT.BIN SHA-256: dd96357c050cf3b9116dcf089a731ef159477b505351f46436f983fdbf090b64 (102,209 B)
+    - Boot witness: 0x0035C980
+    - Linked _end: 0x003629B0 <= heap start 0x00368880 (24,272 B clearance)
 (c) Combined G3X_GUI5=1 + G3X_SHORTPRESS=1 builds cleanly:
-    - DISKBOOT.BIN SHA-256: 5819c5f6a8d448310b3ed7dece34ed6b62263b88896232b4c8704db5080f3195 (102,385 B)
-    - Boot witness: 0x0035CA30
-    - Linked _end: 0x00362A70 <= heap start 0x00368880 (24,080 B clearance)
+    - DISKBOOT.BIN SHA-256: 86e12a2cfe792a8901fa2e0ec5a98f019290593e35d5c4c2e66fd3e073f16ff1 (102,369 B)
+    - Boot witness: 0x0035CA20
+    - Linked _end: 0x00362A60 <= heap start 0x00368880 (24,096 B clearance)
 (d) Host-side geometry check (using preprocessed compiled constants):
     - Preprocessed CAM_SCREEN_WIDTH (900), CAM_SCREEN_HEIGHT (600), CAM_BITMAP_WIDTH (928), CAM_BITMAP_HEIGHT (600).
     - Fill rect and menu rect derived from compiled constants match exactly: (10, 12, 880, 576).
@@ -74,15 +74,15 @@ PINNED_DEFAULT_SIZE = 118001
 PINNED_GUI4_SHA256 = "14456b08fca82758262c26ad6105f784ebacaa080b7a059a622ded5a8d505fdd"
 PINNED_GUI4_SIZE = 102241
 
-PINNED_GUI5_SHA256 = "aff912e317c007208d00dc78dca966aada10256dcf5ecb734c1b6b610a7e91fa"
-PINNED_GUI5_SIZE = 102161
-PINNED_GUI5_WITNESS = 0x0035C950
-PINNED_GUI5_END = 0x00362980
+PINNED_GUI5_SHA256 = "dd96357c050cf3b9116dcf089a731ef159477b505351f46436f983fdbf090b64"
+PINNED_GUI5_SIZE = 102209
+PINNED_GUI5_WITNESS = 0x0035C980
+PINNED_GUI5_END = 0x003629B0
 
-PINNED_GUI5_SHORTPRESS_SHA256 = "5c5d4ef4bbecd09b31a73cb461c80674fef268fc5c5993f38f18e91231860ed4"
-PINNED_GUI5_SHORTPRESS_SIZE = 102321
-PINNED_GUI5_SHORTPRESS_WITNESS = 0x0035C9F0
-PINNED_GUI5_SHORTPRESS_END = 0x00362A30
+PINNED_GUI5_SHORTPRESS_SHA256 = "86e12a2cfe792a8901fa2e0ec5a98f019290593e35d5c4c2e66fd3e073f16ff1"
+PINNED_GUI5_SHORTPRESS_SIZE = 102369
+PINNED_GUI5_SHORTPRESS_WITNESS = 0x0035CA20
+PINNED_GUI5_SHORTPRESS_END = 0x00362A60
 
 HEAP_START = 0x00368880
 
@@ -101,10 +101,7 @@ class TestPort40GuiLayout(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls) -> None:
-        import shutil
         cls._tmp.cleanup()
-        if (REPO_ROOT / "build").exists():
-            shutil.rmtree(REPO_ROOT / "build", ignore_errors=True)
 
     def test_default_build_byte_identical_to_main(self) -> None:
         """Default build (no flags) is byte-identical to origin/main."""
@@ -234,10 +231,21 @@ class TestPort40GuiLayout(unittest.TestCase):
         buffer_w_def = int(defines["G3X_OSD2_DEFAULT_BUFFER_WIDTH"].strip("() "))
         buffer_h_def = int(defines["G3X_OSD2_DEFAULT_BUFFER_HEIGHT"].strip("() "))
 
-        self.assertEqual(screen_w_def, 900, "G3X_OSD2_DEFAULT_WIDTH must be 900")
-        self.assertEqual(screen_h_def, 600, "G3X_OSD2_DEFAULT_HEIGHT must be 600")
-        self.assertEqual(buffer_w_def, 928, "G3X_OSD2_DEFAULT_BUFFER_WIDTH must be 928")
-        self.assertEqual(buffer_h_def, 600, "G3X_OSD2_DEFAULT_BUFFER_HEIGHT must be 600")
+        self.assertEqual(screen_w_def, 720, "G3X_OSD2_DEFAULT_WIDTH must remain 720")
+        self.assertEqual(screen_h_def, 480, "G3X_OSD2_DEFAULT_HEIGHT must remain 480")
+        self.assertEqual(buffer_w_def, 736, "G3X_OSD2_DEFAULT_BUFFER_WIDTH must remain 736")
+        self.assertEqual(buffer_h_def, 480, "G3X_OSD2_DEFAULT_BUFFER_HEIGHT must remain 480")
+
+        # Initial GUI5 camera_screen values
+        init_w_def = int(defines["G3X_GUI5_INITIAL_WIDTH"].strip("() "))
+        init_h_def = int(defines["G3X_GUI5_INITIAL_HEIGHT"].strip("() "))
+        init_bw_def = int(defines["G3X_GUI5_INITIAL_BUFFER_WIDTH"].strip("() "))
+        init_bh_def = int(defines["G3X_GUI5_INITIAL_BUFFER_HEIGHT"].strip("() "))
+
+        self.assertEqual(init_w_def, 900, "G3X_GUI5_INITIAL_WIDTH must be 900")
+        self.assertEqual(init_h_def, 600, "G3X_GUI5_INITIAL_HEIGHT must be 600")
+        self.assertEqual(init_bw_def, 928, "G3X_GUI5_INITIAL_BUFFER_WIDTH must be 928")
+        self.assertEqual(init_bh_def, 600, "G3X_GUI5_INITIAL_BUFFER_HEIGHT must be 600")
 
         # 2. Extract camera_screen struct values from compiled candidate_main.elf
         elf_path = os.path.join(self.gui5_dir, "candidate_main.elf")
@@ -466,6 +474,107 @@ class TestPort40GuiLayout(unittest.TestCase):
         self.assertEqual(total_h, 576)
         # 576 / 600 is 96.0% of LCD vertical height
         self.assertAlmostEqual(total_h / 600, 0.96, places=2)
+
+    def test_displaytype_regression_under_gui5(self) -> None:
+        """Host regression test: Under G3X_GUI5, displaytypes 1, 2, 8, 9, 10 must have 720x480 stride 736 and opacity offset (10,100) == 73610; dt 12 must have 900x600 stride 928."""
+        host_cc = "gcc"
+        try:
+            subprocess.run([host_cc, "--version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+            has_cc = True
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            has_cc = False
+
+        if has_cc:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tmp_path = Path(tmpdir)
+                (tmp_path / "lolevel.h").write_text("/* stub lolevel.h */\n", encoding="utf-8")
+                (tmp_path / "platform.h").write_text(
+                    "#ifndef PLATFORM_H\n"
+                    "#define PLATFORM_H\n"
+                    "typedef struct {\n"
+                    "    int width;\n"
+                    "    int physical_width;\n"
+                    "    int height;\n"
+                    "    int buffer_width;\n"
+                    "    int buffer_height;\n"
+                    "    int size;\n"
+                    "    int buffer_size;\n"
+                    "    int disp_left;\n"
+                    "    int disp_right;\n"
+                    "    int disp_width;\n"
+                    "} t_camera_screen;\n"
+                    "extern t_camera_screen camera_screen;\n"
+                    "#endif\n",
+                    encoding="utf-8",
+                )
+                harness_c = tmp_path / "harness.c"
+                harness_bin = tmp_path / "harness"
+                harness_c.write_text(
+                    '#include <stdio.h>\n'
+                    '#include "platform.h"\n'
+                    "t_camera_screen camera_screen;\n"
+                    "char *bitmap_buffer[2] = { 0, 0 };\n"
+                    "int active_bitmap_buffer = 0;\n"
+                    "int displaytype = 0;\n"
+                    "void _transfer_src_overlay(int n) { (void)n; }\n"
+                    '#include "osd2_test_overlay.h"\n'
+                    "int main(void) {\n"
+                    "    int dts[] = { 1, 2, 8, 9, 10, 12 };\n"
+                    "    for (int i = 0; i < 6; i++) {\n"
+                    "        displaytype = dts[i];\n"
+                    "        g3x_osd2_update_screen_dimensions();\n"
+                    "        int op_offset = 100 * camera_screen.buffer_width + 10;\n"
+                    '        printf("%d:%d,%d,%d,%d\\n",\n'
+                    "            displaytype,\n"
+                    "            camera_screen.width,\n"
+                    "            camera_screen.height,\n"
+                    "            camera_screen.buffer_width,\n"
+                    "            op_offset);\n"
+                    "    }\n"
+                    "    return 0;\n"
+                    "}\n",
+                    encoding="utf-8",
+                )
+                subprocess.run(
+                    [
+                        host_cc,
+                        "-DG3X_OSD2=1",
+                        "-DG3X_GUI5=1",
+                        "-Wno-pointer-to-int-cast",
+                        "-Wno-int-to-pointer-cast",
+                        "-Wno-incompatible-pointer-types",
+                        f"-I{tmpdir}",
+                        f"-I{SUB_DIR}",
+                        str(harness_c),
+                        "-o",
+                        str(harness_bin),
+                    ],
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                out = subprocess.check_output([str(harness_bin)], text=True)
+
+            res: dict[int, list[int]] = {}
+            for line in out.strip().splitlines():
+                parts = line.split(":")
+                dt = int(parts[0])
+                res[dt] = [int(v) for v in parts[1].split(",")]
+
+            for dt in (1, 2, 8, 9, 10):
+                with self.subTest(displaytype=dt):
+                    self.assertEqual(res[dt][0], 720, f"dt={dt} width must be 720")
+                    self.assertEqual(res[dt][1], 480, f"dt={dt} height must be 480")
+                    self.assertEqual(res[dt][2], 736, f"dt={dt} buffer_width must be 736")
+                    self.assertEqual(res[dt][3], 73610, f"dt={dt} opacity offset (10,100) must be 73610")
+
+            self.assertEqual(res[12][0], 900, "dt=12 width must be 900")
+            self.assertEqual(res[12][1], 600, "dt=12 height must be 600")
+            self.assertEqual(res[12][2], 928, "dt=12 buffer_width must be 928")
+            self.assertEqual(res[12][3], 92810, "dt=12 opacity offset (10,100) must be 92810")
+        else:
+            self.skipTest("Host C compiler (gcc) not available")
 
     def test_camera_screen_static_initialization_in_binary(self) -> None:
         """Binary inspection: camera_screen in candidate .data matches 900x600 stride 928 disp_width 900."""

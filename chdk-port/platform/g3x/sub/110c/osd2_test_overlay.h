@@ -51,20 +51,19 @@
 /* Default LCD screen dimensions (displaytype 1, 2, 8, 9, 10)
  * [evidence/port35_manifest.json: PORT35-ROM-BMPDDEV (jump table at 0xFC1834F8);
  *  chdk-port/platform/g7x/platform_camera.h:61-65; chdk-port/platform/g7x/lib.c:323-332] */
-#if defined(G3X_GUI5) && (G3X_GUI5 == 1)
-#define G3X_OSD2_DEFAULT_WIDTH         900
-#define G3X_OSD2_DEFAULT_HEIGHT        600
-#define G3X_OSD2_DEFAULT_BUFFER_WIDTH  928
-#define G3X_OSD2_DEFAULT_BUFFER_HEIGHT 600
-#define G3X_OSD2_DEFAULT_SIZE          540000
-#define G3X_OSD2_DEFAULT_BUFFER_SIZE   556800
-#else
 #define G3X_OSD2_DEFAULT_WIDTH         720
 #define G3X_OSD2_DEFAULT_HEIGHT        480
 #define G3X_OSD2_DEFAULT_BUFFER_WIDTH  736
 #define G3X_OSD2_DEFAULT_BUFFER_HEIGHT 480
 #define G3X_OSD2_DEFAULT_SIZE          345600
 #define G3X_OSD2_DEFAULT_BUFFER_SIZE   353280
+
+#if defined(G3X_GUI5) && (G3X_GUI5 == 1)
+/* Initial camera_screen dimensions for G3X_GUI5 before first g3x_osd2_update_screen_dimensions() */
+#define G3X_GUI5_INITIAL_WIDTH         900
+#define G3X_GUI5_INITIAL_HEIGHT        600
+#define G3X_GUI5_INITIAL_BUFFER_WIDTH  928
+#define G3X_GUI5_INITIAL_BUFFER_HEIGHT 600
 #endif
 
 /* Alternate displaytype dimensions in GM1.10C BmpDDev.c sub_fc18347e (jump table at 0xFC1834F8)
