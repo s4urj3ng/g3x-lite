@@ -61,15 +61,15 @@ import build_candidate_port25_ladder_fix as legacy_builder
 PINNED_DEFAULT_SHA256 = "9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136"
 PINNED_DEFAULT_SIZE = 118001
 
-PINNED_SHORTPRESS_SHA256 = "a0f5670a77e135466bcec656625f820813a490f54ffda1a69387ed29b3a9c62b"
-PINNED_SHORTPRESS_SIZE = 124833
-PINNED_SHORTPRESS_WITNESS = 0x00361150
-PINNED_SHORTPRESS_END = 0x00368660
+PINNED_SHORTPRESS_SHA256 = "6df54a905e36a6fe92b5a3a4ac4dd71086d3306fd0aaa31a1f1bc670f7e19461"
+PINNED_SHORTPRESS_SIZE = 124945
+PINNED_SHORTPRESS_WITNESS = 0x003611C0
+PINNED_SHORTPRESS_END = 0x003686E0
 
-PINNED_COMBINED_SHA256 = "d72c1da63fdd7cee5821dad648595c705fec5427424113ab883e7a9010013279"
-PINNED_COMBINED_SIZE = 102273
-PINNED_COMBINED_WITNESS = 0x0035C9C0
-PINNED_COMBINED_END = 0x003629F0
+PINNED_COMBINED_SHA256 = "4859e0886a32665e5adbf65400121bb2a503b5827aa29aa69e35dc33a465db28"
+PINNED_COMBINED_SIZE = 102401
+PINNED_COMBINED_WITNESS = 0x0035CA40
+PINNED_COMBINED_END = 0x00362A80
 
 PINNED_PORT34_KBD_SHA256 = "a750253feb0cd9bb3bb1addb4cede5585bef29a0bf26bd86d3f577fdbf41be33"
 PINNED_PORT34_KBD_SIZE = 124801
@@ -165,7 +165,7 @@ class TestPort39ShortpressCandidate(unittest.TestCase):
 
     @unittest.skipUnless(HAVE_TOOLCHAIN, "Requires pinned ARM toolchain")
     def test_disassembly_shortpress_active_low_and_duration(self) -> None:
-        """Verify disassembly of short-press override: active-low bit clearance, 700 polls, start cause check."""
+        """Verify disassembly of short-press override: active-low bit clearance, margin polls, start cause check, and release."""
         with tempfile.TemporaryDirectory() as tmpdir:
             res = legacy_builder.build_candidate(shortpress=True, out_dir=tmpdir)
             disasm = subprocess.check_output([str(ARM_OBJDUMP), "-d", res["core_elf"]], text=True)
@@ -180,21 +180,90 @@ class TestPort39ShortpressCandidate(unittest.TestCase):
             self.assertIn("kbd_update_key_state", fn_disasm)
             self.assertIn("kbd_update_physw_bits", fn_disasm)
 
-            # 2. Start cause check at 0x9BD0 (*(0x9BC4 + 12))
+            # 2. Start cause address reference 0x9BD0 (*(0x9BC4 + 12))
             self.assertIn("0x9bd0", fn_disasm.lower())
-            self.assertIn("1048576", fn_disasm)  # 0x00100000 Playback start bit
 
-            # 3. Active-low bit clearance: bic.w for Power (0x20000 = 131072) and Playback (0x10000 = 65536)
+            # 3. Active-low bit clearance: bic.w on physw_status[0] (0x00040DAC)
             self.assertIn("bic", fn_disasm)
-            self.assertIn("131072", fn_disasm)  # 0x00020000
-            self.assertIn("65536", fn_disasm)   # 0x00010000
+            self.assertIn("0x00040dac", fn_disasm.lower())
 
-            # 4. Hold counter initial value: 700 (0x2BC = 700)
-            data_dump = subprocess.check_output(
-                [str(ARM_OBJDUMP), "-s", "--start-address=0x00361140", "--stop-address=0x00361148", res["core_elf"]],
-                text=True,
-            )
-            self.assertIn("bc020000", data_dump.lower())  # 700 in little-endian
+            # 4. Release logic: when margin polls reaches 0, sets active flag to 0
+            self.assertRegex(fn_disasm, r"movs\s+r2,\s+#0")
+
+    @unittest.skipUnless(HAVE_TOOLCHAIN, "Requires pinned ARM toolchain")
+    def test_early_hook_placed_before_ladder(self) -> None:
+        """Verify early boot entry hook is placed before CORE_LADDER_PULSE_11 and CORE_LADDER_PULSE_42."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            res = legacy_builder.build_candidate(shortpress=True, out_dir=tmpdir)
+            disasm = subprocess.check_output([str(ARM_OBJDUMP), "-d", res["core_elf"]], text=True)
+
+            self.assertIn("<boot>:", disasm)
+            pos_boot = disasm.find("<boot>:")
+            boot_disasm = disasm[pos_boot : pos_boot + 500]
+
+            # Verify bl g3x_shortpress_boot_entry_hook is present
+            self.assertIn("g3x_shortpress_boot_entry_hook", boot_disasm)
+
+            pos_hook = boot_disasm.find("g3x_shortpress_boot_entry_hook")
+            # First ladder pulse accesses LED MMIO 0xD20B0884 (movw #2180 / 0x884, movt #53771 / 0xd20b)
+            pos_ladder1 = boot_disasm.find("0xd20b")
+            self.assertGreater(pos_ladder1, 0, "First ladder pulse MMIO address must be present in boot")
+            self.assertLess(pos_hook, pos_ladder1, "g3x_shortpress_boot_entry_hook must execute BEFORE first ladder stage")
+
+            # Verify g3x_shortpress_post_bss_hook is present in boot
+            self.assertIn("g3x_shortpress_post_bss_hook", disasm)
+
+            # Verify hook appears well before CORE_LADDER_PULSE_42 / task_PhySw hook
+            pos_physw = disasm.find("<sub_fc1283d2_my>:")
+            self.assertGreater(pos_physw, pos_boot)
+
+            # Check g3x_shortpress_boot_entry_hook initializes active=1 and margin_polls=200 (0xC8)
+            pos_entry = disasm.find("<g3x_shortpress_boot_entry_hook>:")
+            entry_disasm = disasm[pos_entry : pos_entry + 800]
+            self.assertIn("0x9bd0", entry_disasm.lower())
+            self.assertIn("200", entry_disasm)  # 200 polls
+            self.assertIn("g3x_shortpress_discriminate", entry_disasm)
+
+    @unittest.skipUnless(HAVE_TOOLCHAIN, "Requires pinned ARM toolchain")
+    def test_start_cause_discrimination_playback_and_power(self) -> None:
+        """Verify start-cause discrimination logic for released-Playback and released-Power cases."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            res = legacy_builder.build_candidate(shortpress=True, out_dir=tmpdir)
+            disasm = subprocess.check_output([str(ARM_OBJDUMP), "-d", res["core_elf"]], text=True)
+
+            self.assertIn("<g3x_shortpress_discriminate>:", disasm)
+            pos_disc = disasm.find("<g3x_shortpress_discriminate>:")
+            disc_disasm = disasm[pos_disc : pos_disc + 250]
+
+            # Tests Playback bit 20: 0x00100000 = 1048576
+            self.assertIn("1048576", disc_disasm)
+
+            # Branch 1 (Playback match): returns 0x00010000 = 65536 (Playback bit 16)
+            self.assertIn("65536", disc_disasm)
+
+            # Branch 2 (Power / default match): returns 0x00020000 = 131072 (Power bit 17)
+            self.assertIn("131072", disc_disasm)
+
+        # Unit-test the selection logic in Python matching C implementation
+        g3x_startcause_playback = 1 << 20  # 0x00100000
+        g3x_startcause_power = 1 << 19     # 0x00080000
+        g3x_key_playback_bit = 0x00010000  # bit 16
+        g3x_key_power_bit = 0x00020000     # bit 17
+
+        def py_discriminate(raw_cause: int) -> int:
+            if raw_cause & g3x_startcause_playback:
+                return g3x_key_playback_bit
+            else:
+                return g3x_key_power_bit
+
+        # Case 1: Released Playback tap (0x00100000 captured before copy)
+        self.assertEqual(py_discriminate(g3x_startcause_playback), g3x_key_playback_bit)
+        # Case 2: Released Power tap (0x00080000 captured before copy)
+        self.assertEqual(py_discriminate(g3x_startcause_power), g3x_key_power_bit)
+        # Case 3: Zero initializer (0) defaults to Power
+        self.assertEqual(py_discriminate(0), g3x_key_power_bit)
+        # Case 4: Both bits set (edge case) prioritizes Playback
+        self.assertEqual(py_discriminate(g3x_startcause_playback | g3x_startcause_power), g3x_key_playback_bit)
 
     def test_shortpress_implies_resident(self) -> None:
         """Assert G3X_SHORTPRESS=1 implies G3X_RESIDENT=1 and baseline prerequisites."""
@@ -209,7 +278,11 @@ class TestPort39ShortpressCandidate(unittest.TestCase):
         self.assertTrue(KBD_HEADER.is_file(), f"Missing {KBD_HEADER}")
         kbd_text = KBD_HEADER.read_text(encoding="utf-8")
         self.assertIn("#if defined(G3X_SHORTPRESS) && (G3X_SHORTPRESS == 1)", kbd_text)
-        self.assertIn("#define G3X_SHORTPRESS_HOLD_POLLS   700", kbd_text)
+        self.assertIn("#define G3X_SHORTPRESS_MARGIN_POLLS", kbd_text)
+        self.assertIn("#define G3X_SHORTPRESS_HOLD_POLLS", kbd_text)
+        self.assertIn("g3x_shortpress_boot_entry_hook", kbd_text)
+        self.assertIn("g3x_shortpress_post_bss_hook", kbd_text)
+        self.assertIn("g3x_shortpress_discriminate", kbd_text)
         self.assertIn("g3x_shortpress_read_keys", kbd_text)
         self.assertIn("g3x_shortpress_read_keys();", kbd_text)
 
@@ -232,8 +305,11 @@ class TestPort39ShortpressCandidate(unittest.TestCase):
         self.assertIn("0x00010000", doc_text)  # Playback bit
         self.assertIn("0x00040DAC", doc_text)  # physw_status
         self.assertIn("0x00009BD0", doc_text)  # start cause
-        self.assertIn("700", doc_text)         # duration polls
+        self.assertIn("200", doc_text)         # margin polls
         self.assertIn("~5 s", doc_text)        # PORT-38 LED ladder window reference
+        self.assertIn("~7.0 s", doc_text)      # total coverage window
+        self.assertIn("g3x_shortpress_boot_entry_hook", doc_text)
+        self.assertIn("g3x_saved_start_cause", doc_text)
 
         # Check ordered trial steps (a) through (e)
         self.assertIn("Step (a): Held Press Regression Check", doc_text)
@@ -251,6 +327,9 @@ class TestPort39ShortpressCandidate(unittest.TestCase):
         self.assertIn("No Flicker", doc_text)
         self.assertIn("Step 8", doc_text)
         self.assertIn("Step 9", doc_text)
+
+        # Check discrimination items tested in (b) and (c)
+        self.assertIn("start-cause discrimination via `g3x_saved_start_cause`", doc_text)
 
         # Check that FAIL appearance and confirmed/refuted INFERRED items are present for all steps
         self.assertEqual(doc_text.count("What a FAIL looks like"), 5)

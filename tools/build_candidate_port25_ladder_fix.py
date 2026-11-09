@@ -247,11 +247,50 @@ def generate_boot_prototype_resident_c() -> str:
         '        "    b.w     sub_fc0d0126\\n"'
     )
 
+    target_early = '"    mov     sp, r0\\n" CORE_LADDER_PULSE_11'
+    repl_early = (
+        '        "    mov     sp, r0\\n"\n'
+        '#if defined(G3X_SHORTPRESS) && (G3X_SHORTPRESS == 1)\n'
+        '        "    push    {r0, r1, r2, r3, r12, lr}\\n"\n'
+        '        "    bl      g3x_shortpress_boot_entry_hook\\n"\n'
+        '        "    pop     {r0, r1, r2, r3, r12, lr}\\n"\n'
+        '#endif\n'
+        '        CORE_LADDER_PULSE_11'
+    )
+
+    target_post_bss = '"    blo     loc_zero_bss\\n" CORE_LADDER_PULSE_12'
+    repl_post_bss = (
+        '"    blo     loc_zero_bss\\n" CORE_LADDER_PULSE_12\n'
+        '#if defined(G3X_SHORTPRESS) && (G3X_SHORTPRESS == 1)\n'
+        '        "    push    {r0, r1, r2, r3, r12, lr}\\n"\n'
+        '        "    bl      g3x_shortpress_post_bss_hook\\n"\n'
+        '        "    pop     {r0, r1, r2, r3, r12, lr}\\n"\n'
+        '#endif'
+    )
+
+    target_pwr_fix = '"    bl      sub_fc1284ac\\n" "    movs    r0, #1\\n" "    b       loc_fc05b978\\n" "    nop\\n"'
+    repl_pwr_fix = (
+        '#if defined(G3X_SHORTPRESS) && (G3X_SHORTPRESS == 1)\n'
+        '        "    bl      sub_fc1284ac\\n"\n'
+        '        "    ldr     r0, =g3x_saved_start_cause\\n"\n'
+        '        "    ldr     r1, [r0]\\n"\n'
+        '        "    ldr     r0, =0x00009bd0\\n"\n'
+        '        "    str     r1, [r0]\\n"\n'
+        '        "    movs    r0, #1\\n"\n'
+        '        "    b       loc_fc05b978\\n"\n'
+        '#else\n'
+        '        "    bl      sub_fc1284ac\\n" "    movs    r0, #1\\n" "    b       loc_fc05b978\\n" "    nop\\n"\n'
+        '#endif'
+    )
+
     resident_replacements = [
         (target_new_sa, repl_new_sa),
         (target_heap_ldr, repl_heap_ldr),
         (target_task_physw, repl_task_physw),
         (target_handoff, repl_handoff),
+        (target_early, repl_early),
+        (target_post_bss, repl_post_bss),
+        (target_pwr_fix, repl_pwr_fix),
     ]
     for target, repl in resident_replacements:
         if target not in src:
@@ -1987,6 +2026,7 @@ def main():
         osd2=osd2,
         gui=gui,
         gui2=gui2,
+        shortpress=shortpress,
     )
 
     print("\nSummary:")
@@ -2003,6 +2043,7 @@ def main():
     print(f"  osd2:         {res['osd2']}")
     print(f"  gui:          {res['gui']}")
     print(f"  gui2:         {res['gui2']}")
+    print(f"  shortpress:   {res['shortpress']}")
 
 
 if __name__ == "__main__":

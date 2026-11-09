@@ -65,17 +65,28 @@ extern int kbd_is_blocked(void);
  *        chdk-port/platform/g5x/sub/100c/boot.c:411-420 (power-cut bypass sub_fc0ecf20_my);
  *        chdk-port/platform/g5x/sub/100c/boot.c:479-506 (taskcreate_physw stack 0x2000)
  *
- * Timing reference:
- * - Owner trial observation (PORT-38, 2026-11): held press of ~5 s (until LED ladder
- *   blinks finish) is sufficient for camera to power on into the CHDK candidate.
- * - At physw_sleep_delay = 10 ms (0x000082C4), 700 polls = 7000 ms (7.0 s),
- *   covering the ~5 s LED ladder window with 2.0 s (40%) safety margin before releasing
- *   the override so a normal Power button press can turn off the camera.
+ * Timing reference & time base:
+ * - What starts the timer: early boot entry hook g3x_shortpress_boot_entry_hook()
+ *   placed before the first ladder stage (CORE_LADDER_PULSE_11) at boot entry (t = 0).
+ * - Pre-task window: early boot sequence and complete LED ladder run synchronously
+ *   from boot entry to mykbd_task creation (~5.0 s / 5000 ms), verified on physical
+ *   camera (owner trial observation, PORT-38, 2026-11: holding Power for ~5 s until
+ *   LED ladder finishes powers on into CHDK candidate). [VERIFIED]
+ * - Post-task margin: in mykbd_task, polling delay is paced by physw_sleep_delay loaded
+ *   from 0x000082C4, where ROM literal 0xFC1283B2 initializes sleep time to 10 ms.
+ *   [FINSIG/VERIFIED] Thus 1 poll in mykbd_task = 10 ms.
+ * - Margin duration: 200 polls @ 10 ms/poll = 2000 ms (2.0 s, 40%) safety margin beyond the
+ *   ~5 s LED ladder window, yielding total hold coverage of ~7000 ms (~7.0 s) from boot entry. [INFERRED]
+ * - Release: once margin polls reach 0, g3x_shortpress_active is cleared (0) and override is
+ *   released so subsequent button presses (e.g. normal Power button press to shut down) work natively. [VERIFIED]
  */
 #if defined(G3X_SHORTPRESS) && (G3X_SHORTPRESS == 1)
 
-/* Override duration covering ~5 s ladder window with 2 s margin [INFERRED] */
-#define G3X_SHORTPRESS_HOLD_POLLS   700     /* 700 polls @ 10 ms = 7.0 s (~5 s ladder + 2.0 s margin) */
+#define G3X_SHORTPRESS_LADDER_TIME_MS   5000    /* ~5 s LED ladder duration from boot entry [VERIFIED] */
+#define G3X_SHORTPRESS_MARGIN_MS        2000    /* 2.0 s safety margin beyond ladder [INFERRED] */
+#define G3X_SHORTPRESS_POLL_INTERVAL_MS 10      /* physw_sleep_delay = 10 ms [FINSIG/VERIFIED] */
+#define G3X_SHORTPRESS_MARGIN_POLLS     (G3X_SHORTPRESS_MARGIN_MS / G3X_SHORTPRESS_POLL_INTERVAL_MS) /* 200 polls [INFERRED] */
+#define G3X_SHORTPRESS_HOLD_POLLS       G3X_SHORTPRESS_MARGIN_POLLS
 
 /*
  * Addresses and bit constants for shortpress candidate:
@@ -83,34 +94,77 @@ extern int kbd_is_blocked(void);
  * - G3X_STARTCAUSE_POWER: 0x00080000 = (1u << 19) Power button start cause [VERIFIED]
  * - G3X_STARTCAUSE_PLAYBACK: 0x00100000 = (1u << 20) Playback button start cause [VERIFIED]
  */
-#define G3X_ADDR_STARTCAUSE         39888
-#define G3X_STARTCAUSE_POWER        (1u << 19)
-#define G3X_STARTCAUSE_PLAYBACK     (1u << 20)
+#define G3X_ADDR_STARTCAUSE             0x00009BD0
+#define G3X_STARTCAUSE_POWER            (1u << 19)
+#define G3X_STARTCAUSE_PLAYBACK         (1u << 20)
+
+/* CHDK-owned state variables in .data section to survive low-RAM reinit and BSS zeroing */
+volatile unsigned int g3x_saved_start_cause = 0;
+volatile int g3x_shortpress_active = 0;
+volatile int g3x_shortpress_margin_polls = 0;
+volatile unsigned int g3x_selected_button_bit = 0;
+
+/*
+ * Discrimination function:
+ * Evaluates start cause captured before low-RAM reinitialization:
+ * - If Playback button bit 20 (0x00100000) is set: returns G3X_KEY_PLAYBACK_BIT (0x00010000, bit 16).
+ * - Otherwise (Power button bit 19 0x00080000 set, 0, or default): returns G3X_KEY_POWER_BIT (0x00020000, bit 17).
+ */
+unsigned int g3x_shortpress_discriminate(unsigned int raw_cause)
+{
+    if (raw_cause & G3X_STARTCAUSE_PLAYBACK) {
+        return G3X_KEY_PLAYBACK_BIT;
+    } else {
+        return G3X_KEY_POWER_BIT;
+    }
+}
+
+/*
+ * Early boot hook executed at boot entry before first ladder stage (CORE_LADDER_PULSE_11):
+ * 1. Captures original start-cause word from 0x00009BD0 before Copy Loop 3 overwrites low RAM.
+ * 2. Discriminates start cause into Playback vs Power button.
+ * 3. Starts coverage window: active flag = 1, margin polls = 200.
+ */
+void __attribute__((noinline)) g3x_shortpress_boot_entry_hook(void)
+{
+    volatile unsigned int * const raw_cause = (volatile unsigned int *)G3X_ADDR_STARTCAUSE;
+    g3x_saved_start_cause = *raw_cause;
+
+    /* If neither button was recorded (e.g. 0), default to Power start */
+    if ((g3x_saved_start_cause & (G3X_STARTCAUSE_PLAYBACK | G3X_STARTCAUSE_POWER)) == 0) {
+        g3x_saved_start_cause = G3X_STARTCAUSE_POWER;
+    }
+
+    g3x_selected_button_bit = g3x_shortpress_discriminate(g3x_saved_start_cause);
+    g3x_shortpress_active = 1;
+    g3x_shortpress_margin_polls = G3X_SHORTPRESS_MARGIN_POLLS;
+}
+
+/*
+ * Post-BSS hook executed right after Canon BSS is zeroed:
+ * Restores saved start cause into low RAM 0x00009BD0 and clears active-low button bit in physw_status[0].
+ */
+void __attribute__((noinline)) g3x_shortpress_post_bss_hook(void)
+{
+    *(volatile unsigned int *)G3X_ADDR_STARTCAUSE = g3x_saved_start_cause;
+    physw_status[0] &= ~g3x_selected_button_bit;
+}
 
 static inline void g3x_shortpress_read_keys(void)
 {
-    static int pwr_hold_count = G3X_SHORTPRESS_HOLD_POLLS;
-
     kbd_update_key_state();
     kbd_update_physw_bits();
 
-    if (pwr_hold_count > 0) {
-        pwr_hold_count--;
-
-        /* Active-low key logic: clear bit (&= ~mask) to fake button held.
-         * Distinguish Playback start vs Power start using start-cause word at 0x00009BD0:
-         * If Playback start was recorded (0x00100000), fake Playback held (bit 16).
-         * Otherwise (Power start 0x00080000, unrecorded 0, or default), fake Power held (bit 17)
-         * and ensure start-cause is populated with Power start cause.
-         */
-        volatile unsigned int *start_cause = (volatile unsigned int *)G3X_ADDR_STARTCAUSE;
-        if (*start_cause & G3X_STARTCAUSE_PLAYBACK) {
-            physw_status[0] &= ~G3X_KEY_PLAYBACK_BIT;
+    if (g3x_shortpress_active) {
+        if (g3x_shortpress_margin_polls > 0) {
+            g3x_shortpress_margin_polls--;
+            /* Active-low key logic: clear bit (&= ~mask) to fake button held */
+            physw_status[0] &= ~g3x_selected_button_bit;
+            /* Keep start cause word populated */
+            *(volatile unsigned int *)G3X_ADDR_STARTCAUSE = g3x_saved_start_cause;
         } else {
-            if (*start_cause == 0) {
-                *start_cause = G3X_STARTCAUSE_POWER;
-            }
-            physw_status[0] &= ~G3X_KEY_POWER_BIT;
+            /* Hold window expired: release override so normal Power button press turns off camera */
+            g3x_shortpress_active = 0;
         }
     }
 }

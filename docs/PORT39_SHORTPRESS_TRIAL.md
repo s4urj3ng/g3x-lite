@@ -5,11 +5,12 @@
 Milestone PORT-39 addresses the short-press power-off limitation on the PowerShot G3 X (GM1.10C, PID `0x32A8`, DIGIC 6). In prior milestones, booting the CHDK candidate required physically holding the Power button. Owner input from the PORT-38 trial (2026-11) refined this understanding: holding the Power button for approximately 5 seconds—specifically until the LED breadcrumb ladder blinks finish—is sufficient for the camera to remain powered on and load the candidate.
 
 The short-press power-on mechanism adapts the closest DIGIC 6 sibling handling (PowerShot G7 X and G5 X) to GM1.10C:
-1. **Active-Low Button State Override**: DryOS button polling in `task_PhySw` uses active-low logic (`chdk-port/core/kbd_common.c:297, 338`). Clearing the bit (`&= ~mask`) indicates that a button is physically PRESSED/HELD, while setting the bit (`|= mask`) indicates RELEASED. In `my_kbd_read_keys_candidate()`, clearing Power bit 17 (`0x00020000`) or Playback bit 16 (`0x00010000`) fakes button held during startup.
-2. **Override Duration Paced to LED Ladder Window**: Owner trial input establishes that the required hold duration corresponds to the LED ladder execution window (~5.0 s). At `physw_sleep_delay = 10` ms (`0x000082C4`), 700 polling cycles correspond to 7000 ms (7.0 s), providing a 2.0 s (~40%) safety margin over the 5 s window. After 700 polls, the override is automatically released so subsequent button presses operate normally.
-3. **Start-Cause Mode Discrimination**: In `sub_fc08ecbc` (`0xFC08ECBC`), Canon firmware records the boot mode into `*(0x9BC4 + 12)` (`0x00009BD0`): `0x80000` for Power start (shooting mode) and `0x100000` for Playback start. The candidate inspects `0x00009BD0` to fake the matching button, ensuring Playback starts stay in Playback mode and Power starts boot into shooting mode.
-4. **Early Power-Cut Bypass**: In Stage 5 caller `sub_fc05b962_my` (`0xFC05B962`), the power-cut call to `sub_fc05ba56` is bypassed, matching sibling G5 X `sub_fc0ecf20_my:411-420`.
-5. **Task Stack Allocation**: In `sub_fc1283d2_my` (`0xFC1283D2`), `mykbd_task` is created with a dedicated 0x2000 (8192 B) stack via `j_CreateTaskStrictly` (`0xFC31BE8C`), matching sibling G5 X `boot.c:479-506`.
+1. **Early Boot Entry Hook & Saved-Cause Capture**: At boot entry (`boot()` in `boot_prototype.c`), before the first ladder stage (`CORE_LADDER_PULSE_11`) and before Copy Loop 3 overwrites low RAM (`0x00008000..0x0003F4F4`), `g3x_shortpress_boot_entry_hook()` samples the original startup cause from `*(0x9BC4 + 12)` (`0x00009BD0`) and preserves it in CHDK-owned variable `g3x_saved_start_cause`.
+2. **Start-Cause Mode Discrimination**: Evaluates `g3x_saved_start_cause`: Playback start (`0x00100000`) selects Playback switch bit 16 (`0x00010000`), while Power start (`0x00080000`, 0, or default) selects Power switch bit 17 (`0x00020000`).
+3. **Low-RAM Post-BSS Restoration**: After Copy Loop 3 and Canon BSS zeroing complete, `g3x_shortpress_post_bss_hook()` restores `0x00009BD0` from `g3x_saved_start_cause` and clears the active-low button bit in `physw_status[0]` (`0x00040DAC`). Stage 5 caller `sub_fc05b962_my` similarly maintains `0x00009BD0` after `sub_fc1284ac` returns 0.
+4. **Override Duration Paced to LED Ladder Window**: The coverage window starts at boot entry ($t = 0$), spanning the synchronous execution of the LED ladder (~5.0 s / 5000 ms, `VERIFIED` by PORT-38 owner trial). When `mykbd_task` starts after ladder pulse 42, it continues the override for `G3X_SHORTPRESS_MARGIN_POLLS = 200` polls. At `physw_sleep_delay = 10` ms (`0x000082C4`, `FINSIG`/`VERIFIED`), 200 polls provide 2000 ms (2.0 s, 40%) safety margin beyond the ladder, for a total hold window of ~7000 ms (~7.0 s) from boot entry.
+5. **Automatic Override Release**: Once the 200 margin polls complete, `g3x_shortpress_active` is cleared (0) and the override is released, allowing subsequent physical button presses (e.g. normal Power button press to shut down) to operate natively.
+6. **Task Stack Allocation**: In `sub_fc1283d2_my` (`0xFC1283D2`), `mykbd_task` is created with a dedicated 0x2000 (8192 B) stack via `j_CreateTaskStrictly` (`0xFC31BE8C`), matching sibling G5 X `boot.c:479-506`.
 
 All short-press code is strictly guarded behind `#if defined(G3X_SHORTPRESS) && (G3X_SHORTPRESS == 1)`. The default build and all prior candidate builds remain 100% byte-identical.
 
@@ -17,10 +18,13 @@ All short-press code is strictly guarded behind `#if defined(G3X_SHORTPRESS) && 
 
 ## 2. Adapted-Value Table
 
-The table below lists every adapted address, bit, and duration mapping sibling sources to GM1.10C:
+The table below lists every adapted address, bit, hook, and duration mapping sibling sources to GM1.10C:
 
 | Item / Mechanism | Sibling Source path:line | GM1.10C Value (Address / Bit / Constant) | Label | Source Citation / Proof |
 |:---|:---|:---|:---:|:---|
+| **Boot entry hook** | `chdk-port/platform/g5x/sub/100c/boot.c:172-182` | `g3x_shortpress_boot_entry_hook` before `CORE_LADDER_PULSE_11` | `INFERRED` | Sibling G5 X samples button and writes start cause before task creation (`boot.c:172-182`); GM1.10C hooks `boot()` entry at `0x0034960E` before first ladder stage and before low-RAM copy. |
+| **Saved-cause variable** | `chdk-port/platform/g5x/sub/100c/boot.c:172-182` | `g3x_saved_start_cause` capturing `*(0x9BC4 + 12)` (`0x00009BD0`) | `INFERRED` | `0x00009BD0` address/bit meaning is `VERIFIED` in ROM (`docs/PORT24_POWERON_FIX.md:172-198`). Retention across soft restart into CHDK `boot()` entry is `INFERRED` and tested in trial steps (b)/(c). |
+| **Post-BSS restoration hook** | `chdk-port/platform/g5x/sub/100c/boot.c:172-182` | `g3x_shortpress_post_bss_hook` after `loc_zero_bss` | `INFERRED` | Restores `*(0x00009BD0) = g3x_saved_start_cause` and clears `physw_status[0]` bit after ROM-to-RAM copy loop overwrites low RAM. |
 | **Power switch bit** | `chdk-port/platform/g7x/kbd.c:50`<br>`chdk-port/platform/g5x/sub/100c/physw_bits.txt:16` | Word 0, bit 17 (`0x00020000`, levent `0x100`) | `FINSIG` | `reference/finsig_gm110c/physw_bits.txt:18`; `chdk-port/platform/g3x/platform_kbd.h:26` |
 | **Playback switch bit** | `chdk-port/platform/g7x/kbd.c:48`<br>`chdk-port/platform/g5x/sub/100c/physw_bits.txt:13` | Word 0, bit 16 (`0x00010000`, levent `0x101`) | `FINSIG` | `reference/finsig_gm110c/physw_bits.txt:17`; `chdk-port/platform/g3x/platform_kbd.h:25` |
 | **Physical switch buffer** | `chdk-port/platform/g5x/kbd.c:118-126`<br>`chdk-port/platform/g7x/sub/100d/boot.c:382` | `physw_status[0]` at `0x00040DAC` | `VERIFIED` | `reference/finsig_gm110c/stubs_entry.S:173` (FINSIG); manifest `docs/port34_evidence_manifest.json` (`PORT34-ROM-KBD-P1-F-LITERALS`, start `0xFC12868C`, len 164 B, SHA-256 `bc6ca612429d161a14b2dee2d12599dbb8f9c824b4915ea8086371156f98aaee`) |
@@ -30,25 +34,21 @@ The table below lists every adapted address, bit, and duration mapping sibling s
 | **Start-cause structure** | `chdk-port/platform/g5x/sub/100c/boot.c:172-182`<br>`g3x_110e.patch:P1685-1691` | `*(volatile unsigned int *)(0x9BC4 + 12)` (`0x00009BD0`) | `VERIFIED` | Manifest `docs/agentbridge/PORT24_POWERON_EVIDENCE_MANIFEST.json` (`PORT24-ROM-STARTCAUSE-SAVE`, start `0xFC08ECB0`, len 80 B, SHA-256 `039ca184b58d48f853b02fd60a4ad72f45f389790e6da71c6488d99162f8277d`; `PORT24-ROM-STARTCAUSE-PTR`, start `0xFC08EEE0`, len 32 B, SHA-256 `0ceabc1be63a68d5c37a240c220c5e3e4448271ffa11c6d28c4a3d20e72506c6`) |
 | **Start-cause values** | `chdk-port/platform/g5x/sub/100c/boot.c:172-182`<br>`g3x_110e.patch:P1685-1691` | Power: `0x00080000`; Playback: `0x00100000` | `VERIFIED` | Written by `sub_fc08ecbc` in GM1.10C ROM (`docs/PORT24_POWERON_FIX.md:172-198`). Manifest: `PORT24-ROM-STARTCAUSE-SAVE`. |
 | **Power-cut bypass** | `chdk-port/platform/g5x/sub/100c/boot.c:411-420` (`sub_fc0ecf20_my`) | `sub_fc05b962_my` (`0xFC05B962`) bypasses `sub_fc05ba56` (`0xFC05BA56`), forcing `r0 = 1` | `VERIFIED` | Manifest `docs/agentbridge/PORT24_POWERON_EVIDENCE_MANIFEST.json` (`PORT24-ROM-CALLER-STARTUP`, start `0xFC05B960`, len 96 B; `PORT24-ROM-POWERCUT`, start `0xFC05BA50`, len 32 B) |
-| **Override duration** | Owner observation (PORT-38 trial, 2026-11) (held press of ~5 s until LED ladder finishes) | `G3X_SHORTPRESS_HOLD_POLLS = 700` (7000 ms = 7.0 s @ 10 ms/poll) | `INFERRED` | Owner observation verified ~5 s LED ladder window (`VERIFIED`); 700 polls provides ~2.0 s (40%) safety margin over ladder before releasing override (`INFERRED`). |
+| **Hold duration & time base** | Owner observation (PORT-38 trial, 2026-11) (held press of ~5 s until LED ladder finishes) | Pre-task ladder (~5000 ms) + `G3X_SHORTPRESS_MARGIN_POLLS = 200` polls @ 10 ms = ~7000 ms (~7.0 s) from boot entry | `INFERRED` | Owner observation verified ~5 s LED ladder window (`VERIFIED`); `physw_sleep_delay = 10` ms (`0x000082C4`, `FINSIG`/`VERIFIED`). 200 polls provides ~2.0 s (40%) safety margin beyond ladder before releasing override (`INFERRED`). |
 
 ---
 
-## 3. Override Duration Analysis & PORT-38 Timing Reference
+## 3. Override Duration Analysis & Time Base (PORT-38 Timing Reference)
 
-In the PORT-38 owner trial (2026-11), the owner noted that holding the Power button does not need to last until the stock UI loads. Holding Power for about 5 seconds—until the LED ladder blinks complete—is sufficient for the camera to remain powered on into the CHDK candidate.
+In the PORT-38 owner trial (2026-11), the owner observed that holding the Power button does not need to last until the stock UI loads. Holding Power for about 5 seconds—until the LED breadcrumb ladder blinks finish—is sufficient for the camera to remain powered on into the CHDK candidate.
 
-**Hold Duration Calculation**:
-- `physw_sleep_delay = 10` ms (`0x000082C4`, VERIFIED in ROM).
-- LED ladder execution window: ~5000 ms (~500 polls).
-- Safety margin: 2000 ms (200 polls, +40% margin).
-- Total override duration: `G3X_SHORTPRESS_HOLD_POLLS = 700` polls ($700 \times 10\text{ ms} = 7000\text{ ms} = 7.0\text{ s}$).
-
-**Lifecycle of the Override**:
-1. At cold boot or breadcrumb ladder handoff, `mykbd_task` starts polling.
-2. For the first 700 polls (~7.0 s), `my_kbd_read_keys_candidate()` intercepts key reads and forces the active-low button bit to 0 (`&= ~mask`), faking the button still held.
-3. At the end of 700 polls, `pwr_hold_count` reaches 0. The override is deactivated, and `physw_status[0]` reflects actual physical switch state.
-4. When the user subsequently presses the Power button, the button press is detected normally by Canon firmware, initiating clean power-down.
+**Time Base & Hold Window Breakdown**:
+1. **Timer Start**: The coverage timer begins at boot entry ($t = 0$) when `g3x_shortpress_boot_entry_hook()` runs immediately after `sp` initialization and before `CORE_LADDER_PULSE_11`.
+2. **Pre-Task Window (LED Ladder Execution)**: Spans the synchronous execution of early boot and all 20 breadcrumb ladder stages from boot entry to `sub_fc1283d2_my` (pulse 42), lasting approximately 5000 ms (~5.0 s) on physical camera (`VERIFIED` by PORT-38 trial observation).
+3. **Task Creation & Sleep Delay Mapping**: After pulse 42, `sub_fc1283d2_my` creates `mykbd_task`. In `mykbd_task`, the task loop executes `_SleepTask(physw_sleep_delay)`. `physw_sleep_delay` is loaded from `0x000082C4`, which is initialized to 10 in Low RAM (verified at ROM literal `0xFC1283B2` in `task_PhySw`, `reference/finsig_gm110c/stubs_entry.S:172`). Thus, each poll in `mykbd_task` maps to exactly 10 ms.
+4. **Post-Task Margin**: In `mykbd_task`, `my_kbd_read_keys_candidate()` / `g3x_shortpress_read_keys()` maintains the override for `G3X_SHORTPRESS_MARGIN_POLLS = 200` polls ($200 \times 10\text{ ms} = 2000\text{ ms} = 2.0\text{ s}$), providing a 40% safety margin beyond the ladder.
+5. **Total Coverage Window**: Spans $\sim 5000\text{ ms} + 2000\text{ ms} = \sim 7000\text{ ms}$ ($\sim 7.0\text{ s}$) measured from boot entry.
+6. **Automatic Release**: When `g3x_shortpress_margin_polls` reaches 0, `g3x_shortpress_active` is cleared (0). Subsequent polls no longer clear button bits in `physw_status[0]`. When the user later presses the Power button, the press is detected normally by Canon firmware, initiating clean power-down.
 
 ---
 
@@ -58,8 +58,8 @@ Built with pinned toolchain `toolchains/gcc-arm-none-eabi-5_4-2016q3`:
 
 | Candidate Configuration | DISKBOOT Size | DISKBOOT SHA-256 | Boot Witness | Linked `_end` | Heap Clearance |
 |---|---|---|---|---|---|
-| **`G3X_SHORTPRESS=1` (Plain Candidate)** | 124,833 B | `a0f5670a77e135466bcec656625f820813a490f54ffda1a69387ed29b3a9c62b` | `0x00361150` | `0x00368660` | 544 B |
-| **`G3X_SHORTPRESS=1` + `G3X_GUI4=1` (Combined)** | 102,273 B | `d72c1da63fdd7cee5821dad648595c705fec5427424113ab883e7a9010013279` | `0x0035C9C0` | `0x003629F0` | 24,208 B |
+| **`G3X_SHORTPRESS=1` (Plain Candidate)** | 124,945 B | `6df54a905e36a6fe92b5a3a4ac4dd71086d3306fd0aaa31a1f1bc670f7e19461` | `0x003611C0` | `0x003686E0` | 416 B |
+| **`G3X_SHORTPRESS=1` + `G3X_GUI4=1` (Combined)** | 102,401 B | `4859e0886a32665e5adbf65400121bb2a503b5827aa29aa69e35dc33a465db28` | `0x0035CA40` | `0x00362A80` | 24,064 B |
 
 DryOS heap base is `0x00368880` (`docs/port34_evidence_manifest.json: PORT34-ROM-HEAP-KBD`), providing positive clearance above linked `_end` for both configurations.
 
@@ -94,7 +94,7 @@ Every prior build remains 100% byte-identical to its pinned baseline:
 
 ## 7. Owner Trial Plan (Ordered Steps a–e)
 
-Use the combined candidate `G3X_SHORTPRESS=1 G3X_GUI4=1` (`DISKBOOT.BIN` SHA-256 `d72c1da63fdd...`, size `102,273` B).
+Use the combined candidate `G3X_SHORTPRESS=1 G3X_GUI4=1` (`DISKBOOT.BIN` SHA-256 `4859e0886a32665e5adbf65400121bb2a503b5827aa29aa69e35dc33a465db28`, size `102,401` B).
 
 ### Step (a): Held Press Regression Check (PORT-38 GUI4 Baseline)
 - **Action**: Insert SD card with combined build `DISKBOOT.BIN`. Press and hold Power button for ~5 seconds through the LED ladder until stock Playback UI loads. Press Playback button to enter ALT mode; press Menu button to open the CHDK menu.
@@ -107,29 +107,29 @@ Use the combined candidate `G3X_SHORTPRESS=1 G3X_GUI4=1` (`DISKBOOT.BIN` SHA-256
   - **Step 8**: Sentinel byte `0x42` restores overlay after stock OSD toggle (`PASS`).
   - **Step 9**: Menu close and ALT exit cleanly erase CHDK overlay and restore stock controls (`PASS`).
 - **What a FAIL looks like**: Overlapping or unreadable 8x16 font; unreadable header (black text on dark background); menu flickering or blinking at idle; crash on ALT toggle.
-- **Item Confirmed/Refuted**: Confirms `INFERRED` that combining `G3X_SHORTPRESS=1` with `G3X_GUI4=1` introduces zero regression to font rendering, menu layout, opacity fill, or task coordination.
+- **Item Confirmed/Refuted**: Confirms `INFERRED` that combining `G3X_SHORTPRESS=1` with `G3X_GUI4=1` introduces zero regression to font rendering, menu layout, opacity fill, or task coordination against the PORT-38 baseline.
 
 ### Step (b): Short Press into Playback Mode
 - **Action**: From clean power-off state, perform a brief short tap ($<0.5\text{ s}$) on the **Playback** button.
-  *(Note: Contrast with the reference held-press timing of ~5 s required in prior trials).*
-- **Expected Result**: Camera powers on, executes LED ladder, overrides Playback switch state (`physw_status[0] &= ~0x00010000`) for 700 polls (~7.0 s), bypasses shutdown, and successfully loads stock Playback UI with CHDK candidate resident (rear green LED blinks steady ~1.0 Hz single blink).
-- **What a FAIL looks like**: Camera cuts power during or at the end of the LED ladder (Code 43 terminal shutdown; outcome O10), or LCD remains off.
-- **Item Confirmed/Refuted**: Confirms `INFERRED` that clearing Playback bit 16 in `physw_status[0]` with start cause `0x00100000` at `0x00009BD0` across the ~5 s LED ladder window prevents premature shutdown when booting via Playback button. Refutes if camera cuts power at Code 43.
+  *(Note: Contrast with the reference held-press timing of ~5 s required in prior trials to bridge the LED ladder window).*
+- **Expected Result**: Camera powers on, captures start cause `0x00100000` at boot entry, executes LED ladder (~5 s), restores `0x00009BD0 = 0x00100000`, overrides Playback switch state (`physw_status[0] &= ~0x00010000`) for 200 polls (~2.0 s post-ladder), bypasses shutdown, and successfully loads stock Playback UI with CHDK candidate resident (rear green LED blinks steady ~1.0 Hz single blink).
+- **What a FAIL looks like**: Camera cuts power during or at the end of the LED ladder (Code 43 terminal shutdown; outcome O10), boots into shooting mode instead of Playback mode, or LCD remains off.
+- **Item Confirmed/Refuted**: Confirms `INFERRED` item: start-cause discrimination via `g3x_saved_start_cause` captured before Low-RAM reinitialization correctly identifies Playback button start (`0x00100000`) and synthesizes Playback held (`physw_status[0] &= ~0x00010000`), keeping camera in Playback mode without cutting power. Refutes if camera boots into shooting mode or cuts power at Code 43.
 
 ### Step (c): Short Press into Shooting Mode
 - **Action**: From clean power-off state, perform a brief short tap ($<0.5\text{ s}$) on the **Power** button.
-- **Expected Result**: Camera powers on, executes LED ladder, extends zoom lens, overrides Power switch state (`physw_status[0] &= ~0x00020000`) for 700 polls (~7.0 s), bypasses shutdown, and reaches live shooting mode with CHDK candidate resident (heartbeat LED alive, live view display active on LCD).
-- **What a FAIL looks like**: Camera cuts power during the ladder (Code 43), or lens extends partially and power cuts off (outcome O10).
-- **Item Confirmed/Refuted**: Confirms `INFERRED` that clearing Power bit 17 in `physw_status[0]` with start cause `0x00080000` at `0x00009BD0` across the ~5 s LED ladder window prevents premature shutdown when booting via Power button. Refutes if camera cuts power at Code 43.
+- **Expected Result**: Camera powers on, captures start cause `0x00080000` at boot entry, executes LED ladder (~5 s), restores `0x00009BD0 = 0x00080000`, extends zoom lens, overrides Power switch state (`physw_status[0] &= ~0x00020000`) for 200 polls (~2.0 s post-ladder), bypasses shutdown, and reaches live shooting mode with CHDK candidate resident (heartbeat LED alive, live view display active on LCD).
+- **What a FAIL looks like**: Camera cuts power during the ladder (Code 43), boots into Playback mode instead of shooting mode, or lens extends partially and power cuts off (outcome O10).
+- **Item Confirmed/Refuted**: Confirms `INFERRED` item: start-cause discrimination via `g3x_saved_start_cause` captured before Low-RAM reinitialization correctly identifies Power button start (`0x00080000` / default) and synthesizes Power held (`physw_status[0] &= ~0x00020000`), booting camera into Shooting mode (extending lens) without cutting power. Refutes if camera boots into Playback mode or cuts power.
 
 ### Step (d): Heartbeat LED Alive After 30 Seconds
 - **Action**: After short-press boot (either Step b or c), leave camera idle on a table for $\ge 30\text{ seconds}$ without touching any buttons. Observe rear green LED.
-- **Expected Result**: Rear green LED continues steady ~1.0 Hz single blink (`100 ms ON / 900 ms OFF`). Camera remains fully stable and responsive; DryOS tasks continue executing normally after the 700-poll (~7.0 s) override has expired.
+- **Expected Result**: Rear green LED continues steady ~1.0 Hz single blink (`100 ms ON / 900 ms OFF`). Camera remains fully stable and responsive; DryOS tasks continue executing normally after the ~7.0 s hold window has expired.
 - **What a FAIL looks like**: Heartbeat LED freezes ON, freezes OFF, stops blinking, or camera spontaneously shuts down after 7 seconds.
-- **Item Confirmed/Refuted**: Confirms `INFERRED` that the 700-poll (~7.0 s) hold window safely expires and returns control to physical switches without task starvation, deadlock, or watchdog panic in `task_PhySw` or `mykbd_task`. Refutes if camera crashes upon override expiration.
+- **Item Confirmed/Refuted**: Confirms `INFERRED` that the hold window (~5 s ladder + 200 polls @ 10 ms = ~7.0 s) safely expires and returns control to physical switches without task starvation, deadlock, or watchdog panic in `task_PhySw` or `mykbd_task`. Refutes if camera crashes upon override expiration.
 
 ### Step (e): Normal Power-Off With Power Button
 - **Action**: With camera running past 30 s, press and release the physical **Power** button normally.
 - **Expected Result**: Physical Power button press is detected by `my_kbd_read_keys_candidate` (override is inactive). Canon firmware executes clean shutdown: lens retracts smoothly (if in shooting mode), LCD turns off, power LED turns off, and PMIC power-hold line is released cleanly.
 - **What a FAIL looks like**: Camera ignores the Power button press and remains ON (override failed to release / stuck in hold loop); or camera crashes with lens extended.
-- **Item Confirmed/Refuted**: Confirms `INFERRED` that releasing the override after 700 polls restores normal physical Power button detection via Canon event dispatcher `_kbd_p2_f` (`0xFC12811F`), allowing clean user-directed power-down. Refutes if camera cannot be powered off with the button.
+- **Item Confirmed/Refuted**: Confirms `INFERRED` that releasing the override after 200 margin polls restores normal physical Power button detection via Canon event dispatcher `_kbd_p2_f` (`0xFC12811F`), allowing clean user-directed power-down. Refutes if camera cannot be powered off with the button.

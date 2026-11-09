@@ -55,9 +55,9 @@
 | `G3X_KBD_HEAP_START` | `0x00368880` | `HISTORICAL_CHDK` | `chdk-port/platform/g7x/sub/100d/boot.c:165`<br>`chdk-port/platform/g5x/sub/100c/boot.c:190` | **Confirms**: Raised heap start leaves 256+ B clearance above candidate core `_end`.<br>**Refutes**: Heap collision with core text/bss. | `tools/build_candidate_port25_ladder_fix.py` |
 | `handle_jogdial` | stubbed (`return 1`) | `INFERRED` | `chdk-port/platform/g7x/kbd.c:115` | **Confirms**: Jogdial passthrough does not crash or corrupt key event queue.<br>**Refutes**: Jogdial rotation causes unhandled exception or lockup. | `chdk-port/platform/g7x/kbd.c:115` |
 | `jogdial_control` | stubbed (`noop`) | `INFERRED` | `chdk-port/platform/g7x/kbd.c:135` | **Confirms**: Calling jogdial_control has no effect, preserving default behavior.<br>**Refutes**: Compiler warning or missing symbol at link time. | `chdk-port/platform/g7x/kbd.c:135` |
+| `G3X_START_CAUSE_ADDR` | `0x00009BD0` | `INFERRED` | `docs/PORT24_POWERON_FIX.md:145` | **Confirms**: Preserved start cause word before Low-RAM copy.<br>**Refutes**: Start cause lost or reset to 0. | `docs/PORT24_POWERON_FIX.md` |
 
 ## 3. Recorded KBD Candidate Hashes
 
 - **G3X_KBD=1 `DISKBOOT.BIN` SHA-256**: `a750253feb0cd9bb3bb1addb4cede5585bef29a0bf26bd86d3f577fdbf41be33` (`124,801` bytes)
 - **G3X_KBD=1 G3X_OSD=1 `DISKBOOT.BIN` SHA-256**: `686c4e4688f74cccd2b7a21e7000eb574672635cfd4d17c885d86bbf52eb99a8` (`125,121` bytes)
-
