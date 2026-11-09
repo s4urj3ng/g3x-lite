@@ -322,32 +322,148 @@ class TestPort38GuiGeometry(unittest.TestCase):
             self.assertIn("g3x_draw_char_16x32", m_mh.group(1))
 
     def test_zero_flicker_and_steps_8_9_preservation(self) -> None:
-        """No timer force_redraw; Step 8 sentinel recovery and Step 9 clean ALT exit kept."""
+        """PORT38-GUI4-REGRESS: No timer force_redraw; Step 8 sentinel recovery and Step 9 clean ALT exit kept."""
         with tempfile.TemporaryDirectory() as tmpdir:
             res_gui4 = build_candidate(gui4=True, out_dir=tmpdir)
+            elf_path = res_gui4["core_elf"]
             disasm = subprocess.run(
-                [str(ARM_OBJDUMP), "-d", res_gui4["core_elf"]],
+                [str(ARM_OBJDUMP), "-d", elf_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True,
+            ).stdout
+            nm_output = subprocess.run(
+                [str(ARM_NM), "-n", elf_path],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
                 check=True,
             ).stdout
 
+            # --- PORT-37 (B) Fix Verification: NO periodic force_redraw ---
             m_redraw = re.search(r"<g3x_gui_kbd_redraw>:(.*?)(?:\n\n|\Z)", disasm, re.DOTALL)
-            self.assertIsNotNone(m_redraw)
+            self.assertIsNotNone(m_redraw, "g3x_gui_kbd_redraw must exist in GUI4 ELF")
             redraw_code = m_redraw.group(1)
 
-            # 1. No timer force redraw (tick_cnt & 3)
+            # 1. No timer force redraw (tick_cnt & 3), no timer modulo
             self.assertNotRegex(redraw_code, r"(ands|tst(\.w)?)\s+r\d+,\s*#3")
             self.assertNotIn("kbd_get_clicked_key", redraw_code)
+            self.assertNotIn("kbd_get_pressed_key", redraw_code)
 
-            # 2. Step 8: sentinel check and buffer switch detection
-            self.assertIn("draw_test_guard", redraw_code)
-            self.assertIn("check_gui_needs_redraw", redraw_code)
-            self.assertIn("draw_set_guard", redraw_code)
+            # Check C source of GUI4 candidate generator (strip comments first)
+            gui4_c_src = generate_gui4_candidate_c(gui_diag=False)
+            code_without_comments = re.sub(r"/\*.*?\*/|//[^\n]*", "", gui4_c_src, flags=re.DOTALL)
+            self.assertNotIn("tick_cnt", code_without_comments, "Periodic tick_cnt must not return in code under GUI4")
+            self.assertNotIn("kbd_get_clicked_key", code_without_comments, "Per-key force_redraw must not return under GUI4")
+            self.assertNotIn("kbd_get_pressed_key", code_without_comments, "Per-key force_redraw must not return under GUI4")
 
-            # 3. Step 9: clean exit on leaving ALT
-            self.assertIn("gui_set_need_restore", redraw_code)
+            # Check build source retains Step 8 repaint logic and sentinel handling
+            self.assertIn("check_gui_needs_redraw()", code_without_comments, "GUI4 build source must check check_gui_needs_redraw()")
+            self.assertIn("draw_test_guard()", code_without_comments, "GUI4 build source must check draw_test_guard()")
+            self.assertIn("draw_set_guard()", code_without_comments, "GUI4 build source must re-arm sentinel via draw_set_guard()")
+            self.assertIn("g3x_fill_menu_opaque_black()", code_without_comments, "GUI4 build source must call g3x_fill_menu_opaque_black()")
+            self.assertIn("gui_get_mode() == GUI_MODE_MENU", code_without_comments, "GUI4 build source must gate refill on GUI_MODE_MENU")
+
+            # Check build source retains Step 9 ALT exit / restore logic
+            self.assertIn("gui_set_need_restore()", code_without_comments, "GUI4 build source must call gui_set_need_restore() on left_alt")
+            self.assertIn("gui_activate_alt_mode()", code_without_comments, "GUI4 build source must call gui_activate_alt_mode()")
+
+            # --- Step 8 Verification: Redraw-on-stock-overwrite / DISP / half-press repaint path ---
+            # Symbols must exist in symbol table
+            self.assertIn(" T check_gui_needs_redraw", nm_output)
+            self.assertIn(" T draw_test_guard", nm_output)
+            self.assertIn(" T draw_set_guard", nm_output)
+            self.assertIn(" T gui_redraw", nm_output)
+            self.assertRegex(nm_output, r"\s+[tT]\s+g3x_fill_menu_opaque_black\b")
+
+            # In g3x_gui_kbd_redraw disassembly:
+            self.assertIn("check_gui_needs_redraw", redraw_code, "GUI4 must call check_gui_needs_redraw for buffer toggles")
+            self.assertIn("draw_test_guard", redraw_code, "GUI4 must call draw_test_guard for sentinel checks")
+            self.assertIn("draw_set_guard", redraw_code, "GUI4 must re-arm sentinel via draw_set_guard")
+            self.assertIn("gui_redraw", redraw_code, "GUI4 must call gui_redraw(force_redraw)")
+            self.assertIn("g3x_fill_menu_opaque_black", redraw_code, "GUI4 must refill menu on forced repaint")
+            self.assertIn("gui_get_mode", redraw_code, "GUI4 must check gui_mode before refill")
+
+            # --- Step 9 Verification: ALT exit / menu close path (stock controls restored) ---
+            # In g3x_gui_kbd_redraw disassembly:
+            self.assertIn("gui_activate_alt_mode", redraw_code, "GUI4 must call gui_activate_alt_mode to process transitions")
+            self.assertIn("gui_set_need_restore", redraw_code, "GUI4 must call gui_set_need_restore on left_alt")
+
+            # In mykbd_task disassembly:
+            m_kbd = re.search(r"<mykbd_task>:(.*?)(?:\n\n|\Z)", disasm, re.DOTALL)
+            self.assertIsNotNone(m_kbd, "mykbd_task must exist in GUI4 ELF")
+            kbd_code = m_kbd.group(1)
+            self.assertIn("kbd_is_blocked", kbd_code, "mykbd_task must query kbd_is_blocked to restore stock controls")
+            self.assertIn("g3x_gui_kbd_redraw", kbd_code, "mykbd_task must pass kbd_is_blocked() to g3x_gui_kbd_redraw")
+
+            # Symbols for ALT exit and stock control restoration
+            self.assertIn(" T kbd_is_blocked", nm_output)
+            self.assertIn(" T gui_set_need_restore", nm_output)
+            self.assertIn(" T gui_activate_alt_mode", nm_output)
+
+            # --- State Machine Unit Test for Steps 8, 9, and No Periodic Force Redraw ---
+            def run_kbd_redraw_sim(
+                alt_active: int,
+                prev_alt: int,
+                guard_ok: bool,
+                buf_toggled: bool,
+                gui_mode: int,
+            ):
+                entered_alt = (alt_active != 0) and (prev_alt == 0)
+                left_alt = (alt_active == 0) and (prev_alt != 0)
+                restore_called = False
+                fill_called = False
+                force_redraw = False
+
+                if left_alt:
+                    restore_called = True
+                    return {
+                        "left_alt": True,
+                        "restore_called": restore_called,
+                        "force_redraw": True,  # gui_redraw(1) called on left_alt
+                        "fill_called": False,
+                    }
+
+                if alt_active:
+                    force_redraw = entered_alt or buf_toggled or (not guard_ok)
+                    if force_redraw:
+                        if gui_mode == 2:  # GUI_MODE_MENU
+                            fill_called = True
+                    return {
+                        "left_alt": False,
+                        "restore_called": False,
+                        "force_redraw": force_redraw,
+                        "fill_called": fill_called,
+                    }
+
+                return {
+                    "left_alt": False,
+                    "restore_called": False,
+                    "force_redraw": False,
+                    "fill_called": fill_called,
+                }
+
+            # 1. Steady state: NO periodic redraw at idle
+            res_steady = run_kbd_redraw_sim(alt_active=1, prev_alt=1, guard_ok=True, buf_toggled=False, gui_mode=2)
+            self.assertFalse(res_steady["force_redraw"], "Steady state in ALT must NOT trigger force_redraw (no periodic flicker)")
+            self.assertFalse(res_steady["fill_called"])
+
+            # 2. Step 8 (DISP toggle or half-press): guard wiped -> force_redraw and menu refill triggered
+            res_step8_guard = run_kbd_redraw_sim(alt_active=1, prev_alt=1, guard_ok=False, buf_toggled=False, gui_mode=2)
+            self.assertTrue(res_step8_guard["force_redraw"], "Step 8: Overwrite wiping guard sentinel MUST trigger force_redraw")
+            self.assertTrue(res_step8_guard["fill_called"], "Step 8: Repaint must refill opaque menu background")
+
+            # 2b. Step 8 (DISP toggle switching active display buffer) -> force_redraw and menu refill triggered
+            res_step8_buf = run_kbd_redraw_sim(alt_active=1, prev_alt=1, guard_ok=True, buf_toggled=True, gui_mode=2)
+            self.assertTrue(res_step8_buf["force_redraw"], "Step 8: Active buffer toggle MUST trigger force_redraw")
+            self.assertTrue(res_step8_buf["fill_called"], "Step 8: Buffer toggle repaint must refill opaque menu background")
+
+            # 3. Step 9: Menu closed, leaving ALT (alt_active 1 -> 0) -> restores stock controls and clears overlay
+            res_step9 = run_kbd_redraw_sim(alt_active=0, prev_alt=1, guard_ok=True, buf_toggled=False, gui_mode=1)
+            self.assertTrue(res_step9["left_alt"], "Step 9: Leaving ALT must set left_alt")
+            self.assertTrue(res_step9["restore_called"], "Step 9: Leaving ALT must call gui_set_need_restore()")
+            self.assertFalse(res_step9["fill_called"], "Step 9: Leaving ALT must NOT refill menu box")
 
     def test_card_write_exclusions_hold_under_gui4(self) -> None:
         """Card file-write hooks and unsafe stubs remain uncalled in .text."""
