@@ -42,7 +42,6 @@ TOOLS_DIR = REPO_ROOT / "tools"
 DOCS_DIR = REPO_ROOT / "docs"
 CHDK_PORT = REPO_ROOT / "chdk-port"
 SUB_DIR = CHDK_PORT / "platform" / "g3x" / "sub" / "110c"
-SHORTPRESS_HEADER = SUB_DIR / "shortpress_candidate.h"
 KBD_HEADER = SUB_DIR / "kbd_candidate.h"
 TRIAL_DOC = DOCS_DIR / "PORT39_SHORTPRESS_TRIAL.md"
 
@@ -197,17 +196,21 @@ class TestPort39ShortpressCandidate(unittest.TestCase):
             )
             self.assertIn("bc020000", data_dump.lower())  # 700 in little-endian
 
+    def test_shortpress_implies_resident(self) -> None:
+        """Assert G3X_SHORTPRESS=1 implies G3X_RESIDENT=1 and baseline prerequisites."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            res = legacy_builder.build_candidate(shortpress=True, out_dir=tmpdir)
+            self.assertTrue(res["shortpress"])
+            self.assertTrue(res["resident"], "G3X_SHORTPRESS implies G3X_RESIDENT=1")
+            self.assertTrue(res["kbd"])
+
     def test_shortpress_code_strictly_guarded(self) -> None:
         """Verify all short-press definitions and routines are guarded by G3X_SHORTPRESS."""
-        self.assertTrue(SHORTPRESS_HEADER.is_file(), f"Missing {SHORTPRESS_HEADER}")
-        hdr_text = SHORTPRESS_HEADER.read_text(encoding="utf-8")
-        self.assertIn("#if defined(G3X_SHORTPRESS) && (G3X_SHORTPRESS == 1)", hdr_text)
-        self.assertIn("#define G3X_SHORTPRESS_HOLD_POLLS   700", hdr_text)
-        self.assertIn("g3x_shortpress_read_keys", hdr_text)
-
-        # In kbd_candidate.h, ensure shortpress_read_keys is guarded
+        self.assertTrue(KBD_HEADER.is_file(), f"Missing {KBD_HEADER}")
         kbd_text = KBD_HEADER.read_text(encoding="utf-8")
         self.assertIn("#if defined(G3X_SHORTPRESS) && (G3X_SHORTPRESS == 1)", kbd_text)
+        self.assertIn("#define G3X_SHORTPRESS_HOLD_POLLS   700", kbd_text)
+        self.assertIn("g3x_shortpress_read_keys", kbd_text)
         self.assertIn("g3x_shortpress_read_keys();", kbd_text)
 
     def test_trial_plan_doc_and_adapted_values(self) -> None:
