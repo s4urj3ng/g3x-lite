@@ -54,6 +54,11 @@ def main() -> int:
         help="Build opt-in G3X_SHORTPRESS=1 plain candidate (default)",
     )
     group.add_argument(
+        "--gui5",
+        action="store_true",
+        help="Build combined G3X_SHORTPRESS=1 + G3X_GUI5=1 candidate",
+    )
+    group.add_argument(
         "--gui4",
         "--combined",
         action="store_true",
@@ -70,6 +75,8 @@ def main() -> int:
 
     if args.default:
         res = build_candidate_gui(ladder=False, poweron_fix=False, resident=False, out_dir=args.out_dir)
+    elif args.gui5:
+        res = build_candidate_gui(gui5=True, shortpress=True, out_dir=args.out_dir)
     elif args.gui4:
         res = build_candidate_gui(gui4=True, shortpress=True, out_dir=args.out_dir)
     else:
