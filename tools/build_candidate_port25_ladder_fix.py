@@ -1153,6 +1153,15 @@ void conf_restore(void)
     conf.menu_color.bg.col = 1; /* COLOR_BLACK index in ply_colors */
     conf.menu_color.bg.type = 1;
 #endif
+#if defined(G3X_GUI4) && (G3X_GUI4 == 1)
+    /* PORT-38 F3 & Title: Title bar solid black with crisp white text */
+    conf.menu_title_color.bg.col = 1; /* COLOR_BLACK index in ply_colors */
+    conf.menu_title_color.bg.type = 1;
+    conf.menu_title_color.fg.col = 2; /* COLOR_WHITE index in ply_colors */
+    conf.menu_title_color.fg.type = 1;
+    /* Anchor menu at top (header at y=12, rows starting at y=44) to match painted and fill bounds */
+    conf.menu_center = 0;
+#endif
 }
 
 void __wrap_conf_restore(void)
