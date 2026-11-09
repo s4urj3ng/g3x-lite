@@ -9,10 +9,10 @@ The `G3X_GUI5=1` opt-in candidate builds upon `G3X_GUI4=1` (preserving 2x font s
 
 | Symbol / Parameter | Old Value (GUI4) | New Value (GUI5) | Source Path:Line | Label | Evidence & Rationale |
 |---|---|---|---|---|---|
-| `CAM_BITMAP_WIDTH` | `736` | `928` | `chdk-port/platform/g3x/platform_camera.h:74` | `VERIFIED` | Mode 12 LCD buffer stride in GM1.10C `BmpDDev.c` (`PORT35-ROM-BMPDDEV` jump table at `0xFC1834F8`, SHA-256 `d0827e15c2deb8c1eace949c85c395bb0c75455f7e88ce3c1a0f9b3477b78647`). |
-| `CAM_BITMAP_HEIGHT` | `480` | `600` | `chdk-port/platform/g3x/platform_camera.h:75` | `VERIFIED` | Mode 12 LCD buffer height in GM1.10C `BmpDDev.c` (`PORT35-ROM-BMPDDEV` jump table at `0xFC1834F8`). |
-| `CAM_SCREEN_WIDTH` | `720` | `900` | `chdk-port/platform/g3x/platform_camera.h:76` | `VERIFIED` | Mode 12 LCD visible pixel width in GM1.10C `BmpDDev.c`; verified by PORT-36 1-px frame test at `(0,0)-(899,599)`. |
-| `CAM_SCREEN_HEIGHT` | `480` | `600` | `chdk-port/platform/g3x/platform_camera.h:77` | `VERIFIED` | Mode 12 LCD visible pixel height in GM1.10C `BmpDDev.c`; verified by PORT-36 1-px frame test at `(0,0)-(899,599)`. |
+| `CAM_BITMAP_WIDTH` | `736` | `928` | `scripts/build_candidate_gui3.py:1625` (injected GUI5 override) | `VERIFIED` | Mode 12 LCD buffer stride in GM1.10C `BmpDDev.c` (`PORT35-ROM-BMPDDEV` jump table at `0xFC1834F8`, SHA-256 `d0827e15c2deb8c1eace949c85c395bb0c75455f7e88ce3c1a0f9b3477b78647`). |
+| `CAM_BITMAP_HEIGHT` | `480` | `600` | `scripts/build_candidate_gui3.py:1626` (injected GUI5 override) | `VERIFIED` | Mode 12 LCD buffer height in GM1.10C `BmpDDev.c` (`PORT35-ROM-BMPDDEV` jump table at `0xFC1834F8`). |
+| `CAM_SCREEN_WIDTH` | `720` | `900` | `scripts/build_candidate_gui3.py:1627` (injected GUI5 override) | `VERIFIED` | Mode 12 LCD visible pixel width in GM1.10C `BmpDDev.c`; verified by PORT-36 1-px frame test at `(0,0)-(899,599)`. |
+| `CAM_SCREEN_HEIGHT` | `480` | `600` | `scripts/build_candidate_gui3.py:1628` (injected GUI5 override) | `VERIFIED` | Mode 12 LCD visible pixel height in GM1.10C `BmpDDev.c`; verified by PORT-36 1-px frame test at `(0,0)-(899,599)`. |
 | `G3X_OSD2_DEFAULT_WIDTH` | `720` | `900` | `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:54` | `VERIFIED` | Default OSD2 screen width matching Mode 12 LCD resolution. |
 | `G3X_OSD2_DEFAULT_HEIGHT` | `480` | `600` | `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:55` | `VERIFIED` | Default OSD2 screen height matching Mode 12 LCD resolution. |
 | `G3X_OSD2_DEFAULT_BUFFER_WIDTH` | `736` | `928` | `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:56` | `VERIFIED` | Default OSD2 buffer stride matching Mode 12 LCD buffer stride (`PORT35-ROM-BMPDDEV`). |
@@ -32,7 +32,7 @@ The `G3X_GUI5=1` opt-in candidate builds upon `G3X_GUI4=1` (preserving 2x font s
 
 1. **Symptom 1 (Box covers only ~80% width, ~85% height; left uncovered, right ~1/10 width, photo shows at top)**:
    - *Root cause*: `CAM_SCREEN_WIDTH` was 720 (80.0% of 900) and `CAM_SCREEN_HEIGHT` was 480 (80.0% of 600) in `platform_camera.h:73-83` and static `camera_info.thm.o`. In Mode 12 (900x600), `disp_width=720` produced `w = 700 px`. Centering left `(900 - 720) / 2 = 90 px` margins on both sides (exactly 1/10 LCD width), and photo show-through above `y = 12`.
-   - *Code fix*: `chdk-port/platform/g3x/platform_camera.h:73-83` (`CAM_SCREEN_WIDTH: 720 -> 900`, `CAM_SCREEN_HEIGHT: 480 -> 600`, `CAM_BITMAP_WIDTH: 736 -> 928`, `CAM_BITMAP_HEIGHT: 480 -> 600`) and `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:51-60` (`G3X_OSD2_DEFAULT_WIDTH: 720 -> 900`, etc.), setting `disp_width = 900` and `w = 880 px` centered with even 10 px margins.
+   - *Code fix*: Candidate build glue in `scripts/build_candidate_gui3.py` (`CAM_SCREEN_WIDTH: 720 -> 900`, `CAM_SCREEN_HEIGHT: 480 -> 600`, `CAM_BITMAP_WIDTH: 736 -> 928`, `CAM_BITMAP_HEIGHT: 480 -> 600`) and `chdk-port/platform/g3x/sub/110c/osd2_test_overlay.h:51-68` (`G3X_OSD2_DEFAULT_WIDTH: 720 -> 900`, etc.), setting `disp_width = 900` and `w = 880 px` centered with even 10 px margins.
 2. **Symptom 2 (Thin bright strip along top edge, thin green line along right edge; fill rect and painted area out of line)**:
    - *Root cause*:
      - Top bright strip: `conf.menu_center = 1` shifted `gui_menu_draw()` `y` to 96 (header to 64) when `count=10`, while `g3x_fill_menu_opaque_black()` filled from `header_y = 12`, creating a vertical mismatch.
@@ -81,8 +81,8 @@ The `G3X_GUI5=1` opt-in candidate builds upon `G3X_GUI4=1` (preserving 2x font s
 |---|---|---|---|---|---|---|
 | Default Baseline | (no flags) | `9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136` | `118001` (118,001) | `0x0035F7A0` | `0x00366CB0` | 7,120 B |
 | `G3X_GUI4=1` Trial Baseline | `-DG3X_GUI4=1` | `14456b08fca82758262c26ad6105f784ebacaa080b7a059a622ded5a8d505fdd` | `102241` (102,241) | `0x0035C9A0` | `0x003629D0` | 24,240 B |
-| `G3X_GUI5=1` Plain | `-DG3X_GUI5=1` | `ae4358432948231d634b33d10c0c92677a1763274d51bee7a74d4ed71270791d` | `102225` (102,225) | `0x0035C990` | `0x003629C0` | 24,256 B |
-| `G3X_GUI5=1` Combined | `-DG3X_GUI5=1 -DG3X_SHORTPRESS=1` | `5819c5f6a8d448310b3ed7dece34ed6b62263b88896232b4c8704db5080f3195` | `102385` (102,385) | `0x0035CA30` | `0x00362A70` | 24,080 B |
+| `G3X_GUI5=1` Plain | `-DG3X_GUI5=1` | `eb4917b1f45d22e765265aa05f912512e07c7e0b141ddd717d877f295994cf37` | `102225` (102,225) | `0x0035C990` | `0x003629C0` | 24,256 B |
+| `G3X_GUI5=1` Combined | `-DG3X_GUI5=1 -DG3X_SHORTPRESS=1` | `02c465107dc3d501b496702d9a9d86e0c15c91cb9524937c158da060521790b8` | `102385` (102,385) | `0x0035CA30` | `0x00362A70` | 24,080 B |
 
 ---
 

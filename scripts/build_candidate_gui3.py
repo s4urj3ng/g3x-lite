@@ -1618,8 +1618,26 @@ def build_candidate_gui3_core(
 
     gui_draw_obj = str(SUB_DIR / "gui_draw.thm.o")
     if gui5:
+        camera_info_cand_c = os.path.join(candidate_dir, "camera_info.c")
         camera_info_cand_o = os.path.join(candidate_dir, "camera_info.o")
-        run_cmd(list(base_cflags) + ["-c", "-o", camera_info_cand_o, str(CHDK_PORT / "core" / "camera_info.c")], cwd=str(CHDK_PORT))
+        with open(str(CHDK_PORT / "core" / "camera_info.c"), "r", encoding="utf-8") as f:
+            cam_src = f.read()
+        cam_override = """
+#if defined(G3X_GUI5) && (G3X_GUI5 == 1)
+#undef CAM_BITMAP_WIDTH
+#undef CAM_BITMAP_HEIGHT
+#undef CAM_SCREEN_WIDTH
+#undef CAM_SCREEN_HEIGHT
+#define CAM_BITMAP_WIDTH 928
+#define CAM_BITMAP_HEIGHT 600
+#define CAM_SCREEN_WIDTH 900
+#define CAM_SCREEN_HEIGHT 600
+#endif
+"""
+        cam_src = cam_src.replace('#include "platform.h"', '#include "platform.h"\n' + cam_override)
+        with open(camera_info_cand_c, "w", encoding="utf-8") as f:
+            f.write(cam_src)
+        run_cmd(list(base_cflags) + ["-c", "-o", camera_info_cand_o, camera_info_cand_c], cwd=str(CHDK_PORT))
         camera_info_obj = camera_info_cand_o
 
         gui_menu_cand_o = os.path.join(candidate_dir, "gui_menu.o")

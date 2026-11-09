@@ -74,12 +74,12 @@ PINNED_DEFAULT_SIZE = 118001
 PINNED_GUI4_SHA256 = "14456b08fca82758262c26ad6105f784ebacaa080b7a059a622ded5a8d505fdd"
 PINNED_GUI4_SIZE = 102241
 
-PINNED_GUI5_SHA256 = "ae4358432948231d634b33d10c0c92677a1763274d51bee7a74d4ed71270791d"
+PINNED_GUI5_SHA256 = "eb4917b1f45d22e765265aa05f912512e07c7e0b141ddd717d877f295994cf37"
 PINNED_GUI5_SIZE = 102225
 PINNED_GUI5_WITNESS = 0x0035C990
 PINNED_GUI5_END = 0x003629C0
 
-PINNED_GUI5_SHORTPRESS_SHA256 = "5819c5f6a8d448310b3ed7dece34ed6b62263b88896232b4c8704db5080f3195"
+PINNED_GUI5_SHORTPRESS_SHA256 = "02c465107dc3d501b496702d9a9d86e0c15c91cb9524937c158da060521790b8"
 PINNED_GUI5_SHORTPRESS_SIZE = 102385
 PINNED_GUI5_SHORTPRESS_WITNESS = 0x0035CA30
 PINNED_GUI5_SHORTPRESS_END = 0x00362A70
@@ -89,6 +89,22 @@ HEAP_START = 0x00368880
 
 class TestPort40GuiLayout(unittest.TestCase):
     """Test suite for PORT-40 G3X_GUI5=1 candidate build and geometry layout."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        import shutil
+        cls._tmp = tempfile.TemporaryDirectory(prefix="port40-")
+        cls.gui5_dir = os.path.join(cls._tmp.name, "gui5")
+        cls.gui5_sp_dir = os.path.join(cls._tmp.name, "gui5_sp")
+        cls.res_gui5 = build_candidate_gui(gui5=True, out_dir=cls.gui5_dir)
+        cls.res_gui5_sp = build_candidate_gui(gui5=True, shortpress=True, out_dir=cls.gui5_sp_dir)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        import shutil
+        cls._tmp.cleanup()
+        if (REPO_ROOT / "build").exists():
+            shutil.rmtree(REPO_ROOT / "build", ignore_errors=True)
 
     def test_default_build_byte_identical_to_main(self) -> None:
         """Default build (no flags) is byte-identical to origin/main."""
@@ -113,17 +129,18 @@ class TestPort40GuiLayout(unittest.TestCase):
     def test_gui4_bytes_unaffected_by_gui5_additions(self) -> None:
         """The trialled GUI4 candidate is byte-identical to pinned hash (14456b...); GUI4 implies GUI3."""
         # 1. Verify build_candidate_gui(gui4=True) produces identical bytes
-        res = build_candidate_gui(gui4=True)
-        self.assertEqual(
-            res["diskboot_sha256"],
-            PINNED_GUI4_SHA256,
-            "GUI4 candidate DISKBOOT.BIN SHA-256 diverged from pinned baseline",
-        )
-        self.assertEqual(
-            res["diskboot_size"],
-            PINNED_GUI4_SIZE,
-            "GUI4 candidate DISKBOOT.BIN size diverged from pinned baseline",
-        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            res = build_candidate_gui(gui4=True, out_dir=tmpdir)
+            self.assertEqual(
+                res["diskboot_sha256"],
+                PINNED_GUI4_SHA256,
+                "GUI4 candidate DISKBOOT.BIN SHA-256 diverged from pinned baseline",
+            )
+            self.assertEqual(
+                res["diskboot_size"],
+                PINNED_GUI4_SIZE,
+                "GUI4 candidate DISKBOOT.BIN size diverged from pinned baseline",
+            )
 
         # 2. Verify that G3X_GUI4 and G3X_GUI5 builds both inherit G3X_GUI3=1
         build_py = (SCRIPTS_DIR / "build_candidate_gui3.py").read_text(encoding="utf-8")
@@ -135,8 +152,8 @@ class TestPort40GuiLayout(unittest.TestCase):
         self.assertGreater(idx_gui5, idx_gui3, "GUI5 build must inherit GUI3")
 
     def test_gui5_plain_candidate_build(self) -> None:
-        """G3X_GUI5=1 builds cleanly, matches pinned SHA-256 in canonical dir, and has positive heap clearance."""
-        res_canon = build_candidate_gui(gui5=True)
+        """G3X_GUI5=1 builds cleanly, matches pinned SHA-256, and has positive heap clearance."""
+        res_canon = self.res_gui5
         self.assertEqual(res_canon["diskboot_sha256"], PINNED_GUI5_SHA256)
         self.assertEqual(res_canon["diskboot_size"], PINNED_GUI5_SIZE)
         self.assertEqual(res_canon["boot_witness"], PINNED_GUI5_WITNESS)
@@ -158,7 +175,7 @@ class TestPort40GuiLayout(unittest.TestCase):
 
     def test_gui5_shortpress_candidate_build(self) -> None:
         """Combined G3X_GUI5=1 + G3X_SHORTPRESS=1 builds cleanly, matches pinned SHA-256, and has positive clearance."""
-        res_canon = build_candidate_gui(gui5=True, shortpress=True)
+        res_canon = self.res_gui5_sp
         self.assertEqual(res_canon["diskboot_sha256"], PINNED_GUI5_SHORTPRESS_SHA256)
         self.assertEqual(res_canon["diskboot_size"], PINNED_GUI5_SHORTPRESS_SIZE)
         self.assertEqual(res_canon["boot_witness"], PINNED_GUI5_SHORTPRESS_WITNESS)
@@ -187,12 +204,16 @@ class TestPort40GuiLayout(unittest.TestCase):
             str(ARM_GCC),
             "-E",
             "-dM",
+            "-DLOW_LEVEL",
+            '-DPLATFORM="g3x"',
+            '-DPLATFORMSUB="110c"',
+            "-DG3X_OSD2=1",
             "-DG3X_GUI5=1",
             "-Iinclude",
             "-Icore",
             "-Iplatform/g3x",
             "-Iplatform/g3x/sub/110c",
-            str(CHDK_PORT / "platform" / "g3x" / "platform_camera.h"),
+            str(SUB_DIR / "osd2_test_overlay.h"),
         ]
         proc = subprocess.run(
             cmd,
@@ -208,18 +229,18 @@ class TestPort40GuiLayout(unittest.TestCase):
             if m:
                 defines[m.group(1)] = m.group(2).strip()
 
-        screen_w = int(defines["CAM_SCREEN_WIDTH"].strip("() "))
-        screen_h = int(defines["CAM_SCREEN_HEIGHT"].strip("() "))
-        buffer_w = int(defines["CAM_BITMAP_WIDTH"].strip("() "))
-        buffer_h = int(defines["CAM_BITMAP_HEIGHT"].strip("() "))
+        screen_w = int(defines["G3X_OSD2_DEFAULT_WIDTH"].strip("() "))
+        screen_h = int(defines["G3X_OSD2_DEFAULT_HEIGHT"].strip("() "))
+        buffer_w = int(defines["G3X_OSD2_DEFAULT_BUFFER_WIDTH"].strip("() "))
+        buffer_h = int(defines["G3X_OSD2_DEFAULT_BUFFER_HEIGHT"].strip("() "))
 
-        self.assertEqual(screen_w, 900, "CAM_SCREEN_WIDTH must be 900")
-        self.assertEqual(screen_h, 600, "CAM_SCREEN_HEIGHT must be 600")
-        self.assertEqual(buffer_w, 928, "CAM_BITMAP_WIDTH must be 928")
-        self.assertEqual(buffer_h, 600, "CAM_BITMAP_HEIGHT must be 600")
+        self.assertEqual(screen_w, 900, "G3X_OSD2_DEFAULT_WIDTH must be 900")
+        self.assertEqual(screen_h, 600, "G3X_OSD2_DEFAULT_HEIGHT must be 600")
+        self.assertEqual(buffer_w, 928, "G3X_OSD2_DEFAULT_BUFFER_WIDTH must be 928")
+        self.assertEqual(buffer_h, 600, "G3X_OSD2_DEFAULT_BUFFER_HEIGHT must be 600")
 
         # 2. Extract camera_screen values from compiled candidate_main.elf
-        elf_path = os.path.join(CANDIDATE_PORT40_GUI5_DIR, "candidate_main.elf")
+        elf_path = os.path.join(self.gui5_dir, "candidate_main.elf")
         if not os.path.isfile(elf_path):
             build_candidate_gui(gui5=True)
 
@@ -322,9 +343,7 @@ class TestPort40GuiLayout(unittest.TestCase):
 
     def test_camera_screen_static_initialization_in_binary(self) -> None:
         """Binary inspection: camera_screen in candidate .data matches 900x600 stride 928 disp_width 900."""
-        elf_path = os.path.join(CANDIDATE_PORT40_GUI5_DIR, "candidate_main.elf")
-        if not os.path.isfile(elf_path):
-            build_candidate_gui(gui5=True)
+        elf_path = os.path.join(self.gui5_dir, "candidate_main.elf")
 
         # Extract address of camera_screen from nm
         nm_proc = subprocess.run(
@@ -392,9 +411,7 @@ class TestPort40GuiLayout(unittest.TestCase):
 
     def test_gui_menu_draw_disassembly_has_black_fill_loop(self) -> None:
         """Disassembly inspection: gui_menu_draw contains black fill loop for rows down to num_lines."""
-        elf_path = os.path.join(CANDIDATE_PORT40_GUI5_DIR, "candidate_main.elf")
-        if not os.path.isfile(elf_path):
-            build_candidate_gui(gui5=True)
+        elf_path = os.path.join(self.gui5_dir, "candidate_main.elf")
 
         objdump_proc = subprocess.run(
             [str(ARM_OBJDUMP), "-d", elf_path],
@@ -419,9 +436,7 @@ class TestPort40GuiLayout(unittest.TestCase):
 
     def test_gui4_behaviors_preserved_in_gui5(self) -> None:
         """GUI4 features (F1 2x font, title bar, zero flicker, steps 8/9) remain intact in GUI5."""
-        elf_path = os.path.join(CANDIDATE_PORT40_GUI5_DIR, "candidate_main.elf")
-        if not os.path.isfile(elf_path):
-            build_candidate_gui(gui5=True)
+        elf_path = os.path.join(self.gui5_dir, "candidate_main.elf")
 
         nm_proc = subprocess.run(
             [str(ARM_NM), "-n", elf_path],
