@@ -305,9 +305,11 @@ class TestPort40GuiLayout(unittest.TestCase):
         font_h = int(m_fh.group(1))
         self.assertEqual(font_h, 32, "Font height under F1 2x scaling must be 32")
 
-        gui_menu_src = (CHDK_PORT / "core" / "gui_menu.c").read_text(encoding="utf-8")
+        gui_menu_compiled = Path(self.gui5_dir) / "gui_menu.c"
+        self.assertTrue(gui_menu_compiled.exists(), f"Generated {gui_menu_compiled} must exist from GUI5 build")
+        gui_menu_src = gui_menu_compiled.read_text(encoding="utf-8")
         m_wplus = re.search(r"#if defined\(G3X_GUI5\) && \(G3X_GUI5 == 1\)[\s\S]*?wplus\s*=\s*(\d+);", gui_menu_src)
-        self.assertIsNotNone(m_wplus, "GUI5 wplus scrollbar width must be present in gui_menu.c")
+        self.assertIsNotNone(m_wplus, "GUI5 wplus scrollbar width must be present in compiled gui_menu.c")
         scrollbar_wplus = int(m_wplus.group(1))
         self.assertEqual(scrollbar_wplus, 8, "GUI5 scrollbar width reservation must be 8 px")
 
@@ -608,6 +610,37 @@ class TestPort40GuiLayout(unittest.TestCase):
         self.assertIn("g3x_fill_menu_opaque_black", content)
         self.assertIn("draw_test_guard", content)
         self.assertIn("draw_set_guard", content)
+
+    def test_patch_anchor_missing_fails(self) -> None:
+        """Patch transform fails loudly with RuntimeError if the anchor is missing."""
+        from build_candidate_gui3 import apply_gui5_menu_patch
+        corrupted_src = "void some_func(void) { int count = 0; return; }\n"
+        with self.assertRaises(RuntimeError) as ctx:
+            apply_gui5_menu_patch(corrupted_src)
+        self.assertIn("anchor not found", str(ctx.exception).lower())
+
+    def test_patch_file_exists_and_matches_transform(self) -> None:
+        """The GUI5 menu patch file exists, is tracked, and applies cleanly to pristine gui_menu.c."""
+        from build_candidate_gui3 import GUI5_MENU_PATCH_PATH, apply_gui5_menu_patch
+        self.assertTrue(GUI5_MENU_PATCH_PATH.exists(), f"Patch file {GUI5_MENU_PATCH_PATH} must exist")
+        # Ensure patch is tracked in git index
+        tracked = subprocess.run(
+            ["git", "ls-files", str(GUI5_MENU_PATCH_PATH.relative_to(REPO_ROOT))],
+            cwd=str(REPO_ROOT),
+            stdout=subprocess.PIPE,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        self.assertTrue(tracked, "GUI5 menu patch must be tracked in git index")
+
+        # Ensure core/gui_menu.c in worktree is pristine
+        worktree_core_menu = (CHDK_PORT / "core" / "gui_menu.c").read_text(encoding="utf-8")
+        self.assertNotIn("w -= wplus", worktree_core_menu, "chdk-port/core/gui_menu.c must remain pristine and unpatched")
+
+        # Verify apply_gui5_menu_patch transforms pristine source to include wplus reservation
+        transformed = apply_gui5_menu_patch(worktree_core_menu)
+        self.assertIn("w -= wplus", transformed)
+        self.assertIn("wplus = 8;", transformed)
 
 
 if __name__ == "__main__":

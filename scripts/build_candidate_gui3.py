@@ -61,6 +61,86 @@ CANDIDATE_PORT38_GUI4_DIAG_DIR = str(BUILD_DIR / "candidate_port38_gui4_diag")
 CANDIDATE_PORT39_SHORTPRESS_GUI4_DIR = str(BUILD_DIR / "candidate_port39_shortpress_gui4")
 CANDIDATE_PORT40_GUI5_DIR = str(BUILD_DIR / "candidate_port40_gui5")
 CANDIDATE_PORT40_GUI5_SHORTPRESS_DIR = str(BUILD_DIR / "candidate_port40_gui5_shortpress")
+GUI5_MENU_PATCH_PATH = SUB_DIR / "patches" / "gui_menu_gui5.patch"
+
+GUI5_MENU_DRAW_INITIAL_ANCHOR = """\
+    if (count > num_lines)
+    {
+        wplus = 8; 
+        // scrollbar background 
+        draw_rectangle((x+w), y, (x+w)+wplus, y+num_lines*rbf_font_height()-1, MAKE_COLOR(BG_COLOR(user_color(conf.menu_color)), BG_COLOR(user_color(conf.menu_color))), RECT_BORDER0|DRAW_FILLED);
+    }
+    else
+    {
+        wplus = 0;
+        if (conf.menu_center)
+        {
+            y = (camera_screen.height - ((count - 1) * rbf_font_height())) >> 1;
+        }
+    }"""
+
+GUI5_MENU_DRAW_INITIAL_REPLACEMENT = """\
+#if defined(G3X_GUI5) && (G3X_GUI5 == 1)
+    /* PORT-40: Reset w to base box width inside menu borders and 2-pixel even align */
+    w = (camera_screen.disp_width - camera_screen.menu_border_width * 2) & ~1;
+    if (count > num_lines)
+    {
+        wplus = 8;
+        /* Reserve scrollbar width inside the 880-px box by shrinking item text area */
+        w -= wplus;
+        // scrollbar background: fills from (x+w) to (x+w)+wplus-1 (882..889, width 8 px)
+        draw_rectangle((x+w), y, (x+w)+wplus-1, y+num_lines*rbf_font_height()-1, MAKE_COLOR(COLOR_BLACK, COLOR_BLACK), RECT_BORDER0|DRAW_FILLED);
+    }
+    else
+    {
+        wplus = 0;
+    }
+#else
+    if (count > num_lines)
+    {
+        wplus = 8; 
+        // scrollbar background 
+        draw_rectangle((x+w), y, (x+w)+wplus, y+num_lines*rbf_font_height()-1, MAKE_COLOR(BG_COLOR(user_color(conf.menu_color)), BG_COLOR(user_color(conf.menu_color))), RECT_BORDER0|DRAW_FILLED);
+    }
+    else
+    {
+        wplus = 0;
+        if (conf.menu_center)
+        {
+            y = (camera_screen.height - ((count - 1) * rbf_font_height())) >> 1;
+        }
+    }
+#endif"""
+
+GUI5_UNPAINTED_ROWS_ANCHOR = "        // scrollbar\n        if (count > num_lines)"
+
+GUI5_UNPAINTED_ROWS_BLOCK = """\
+#if defined(G3X_GUI5) && (G3X_GUI5 == 1)
+        /* PORT-40: Fill remaining rows down to num_lines with solid opaque black */
+        for (; i < num_lines; ++i, yy += rbf_font_height())
+        {
+            draw_rectangle(x, yy, x + w - 1, yy + rbf_font_height() - 1,
+                           MAKE_COLOR(COLOR_BLACK, COLOR_BLACK),
+                           RECT_BORDER0 | DRAW_FILLED);
+        }
+#endif"""
+
+
+def apply_gui5_menu_patch(src_content: str) -> str:
+    """Transform pristine core/gui_menu.c content into GUI5-patched candidate source.
+
+    Raises RuntimeError if any patch anchor is missing.
+    """
+    if GUI5_MENU_DRAW_INITIAL_ANCHOR not in src_content:
+        raise RuntimeError("GUI5_MENU_DRAW_INITIAL_ANCHOR not found in gui_menu.c")
+    patched = src_content.replace(GUI5_MENU_DRAW_INITIAL_ANCHOR, GUI5_MENU_DRAW_INITIAL_REPLACEMENT, 1)
+
+    if "PORT-40: Fill remaining rows down to num_lines with solid opaque black" not in patched:
+        if GUI5_UNPAINTED_ROWS_ANCHOR not in patched:
+            raise RuntimeError("GUI5_UNPAINTED_ROWS_ANCHOR not found in gui_menu.c")
+        patched = patched.replace(GUI5_UNPAINTED_ROWS_ANCHOR, GUI5_UNPAINTED_ROWS_BLOCK + "\n\n" + GUI5_UNPAINTED_ROWS_ANCHOR, 1)
+
+    return patched
 
 G3X_GUI3_HEAP_START = legacy_builder.G3X_GUI_HEAP_START
 G3X_GUI4_HEAP_START = legacy_builder.G3X_GUI_HEAP_START
@@ -1602,8 +1682,14 @@ def build_candidate_gui3_core(
 
     conf_cand_c = os.path.join(candidate_dir, "conf_candidate.c")
     conf_cand_o = os.path.join(candidate_dir, "conf_candidate.o")
+    conf_src = legacy_builder.generate_conf_candidate_c()
+    if gui5:
+        target_conf_menu_color = "CONF_INFOC( 55, conf.menu_color,                            CONF_DEF_VALUE, IDX_COLOR_GREY_DK,IDX_COLOR_WHITE,1,1),"
+        repl_conf_menu_color = "CONF_INFOC( 55, conf.menu_color,                            CONF_DEF_VALUE, IDX_COLOR_BLACK,IDX_COLOR_WHITE,1,1),"
+        if target_conf_menu_color in conf_src:
+            conf_src = conf_src.replace(target_conf_menu_color, repl_conf_menu_color, 1)
     with open(conf_cand_c, "w", encoding="utf-8") as f:
-        f.write(legacy_builder.generate_conf_candidate_c())
+        f.write(conf_src)
     run_cmd(list(base_cflags) + ["-c", "-o", conf_cand_o, conf_cand_c], cwd=str(CHDK_PORT))
 
     gui_draw_obj = str(SUB_DIR / "gui_draw.thm.o")
@@ -1630,8 +1716,14 @@ def build_candidate_gui3_core(
         run_cmd(list(base_cflags) + ["-c", "-o", camera_info_cand_o, camera_info_cand_c], cwd=str(CHDK_PORT))
         camera_info_obj = camera_info_cand_o
 
+        gui_menu_cand_c = os.path.join(candidate_dir, "gui_menu.c")
         gui_menu_cand_o = os.path.join(candidate_dir, "gui_menu.o")
-        run_cmd(list(base_cflags) + ["-c", "-o", gui_menu_cand_o, str(CHDK_PORT / "core" / "gui_menu.c")], cwd=str(CHDK_PORT))
+        with open(str(CHDK_PORT / "core" / "gui_menu.c"), "r", encoding="utf-8") as f:
+            raw_menu_src = f.read()
+        patched_menu_src = apply_gui5_menu_patch(raw_menu_src)
+        with open(gui_menu_cand_c, "w", encoding="utf-8") as f:
+            f.write(patched_menu_src)
+        run_cmd(list(base_cflags) + ["-c", "-o", gui_menu_cand_o, gui_menu_cand_c], cwd=str(CHDK_PORT))
     else:
         camera_info_obj = str(SUB_DIR / "camera_info.thm.o")
 

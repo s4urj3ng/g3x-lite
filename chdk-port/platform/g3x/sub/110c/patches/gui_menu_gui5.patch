@@ -1,0 +1,33 @@
+--- a/chdk-port/core/gui_menu.c
++++ b/chdk-port/core/gui_menu.c
+@@ -733,6 +733,22 @@
+     count = gui_menu_rows();
+ 
+     y = (camera_screen.height - ((num_lines - 1) * rbf_font_height())) >> 1;
++#if defined(G3X_GUI5) && (G3X_GUI5 == 1)
++    /* PORT-40: Reset w to base box width inside menu borders and 2-pixel even align */
++    w = (camera_screen.disp_width - camera_screen.menu_border_width * 2) & ~1;
++    if (count > num_lines)
++    {
++        wplus = 8;
++        /* Reserve scrollbar width inside the 880-px box by shrinking item text area */
++        w -= wplus;
++        // scrollbar background: fills from (x+w) to (x+w)+wplus-1 (882..889, width 8 px)
++        draw_rectangle((x+w), y, (x+w)+wplus-1, y+num_lines*rbf_font_height()-1, MAKE_COLOR(COLOR_BLACK, COLOR_BLACK), RECT_BORDER0|DRAW_FILLED);
++    }
++    else
++    {
++        wplus = 0;
++    }
++#else
+     if (count > num_lines)
+     {
+         wplus = 8; 
+@@ -747,6 +763,7 @@
+             y = (camera_screen.height - ((count - 1) * rbf_font_height())) >> 1;
+         }
+     }
++#endif
+ 
+     rbf_draw_menu_header(x, y-rbf_font_height(), w+wplus, (conf.menu_symbol_enable)?curr_menu->symbol:0, lang_str(curr_menu->title), user_color(conf.menu_title_color));
+ }
