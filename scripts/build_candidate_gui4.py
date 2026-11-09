@@ -53,15 +53,17 @@ def main() -> int:
     group.add_argument("--combined", action="store_true", help="Build opt-in ladder + poweron fix candidate")
     group.add_argument("--default", action="store_true", help="Build default baseline candidate")
     parser.add_argument("--gui-diag", action="store_true", help="Include 1-px frame and marker under GUI4/GUI3")
+    parser.add_argument("--shortpress", action="store_true", help="Include opt-in G3X_SHORTPRESS=1 short-press handling")
     parser.add_argument("--out-dir", type=str, default=None, help="Output directory")
 
     args = parser.parse_args()
+    shortpress = bool(args.shortpress or os.environ.get("G3X_SHORTPRESS", "0") == "1")
 
     if args.default:
         res = build_candidate(ladder=False, poweron_fix=False, resident=False, out_dir=args.out_dir)
     elif args.gui3:
         gui_diag = bool(args.gui_diag or os.environ.get("G3X_GUI_DIAG", "0") == "1")
-        res = build_candidate(gui3=True, gui_diag=gui_diag, out_dir=args.out_dir)
+        res = build_candidate(gui3=True, gui_diag=gui_diag, shortpress=shortpress, out_dir=args.out_dir)
     elif args.gui2:
         res = build_candidate(gui2=True, out_dir=args.out_dir)
     elif args.gui:
@@ -69,7 +71,7 @@ def main() -> int:
     elif args.osd2:
         res = build_candidate(osd2=True, out_dir=args.out_dir)
     elif args.kbd:
-        res = build_candidate(kbd=True, out_dir=args.out_dir)
+        res = build_candidate(kbd=True, shortpress=shortpress, out_dir=args.out_dir)
     elif args.osd:
         res = build_candidate(osd=True, out_dir=args.out_dir)
     elif args.resident:
@@ -79,7 +81,7 @@ def main() -> int:
     else:
         # Default action is --gui4
         gui_diag = bool(args.gui_diag or os.environ.get("G3X_GUI_DIAG", "0") == "1")
-        res = build_candidate(gui4=True, gui_diag=gui_diag, out_dir=args.out_dir)
+        res = build_candidate(gui4=True, gui_diag=gui_diag, shortpress=shortpress, out_dir=args.out_dir)
 
     print(f"\nFinal DISKBOOT: {res['diskboot_bin']}")
     print(f"SHA-256:        {res['diskboot_sha256']}")

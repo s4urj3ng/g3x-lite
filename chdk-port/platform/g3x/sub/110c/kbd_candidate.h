@@ -11,13 +11,17 @@
 #ifndef KBD_CANDIDATE_H
 #define KBD_CANDIDATE_H
 
-#if defined(G3X_KBD) && (G3X_KBD == 1)
+#if (defined(G3X_KBD) && (G3X_KBD == 1)) || (defined(G3X_SHORTPRESS) && (G3X_SHORTPRESS == 1))
 
 #include "lolevel.h"
 #include "platform.h"
 #include "keyboard.h"
 #include "kbd_common.h"
 #include "conf.h"
+
+#if defined(G3X_SHORTPRESS) && (G3X_SHORTPRESS == 1)
+#include "shortpress_candidate.h"
+#endif
 
 /* Task parameters */
 #define G3X_KBD_HEAP_START          0x00368880  /* Raised heap start for G3X_KBD=1 */
@@ -62,6 +66,9 @@ extern int kbd_is_blocked(void);
  */
 void __attribute__((noinline)) my_kbd_read_keys_candidate(void)
 {
+#if defined(G3X_SHORTPRESS) && (G3X_SHORTPRESS == 1)
+    g3x_shortpress_read_keys();
+#else
     static int pwr_hold_count = G3X_POWERON_HOLD_POLLS;
 
     kbd_update_key_state();
@@ -71,6 +78,7 @@ void __attribute__((noinline)) my_kbd_read_keys_candidate(void)
         pwr_hold_count--;
         physw_status[0] |= G3X_KEY_POWER_BIT;
     }
+#endif
 }
 
 /*
