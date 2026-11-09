@@ -59,9 +59,12 @@ CANDIDATE_PORT37_GUI3_DIAG_DIR = str(BUILD_DIR / "candidate_port37_gui3_diag")
 CANDIDATE_PORT38_GUI4_DIR = str(BUILD_DIR / "candidate_port38_gui4")
 CANDIDATE_PORT38_GUI4_DIAG_DIR = str(BUILD_DIR / "candidate_port38_gui4_diag")
 CANDIDATE_PORT39_SHORTPRESS_GUI4_DIR = str(BUILD_DIR / "candidate_port39_shortpress_gui4")
+CANDIDATE_PORT40_GUI5_DIR = str(BUILD_DIR / "candidate_port40_gui5")
+CANDIDATE_PORT40_GUI5_SHORTPRESS_DIR = str(BUILD_DIR / "candidate_port40_gui5_shortpress")
 
 G3X_GUI3_HEAP_START = legacy_builder.G3X_GUI_HEAP_START
 G3X_GUI4_HEAP_START = legacy_builder.G3X_GUI_HEAP_START
+G3X_GUI5_HEAP_START = legacy_builder.G3X_GUI_HEAP_START
 
 
 def generate_gui3_candidate_c(gui_diag: bool = False) -> str:
@@ -1366,9 +1369,12 @@ def build_candidate_gui3_core(
     candidate_dir: str,
     gui_diag: bool = False,
     gui4: bool = False,
+    gui5: bool = False,
     shortpress: bool = False,
 ) -> tuple[str, str, int, int]:
-    """Compile and link candidate core for G3X_GUI3=1 or G3X_GUI4=1."""
+    """Compile and link candidate core for G3X_GUI3=1, G3X_GUI4=1, or G3X_GUI5=1."""
+    if gui5:
+        gui4 = True
     legacy_builder.ensure_bootstrap()
     os.makedirs(candidate_dir, exist_ok=True)
 
@@ -1438,6 +1444,11 @@ def build_candidate_gui3_core(
     ]
     if gui4:
         base_cflags.append("-DG3X_GUI4=1")
+    if gui5:
+        base_cflags.append("-DG3X_GUI5=1")
+        base_cflags.append("-Wno-builtin-macro-redefined")
+        base_cflags.append('-D__DATE__="Nov  9 2026"')
+        base_cflags.append('-D__TIME__="12:00:00"')
     if shortpress:
         base_cflags.append("-DG3X_SHORTPRESS=1")
     if gui_diag:
@@ -1516,7 +1527,53 @@ def build_candidate_gui3_core(
     run_cmd(list(base_cflags) + ["-c", "-o", conf_cand_o, conf_cand_c], cwd=str(CHDK_PORT))
 
     gui_draw_obj = str(SUB_DIR / "gui_draw.thm.o")
-    camera_info_obj = str(SUB_DIR / "camera_info.thm.o")
+    if gui5:
+        camera_info_cand_c = os.path.join(candidate_dir, "camera_info.c")
+        with open(str(CHDK_PORT / "core" / "camera_info.c"), "r", encoding="utf-8") as f:
+            cam_info_src = f.read()
+        # In GUI5, camera_screen is statically compiled with Mode 12 LCD panel dimensions (900x600, stride 928)
+        cam_info_src = cam_info_src.replace(
+            "_cam_screen camera_screen =",
+            """#undef CAM_BITMAP_WIDTH
+#undef CAM_BITMAP_HEIGHT
+#undef CAM_SCREEN_WIDTH
+#undef CAM_SCREEN_HEIGHT
+#define CAM_BITMAP_WIDTH 928
+#define CAM_BITMAP_HEIGHT 600
+#define CAM_SCREEN_WIDTH 900
+#define CAM_SCREEN_HEIGHT 600
+_cam_screen camera_screen =""",
+        )
+        with open(camera_info_cand_c, "w", encoding="utf-8") as f:
+            f.write(cam_info_src)
+        camera_info_cand_o = os.path.join(candidate_dir, "camera_info.o")
+        run_cmd(list(base_cflags) + ["-c", "-o", camera_info_cand_o, camera_info_cand_c], cwd=str(CHDK_PORT))
+        camera_info_obj = camera_info_cand_o
+
+        gui_menu_cand_c = os.path.join(candidate_dir, "gui_menu.c")
+        with open(str(CHDK_PORT / "core" / "gui_menu.c"), "r", encoding="utf-8") as f:
+            gui_menu_src = f.read()
+        if "Fill remaining rows down to num_lines" not in gui_menu_src:
+            target_str = "// scrollbar\n        if (count > num_lines)"
+            fill_code = """#if defined(G3X_GUI5) && (G3X_GUI5 == 1)
+        /* PORT-40: Fill remaining rows down to num_lines with solid opaque black */
+        for (; i < num_lines; ++i, yy += rbf_font_height())
+        {
+            draw_rectangle(x, yy, x + w - 1, yy + rbf_font_height() - 1,
+                           MAKE_COLOR(COLOR_BLACK, COLOR_BLACK),
+                           RECT_BORDER0 | DRAW_FILLED);
+        }
+#endif
+
+        // scrollbar
+        if (count > num_lines)"""
+            gui_menu_src = gui_menu_src.replace(target_str, fill_code)
+        with open(gui_menu_cand_c, "w", encoding="utf-8") as f:
+            f.write(gui_menu_src)
+        gui_menu_cand_o = os.path.join(candidate_dir, "gui_menu.o")
+        run_cmd(list(base_cflags) + ["-c", "-o", gui_menu_cand_o, gui_menu_cand_c], cwd=str(CHDK_PORT))
+    else:
+        camera_info_obj = str(SUB_DIR / "camera_info.thm.o")
 
     obj_files = [
         boot_proto_o,
@@ -1538,6 +1595,8 @@ def build_candidate_gui3_core(
         str(SUB_DIR / "lib_thumb.thm.o"),
         str(SUB_DIR / "lang_str.thm.o"),
     ]
+    if gui5:
+        obj_files.append(gui_menu_cand_o)
     run_cmd([AR, "cr", lib_proto_a] + obj_files, cwd=str(CHDK_PORT))
 
     # 4. Link candidate_main.elf
@@ -1580,6 +1639,8 @@ def build_candidate_gui3_core(
         ],
         cwd=candidate_dir,
     )
+    if gui5:
+        run_cmd([AR, "d", libcore_cand_a, "gui_menu.o"], cwd=candidate_dir)
     libcore_a = libcore_cand_a
 
     ld_script = "tools/link-boot.ld"
@@ -1721,12 +1782,16 @@ def build_candidate(
     gui2: bool | None = None,
     gui3: bool | None = None,
     gui4: bool | None = None,
+    gui5: bool | None = None,
     gui_diag: bool | None = None,
     shortpress: bool | None = None,
 ) -> dict:
-    """Execute candidate build pipeline supporting G3X_GUI4=1, G3X_GUI3=1 and prior flags."""
+    """Execute candidate build pipeline supporting G3X_GUI5=1, G3X_GUI4=1, G3X_GUI3=1 and prior flags."""
     if shortpress is None:
         shortpress = os.environ.get("G3X_SHORTPRESS", "0") == "1"
+
+    if gui5 is None:
+        gui5 = os.environ.get("G3X_GUI5", "0") == "1"
 
     if gui4 is None:
         gui4 = os.environ.get("G3X_GUI4", "0") == "1"
@@ -1734,13 +1799,16 @@ def build_candidate(
     if gui3 is None:
         gui3 = os.environ.get("G3X_GUI3", "0") == "1"
 
-    if gui4:
+    if gui5:
+        gui4 = True
+        gui3 = True
+    elif gui4:
         gui3 = True
 
     if gui_diag is None:
         gui_diag = os.environ.get("G3X_GUI_DIAG", "0") == "1"
 
-    if not gui3 and not gui4:
+    if not gui3 and not gui4 and not gui5:
         # Prior builds delegate to legacy builder ensuring byte identity
         return legacy_builder.build_candidate(
             ladder=ladder,
@@ -1755,7 +1823,7 @@ def build_candidate(
             shortpress=shortpress,
         )
 
-    # G3X_GUI4=1 and G3X_GUI3=1 imply GUI2, GUI, OSD2, KBD, RESIDENT, POWERON_FIX, LED_LADDER
+    # G3X_GUI5=1, G3X_GUI4=1 and G3X_GUI3=1 imply GUI2, GUI, OSD2, KBD, RESIDENT, POWERON_FIX, LED_LADDER
     gui2 = True
     gui = True
     osd2 = True
@@ -1766,6 +1834,10 @@ def build_candidate(
 
     if out_dir:
         candidate_dir = os.path.abspath(out_dir)
+    elif gui5 and shortpress:
+        candidate_dir = CANDIDATE_PORT40_GUI5_SHORTPRESS_DIR
+    elif gui5:
+        candidate_dir = CANDIDATE_PORT40_GUI5_DIR
     elif gui4 and shortpress:
         candidate_dir = CANDIDATE_PORT39_SHORTPRESS_GUI4_DIR
     elif gui4:
@@ -1777,13 +1849,19 @@ def build_candidate(
 
     legacy_builder._check_not_tracked_dir(candidate_dir)
     os.makedirs(candidate_dir, exist_ok=True)
-    tag = "G3X_GUI4=1" if gui4 else "G3X_GUI3=1"
+    if gui5:
+        tag = "G3X_GUI5=1"
+    elif gui4:
+        tag = "G3X_GUI4=1"
+    else:
+        tag = "G3X_GUI3=1"
     print(f"\n--- Building Candidate Core ({tag}, diag={gui_diag}) (@ 0x003489B4) ---")
 
     core_elf, core_bin, boot_witness_addr, end_addr = build_candidate_gui3_core(
         candidate_dir=candidate_dir,
         gui_diag=gui_diag,
         gui4=gui4,
+        gui5=gui5,
         shortpress=shortpress,
     )
 
@@ -1836,12 +1914,13 @@ def build_candidate(
     manifest_data["architectural_invariants"]["dryos_heap_base"] = f"0x{G3X_GUI3_HEAP_START:08X}"
     manifest_data["architectural_invariants"]["gui3_active"] = True
     manifest_data["architectural_invariants"]["gui4_active"] = gui4
+    manifest_data["architectural_invariants"]["gui5_active"] = gui5
     manifest_data["architectural_invariants"]["gui_diag_active"] = gui_diag
     manifest_data["architectural_invariants"]["shortpress_active"] = shortpress
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest_data, f, indent=2)
 
-    heap_start = G3X_GUI4_HEAP_START if gui4 else G3X_GUI3_HEAP_START
+    heap_start = G3X_GUI5_HEAP_START if gui5 else (G3X_GUI4_HEAP_START if gui4 else G3X_GUI3_HEAP_START)
     clearance = heap_start - end_addr
 
     print("\nCANDIDATE BUILD COMPLETE (OFFLINE ONLY).")
@@ -1874,6 +1953,7 @@ def build_candidate(
         "gui2": gui2,
         "gui3": gui3,
         "gui4": gui4,
+        "gui5": gui5,
         "gui_diag": gui_diag,
         "dancingbits_row": 13,
         "clearance_bytes": clearance,
@@ -1882,9 +1962,10 @@ def build_candidate(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="PORT-38 / PORT-37: Opt-in G3X_GUI4=1 / G3X_GUI3=1 Candidate Builder for Canon PowerShot G3 X (GM1.10C)"
+        description="PORT-40 / PORT-38 / PORT-37: Opt-in G3X_GUI5=1 / G3X_GUI4=1 / G3X_GUI3=1 Candidate Builder for Canon PowerShot G3 X (GM1.10C)"
     )
     group = parser.add_mutually_exclusive_group()
+    group.add_argument("--gui5", action="store_true", help="Build opt-in G3X_GUI5=1 candidate")
     group.add_argument("--gui4", action="store_true", help="Build opt-in G3X_GUI4=1 candidate")
     group.add_argument("--gui3", action="store_true", help="Build opt-in G3X_GUI3=1 candidate")
     group.add_argument("--gui2", action="store_true", help="Build opt-in G3X_GUI2=1 candidate")
@@ -1902,6 +1983,8 @@ def main() -> int:
 
     if args.default:
         res = build_candidate(ladder=False, poweron_fix=False, resident=False, out_dir=args.out_dir)
+    elif args.gui5:
+        res = build_candidate(gui5=True, out_dir=args.out_dir)
     elif args.gui4:
         gui_diag = bool(args.gui_diag or os.environ.get("G3X_GUI_DIAG", "0") == "1")
         res = build_candidate(gui4=True, gui_diag=gui_diag, out_dir=args.out_dir)
@@ -1923,9 +2006,11 @@ def main() -> int:
     elif args.combined:
         res = build_candidate(ladder=True, poweron_fix=True, out_dir=args.out_dir)
     else:
-        # Default action: check G3X_GUI4 first, then G3X_GUI3
+        # Default action: check G3X_GUI5 first, then G3X_GUI4, then G3X_GUI3
         gui_diag = bool(args.gui_diag or os.environ.get("G3X_GUI_DIAG", "0") == "1")
-        if os.environ.get("G3X_GUI4", "0") == "1":
+        if os.environ.get("G3X_GUI5", "0") == "1":
+            res = build_candidate(gui5=True, out_dir=args.out_dir)
+        elif os.environ.get("G3X_GUI4", "0") == "1":
             res = build_candidate(gui4=True, gui_diag=gui_diag, out_dir=args.out_dir)
         else:
             res = build_candidate(gui3=True, gui_diag=gui_diag, out_dir=args.out_dir)
