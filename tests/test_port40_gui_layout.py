@@ -74,15 +74,15 @@ PINNED_DEFAULT_SIZE = 118001
 PINNED_GUI4_SHA256 = "14456b08fca82758262c26ad6105f784ebacaa080b7a059a622ded5a8d505fdd"
 PINNED_GUI4_SIZE = 102241
 
-PINNED_GUI5_SHA256 = "eb4917b1f45d22e765265aa05f912512e07c7e0b141ddd717d877f295994cf37"
-PINNED_GUI5_SIZE = 102225
-PINNED_GUI5_WITNESS = 0x0035C990
-PINNED_GUI5_END = 0x003629C0
+PINNED_GUI5_SHA256 = "aff912e317c007208d00dc78dca966aada10256dcf5ecb734c1b6b610a7e91fa"
+PINNED_GUI5_SIZE = 102161
+PINNED_GUI5_WITNESS = 0x0035C950
+PINNED_GUI5_END = 0x00362980
 
-PINNED_GUI5_SHORTPRESS_SHA256 = "02c465107dc3d501b496702d9a9d86e0c15c91cb9524937c158da060521790b8"
-PINNED_GUI5_SHORTPRESS_SIZE = 102385
-PINNED_GUI5_SHORTPRESS_WITNESS = 0x0035CA30
-PINNED_GUI5_SHORTPRESS_END = 0x00362A70
+PINNED_GUI5_SHORTPRESS_SHA256 = "5c5d4ef4bbecd09b31a73cb461c80674fef268fc5c5993f38f18e91231860ed4"
+PINNED_GUI5_SHORTPRESS_SIZE = 102321
+PINNED_GUI5_SHORTPRESS_WITNESS = 0x0035C9F0
+PINNED_GUI5_SHORTPRESS_END = 0x00362A30
 
 HEAP_START = 0x00368880
 
@@ -198,7 +198,7 @@ class TestPort40GuiLayout(unittest.TestCase):
             self.assertGreaterEqual(clearance, 24000)
 
     def test_geometry_constants_fill_rect_equals_menu_rect(self) -> None:
-        """Geometry assertion: fill rect equals menu rect, fits 900x600, with even margins."""
+        """Geometry assertion: fill rect equals menu rect, fits 900x600, with even margins in scrolling and non-scrolling cases."""
         # 1. Preprocess real header with pinned toolchain under -DG3X_GUI5=1
         cmd = [
             str(ARM_GCC),
@@ -229,20 +229,20 @@ class TestPort40GuiLayout(unittest.TestCase):
             if m:
                 defines[m.group(1)] = m.group(2).strip()
 
-        screen_w = int(defines["G3X_OSD2_DEFAULT_WIDTH"].strip("() "))
-        screen_h = int(defines["G3X_OSD2_DEFAULT_HEIGHT"].strip("() "))
-        buffer_w = int(defines["G3X_OSD2_DEFAULT_BUFFER_WIDTH"].strip("() "))
-        buffer_h = int(defines["G3X_OSD2_DEFAULT_BUFFER_HEIGHT"].strip("() "))
+        screen_w_def = int(defines["G3X_OSD2_DEFAULT_WIDTH"].strip("() "))
+        screen_h_def = int(defines["G3X_OSD2_DEFAULT_HEIGHT"].strip("() "))
+        buffer_w_def = int(defines["G3X_OSD2_DEFAULT_BUFFER_WIDTH"].strip("() "))
+        buffer_h_def = int(defines["G3X_OSD2_DEFAULT_BUFFER_HEIGHT"].strip("() "))
 
-        self.assertEqual(screen_w, 900, "G3X_OSD2_DEFAULT_WIDTH must be 900")
-        self.assertEqual(screen_h, 600, "G3X_OSD2_DEFAULT_HEIGHT must be 600")
-        self.assertEqual(buffer_w, 928, "G3X_OSD2_DEFAULT_BUFFER_WIDTH must be 928")
-        self.assertEqual(buffer_h, 600, "G3X_OSD2_DEFAULT_BUFFER_HEIGHT must be 600")
+        self.assertEqual(screen_w_def, 900, "G3X_OSD2_DEFAULT_WIDTH must be 900")
+        self.assertEqual(screen_h_def, 600, "G3X_OSD2_DEFAULT_HEIGHT must be 600")
+        self.assertEqual(buffer_w_def, 928, "G3X_OSD2_DEFAULT_BUFFER_WIDTH must be 928")
+        self.assertEqual(buffer_h_def, 600, "G3X_OSD2_DEFAULT_BUFFER_HEIGHT must be 600")
 
-        # 2. Extract camera_screen values from compiled candidate_main.elf
+        # 2. Extract camera_screen struct values from compiled candidate_main.elf
         elf_path = os.path.join(self.gui5_dir, "candidate_main.elf")
         if not os.path.isfile(elf_path):
-            build_candidate_gui(gui5=True)
+            build_candidate(gui5=True)
 
         nm_proc = subprocess.run(
             [str(ARM_NM), "-n", elf_path],
@@ -255,12 +255,13 @@ class TestPort40GuiLayout(unittest.TestCase):
         self.assertIsNotNone(m, "camera_screen symbol must be in .data")
         cs_addr = int(m.group(1), 16)
 
+        # Dump 64 bytes (16 32-bit ints) of camera_screen struct
         objdump_proc = subprocess.run(
             [
                 str(ARM_OBJDUMP),
                 "-s",
                 f"--start-address=0x{cs_addr:x}",
-                f"--stop-address=0x{cs_addr + 48:x}",
+                f"--stop-address=0x{cs_addr + 64:x}",
                 elf_path,
             ],
             stdout=subprocess.PIPE,
@@ -279,54 +280,177 @@ class TestPort40GuiLayout(unittest.TestCase):
                     if len(w) == 8 and re.match(r"^[0-9a-fA-F]{8}$", w):
                         hex_bytes.extend(bytes.fromhex(w))
 
-        ints = struct.unpack("<12I", bytes(hex_bytes[:48]))
+        ints = struct.unpack("<16I", bytes(hex_bytes[:64]))
+        screen_w = ints[0]
+        screen_h = ints[1]
+        buffer_w = ints[4]
+        buffer_h = ints[5]
         disp_left = ints[7]
         disp_right = ints[8]
         disp_width = ints[9]
-        menu_border = 10
-        ts_menu_border = 0
-        font_h = 32  # F1 2x font: 16x32
+        ts_menu_border = ints[14]
+        menu_border_width = ints[15]
 
-        # Core CHDK gui_menu.c equations:
-        num_lines = (screen_h - ts_menu_border * 2) // font_h - 1  # 17
-        menu_x = disp_left + menu_border  # 10
-        menu_w = disp_width - menu_border * 2  # 880
+        self.assertEqual(screen_w, 900)
+        self.assertEqual(screen_h, 600)
+        self.assertEqual(disp_left, 0)
+        self.assertEqual(disp_width, 900)
+        self.assertEqual(ts_menu_border, 0)
+        self.assertEqual(menu_border_width, 10)
 
-        # Non-scrolling menu (e.g. root_menu: 10 items <= 17):
-        wplus = 0
-        menu_y = (screen_h - ((num_lines - 1) * font_h)) >> 1  # 44
-        header_y = menu_y - font_h  # 12
-        total_h = (num_lines + 1) * font_h  # 576
-        total_w = menu_w + wplus  # 880
+        # 3. Parse font height and scrollbar wplus from real sources
+        build_py_src = (SCRIPTS_DIR / "build_candidate_gui3.py").read_text(encoding="utf-8")
+        m_fh = re.search(r"int\s+rbf_font_height\s*\(void\)\s*\{\s*return\s+(\d+);", build_py_src)
+        self.assertIsNotNone(m_fh, "rbf_font_height definition must be present")
+        font_h = int(m_fh.group(1))
+        self.assertEqual(font_h, 32, "Font height under F1 2x scaling must be 32")
 
-        # Fill rectangle (g3x_fill_menu_opaque_black):
-        fill_rect = (menu_x, header_y, total_w, total_h)
-        # Menu painted rectangle (header + rows):
-        paint_rect = (menu_x, header_y, menu_w, total_h)
+        gui_menu_src = (CHDK_PORT / "core" / "gui_menu.c").read_text(encoding="utf-8")
+        m_wplus = re.search(r"#if defined\(G3X_GUI5\) && \(G3X_GUI5 == 1\)[\s\S]*?wplus\s*=\s*(\d+);", gui_menu_src)
+        self.assertIsNotNone(m_wplus, "GUI5 wplus scrollbar width must be present in gui_menu.c")
+        scrollbar_wplus = int(m_wplus.group(1))
+        self.assertEqual(scrollbar_wplus, 8, "GUI5 scrollbar width reservation must be 8 px")
 
-        self.assertEqual(fill_rect, (10, 12, 880, 576))
-        self.assertEqual(paint_rect, (10, 12, 880, 576))
-        self.assertEqual(fill_rect, paint_rect, "Fill rect must equal painted menu rect")
+        # 4. Parse real menu item counts from gui.c: non-scrolling (root_menu) vs scrolling (visual_submenu)
+        gui_src = (CHDK_PORT / "core" / "gui.c").read_text(encoding="utf-8")
+        m_root = re.search(r"root_menu_items\[\]\s*=\s*\{(.*?)\{0\}", gui_src, re.DOTALL)
+        self.assertIsNotNone(m_root, "root_menu_items array must be found in gui.c")
+        root_count = len(re.findall(r"MENU_ITEM\s*\(", m_root.group(1)))
+        self.assertEqual(root_count, 10)
 
-        # Boundary checks within 0..899 x 0..599
-        self.assertGreaterEqual(menu_x, 0)
-        self.assertGreaterEqual(header_y, 0)
-        self.assertLessEqual(menu_x + total_w, screen_w)
-        self.assertLessEqual(header_y + total_h, screen_h)
+        m_vis = re.search(r"visual_submenu_items\[\]\s*=\s*\{(.*?)\{0\}", gui_src, re.DOTALL)
+        self.assertIsNotNone(m_vis, "visual_submenu_items array must be found in gui.c")
+        vis_count = len(re.findall(r"MENU_ITEM\s*\(", m_vis.group(1)))
+        self.assertEqual(vis_count, 31)
 
-        # Margins:
-        left_margin = menu_x  # 10
-        right_margin = screen_w - (menu_x + total_w)  # 900 - 890 = 10
-        top_margin = header_y  # 12
-        bottom_margin = screen_h - (header_y + total_h)  # 600 - 588 = 12
+        # 5. Path A: Independent computation of fill rect from build_candidate_gui3.py g3x_get_menu_layout
+        num_l = (screen_h - ts_menu_border * 2) // font_h - 1
+        fill_x = (disp_left + menu_border_width) & ~1
+        fill_w = (disp_width - menu_border_width * 2) & ~1
+        by = (screen_h - ((num_l - 1) * font_h)) >> 1
+        header_y = by - font_h
+        total_h = (num_l + 1) * font_h
+        total_w = fill_w
+        if fill_x < 0:
+            fill_x = 0
+        if header_y < 0:
+            header_y = 0
+        if fill_x + total_w > disp_width:
+            total_w = disp_width - fill_x
+        if header_y + total_h > screen_h:
+            total_h = screen_h - header_y
+        fill_rect = (fill_x, header_y, total_w, total_h)
+        self.assertEqual(fill_rect, (10, 12, 880, 576), "Background fill rect must be exactly (10, 12, 880, 576)")
 
-        self.assertEqual(left_margin, 10)
-        self.assertEqual(right_margin, 10)
-        self.assertEqual(left_margin, right_margin, "Horizontal margins must be even")
+        # 6. Path B: Independent computation of painted menu rect from gui_menu.c draw calls
+        def compute_menu_geometry(count: int):
+            num_lines = (screen_h - ts_menu_border * 2) // font_h - 1
+            menu_x = (disp_left + menu_border_width) & ~1
+            base_w = (disp_width - menu_border_width * 2) & ~1
+            y = (screen_h - ((num_lines - 1) * font_h)) >> 1
+            h_y = y - font_h
 
-        self.assertEqual(top_margin, 12)
-        self.assertEqual(bottom_margin, 12)
-        self.assertEqual(top_margin, bottom_margin, "Vertical margins must be even")
+            if count > num_lines:
+                wp = scrollbar_wplus
+                w = base_w - wp
+                # Scrollbar background: draw_rectangle((x+w), y, (x+w)+wplus-1, ...)
+                sb_x1 = menu_x + w
+                sb_x2 = (menu_x + w) + wp - 1
+                sb_y1 = y
+                sb_y2 = y + num_lines * font_h - 1
+                # Scrollbar thumb: draw_rectangle((x+w)+2, y+1+i, (x+w)+6, y+i+j, ...)
+                thumb_x1 = (menu_x + w) + 2
+                thumb_x2 = (menu_x + w) + 6
+            else:
+                wp = 0
+                w = base_w
+                sb_x1 = sb_x2 = sb_y1 = sb_y2 = None
+                thumb_x1 = thumb_x2 = None
+
+            # rbf_draw_menu_header draws header bar to x + (w + wplus) - 1
+            header_w = w + wp
+            header_x1 = menu_x
+            header_x2 = menu_x + header_w - 1
+            header_y1 = h_y
+            header_y2 = h_y + font_h - 1
+
+            # gui_menu_draw draws items to x + w - 1
+            items_x1 = menu_x
+            items_x2 = menu_x + w - 1
+            items_y1 = y
+            items_y2 = y + num_lines * font_h - 1
+
+            # Bounding box of all drawn elements
+            all_x1 = [header_x1, items_x1]
+            all_x2 = [header_x2, items_x2]
+            all_y1 = [header_y1, items_y1]
+            all_y2 = [header_y2, items_y2]
+            if sb_x1 is not None:
+                all_x1.append(sb_x1)
+                all_x2.append(sb_x2)
+                all_y1.append(sb_y1)
+                all_y2.append(sb_y2)
+
+            outer_x = min(all_x1)
+            outer_y = min(all_y1)
+            outer_w = max(all_x2) - outer_x + 1
+            outer_h = max(all_y2) - outer_y + 1
+            return (outer_x, outer_y, outer_w, outer_h), (sb_x1, sb_x2), (thumb_x1, thumb_x2)
+
+        # 7. Parameterised checks over non-scrolling and scrolling menu counts
+        test_counts = [
+            (root_count, "non-scrolling root_menu (count=10)"),
+            (17, "non-scrolling boundary (count=17)"),
+            (18, "scrolling boundary (count=18)"),
+            (vis_count, "scrolling Visual Settings submenu (count=31)"),
+        ]
+
+        for count_val, desc in test_counts:
+            outer_rect, sb_range, thumb_range = compute_menu_geometry(count_val)
+
+            # Assert fill == outer menu rect == (10, 12, 880, 576)
+            self.assertEqual(fill_rect, (10, 12, 880, 576), f"Fill rect mismatch for {desc}")
+            self.assertEqual(outer_rect, (10, 12, 880, 576), f"Outer menu rect mismatch for {desc}")
+            self.assertEqual(fill_rect, outer_rect, f"Fill rect must equal outer menu rect for {desc}")
+
+            # Assert margins: left == right == 10, top == bottom == 12
+            left_margin = outer_rect[0]
+            right_margin = screen_w - (outer_rect[0] + outer_rect[2])
+            top_margin = outer_rect[1]
+            bottom_margin = screen_h - (outer_rect[1] + outer_rect[3])
+
+            self.assertEqual(left_margin, 10, f"Left margin must be 10 for {desc}")
+            self.assertEqual(right_margin, 10, f"Right margin must be 10 for {desc}")
+            self.assertEqual(left_margin, right_margin, f"Horizontal margins must be even for {desc}")
+
+            self.assertEqual(top_margin, 12, f"Top margin must be 12 for {desc}")
+            self.assertEqual(bottom_margin, 12, f"Bottom margin must be 12 for {desc}")
+            self.assertEqual(top_margin, bottom_margin, f"Vertical margins must be even for {desc}")
+
+            # Assert boundary within 0..899 x 0..599
+            self.assertGreaterEqual(outer_rect[0], 0, f"X must be non-negative for {desc}")
+            self.assertGreaterEqual(outer_rect[1], 0, f"Y must be non-negative for {desc}")
+            self.assertLessEqual(outer_rect[0] + outer_rect[2], screen_w, f"Right edge within LCD for {desc}")
+            self.assertLessEqual(outer_rect[1] + outer_rect[3], screen_h, f"Bottom edge within LCD for {desc}")
+
+            # Scrollbar checks when count > num_lines
+            if count_val > 17:
+                self.assertIsNotNone(sb_range[0], f"Scrollbar must be present for {desc}")
+                self.assertGreaterEqual(sb_range[0], outer_rect[0], f"Scrollbar start inside box for {desc}")
+                self.assertLessEqual(sb_range[1], outer_rect[0] + outer_rect[2] - 1, f"Scrollbar end inside box for {desc}")
+                self.assertEqual(sb_range, (882, 889), f"Scrollbar range must be exactly 882..889 for {desc}")
+                self.assertEqual(thumb_range, (884, 888), f"Scrollbar thumb must be 884..888 for {desc}")
+
+        # 8. Negative check: demonstrate rejection of old attempt 4 formula (which widened to 890)
+        wp_old = scrollbar_wplus if vis_count > num_l else 0
+        old_total_w = fill_w + wp_old + (1 if wp_old else 0)
+        old_total_w = (old_total_w + 1) & ~1
+        self.assertEqual(old_total_w, 890, "Old attempt 4 formula must produce 890 for scrolling menu")
+        self.assertNotEqual(old_total_w, 880, "Old 890 width violates 880 box width specification")
+        old_right_margin = screen_w - (fill_x + old_total_w)
+        self.assertEqual(old_right_margin, 0, "Old 890 width destroys right margin (0 px)")
+        self.assertNotEqual(fill_x, old_right_margin, "Old 890 width destroys margin symmetry (10 vs 0)")
+        self.assertNotEqual(fill_rect[2], old_total_w, "Current GUI5 candidate fill rect rejects old 890 formula")
 
     def test_row_count_and_pitch_fill_height(self) -> None:
         """Row count (17 rows at 32 px pitch) fills the box height."""

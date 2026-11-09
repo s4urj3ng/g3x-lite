@@ -770,25 +770,15 @@ void g3x_get_menu_layout(int *out_x, int *out_y, int *out_w, int *out_h)
     x &= ~1;
     w &= ~1;
 
-    /* Check current menu row count to determine scrollbar presence (wplus) */
-    CMenu *cm = get_curr_menu();
-    int count = 0;
-    if (cm && cm->menu) {
-        while (cm->menu[count].text) count++;
-    }
-
-    int wplus = (count > num_l) ? 8 : 0;
-
     int by = (camera_screen.height - ((num_l - 1) * fh)) >> 1;
     int header_y = by - fh;
     int total_h = (num_l + 1) * fh;
 
-    /* When scrollbar is present, scrollbar draws to (x + w) + wplus inclusive.
-     * When scrollbar is absent, list and header draw to x + w - 1 (x=889),
-     * so total width from x is w (880 px). */
-    int total_w = w + wplus + (wplus ? 1 : 0);
-    /* Enforce even width for UYVY 2-pixel word packing */
-    total_w = (total_w + 1) & ~1;
+    /* PORT-40: Outer box is strictly 880x576 at (10,12)-(889,587) with even 10-px margins
+     * in BOTH scrolling (count > num_l) and non-scrolling (count <= num_l) cases.
+     * Scrollbar width (wplus = 8) is reserved INSIDE the 880-px box by shrinking the item
+     * text area in gui_menu.c, not by widening the box. */
+    int total_w = w;
 
     /* Clamp to display dimensions (900x600) */
     if (x < 0) x = 0;
