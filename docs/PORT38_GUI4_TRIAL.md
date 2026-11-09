@@ -96,17 +96,39 @@ Copy this checklist to record trial observations:
     - *Action*: Navigate into a menu or submenu with $>17$ items (or scrollable list).
     - *Expected*: Scrollbar appears on the right (`x = 890..898`). The solid opaque black fill covers the entire layout including the scrollbar (`x = 10..898`, width 889 px, height 576 px). Scrollbar thumb and track remain entirely inside the opaque black background with zero photo show-through.
 
-11. `[ ] PASS  [ ] FAIL` **Step 8: Redraw Recovery on Stock Canon Overwrite (DISP / Half-Press)**:
+11. `[ ] PASS  [ ] FAIL` **Step 8 (Regression Step): Redraw Recovery on Stock Canon Overwrite (menu returns after DISP / half-press)**:
     - *Action*: While CHDK menu is open, toggle DISP button or lightly tap shutter half-press to trigger stock Canon OSD update.
-    - *Expected*: CHDK menu restores promptly without freezing or leaving corrupt artifacts (detected via guard sentinel byte check).
+    - *Expected*: CHDK menu restores promptly without freezing or leaving corrupt artifacts (detected via guard sentinel byte check). PORT-37 Step 8 PASS behavior is strictly preserved under GUI4.
 
-12. `[ ] PASS  [ ] FAIL` **Step 9: Clean Menu Close & ALT Exit (Stock Controls Restored)**:
+12. `[ ] PASS  [ ] FAIL` **Step 9 (Regression Step): Clean Menu Close & ALT Exit (close menu, leave ALT, stock controls restored)**:
     - *Action*: Press Menu button to close menu; press Playback button to exit ALT mode.
-    - *Expected*: CHDK menu and overlay are completely erased (`draw_restore()`). Rear LED returns to steady single blink. Full stock Canon camera controls and Playback review functions operate normally. No black box is redrawn on subsequent buffer toggles or guard updates while in ALT with menu closed.
+    - *Expected*: CHDK menu and overlay are completely erased (`draw_restore()`). Rear LED returns to steady single blink. Full stock Canon camera controls and Playback review functions operate normally. No black box is redrawn on subsequent buffer toggles or guard updates while in ALT with menu closed. PORT-37 Step 9 PASS behavior is strictly preserved under GUI4.
 
 13. `[ ] PASS  [ ] FAIL` **Battery-Pull Recovery Verification**:
     - *Action*: Open battery door and remove NB-10L battery for $\ge 10\text{ seconds}$; reinsert battery; short tap ($<0.5\text{ s}$) Power button.
     - *Expected*: Camera powers up directly into stock Canon firmware without executing CHDK.
+
+---
+
+## PORT-38 Regression Audit: GUI4 vs GUI3 (PORT-37 Steps 8 & 9)
+
+Owner addendum on PORT-37 (`G3X_GUI3=1`, main `3e08999`):
+- **Step 8**: Menu returns promptly after stock Canon overwrite (DISP toggle or half-press shutter) — **PASS**
+- **Step 9**: Close menu, leave ALT, full stock Canon camera controls restored — **PASS**
+
+The table below diffs the GUI4 implementation against the GUI3 baseline for both paths:
+
+| Path | File:Line in GUI3 | File:Line in GUI4 | Changed? (Y/N) | Why the behaviour is kept |
+|---|---|---|---|---|
+| **Step 8: Redraw on stock overwrite / DISP / half-press** (`force_redraw = entered_alt \|\| check_gui_needs_redraw() \|\| (!draw_test_guard())`, `draw_set_guard()` re-arm, GUI4 opaque refill gated on `GUI_MODE_MENU`) | `scripts/build_candidate_gui3.py:174-186` | `scripts/build_candidate_gui3.py:729-744` | Y | Detection logic `force_redraw = entered_alt \|\| check_gui_needs_redraw() \|\| (!draw_test_guard())` and sentinel re-arm `draw_set_guard()` are identical. GUI4 adds `if (gui_get_mode() == GUI_MODE_MENU) g3x_fill_menu_opaque_black()` to refill the 880x576 (or 889x576) opaque black box before text repaint, ensuring prompt menu recovery with 100% solid opacity and zero photo show-through after stock Canon overwrites. |
+| **Step 8: Active display buffer toggle check** | `vendor/g3x-platform/platform/g3x/lib.c:136-145` | `vendor/g3x-platform/platform/g3x/lib.c:136-145` | N | Identical detection of Canon firmware flipping the active display buffer (`active_bitmap_buffer`). |
+| **Step 8: Opacity guard sentinel byte check** | `chdk-port/core/gui_draw.c:380-389` | `chdk-port/core/gui_draw.c:380-389` | N | Identical sentinel byte `0x42` at `opacity_buffer[active_bitmap_buffer][0]`. |
+| **Step 9: Menu close on KEY_MENU** | `chdk-port/core/gui_menu.c:1096-1110` | `chdk-port/core/gui_menu.c:1096-1110` | N | `KEY_MENU` runs `gui_set_mode(&altGuiHandler)`, transitioning GUI mode from `GUI_MODE_MENU` to `GUI_MODE_ALT` (closing menu while in ALT). |
+| **Step 9: Idle guard after menu close while still in ALT** | `scripts/build_candidate_gui3.py:190-201` (`__wrap_gui_menu_draw_initial`) | `scripts/build_candidate_gui3.py:739-741` (`g3x_gui_kbd_redraw`) | Y | In GUI4, `g3x_fill_menu_opaque_black()` is gated by `gui_get_mode() == GUI_MODE_MENU`. When menu is closed while remaining in ALT, subsequent buffer toggles or sentinel checks do NOT redraw the black box. |
+| **Step 9: ALT exit/kbd unblock** (`kbd_process.c` `exit_alt`, `kbd_candidate.h` `kbd_is_blocked`) | `chdk-port/core/kbd_process.c:72-76,158-161`; `chdk-port/platform/g3x/sub/110c/kbd_candidate.h:110` | `chdk-port/core/kbd_process.c:72-76,158-161`; `chdk-port/platform/g3x/sub/110c/kbd_candidate.h:110` | N | Releasing `KEY_PLAYBACK` invokes `exit_alt()`, setting `kbd_blocked = 0` and `gui_current_alt_state = ALT_MODE_LEAVE`. `mykbd_task` queries `kbd_is_blocked()` and passes it to `g3x_osd2_kbd_redraw`. When `kbd_blocked == 0`, `physw_status` is unmasked, restoring all physical buttons to stock Canon UI. |
+| **Step 9: Overlay erase on ALT exit** | `scripts/build_candidate_gui3.py:167-172` | `scripts/build_candidate_gui3.py:722-727` | N | `left_alt` condition triggers `gui_set_need_restore()` and `gui_redraw(1)`, executing `draw_restore()` and `vid_bitmap_refresh()` to erase overlay. |
+| **Step 9: GUI mode reset/vid_turn_on_updates** | `chdk-port/core/gui.c:3085-3096` | `chdk-port/core/gui.c:3085-3096` | N | `gui_activate_alt_mode()` on `ALT_MODE_LEAVE` calls `gui_set_mode(&defaultGuiHandler)` (resetting to `GUI_MODE_NONE`) and `vid_turn_on_updates()`. |
+| **Periodic force_redraw is absent** | Absent (`scripts/build_candidate_gui3.py:174-186`) | Absent (`scripts/build_candidate_gui3.py:729-744`) | N | Periodic timer modulo `(tick_cnt & 3)` and unconditional per-key forced redraw remain completely omitted; overlay is rock-steady at idle. |
 
 ---
 
