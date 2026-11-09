@@ -19,8 +19,8 @@ Built with pinned toolchain `toolchains/gcc-arm-none-eabi-5_4-2016q3` via `scrip
 
 | Candidate Configuration | DISKBOOT Size | DISKBOOT SHA-256 | Boot Witness | Linked `_end` | Heap Clearance |
 |---|---|---|---|---|---|
-| **`G3X_GUI4=1` (Plain Candidate)** | 102,033 B | `5a1eb4aaf09b33cf4d6f5a22d0f1dd11b9d4bbd1a97d1803c1307a58182b10f2` | `0x0035C8D0` | `0x00362900` | 24,448 B |
-| **`G3X_GUI4=1` + `G3X_GUI_DIAG=1` (DIAG Variant)** | 102,193 B | `ff3faaa4ade538e1f22f6f4c5cde2a0fc15149869c692825c45ced55799e6996` | `0x0035C970` | `0x003629A0` | 24,288 B |
+| **`G3X_GUI4=1` (Plain Candidate)** | 102,241 B | `14456b08fca82758262c26ad6105f784ebacaa080b7a059a622ded5a8d505fdd` | `0x0035C9A0` | `0x003629D0` | 24,240 B |
+| **`G3X_GUI4=1` + `G3X_GUI_DIAG=1` (DIAG Variant)** | 102,417 B | `a4bfdeeae630e5fcac07e4b206ff2c64acea28e77f22bad49996bea460d35e1d` | `0x0035CA50` | `0x00362A80` | 24,064 B |
 
 DryOS heap base is raised to `0x00368880` (`docs/port34_evidence_manifest.json: PORT34-ROM-HEAP-KBD`), providing $>24\text{ KB}$ clearance above linked `_end`.
 
@@ -57,7 +57,7 @@ DryOS heap base is raised to `0x00368880` (`docs/port34_evidence_manifest.json: 
 Copy this checklist to record trial observations:
 
 1. `[ ] PASS  [ ] FAIL` **Boot & Heartbeat (Held-press boot in Playback mode)**:
-   - *Action*: Insert SD card containing `DISKBOOT.BIN` (SHA-256 `5a1eb4aaf09b...`), hold Power button ~1–2 seconds until stock Playback UI loads.
+   - *Action*: Insert SD card containing `DISKBOOT.BIN` (SHA-256 `14456b08fca8...`), hold Power button ~1–2 seconds until stock Playback UI loads.
    - *Expected*: Rear green LED blinks steady ~1.0 Hz single blink (`100 ms ON / 900 ms OFF`). Stock Canon Playback photo displays cleanly.
 
 2. `[ ] PASS  [ ] FAIL` **ALT Entry (Playback button)**:
@@ -92,15 +92,19 @@ Copy this checklist to record trial observations:
    - *Action*: Press Up / Down on directional pad; press Right / SET to enter submenus; press Left / Menu to return.
    - *Expected*: Selection bar moves smoothly and responsively. Rows redraw cleanly without whole-screen flashing. Submenus open and display with the same 16x32 font, opaque black background, and legible header.
 
-10. `[ ] PASS  [ ] FAIL` **Step 8: Redraw Recovery on Stock Canon Overwrite (DISP / Half-Press)**:
+10. `[ ] PASS  [ ] FAIL` **Scrolling Submenu & Scrollbar (Scrollbar Inside Black Box)**:
+    - *Action*: Navigate into a menu or submenu with $>17$ items (or scrollable list).
+    - *Expected*: Scrollbar appears on the right (`x = 890..898`). The solid opaque black fill covers the entire layout including the scrollbar (`x = 10..898`, width 889 px, height 576 px). Scrollbar thumb and track remain entirely inside the opaque black background with zero photo show-through.
+
+11. `[ ] PASS  [ ] FAIL` **Step 8: Redraw Recovery on Stock Canon Overwrite (DISP / Half-Press)**:
     - *Action*: While CHDK menu is open, toggle DISP button or lightly tap shutter half-press to trigger stock Canon OSD update.
     - *Expected*: CHDK menu restores promptly without freezing or leaving corrupt artifacts (detected via guard sentinel byte check).
 
-11. `[ ] PASS  [ ] FAIL` **Step 9: Clean Menu Close & ALT Exit (Stock Controls Restored)**:
+12. `[ ] PASS  [ ] FAIL` **Step 9: Clean Menu Close & ALT Exit (Stock Controls Restored)**:
     - *Action*: Press Menu button to close menu; press Playback button to exit ALT mode.
-    - *Expected*: CHDK menu and overlay are completely erased (`draw_restore()`). Rear LED returns to steady single blink. Full stock Canon camera controls and Playback review functions operate normally.
+    - *Expected*: CHDK menu and overlay are completely erased (`draw_restore()`). Rear LED returns to steady single blink. Full stock Canon camera controls and Playback review functions operate normally. No black box is redrawn on subsequent buffer toggles or guard updates while in ALT with menu closed.
 
-12. `[ ] PASS  [ ] FAIL` **Battery-Pull Recovery Verification**:
+13. `[ ] PASS  [ ] FAIL` **Battery-Pull Recovery Verification**:
     - *Action*: Open battery door and remove NB-10L battery for $\ge 10\text{ seconds}$; reinsert battery; short tap ($<0.5\text{ s}$) Power button.
     - *Expected*: Camera powers up directly into stock Canon firmware without executing CHDK.
 
@@ -116,8 +120,8 @@ All assumptions and implementations are mapped with exact citations:
 | Character advance width 16 px | `scripts/build_candidate_gui3.py:263,308` | VERIFIED | `rbf_char_width(int ch) { return 16; }`, `rbf_draw_char` returns `16` |
 | Row pitch 32 px | `scripts/build_candidate_gui3.py:258,318` | VERIFIED | `rbf_font_height(void) { return 32; }` |
 | Direct font routing (no `--wrap`) | `scripts/build_candidate_gui3.py:250-330,900-925` | VERIFIED | `rbf_*` defined in `libplatformsub_candidate.a`, bypassing `libfont.a:rbf_font.o` |
-| Full menu bounding box dimensions | `scripts/build_candidate_gui3.py:202-230` | VERIFIED | `bx = 10`, `by = 12`, `bw = 880`, `bh = 576` (`total_h = 18 * 32 = 576`) |
-| Opacity 255 buffer write | `scripts/build_candidate_gui3.py:222-226` | VERIFIED | Writes `255` into `opacity_buffer[active_bitmap_buffer & 1]` for all 880x576 pixels |
+| Full menu bounding box dimensions | `scripts/build_candidate_gui3.py:202-230` | VERIFIED | `bx = 10`, `by = 12`, `bw = 880` (non-scrolling) / `889` (scrolling), `bh = 576` (`total_h = 18 * 32 = 576`) |
+| Opacity 255 buffer write | `scripts/build_candidate_gui3.py:222-226` | VERIFIED | Writes `255` into `opacity_buffer[active_bitmap_buffer & 1]` for all menu pixels |
 | UYVY Black buffer write | `scripts/build_candidate_gui3.py:215-220` | VERIFIED | Writes `0x00800080` (UYVY black) into `bitmap_buffer[active_bitmap_buffer & 1]` |
 | Title bar color configuration | `tools/build_candidate_port25_ladder_fix.py:1145-1152` | VERIFIED | `conf.menu_title_color.bg.col = 1` (Black), `fg.col = 2` (White), `conf.menu_center = 0` |
 | Sibling opacity buffer architecture | `chdk-port/platform/g7x/lib.c:289-296`; `g5x/lib.c:28-33` | HISTORICAL_CHDK | `vid_get_opacity_active_buffer() { return (void *)opacity_buffer[active_bitmap_buffer&1]; }` |
@@ -127,7 +131,7 @@ All assumptions and implementations are mapped with exact citations:
 | Mode 12 900x600 display geometry | `docs/PORT36_GUI_GEOMETRY.md:4,10` | VERIFIED | `displaytype = 12`, `width = 900`, `height = 600`, `buffer_width = 928` |
 | ROM Opacity buffer addresses | `evidence/port35_manifest.json` (`PORT35-ROM-BMPDDEV`) | VERIFIED | `0x5FC40000` (buffer 0), `0x5FB80000` (buffer 1) |
 | ROM Bitmap overlay addresses | `evidence/port35_manifest.json` (`PORT35-ROM-BMPDDEV`) | VERIFIED | `0x5FE80000` (buffer 0), `0x5FD00000` (buffer 1) |
-| Raised DryOS heap base | `docs/port34_evidence_manifest.json: PORT34-ROM-HEAP-KBD` | VERIFIED | `0x00368880` provides 24,448 B clearance above `_end` `0x00362900` |
+| Raised DryOS heap base | `docs/port34_evidence_manifest.json: PORT34-ROM-HEAP-KBD` | VERIFIED | `0x00368880` provides 24,240 B clearance above `_end` `0x003629D0` |
 | Zero new ROM ranges read | Offline repository audit | VERIFIED | `0` new ROM slices read; all symbols from verified manifests |
 
 ---
@@ -147,5 +151,5 @@ python3 -B scripts/build_candidate_gui4.py --out-dir /tmp/candidate_port38_gui4
 
 # 4. Verify SHA-256 and size:
 sha256sum /tmp/candidate_port38_gui4/DISKBOOT.BIN
-# Output: 5a1eb4aaf09b33cf4d6f5a22d0f1dd11b9d4bbd1a97d1803c1307a58182b10f2  102033 bytes
+# Output: 14456b08fca82758262c26ad6105f784ebacaa080b7a059a622ded5a8d505fdd  102241 bytes
 ```

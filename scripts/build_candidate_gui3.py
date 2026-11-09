@@ -682,6 +682,13 @@ void core_spytask(void)
 
 static void g3x_fill_menu_opaque_black(void);
 void g3x_draw_char_16x32(coord x, coord y, const char ch, twoColors cl);
+int gui_get_mode(void);
+void g3x_get_menu_layout(int *out_x, int *out_y, int *out_w, int *out_h);
+
+int gui_get_mode(void)
+{
+    return camera_info.state.gui_mode;
+}
 
 /* Driven from mykbd_task -> g3x_osd2_kbd_redraw on every keyboard tick */
 void g3x_gui_kbd_redraw(int alt_active)
@@ -729,7 +736,9 @@ void g3x_gui_kbd_redraw(int alt_active)
         int force_redraw = entered_alt || check_gui_needs_redraw() || (!draw_test_guard());
         if (force_redraw) {
             draw_set_guard();
-            g3x_fill_menu_opaque_black();
+            if (gui_get_mode() == GUI_MODE_MENU) {
+                g3x_fill_menu_opaque_black();
+            }
         }
         gui_redraw(force_redraw);
     }
@@ -742,8 +751,50 @@ void g3x_gui_kbd_redraw(int alt_active)
  * Opacity buffer defines per-pixel opacity (255 = fully opaque) for the bitmap overlay.
  * Both bitmap_buffer and opacity_buffer are indexed by (active_bitmap_buffer & 1).
  * Mode 12 (900x600, buffer_width 928):
- * Menu rectangle: bx=10, by=12, bw=880, bh=576.
+ * Menu rectangle computed from shared layout matching chdk-port/core/gui_menu.c.
  * ============================================================================= */
+
+void g3x_get_menu_layout(int *out_x, int *out_y, int *out_w, int *out_h)
+{
+    int fh = rbf_font_height();
+    int num_l = (camera_screen.height - camera_screen.ts_menu_border * 2) / fh - 1;
+    int x = camera_screen.disp_left + camera_screen.menu_border_width;
+    int w = camera_screen.disp_width - camera_screen.menu_border_width * 2;
+
+    /* Check current menu row count to determine scrollbar presence (wplus) */
+    CMenu *cm = get_curr_menu();
+    int count = 0;
+    if (cm && cm->menu) {
+        while (cm->menu[count].text) count++;
+    }
+
+    int wplus = (count > num_l) ? 8 : 0;
+
+    int by = (camera_screen.height - ((num_l - 1) * fh)) >> 1;
+    int header_y = by - fh;
+    int total_h = (num_l + 1) * fh;
+
+    /* When scrollbar is present, scrollbar draws to (x + w) + wplus inclusive (x=898),
+     * so total width from x is w + wplus + 1 (880 + 8 + 1 = 889 px).
+     * When scrollbar is absent, list and header draw to x + w - 1 (x=889),
+     * so total width from x is w (880 px). */
+    int total_w = w + wplus + (wplus ? 1 : 0);
+
+    /* Clamp to display dimensions (900x600) */
+    if (x < 0) x = 0;
+    if (header_y < 0) header_y = 0;
+    if (x + total_w > camera_screen.disp_width) {
+        total_w = camera_screen.disp_width - x;
+    }
+    if (header_y + total_h > camera_screen.height) {
+        total_h = camera_screen.height - header_y;
+    }
+
+    if (out_x) *out_x = x;
+    if (out_y) *out_y = header_y;
+    if (out_w) *out_w = total_w;
+    if (out_h) *out_h = total_h;
+}
 
 static void g3x_fill_menu_opaque_black(void)
 {
@@ -756,21 +807,17 @@ static void g3x_fill_menu_opaque_black(void)
     volatile unsigned char *bbu = (volatile unsigned char *)bitmap_buffer[active];
     if (!obu || !bbu) return;
 
-    int bx = camera_screen.disp_left + camera_screen.menu_border_width;
-    int bw = camera_screen.disp_width - camera_screen.menu_border_width * 2;
-    int num_l = (camera_screen.height - camera_screen.ts_menu_border * 2) / rbf_font_height() - 1;
-    int by = (camera_screen.height - ((num_l - 1) * rbf_font_height())) >> 1;
-    int header_y = by - rbf_font_height();
-    int total_h = (num_l + 1) * rbf_font_height();
+    int bx, by, bw, bh;
+    g3x_get_menu_layout(&bx, &by, &bw, &bh);
 
     int y;
-    for (y = header_y; y < header_y + total_h; y++) {
+    for (y = by; y < by + bh; y++) {
         unsigned int offset = y * camera_screen.buffer_width + bx;
         unsigned char *o_ptr = (unsigned char *)&obu[offset];
         memset(o_ptr, 0xFF, bw);
 
         unsigned int *b_ptr = (unsigned int *)&bbu[(offset >> 1) << 2];
-        int count_pairs = bw >> 1;
+        int count_pairs = (bw + 1) >> 1;
         int i;
         for (i = 0; i < count_pairs; i++) {
             b_ptr[i] = 0x00800080;
@@ -990,13 +1037,17 @@ int rbf_draw_menu_header(int x, int y, int len, char symbol, const char *str, tw
     color bg = BG_COLOR(cl);
     color fg = FG_COLOR(cl);
 
+    int bw = 0;
+    g3x_get_menu_layout(0, 0, &bw, 0);
+    int header_w = (len > (camera_screen.disp_width - camera_screen.menu_border_width * 2)) ? bw : len;
+
     /* Fill header bar with solid background color (black) */
-    draw_rectangle(x, y, x + len - 1, y + h - 1, MAKE_COLOR(bg, bg), RECT_BORDER0 | DRAW_FILLED);
+    draw_rectangle(x, y, x + header_w - 1, y + h - 1, MAKE_COLOR(bg, bg), RECT_BORDER0 | DRAW_FILLED);
 
     /* Draw title text in contrasting foreground color (white on black) */
     if (str && *str) {
         int title_x = x + 16;
-        int max_x = x + len - 16;
+        int max_x = x + header_w - 16;
         while (*str && (title_x + 16 <= max_x)) {
             g3x_draw_char_16x32(title_x, y, *str++, MAKE_COLOR(bg, fg));
             title_x += 16;
