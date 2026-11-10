@@ -16,8 +16,8 @@
   "artifacts": {
     "DISKBOOT.BIN": {
       "path": "DISKBOOT.BIN",
-      "size": 124025,
-      "sha256": "b9500290515af03541781587ce06095c5ae75c6f44fd31b038c659ec8341a70e"
+      "size": 124225,
+      "sha256": "087085ad8e3ec67cb3035bc45f7594337e0f3e083983c50450d4cefeaea9fb28"
     },
     "modules_count": 34,
     "modules": {

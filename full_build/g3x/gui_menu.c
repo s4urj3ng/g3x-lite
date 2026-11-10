@@ -34,7 +34,14 @@ static int          gui_menu_redraw;
 #if defined(G3X_GUI_FIX) && (G3X_GUI_FIX == 1)
 int gui_menu_needs_redraw(void)
 {
+    if (camera_info.state.gui_mode != GUI_MODE_MENU)
+        return 0;
     return gui_menu_redraw != 0;
+}
+
+void gui_menu_clear_redraw(void)
+{
+    gui_menu_redraw = 0;
 }
 
 int gui_menu_get_curr_item(void)

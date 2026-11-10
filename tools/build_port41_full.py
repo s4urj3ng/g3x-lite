@@ -235,6 +235,8 @@ def apply_gui_fix_staging_patches(stage_dir: Path) -> None:
         "            extern int draw_test_guard(void);\n"
         "            extern int check_bitmap_buffer_changed(void);\n"
         "            extern int gui_check_state_changed(void);\n"
+        "            extern int gui_is_module_mode(void);\n"
+        "            extern void gui_draw_module_tick(void);\n"
         "\n"
         "            gui_maintenance_tick();\n"
         "            int forced = check_gui_needs_redraw();\n"
@@ -243,7 +245,9 @@ def apply_gui_fix_staging_patches(stage_dir: Path) -> None:
         "            int state_changed = gui_check_state_changed();\n"
         "            int need_redraw = forced || sentinel_lost || buffer_changed || state_changed;\n"
         "            if (need_redraw)\n"
-        "                gui_redraw(forced || sentinel_lost || buffer_changed);"
+        "                gui_redraw(forced || sentinel_lost || buffer_changed);\n"
+        "            else if (gui_is_module_mode())\n"
+        "                gui_draw_module_tick();"
     )
     if main_anchor in core_main_text:
         core_main_text = core_main_text.replace(main_anchor, main_replacement, 1)
@@ -314,17 +318,128 @@ def apply_gui_fix_staging_patches(stage_dir: Path) -> None:
     # and provide gui_check_state_changed() for zero-flicker redraw
     core_gui_c = stage_dir / "core" / "gui.c"
     core_gui_text = core_gui_c.read_text(encoding="utf-8")
+
+    # Guard g3x_fill_menu_opaque_black in gui_draw_alt_helper so it runs only on mode entry,
+    # sentinel loss, or real state change, never on every tick
+    draw_flag_anchor = "static int gui_mode_need_redraw = 0;    // Set if current mode needs to redraw itself\n"
+    draw_flag_replacement = (
+        "static int gui_mode_need_redraw = 0;    // Set if current mode needs to redraw itself\n"
+        "static int alt_helper_drawn = 0;\n"
+    )
+    if draw_flag_anchor in core_gui_text:
+        core_gui_text = core_gui_text.replace(draw_flag_anchor, draw_flag_replacement, 1)
+    else:
+        raise RuntimeError("gui_mode_need_redraw anchor not found in staged core/gui.c")
+
+    helper_def_anchor = (
+        "void gui_reset_alt_helper()\n"
+        "{\n"
+        "    gui_helper_displayat = get_tick_count() + (conf.show_alt_helper_delay * 1000);\n"
+        "}\n\n"
+        "static void gui_draw_alt_helper()\n"
+    )
+    helper_def_replacement = (
+        "void gui_reset_alt_helper()\n"
+        "{\n"
+        "    alt_helper_drawn = 0;\n"
+        "    gui_helper_displayat = get_tick_count() + (conf.show_alt_helper_delay * 1000);\n"
+        "}\n\n"
+        "static void gui_draw_alt_helper(int force_redraw)\n"
+    )
+    if helper_def_anchor in core_gui_text:
+        core_gui_text = core_gui_text.replace(helper_def_anchor, helper_def_replacement, 1)
+    else:
+        raise RuntimeError("gui_reset_alt_helper anchor not found in staged core/gui.c")
+
+    gui_chdk_draw_anchor = (
+        "#ifdef CAM_DISP_ALT_TEXT\n"
+        "    gui_draw_alt_helper();\n"
+        "#else\n"
+    )
+    gui_chdk_draw_replacement = (
+        "#ifdef CAM_DISP_ALT_TEXT\n"
+        "    gui_draw_alt_helper(force_redraw);\n"
+        "#else\n"
+    )
+    if gui_chdk_draw_anchor in core_gui_text:
+        core_gui_text = core_gui_text.replace(gui_chdk_draw_anchor, gui_chdk_draw_replacement, 1)
+    else:
+        raise RuntimeError("gui_draw_alt_helper() call anchor not found in staged core/gui.c")
+
     gui_anchor = "    is_menu_shortcut = 0;\n"
     gui_replacement = (
         "    is_menu_shortcut = 0;\n\n"
-        "    /* PORT-42 GUI fix: Fill full 880x576 box with solid opaque black so live view does not show through */\n"
-        "    extern void g3x_fill_menu_opaque_black(void);\n"
-        "    g3x_fill_menu_opaque_black();\n"
+        "    /* PORT-42 GUI fix: Fill full 880x576 box with solid opaque black only on state change,\n"
+        "     * mode entry or sentinel loss, never on every tick [PORT-38 docs/PORT38_GUI4_TRIAL.md:123] */\n"
+        "    if (force_redraw || !draw_test_guard() || !alt_helper_drawn)\n"
+        "    {\n"
+        "        extern void g3x_fill_menu_opaque_black(void);\n"
+        "        g3x_fill_menu_opaque_black();\n"
+        "        alt_helper_drawn = 1;\n"
+        "    }\n"
     )
     if gui_anchor in core_gui_text:
         core_gui_text = core_gui_text.replace(gui_anchor, gui_replacement, 1)
     else:
         raise RuntimeError("is_menu_shortcut anchor not found in staged core/gui.c")
+
+    # Patch gui_set_mode to reset alt_helper_drawn and clear pending menu redraw
+    set_mode_anchor = (
+        "    gui_handler *old_mode = gui_mode;\n"
+        "    gui_mode = mode;\n\n"
+        "    gui_osd_need_restore = 0;\n"
+    )
+    set_mode_replacement = (
+        "    gui_handler *old_mode = gui_mode;\n"
+        "    gui_mode = mode;\n\n"
+        "    alt_helper_drawn = 0;\n"
+        "    extern void gui_menu_clear_redraw(void);\n"
+        "    gui_menu_clear_redraw();\n\n"
+        "    gui_osd_need_restore = 0;\n"
+    )
+    if set_mode_anchor in core_gui_text:
+        core_gui_text = core_gui_text.replace(set_mode_anchor, set_mode_replacement, 1)
+    else:
+        raise RuntimeError("gui_set_mode anchor not found in staged core/gui.c")
+
+    # Patch gui_activate_alt_mode to clear pending menu redraw on enter and leave
+    alt_activate_anchor = (
+        "    switch (gui_current_alt_state)\n"
+        "    {\n"
+        "    case ALT_MODE_ENTER:\n"
+    )
+    alt_activate_replacement = (
+        "    switch (gui_current_alt_state)\n"
+        "    {\n"
+        "    case ALT_MODE_ENTER:\n"
+        "        alt_helper_drawn = 0;\n"
+        "        {\n"
+        "            extern void gui_menu_clear_redraw(void);\n"
+        "            gui_menu_clear_redraw();\n"
+        "        }\n"
+    )
+    if alt_activate_anchor in core_gui_text:
+        core_gui_text = core_gui_text.replace(alt_activate_anchor, alt_activate_replacement, 1)
+    else:
+        raise RuntimeError("ALT_MODE_ENTER anchor not found in staged core/gui.c")
+
+    alt_leave_anchor = (
+        "    case ALT_MODE_LEAVE:\n"
+        "        conf_save();\n"
+    )
+    alt_leave_replacement = (
+        "    case ALT_MODE_LEAVE:\n"
+        "        alt_helper_drawn = 0;\n"
+        "        {\n"
+        "            extern void gui_menu_clear_redraw(void);\n"
+        "            gui_menu_clear_redraw();\n"
+        "        }\n"
+        "        conf_save();\n"
+    )
+    if alt_leave_anchor in core_gui_text:
+        core_gui_text = core_gui_text.replace(alt_leave_anchor, alt_leave_replacement, 1)
+    else:
+        raise RuntimeError("ALT_MODE_LEAVE anchor not found in staged core/gui.c")
 
     splash_anchor = (
         "static void gui_handle_splash(int force_redraw)\n"
@@ -464,13 +579,15 @@ def apply_gui_fix_staging_patches(stage_dir: Path) -> None:
         "    extern int gui_menu_needs_redraw(void);\n"
         "    extern int gui_menu_get_curr_item(void);\n"
         "    extern int memcmp(const void *s1, const void *s2, long n);\n\n"
-        "    int dirty = gui_osd_need_restore || gui_mode_need_redraw || gui_menu_needs_redraw();\n\n"
+        "    int is_menu_active = (camera_info.state.gui_mode == GUI_MODE_MENU);\n"
+        "    int menu_dirty = is_menu_active && gui_menu_needs_redraw();\n\n"
+        "    int dirty = gui_osd_need_restore || gui_mode_need_redraw || menu_dirty;\n\n"
         "    struct gui_vis_sig current_sig;\n"
         "    current_sig.mode_ptr               = (void*)gui_mode;\n"
         "    current_sig.gui_mode               = camera_info.state.gui_mode;\n"
         "    current_sig.helper_due             = gui_helper_due;\n"
         "    current_sig.splash_sec             = gui_splash_sec;\n"
-        "    current_sig.menu_item              = gui_menu_get_curr_item();\n"
+        "    current_sig.menu_item              = is_menu_active ? gui_menu_get_curr_item() : 0;\n"
         "    current_sig.debug_shortcut_action  = conf.debug_shortcut_action;\n"
         "    current_sig.dng_raw                = conf.dng_raw;\n"
         "    current_sig.enable_shortcuts       = conf.enable_shortcuts;\n"
@@ -521,8 +638,23 @@ def apply_gui_fix_staging_patches(stage_dir: Path) -> None:
         "    {\n"
         "        sig_changed = 1;\n"
         "    }\n\n"
+        "    if (sig_changed)\n"
+        "    {\n"
+        "        alt_helper_drawn = 0;\n"
+        "    }\n\n"
         "    last_gui_sig = current_sig;\n\n"
         "    return dirty || sig_changed;\n"
+        "}\n\n"
+        "int gui_is_module_mode(void)\n"
+        "{\n"
+        "    return (camera_info.state.gui_mode > GUI_MODE_MENU);\n"
+        "}\n\n"
+        "void gui_draw_module_tick(void)\n"
+        "{\n"
+        "    if (gui_mode && gui_mode->redraw)\n"
+        "    {\n"
+        "        gui_mode->redraw(0);\n"
+        "    }\n"
         "}\n"
     )
     if alt_anchor in core_gui_text:
