@@ -13,6 +13,54 @@
 extern int active_bitmap_buffer;
 extern char* bitmap_buffer[];
 
+#if defined(G3X_GUI_FIX) && (G3X_GUI_FIX == 1)
+// GM1.10C Mode 12 LCD opacity buffers in DRAM [osd2_test_overlay.h:131-134; g7x/lib.c:291-292]
+volatile char *opacity_buffer[2] = { (char*)0x5FC40000, (char*)0x5FB80000 };
+
+void vid_bitmap_refresh(void)
+{
+    extern void _transfer_src_overlay(int);
+    _transfer_src_overlay(0);
+    _transfer_src_overlay(1);
+}
+
+void *vid_get_bitmap_fb(void)
+{
+    return bitmap_buffer[active_bitmap_buffer & 1];
+}
+
+void *vid_get_opacity_active_buffer(void)
+{
+    return (void *)opacity_buffer[active_bitmap_buffer & 1];
+}
+
+// FINSIG palette pointers [reference/finsig_gm110c/stubs_entry.S:195,196; build_candidate_gui3.py:1223-1249]
+extern int active_palette_buffer;
+extern int **palette_buffer_ptr;
+
+void *vid_get_bitmap_active_palette(void)
+{
+    unsigned int idx = (unsigned int)active_palette_buffer;
+    if (palette_buffer_ptr == 0 || idx > 7u) {
+        return 0;
+    }
+    int *pal = palette_buffer_ptr[idx];
+    if (pal == 0) {
+        return 0;
+    }
+    return pal + 1;
+}
+
+int vid_get_palette_type(void)
+{
+    return 3;
+}
+
+int vid_get_palette_size(void)
+{
+    return 256 * 4;
+}
+#else
 // GM1.10C Mode 12 LCD opacity buffers in DRAM
 static void *opacity_buffers[2] = { (void*)0x5FC40000, (void*)0x5FB80000 };
 
@@ -31,6 +79,7 @@ void *vid_get_opacity_active_buffer()
 {
     return opacity_buffers[active_bitmap_buffer & 1];
 }
+#endif
 
 /*
  * PORT-40 / PORT-41 GUI5 layout for Mode 12 900x600 LCD:
@@ -240,6 +289,13 @@ int vid_get_aspect_ratio()                      { return LV_ASPECT_3_2; }
 int check_gui_needs_redraw()
 {
     static int last_bitmap_buffer = 0;
+#if defined(G3X_GUI_FIX) && (G3X_GUI_FIX == 1)
+    extern int draw_test_guard(void);
+    if (!draw_test_guard())
+    {
+        return 1;
+    }
+#endif
     if (active_bitmap_buffer != last_bitmap_buffer)
     {
         last_bitmap_buffer = active_bitmap_buffer;
