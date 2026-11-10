@@ -132,3 +132,41 @@ python3 -B tools/build_candidate_port2a.py
 python3 -B tools/validate_candidate_port2a.py
 python3 -B -m unittest discover -s tests -p "test_port*.py"
 ```
+
+---
+
+## 6. Output Artifacts Manifest & Owner Trial Plan
+
+### 6.1 Output Artifacts Manifest
+
+The standard CHDK full build emits the following complete runtime distribution artifacts under `out/port41-full/`:
+
+| Artifact | Type | Size (Bytes) | SHA-256 Checksum | Description |
+|---|---|---|---|---|
+| `DISKBOOT.BIN` | Encoded Bootloader | `124,097` | `9a90ca2f4722f6c507291e45111daed899554eacf2b48542555e51169aa32e60` | Full CHDK executable binary, encoded with dancingbits row 13. |
+| `CHDK/MODULES/` | Directory (34 modules) | — | (See `port41_manifest.json`) | Dynamic runtime modules (`.flt` format): `calend.flt`, `mdetect.flt`, `cpuinfo.flt`, `mpopup.flt`, `tetris.flt`, `fshelter.flt`, `exmemins.flt`, `sudoku.flt`, `_osd_le.flt`, `curves.flt`, `reversi.flt`, `memview.flt`, `palette.flt`, `_hexbox.flt`, `_rawop.flt`, `ubasic.flt`, `eyefi.flt`, `shothist.flt`, `modinsp.flt`, `lua.flt`, `_tbox.flt`, `zebra.flt`, `snake.flt`, `benchm.flt`, `txtread.flt`, `edgeovr.flt`, `grids.flt`, `useredit.flt`, `4wins.flt`, `fselect.flt`, `histo.flt`, `_dng.flt`, `sokoban.flt`, `mastmind.flt`. |
+| `CHDK/FONTS/` | Directory (74 fonts) | — | — | Standard CHDK RBF raster fonts (`.rbf` format) for 16x32 and alternate UI scales. |
+| `CHDK/LANG/` | Directory (20 languages) | — | — | Localization language definition files (`.lng` format). |
+| `CHDK/SCRIPTS/` | Directory | — | — | Default CHDK Lua and uBasic script suite (`shoot.lua`, `interval.lua`, `default.lua`, etc.). |
+| `port41_manifest.json` | JSON Manifest | — | — | Cryptographic integrity manifest verifying all output files and hashes. |
+
+### 6.2 Owner Trial Steps Table
+
+The owner trial validates the full build on physical camera hardware in two consecutive steps: **held press first**, followed by **short press**.
+
+| Step | Action | Expected Result | What to Note |
+|---|---|---|---|
+| **Step 1: Held Press** | Insert SD card with `DISKBOOT.BIN` and `CHDK/`. Press and **hold** the Power button for >= 1.5 seconds until LED activity completes. | 1. **LED ladder**: Diagnostic LED ladder flashes on green power LED (`0xD20B0884`).<br>2. **Stock UI**: Firmware enters normal DryOS initialization and renders the stock Canon display.<br>3. **CHDK resident**: CHDK background keyboard task (`mykbd_task`) is resident in memory without crashes or watchdogs.<br>4. **ALT toggle opens standard CHDK menu**: Pressing the Playback button toggles ALT mode; pressing Menu opens the full 900x600 CHDK menu cleanly without edge leaks or visual artifacts. | - Observe green LED pulse sequence during loader handoff.<br>- Verify LCD display boots to stock live view.<br>- Confirm Playback key enters `<ALT>` mode cleanly.<br>- Confirm Menu key displays standard CHDK menu centered in 880x576 box with 10 px horizontal and 12 px vertical margins.<br>- Pressing Playback exits `<ALT>` mode and returns to normal operation. |
+| **Step 2: Short Press** | With camera powered off, perform a normal **short press** (< 0.5 s) of the Power button. | 1. **Shooting mode on short press**: The camera powers up directly into shooting mode (lens extends, sensor activates, live view starts) because start cause `0x00080000` is restored and the power-cut shutdown in `sub_fc05b962` is bypassed.<br>2. **CHDK resident**: Background kbd driver and CHDK core remain fully resident.<br>3. **Normal power-off**: A later Power press turns it off cleanly. | - Note that the short press does not drop power or shut down prematurely.<br>- Observe lens extension and live viewfinder display.<br>- Verify ALT mode toggle remains functional.<br>- Press Power button to verify that a later Power press turns it off cleanly. |
+
+### 6.3 Recovery Path (RAM-Only & Battery Pull)
+
+The PORT-41 full build strictly follows Phase 0 safety invariants:
+- **Zero Card / Flash Writes**: Linker `--wrap` flags and compile directives (`-DG3X_DISABLE_CARD_WRITES=1`, `-DOPT_DISABLE_FILE_WRITES=1`) suppress all SD card writes, configuration file updates, and flash modifications. The camera flash ROM and SD card filesystem remain 100% pristine.
+- **RAM-Only Execution**: The entire CHDK core and heap exist strictly in volatile SDRAM (`MEMISOSTART` at `0x003489B4`). No state persists across reboots.
+- **Immediate Recovery via Battery Pull**:
+  1. Open the battery compartment and remove the Canon NB-10L battery.
+  2. Leave the battery out for >= 10 seconds to ensure complete discharge of all power supply rail capacitors and volatile SDRAM retention.
+  3. Re-insert the battery.
+  4. Turn on the camera normally: the camera boots pristine stock Canon factory firmware.
+
