@@ -31,6 +31,25 @@ static int          gui_menu_curr_item;
 static int          gui_menu_top_item;
 static int          gui_menu_redraw;
 
+#if defined(G3X_GUI_FIX) && (G3X_GUI_FIX == 1)
+int gui_menu_needs_redraw(void)
+{
+    if (camera_info.state.gui_mode != GUI_MODE_MENU)
+        return 0;
+    return gui_menu_redraw != 0;
+}
+
+void gui_menu_clear_redraw(void)
+{
+    gui_menu_redraw = 0;
+}
+
+int gui_menu_get_curr_item(void)
+{
+    return gui_menu_curr_item;
+}
+#endif
+
 static int          count;
 static int          x, y;
 static int          w, wplus, num_lines;
@@ -977,7 +996,13 @@ void gui_menu_draw(int enforce_redraw)
     if (gui_menu_redraw)
     {
         if (gui_menu_redraw==2)
+        {
+#if defined(G3X_GUI_FIX) && (G3X_GUI_FIX == 1)
+            extern void g3x_fill_menu_opaque_black(void);
+            g3x_fill_menu_opaque_black();
+#endif
             gui_menu_draw_initial();
+        }
 
         gui_menu_redraw=0;
 
@@ -1140,3 +1165,310 @@ void gui_menu_kbd_process_menu_btn()
 // GUI handler for menus
 gui_handler menuGuiHandler = { GUI_MODE_MENU, gui_menu_draw, gui_menu_kbd_process, gui_menu_kbd_process_menu_btn, gui_menu_touch_handler, 0 };
 //-------------------------------------------------------------------
+
+#if defined(G3X_GUI_FIX) && (G3X_GUI_FIX == 1)
+#include <string.h>
+
+/* =============================================================================
+ * PORT-42 GUI FIX: 2x Integer Font Scaling (16x32), 880x576 Layout, and Opacity
+ *
+ * Cites:
+ * - PORT-38: scripts/build_candidate_gui3.py:840-909, 984-1221
+ * - PORT-40: docs/PORT40_GUI_LAYOUT.md:14-28
+ * - Siblings: chdk-port/platform/g7x/lib.c:289-296; chdk-port/platform/g5x/lib.c:27-33
+ * ============================================================================= */
+
+#pragma pack(1)
+typedef struct {
+    unsigned char skips;
+} G3X_FontData;
+#pragma pack()
+
+static unsigned char* g3x_get_cdata(unsigned int *offset, unsigned int *size, const char ch)
+{
+    extern unsigned char *get_current_font_data(unsigned char ch);
+    G3X_FontData *f = (G3X_FontData*)get_current_font_data((unsigned char)ch);
+    *offset = f->skips >> 4;
+    *size = 16 - (f->skips & 0xF);
+    if (*size == *offset)
+        (*offset)++;
+    return (unsigned char*)f + sizeof(G3X_FontData) - *offset;
+}
+
+void g3x_get_menu_layout(int *out_x, int *out_y, int *out_w, int *out_h)
+{
+    int fh = rbf_font_height();
+    int num_l = (camera_screen.height - camera_screen.ts_menu_border * 2) / fh - 1;
+    int lx = camera_screen.disp_left + camera_screen.menu_border_width;
+    int lw = camera_screen.disp_width - camera_screen.menu_border_width * 2;
+
+    /* Enforce 2-pixel even alignment for UYVY word packing (adapting chdk-port/core/gui_draw.c:79-84) */
+    lx &= ~1;
+    lw &= ~1;
+
+    int by = (camera_screen.height - ((num_l - 1) * fh)) >> 1;
+    int header_y = by - fh;
+    int total_h = (num_l + 1) * fh;
+
+    /* PORT-40: Outer box is strictly 880x576 at (10,12)-(889,587) with even 10-px margins
+     * in BOTH scrolling (count > num_l) and non-scrolling (count <= num_l) cases.
+     * Scrollbar width (wplus = 8) is reserved INSIDE the 880-px box by shrinking the item
+     * text area in gui_menu.c, not by widening the box. */
+    int total_w = lw;
+
+    /* Clamp to display dimensions (900x600) */
+    if (lx < 0) lx = 0;
+    if (header_y < 0) header_y = 0;
+    if (lx + total_w > camera_screen.disp_width) {
+        total_w = camera_screen.disp_width - lx;
+    }
+    if (header_y + total_h > camera_screen.height) {
+        total_h = camera_screen.height - header_y;
+    }
+
+    if (out_x) *out_x = lx;
+    if (out_y) *out_y = header_y;
+    if (out_w) *out_w = total_w;
+    if (out_h) *out_h = total_h;
+}
+
+void g3x_fill_menu_opaque_black(void)
+{
+    extern volatile char *opacity_buffer[];
+    extern char *bitmap_buffer[];
+    extern int active_bitmap_buffer;
+
+    int active = active_bitmap_buffer & 1;
+    volatile unsigned char *obu = (volatile unsigned char *)opacity_buffer[active];
+    volatile unsigned char *bbu = (volatile unsigned char *)bitmap_buffer[active];
+    if (!obu || !bbu) return;
+
+    int bx, by, bw, bh;
+    g3x_get_menu_layout(&bx, &by, &bw, &bh);
+
+    /* Enforce 2-pixel even word alignment for DIGIC 6 UYVY overlay (chdk-port/core/gui_draw.c:79-93, 134-142) */
+    bx &= ~1;
+    bw = (bw + 1) & ~1;
+    int count_pairs = bw >> 1;
+
+    int ly;
+    for (ly = by; ly < by + bh; ly++) {
+        unsigned int offset = ly * camera_screen.buffer_width + bx;
+        unsigned char *o_ptr = (unsigned char *)&obu[offset];
+        memset(o_ptr, 0xFF, bw);
+
+        unsigned int *b_ptr = (unsigned int *)&bbu[(offset >> 1) << 2];
+        int i;
+        for (i = 0; i < count_pairs; i++) {
+            b_ptr[i] = 0x00800080;
+        }
+    }
+}
+
+void g3x_draw_char_16x32(coord x, coord y, const char ch, twoColors cl)
+{
+    unsigned int offset, size;
+    unsigned char *sym = g3x_get_cdata(&offset, &size, ch);
+    color fg = FG_COLOR(cl);
+    color bg = BG_COLOR(cl);
+    unsigned int i, j;
+
+    /* Blank lines at top (each blank row is 2 horizontal lines of width 16) */
+    for (i = 0; i < offset; i++) {
+        draw_hline(x, y + (i << 1), 16, bg);
+        draw_hline(x, y + (i << 1) + 1, 16, bg);
+    }
+
+    /* Glyph data rows */
+    for (j = i; i < size; ) {
+        extern unsigned char fontdata_lookup[];
+        unsigned int dsym = fontdata_lookup[sym[j] & 0x7f];
+        int rep = sym[j] & 0x80;
+
+        while (rep >= 0) {
+            int yt = y + (i << 1);
+            int b;
+            for (b = 7; b >= 0; b--) {
+                color c = (dsym & (1u << b)) ? fg : bg;
+                int px = x + ((7 - b) << 1);
+                /* 2x2 pixel block */
+                draw_pixel(px, yt, c);
+                draw_pixel(px + 1, yt, c);
+                draw_pixel(px, yt + 1, c);
+                draw_pixel(px + 1, yt + 1, c);
+            }
+            rep -= 0x80;
+            i++;
+        }
+        j++;
+    }
+
+    /* Blank lines at bottom */
+    for (; i < 16; i++) {
+        draw_hline(x, y + (i << 1), 16, bg);
+        draw_hline(x, y + (i << 1) + 1, 16, bg);
+    }
+}
+
+int rbf_font_height(void)
+{
+    return 32;
+}
+
+int rbf_char_width(int ch)
+{
+    (void)ch;
+    return 16;
+}
+
+int rbf_str_width(const char *str)
+{
+    if (!str) return 0;
+    return strlen(str) * 16;
+}
+
+int rbf_str_clipped_width(const char *str, int l, int maxlen)
+{
+    if (!str) return l;
+    while (*str && (l + 16 <= maxlen)) {
+        l += 16;
+        str++;
+    }
+    return l;
+}
+
+int rbf_draw_char(int x, int y, int ch, twoColors cl)
+{
+    g3x_draw_char_16x32(x, y, (char)ch, cl);
+    return 16;
+}
+
+int rbf_draw_symbol(int x, int y, int ch, twoColors cl)
+{
+    (void)x; (void)y; (void)ch; (void)cl;
+    return 0;
+}
+
+int rbf_symbol_height(void)
+{
+    return 32;
+}
+
+int rbf_symbol_width(int ch)
+{
+    (void)ch;
+    return 0;
+}
+
+static int g3x_cursor_on = 0;
+static int g3x_cursor_start = 0;
+static int g3x_cursor_end = 0;
+
+void rbf_enable_cursor(int s, int e)
+{
+    g3x_cursor_on = 1;
+    g3x_cursor_start = s;
+    g3x_cursor_end = e;
+}
+
+void rbf_disable_cursor(void)
+{
+    g3x_cursor_on = 0;
+}
+
+int rbf_draw_clipped_string(int x, int y, const char *str, twoColors cl, int l, int maxlen)
+{
+    if (!str) return l;
+    int i = 0;
+    twoColors inv_cl = MAKE_COLOR(FG_COLOR(cl), BG_COLOR(cl));
+    while (*str && (l + 16 <= maxlen)) {
+        twoColors c = (g3x_cursor_on && (g3x_cursor_start <= i) && (i <= g3x_cursor_end)) ? inv_cl : cl;
+        g3x_draw_char_16x32(x + l, y, *str++, c);
+        l += 16;
+        i++;
+    }
+    return l;
+}
+
+int rbf_draw_string(int x, int y, const char *str, twoColors cl)
+{
+    if (!str) return 0;
+    int start_x = x;
+    while (*str) {
+        g3x_draw_char_16x32(x, y, *str++, cl);
+        x += 16;
+    }
+    return x - start_x;
+}
+
+int rbf_draw_string_len(int x, int y, int len, const char *str, twoColors cl)
+{
+    int l = rbf_draw_clipped_string(x, y, str, cl, 0, len);
+    if (l < len) {
+        draw_rectangle(x + l, y, x + len - 1, y + 31, MAKE_COLOR(COLOR_BLACK, COLOR_BLACK), RECT_BORDER0 | DRAW_FILLED);
+    }
+    return len;
+}
+
+int rbf_draw_string_right_len(int x, int y, int len, const char *str, twoColors cl)
+{
+    int str_w = str ? (strlen(str) * 16) : 0;
+    int pad = len - str_w;
+    if (pad < 0) pad = 0;
+    if (pad > 0) {
+        draw_rectangle(x, y, x + pad - 1, y + 31, MAKE_COLOR(COLOR_BLACK, COLOR_BLACK), RECT_BORDER0 | DRAW_FILLED);
+    }
+    rbf_draw_clipped_string(x, y, str, cl, pad, len);
+    return len;
+}
+
+void rbf_load_from_file(char *file, int codepage)
+{
+    (void)file; (void)codepage;
+}
+
+int rbf_load_symbol(char *file)
+{
+    (void)file;
+    return 1;
+}
+
+void rbf_set_codepage(int codepage)
+{
+    (void)codepage;
+}
+
+void init_fonts(void)
+{
+}
+
+int rbf_draw_menu_header(int x, int y, int len, char symbol, const char *str, twoColors cl)
+{
+    (void)symbol;
+    /* Fill full menu box with solid opaque black background */
+    g3x_fill_menu_opaque_black();
+
+    int h = rbf_font_height(); // 32
+    color bg = BG_COLOR(cl);
+    color fg = FG_COLOR(cl);
+
+    int bw = 0;
+    g3x_get_menu_layout(0, 0, &bw, 0);
+    int header_w = (len > (camera_screen.disp_width - camera_screen.menu_border_width * 2)) ? bw : len;
+
+    /* Fill header bar with solid background color (black) */
+    draw_rectangle(x, y, x + header_w - 1, y + h - 1, MAKE_COLOR(bg, bg), RECT_BORDER0 | DRAW_FILLED);
+
+    /* Draw title text in contrasting foreground color (white on black) */
+    if (str && *str) {
+        int title_x = x + 16;
+        int max_x = x + header_w - 16;
+        while (*str && (title_x + 16 <= max_x)) {
+            g3x_draw_char_16x32(title_x, y, *str++, MAKE_COLOR(bg, fg));
+            title_x += 16;
+        }
+    }
+    return len;
+}
+#endif
+
