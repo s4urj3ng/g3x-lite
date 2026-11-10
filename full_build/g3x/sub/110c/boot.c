@@ -166,10 +166,12 @@ void __attribute__((naked,noinline)) CreateTask_my(void)
         // Intercept task_PhySw (0xFC1283AD) -> mykbd_task
         "    ldr     r0, =0xfc1283ad\n"
         "    cmp     r0, r3\n"
-        "    itt     eq\n"
-        "    ldreq   r3, =mykbd_task\n"
-        "    orreq   r3, #1\n"
-        "    beq     exitHook\n"
+        "    bne     1f\n"
+        "    ldr     r3, =mykbd_task\n"
+        "    orr     r3, r3, #1\n"
+        "    movw    r2, #0x2000\n" // Set kbd task stack to 0x2000 (cite chdk-port/platform/g7x/sub/100d/boot.c:400, g5x/sub/100c/boot.c:498)
+        "    b       exitHook\n"
+        "1:\n"
 
         // Intercept task_InitFileModules (0xFC0BD071) -> init_file_modules_task
         "    ldr     r0, =0xfc0bd071\n"
@@ -216,7 +218,7 @@ void __attribute__((naked,noinline)) init_file_modules_task(void)
         "    bne     2f\n"
         "    mov     r0, r5\n"
         "    pop.w   {r4, r5, r6, lr}\n"
-        "    movs    r1, #0\n"
+        "    movs    r1, #1\n" // docs/PORT11A_GM110C_ROM_EVIDENCE.md:263-264: verified GM1.10C instruction at 0xFC0BD094 passes r1=1
         "    b.w     _PostLogicalEventToUI\n"
         "2:\n"
         "    pop     {r4, r5, r6, pc}\n"

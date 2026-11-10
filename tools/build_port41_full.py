@@ -40,13 +40,17 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def overlay_tree(src: Path, dst: Path) -> None:
+def overlay_tree(src: Path, dst: Path, ignore: set[str] | None = None) -> None:
     """Recursively overlay files from src directory onto dst directory."""
     for root, dirs, files in os.walk(src):
+        if ignore:
+            dirs[:] = [d for d in dirs if d not in ignore]
         rel_path = Path(root).relative_to(src)
         target_dir = dst / rel_path
         target_dir.mkdir(parents=True, exist_ok=True)
         for f in files:
+            if ignore and f in ignore:
+                continue
             src_file = Path(root) / f
             dst_file = target_dir / f
             shutil.copy2(src_file, dst_file)
@@ -83,7 +87,7 @@ def clean_staging_artifacts(stage_dir: Path) -> None:
                     pass
 
 
-def build_port41_full(clean_stage: bool = True, keep_stage: bool = False) -> int:
+def build_port41_full(clean_stage: bool = True, keep_stage: bool = True) -> int:
     gcc_path = TOOLCHAIN_BIN / "arm-none-eabi-gcc"
     if not gcc_path.is_file() or not os.access(gcc_path, os.X_OK):
         print(f"ERROR: Pinned toolchain compiler not found: {gcc_path}", file=sys.stderr)
@@ -110,10 +114,23 @@ def build_port41_full(clean_stage: bool = True, keep_stage: bool = False) -> int
     # Clean stale objects, ensure permissions
     clean_staging_artifacts(STAGE_DIR)
 
-    # Overlay full_build/g3x onto stage_chdk/platform/g3x/
+    # Overlay full_build/g3x onto stage_chdk/platform/g3x/ (excluding loader/)
     platform_target = STAGE_DIR / "platform" / "g3x"
-    print(f"Overlaying {FULL_BUILD_SRC} onto {platform_target}...")
-    overlay_tree(FULL_BUILD_SRC, platform_target)
+    print(f"Overlaying {FULL_BUILD_SRC} (excluding loader) onto {platform_target}...")
+    overlay_tree(FULL_BUILD_SRC, platform_target, ignore={"loader"})
+
+    # Overlay full_build/g3x/loader onto stage_chdk/loader/g3x/
+    loader_target = STAGE_DIR / "loader" / "g3x"
+    loader_src = FULL_BUILD_SRC / "loader"
+    if loader_src.is_dir():
+        print(f"Overlaying {loader_src} onto {loader_target}...")
+        overlay_tree(loader_src, loader_target)
+
+    # Remove prototype source files from staging platform so test_port24 permitted shorthands stay unique
+    for proto_name in ["boot_prototype.c", "stubs_prototype.S"]:
+        proto_file = platform_target / "sub" / "110c" / proto_name
+        if proto_file.exists():
+            proto_file.unlink()
 
     # Ensure clean platform objects in staging copy so full build compiles freshly
     for subpath in ["platform/g3x", "platform/g3x/sub/110c", "loader/g3x"]:
@@ -227,10 +244,12 @@ def build_port41_full(clean_stage: bool = True, keep_stage: bool = False) -> int
 def main() -> int:
     parser = argparse.ArgumentParser(description="Standard CHDK full build for G3 X GM1.10C")
     parser.add_argument("--no-clean", action="store_true", help="Do not clean staging directory before building")
-    parser.add_argument("--keep-stage", action="store_true", help="Keep scratch staging directory after building")
+    parser.add_argument("--clean-stage", action="store_true", help="Clean scratch staging directory after building")
+    parser.add_argument("--keep-stage", action="store_true", default=True, help="Keep scratch staging directory after building (default)")
     args = parser.parse_args()
 
-    return build_port41_full(clean_stage=not args.no_clean, keep_stage=args.keep_stage)
+    keep = not args.clean_stage if args.clean_stage else True
+    return build_port41_full(clean_stage=not args.no_clean, keep_stage=keep)
 
 
 if __name__ == "__main__":

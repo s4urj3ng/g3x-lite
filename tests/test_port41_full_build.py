@@ -4,16 +4,19 @@ Verifies:
 1. Toolchain availability and skip behavior if toolchain is missing.
 2. Full build execution producing out/port41-full/DISKBOOT.BIN, CHDK/ modules, fonts, lang.
 3. Integrity of SHA-256 manifest (port41_manifest.json).
-4. Invariance of chdk-port/platform/g3x/* hashes before and after full build.
+4. Invariance of chdk-port/platform/g3x/* and chdk-port/loader/g3x/* hashes before and after full build.
 5. boot.c invariants: CreateTask at 0xBFE14A3D, sub_fc0d0126 handoff, LED 0xD20B0884,
    ladder timing 0x00100000, sibling citations.
-6. kbd.c invariants: physw_status 0x40DAC, Power bit 17, Playback bit 16, 10ms sleep,
+6. InitFileModules completion argument r1=1 citing PORT11A ROM evidence line 263.
+7. kbd task stack size 0x2000 citing sibling boot.c line.
+8. kbd.c invariants: physw_status 0x40DAC, Power bit 17, Playback bit 16, 10ms sleep,
    start cause 0x9BD0, power-cut bypass sub_fc05b962, restore 0x00080000, ALT off at boot.
-7. lib.c and platform_camera.h invariants: displaytype 12, 900x600, buffer width 928,
+9. lib.c and platform_camera.h invariants: displaytype 12, 900x600, buffer width 928,
    UYVY active_bitmap_buffer & 1, opacity_buffer {0x5FC40000, 0x5FB80000}, GUI5 layout.
-8. Card write suppression switches and wrappers.
-9. Disabled hook TODOs for capt_seq, movie_rec, filewrite.
-10. Symbol namespacing preventing collision with PORT-39 / candidate symbols.
+10. Card write suppression switches and wrappers.
+11. Disabled hook TODOs for capt_seq, movie_rec, filewrite.
+12. Symbol namespacing preventing collision with PORT-39 / candidate symbols.
+13. Functional loader overlay: calls core_copy, branches to MEMISOSTART, non-inert, differs from stock.
 """
 
 from __future__ import annotations
@@ -28,8 +31,12 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CHDK_PORT_G3X = REPO_ROOT / "chdk-port" / "platform" / "g3x"
+CHDK_LOADER_G3X = REPO_ROOT / "chdk-port" / "loader" / "g3x"
 FULL_BUILD_G3X = REPO_ROOT / "full_build" / "g3x"
-TOOLCHAIN_GCC = REPO_ROOT / "toolchains" / "gcc-arm-none-eabi-5_4-2016q3" / "bin" / "arm-none-eabi-gcc"
+TOOLCHAIN_BIN = REPO_ROOT / "toolchains" / "gcc-arm-none-eabi-5_4-2016q3" / "bin"
+TOOLCHAIN_GCC = TOOLCHAIN_BIN / "arm-none-eabi-gcc"
+TOOLCHAIN_OBJDUMP = TOOLCHAIN_BIN / "arm-none-eabi-objdump"
+TOOLCHAIN_NM = TOOLCHAIN_BIN / "arm-none-eabi-nm"
 BUILD_SCRIPT = REPO_ROOT / "tools" / "build_port41_full.py"
 OUT_DIR = REPO_ROOT / "out" / "port41-full"
 
@@ -86,6 +93,45 @@ class TestPort41FullBuildSources(unittest.TestCase):
 
         # Namespaced symbols
         self.assertIn("g3x_full_shortpress", text, "Namespaced shortpress hooks missing in boot.c")
+
+        # InitFileModules completion argument r1=1 citing PORT11A ROM evidence
+        self.assertIn(
+            "movs    r1, #1",
+            text,
+            "InitFileModules completion argument must be movs r1, #1",
+        )
+        self.assertIn(
+            "PORT11A_GM110C_ROM_EVIDENCE.md:263",
+            text,
+            "InitFileModules hook must cite docs/PORT11A_GM110C_ROM_EVIDENCE.md:263",
+        )
+
+        # kbd task stack size 0x2000 citing sibling boot.c
+        self.assertIn(
+            "0x2000",
+            text,
+            "mykbd_task stack size 0x2000 missing in boot.c",
+        )
+        self.assertTrue(
+            re.search(r"chdk-port/platform/(g7x|g5x)/sub/\w+/boot\.c:\d+", text),
+            "mykbd_task stack size must cite sibling boot.c:line",
+        )
+
+    def test_loader_overlay_sources(self):
+        loader_dir = FULL_BUILD_G3X / "loader"
+        self.assertTrue((loader_dir / "Makefile").is_file(), "full_build/g3x/loader/Makefile missing")
+        self.assertTrue((loader_dir / "entry.S").is_file(), "full_build/g3x/loader/entry.S missing")
+        self.assertTrue((loader_dir / "main.c").is_file(), "full_build/g3x/loader/main.c missing")
+
+        main_text = (loader_dir / "main.c").read_text(encoding="utf-8")
+        self.assertIn("check_compat", main_text)
+        self.assertIn("core_copy", main_text)
+        self.assertIn("MEMISOSTART", main_text)
+        self.assertIn("0xFC418723", main_text)
+        self.assertTrue(
+            re.search(r"chdk-port/loader/(g7x|g5x)/main\.c:\d+", main_text),
+            "loader/main.c must cite sibling loader:line",
+        )
 
     def test_kbd_invariants(self):
         kbd_c = FULL_BUILD_G3X / "kbd.c"
@@ -219,8 +265,9 @@ class TestPort41FullBuildExecution(unittest.TestCase):
         if not self.has_toolchain:
             self.skipTest(f"Pinned toolchain gcc not found at {TOOLCHAIN_GCC}; skipping execution test.")
 
-        # Snapshot chdk-port/platform/g3x hashes before build
-        before_hashes = snapshot_hashes(CHDK_PORT_G3X)
+        # Snapshot chdk-port/platform/g3x and chdk-port/loader/g3x hashes before build
+        before_plat_hashes = snapshot_hashes(CHDK_PORT_G3X)
+        before_loader_hashes = snapshot_hashes(CHDK_LOADER_G3X)
 
         # Run build script
         cmd = ["python3", "-B", str(BUILD_SCRIPT)]
@@ -258,12 +305,89 @@ class TestPort41FullBuildExecution(unittest.TestCase):
         self.assertEqual(manifest["artifacts"]["DISKBOOT.BIN"]["sha256"], sha256_file(diskboot))
         self.assertEqual(manifest["artifacts"]["modules_count"], len(flt_files))
 
-        # Snapshot chdk-port/platform/g3x hashes after build and assert equality
-        after_hashes = snapshot_hashes(CHDK_PORT_G3X)
+        # Snapshot chdk-port/platform/g3x and chdk-port/loader/g3x hashes after build and assert equality
+        after_plat_hashes = snapshot_hashes(CHDK_PORT_G3X)
         self.assertEqual(
-            before_hashes,
-            after_hashes,
+            before_plat_hashes,
+            after_plat_hashes,
             "chdk-port/platform/g3x/ files were modified during the full build!",
+        )
+        after_loader_hashes = snapshot_hashes(CHDK_LOADER_G3X)
+        self.assertEqual(
+            before_loader_hashes,
+            after_loader_hashes,
+            "chdk-port/loader/g3x/ files were modified during the full build!",
+        )
+
+        # Staged loader checks:
+        stage_dir = OUT_DIR / "stage_chdk"
+        staged_loader_main_c = stage_dir / "loader" / "g3x" / "main.c"
+        inert_loader_main_c = CHDK_LOADER_G3X / "main.c"
+        self.assertTrue(staged_loader_main_c.is_file(), "staged loader/g3x/main.c missing")
+        self.assertNotEqual(
+            staged_loader_main_c.read_text(encoding="utf-8"),
+            inert_loader_main_c.read_text(encoding="utf-8"),
+            "Staged loader main.c must differ from inert chdk-port/loader/g3x/main.c",
+        )
+
+        # Disassemble staged loader ELF
+        staged_loader_elf = stage_dir / "loader" / "g3x" / "main.elf"
+        self.assertTrue(staged_loader_elf.is_file(), "staged loader/g3x/main.elf missing")
+        objdump_res = subprocess.run(
+            [str(TOOLCHAIN_OBJDUMP), "-d", str(staged_loader_elf)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+        loader_disasm = objdump_res.stdout
+
+        # Assert entry path calls core_copy
+        self.assertIn("<core_copy>", loader_disasm, "Loader entry path must call core_copy")
+
+        # Assert entry path branches to core start address (0x003489b4 / 0x3489b5)
+        self.assertIn("3489b4", loader_disasm, "Loader must reference MEMISOSTART (0x3489b4)")
+        self.assertIn("bx\tr0", loader_disasm, "Loader must jump to core entry via bx r0")
+
+        # Assert loader does not end in immediate self loop after check_compat
+        # The inert loader had: bl <check_compat>; b.n <self>
+        self.assertNotRegex(
+            loader_disasm,
+            r"bl\s+<check_compat>\s*\n\s*[0-9a-f]+:\s+e7fe\s+b\.n",
+            "Loader must not loop immediately after check_compat",
+        )
+
+        # Disassemble staged core main.elf to assert regression checks:
+        staged_core_elf = stage_dir / "platform" / "g3x" / "sub" / "110c" / "main.elf"
+        self.assertTrue(staged_core_elf.is_file(), "staged core main.elf missing")
+        core_objdump = subprocess.run(
+            [str(TOOLCHAIN_OBJDUMP), "-d", str(staged_core_elf)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+        core_disasm = core_objdump.stdout
+
+        # Regression check for InitFileModules completion argument (movs r1, #1)
+        # In <init_file_modules_task>: movs r1, #1 followed by b.w <_PostLogicalEventToUI>
+        init_file_idx = core_disasm.find("<init_file_modules_task>:")
+        self.assertGreater(init_file_idx, 0, "Missing <init_file_modules_task> in core disassembly")
+        init_file_chunk = core_disasm[init_file_idx : init_file_idx + 1000]
+        self.assertRegex(
+            init_file_chunk,
+            r"movs\s+r1,\s*#1\s*\n\s*[0-9a-f]+:\s+f[0-9a-f\s]+b\.w\s+[0-9a-f]+\s+<_PostLogicalEventToUI>",
+            "init_file_modules_task must execute movs r1, #1 before PostLogicalEventToUI",
+        )
+
+        # Stack size check for mykbd_task (r2 = 0x2000 = 8192)
+        create_task_idx = core_disasm.find("<CreateTask_my>:")
+        self.assertGreater(create_task_idx, 0, "Missing <CreateTask_my> in core disassembly")
+        create_task_chunk = core_disasm[create_task_idx : create_task_idx + 1000]
+        self.assertRegex(
+            create_task_chunk,
+            r"movw\s+r2,\s*#(8192|0x2000)",
+            "CreateTask_my must set kbd task stack to 0x2000 (8192 bytes)",
         )
 
 

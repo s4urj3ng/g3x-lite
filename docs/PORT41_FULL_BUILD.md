@@ -35,9 +35,10 @@ The PORT-41 full build produces the standard CHDK firmware artifacts for the Can
 | Display Type | Mode `12` | `VERIFIED` | PORT-33,35,40 | DryOS Mode 12 (900x600 UYVY panel). |
 | Screen dimensions | 900 x 600 | `VERIFIED` | PORT-33,35,40 | Physical panel resolution. |
 | Bitmap buffer width | 928 | `VERIFIED` | PORT-33,35,40 | Bitmap buffer pitch / stride. |
-| Active bitmap buffer pointer | `0x0002A548` | `VERIFIED` | DryOS RAM / FINSIG | Pointer holding active bitmap index (`active_bitmap_buffer & 1`). |
+| Active bitmap buffer pointer | `0x0000D2A4` | `VERIFIED` | DryOS RAM / FINSIG (stubs_entry.S:190) | Pointer holding active bitmap index (`active_bitmap_buffer & 1`). |
 | Opacity buffers | `{0x5FC40000, 0x5FB80000}` | `VERIFIED` | MMIO / PORT-33,35,40 | Dual opacity buffer memory addresses. |
 | GUI5 OSD geometry | `(10, 12, 880, 576)` | `VERIFIED` | `docs/PORT40_GUI_LAYOUT.md` | Centered 880x576 OSD box with 10/12 px margins and 32 px rows. |
+| Loader overlay | `0x00008000` -> `0x003489B4` | `VERIFIED` | Sibling `g7x/loader/main.c:1-57` & `g5x/loader/main.c:1-49` | Relocates CHDK core from loader RAM to `MEMISOSTART` (`0x003489B4`), syncs cache (`0xFC418723`), and branches to Thumb core entry (`0x003489B5`). |
 
 ---
 
