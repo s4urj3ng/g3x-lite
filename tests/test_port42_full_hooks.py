@@ -5,21 +5,29 @@ Verifies:
 2. FULL_HOOKS=1 full build execution producing out/port41-full/DISKBOOT.BIN,
    CHDK/ distribution folder, and port42_full_hooks_manifest.json.
 3. FULL_HOOKS=1 manifest integrity (includes FULL_HOOKS=1 in build flags,
-   accurate artifact size and sha256).
-4. CreateTask_my hook intercepts in staged core ELF:
+   accurate artifact size and sha256, matches committed manifest).
+4. Variant build reproducibility: two builds of the FULL_HOOKS=1 variant give identical hashes.
+5. PORT-41 default full build is byte-identical to the PORT-41 output manifest.
+6. CreateTask_my hook intercepts in staged core ELF:
    - task_PhySw (0xFC1283AD, FINSIG/VERIFIED) -> mykbd_task
    - task_InitFileModules (0xFC0BD071, FINSIG/VERIFIED) -> init_file_modules_task
    - task_CaptSeq (0xFC06A001, FINSIG) -> capt_seq_task
    - task_FileWrite (0xFC25F3A7, FINSIG) -> filewritetask
    - task_MovieRecord, task_ExpDrv, task_DvlpSeqTask remain stock (disabled).
-5. capt_seq_task and filewritetask safe trampolines to 0xFC06A001 and 0xFC25F3A7.
-6. Card-write suppression compile flags and linker wrap symbols remain active.
-7. Candidate invariance: PORT-24..40 candidate builds remain byte-identical.
-8. docs/PORT42_FULL_HOOKS.md table format, sibling citations, and labels.
+7. Enabled hooks in build match the enabled=yes rows of docs/PORT42_FULL_HOOKS.md,
+   and every enabled row is labelled FINSIG or VERIFIED.
+8. capt_seq_task and filewritetask safe trampolines to 0xFC06A001 and 0xFC25F3A7.
+9. Card-write suppression compile flags and linker wrap symbols remain active.
+10. Candidate invariance: PORT-24..40 candidate builds remain byte-identical.
+11. Output manifest committed next to PORT-41 manifest in manifests/ and docs/manifests/.
+12. docs/PORT42_FULL_HOOKS.md owner trial plan (order: PORT-41 default first, then variant;
+    DISKBOOT SHA-256 check; held press; at most 2 power-ons; check per enabled hook;
+    battery-pull recovery; PASS/FAIL notes).
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -34,6 +42,17 @@ TOOLCHAIN_OBJDUMP = TOOLCHAIN_BIN / "arm-none-eabi-objdump"
 TOOLCHAIN_NM = TOOLCHAIN_BIN / "arm-none-eabi-nm"
 BUILD_SCRIPT = REPO_ROOT / "tools" / "build_port41_full.py"
 OUT_DIR = REPO_ROOT / "out" / "port41-full"
+WRAPPER_SCRIPT = REPO_ROOT / "scripts" / "gcc_deterministic_wrapper.sh"
+MANIFESTS_DIR = REPO_ROOT / "manifests"
+DOCS_MANIFESTS_DIR = REPO_ROOT / "docs" / "manifests"
+
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(65536):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 class TestPort42FullHooksDoc(unittest.TestCase):
@@ -71,6 +90,49 @@ class TestPort42FullHooksDoc(unittest.TestCase):
         for disabled in ["task_MovieRecord", "task_ExpDrv", "task_DvlpSeqTask"]:
             self.assertIn(disabled, text, f"{disabled} missing in doc table")
 
+    def test_doc_manifest_and_owner_trial_plan(self):
+        """Verify docs/PORT42_FULL_HOOKS.md contains output manifest and owner trial plan."""
+        doc_path = REPO_ROOT / "docs" / "PORT42_FULL_HOOKS.md"
+        self.assertTrue(doc_path.is_file(), f"Missing {doc_path}")
+        text = doc_path.read_text(encoding="utf-8")
+
+        # Output manifest details
+        self.assertIn("DISKBOOT.BIN", text)
+        self.assertIn("124,153", text)
+        self.assertIn("20871cbad4d7f04b621f8d5cad39feeb0ac8f994b266788f900745a22bdf509d", text)
+        self.assertIn("port42_full_hooks_manifest.json", text)
+        self.assertIn("port41_manifest.json", text)
+
+        # Owner trial plan: order PORT-41 default before variant
+        self.assertRegex(
+            text,
+            r"(?i)port-41\s+default.*(?:first|before).*variant",
+            "Owner trial plan must order PORT-41 default before the variant",
+        )
+
+        # DISKBOOT SHA-256 check
+        self.assertRegex(text, r"(?i)sha-256.*(?:check|verification)")
+
+        # Held press
+        self.assertRegex(text, r"(?i)held\s+press")
+
+        # At most 2 power-ons
+        self.assertRegex(text, r"(?i)at\s+most\s+(?:\*\*)?2\s+power-ons")
+
+        # What to check per enabled hook
+        self.assertIn("task_PhySw", text)
+        self.assertIn("task_InitFileModules", text)
+        self.assertIn("task_CaptSeq", text)
+        self.assertIn("task_FileWrite", text)
+
+        # Battery-pull recovery
+        self.assertRegex(text, r"(?i)battery-pull\s+recovery")
+        self.assertRegex(text, r"(?i)ram-only")
+
+        # What to note for PASS / FAIL
+        self.assertIn("PASS", text)
+        self.assertIn("FAIL", text)
+
 
 class TestPort42FullHooksExecution(unittest.TestCase):
     """End-to-end execution and binary analysis of FULL_HOOKS=1 build."""
@@ -93,7 +155,11 @@ class TestPort42FullHooksExecution(unittest.TestCase):
             return
         cls.has_toolchain = True
 
-        # Run full build with --full-hooks
+        # Run full build with --full-hooks and deterministic wrapper
+        env = os.environ.copy()
+        if WRAPPER_SCRIPT.is_file() and os.access(WRAPPER_SCRIPT, os.X_OK):
+            env["MAKEFLAGS"] = f"CC={WRAPPER_SCRIPT}"
+
         cmd = ["python3", "-B", str(BUILD_SCRIPT), "--full-hooks"]
         res = subprocess.run(
             cmd,
@@ -101,6 +167,7 @@ class TestPort42FullHooksExecution(unittest.TestCase):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env=env,
         )
         cls.build_executed = True
         cls.build_returncode = res.returncode
@@ -126,7 +193,7 @@ class TestPort42FullHooksExecution(unittest.TestCase):
         # Check DISKBOOT.BIN
         diskboot = self.diskboot
         self.assertTrue(diskboot.is_file(), f"Expected {diskboot} to exist")
-        self.assertGreater(diskboot.stat().st_size, 50000)
+        self.assertEqual(diskboot.stat().st_size, 124153)
 
         # Check CHDK folder contents
         chdk_dir = OUT_DIR / "CHDK"
@@ -136,15 +203,168 @@ class TestPort42FullHooksExecution(unittest.TestCase):
         flt_files = list(modules_dir.glob("*.flt"))
         self.assertGreaterEqual(len(flt_files), 30)
 
-        # Check port42_full_hooks_manifest.json
-        manifest_path = self.p42_manifest
-        self.assertTrue(manifest_path.is_file(), f"Expected {manifest_path} to exist")
+        # Check committed manifests
+        for manifest_dir in [MANIFESTS_DIR, DOCS_MANIFESTS_DIR]:
+            m_path = manifest_dir / "port42_full_hooks_manifest.json"
+            self.assertTrue(m_path.is_file(), f"Expected {m_path} to exist")
+            with open(m_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+
+            self.assertIn("FULL_HOOKS=1", manifest["build"]["flags"])
+            self.assertEqual(manifest["artifacts"]["DISKBOOT.BIN"]["size"], 124153)
+            self.assertEqual(manifest["artifacts"]["DISKBOOT.BIN"]["sha256"], "20871cbad4d7f04b621f8d5cad39feeb0ac8f994b266788f900745a22bdf509d")
+            self.assertEqual(manifest["artifacts"]["modules_count"], len(flt_files))
+            self.assertIn("chdk_files", manifest["artifacts"])
+            self.assertGreaterEqual(manifest["artifacts"]["chdk_files_count"], 200)
+
+    def test_variant_build_reproducibility(self):
+        """Requirement (a): FULL_HOOKS=1 variant builds reproducibly (two builds give identical hashes)."""
+        self._require_full_build()
+
+        env = os.environ.copy()
+        if WRAPPER_SCRIPT.is_file() and os.access(WRAPPER_SCRIPT, os.X_OK):
+            env["MAKEFLAGS"] = f"CC={WRAPPER_SCRIPT}"
+
+        # Re-run build using --full-hooks
+        cmd = ["python3", "-B", str(BUILD_SCRIPT), "--full-hooks"]
+        res = subprocess.run(
+            cmd,
+            cwd=str(REPO_ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(res.returncode, 0, f"Second build failed: {res.stderr}")
+
+        second_sha = sha256_file(self.diskboot)
+        expected_sha = "20871cbad4d7f04b621f8d5cad39feeb0ac8f994b266788f900745a22bdf509d"
+        self.assertEqual(
+            second_sha,
+            expected_sha,
+            f"Variant DISKBOOT.BIN SHA-256 diverged: expected {expected_sha}, got {second_sha}",
+        )
+
+    def test_port41_default_build_byte_identical_to_manifest(self):
+        """Requirement (b): PORT-41 default full build is byte-identical to the PORT-41 output manifest."""
+        self._require_full_build()
+
+        manifest_path = MANIFESTS_DIR / "port41_manifest.json"
+        self.assertTrue(manifest_path.is_file(), f"Missing {manifest_path}")
         with open(manifest_path, "r", encoding="utf-8") as f:
             manifest = json.load(f)
 
-        self.assertIn("FULL_HOOKS=1", manifest["build"]["flags"])
-        self.assertEqual(manifest["artifacts"]["DISKBOOT.BIN"]["size"], diskboot.stat().st_size)
-        self.assertEqual(manifest["artifacts"]["modules_count"], len(flt_files))
+        expected_diskboot = manifest["artifacts"]["DISKBOOT.BIN"]
+        expected_sha = expected_diskboot["sha256"]
+        expected_size = expected_diskboot["size"]
+
+        # Run PORT-41 default full build (no --full-hooks)
+        env = os.environ.copy()
+        if WRAPPER_SCRIPT.is_file() and os.access(WRAPPER_SCRIPT, os.X_OK):
+            env["MAKEFLAGS"] = f"CC={WRAPPER_SCRIPT}"
+
+        cmd = ["python3", "-B", str(BUILD_SCRIPT)]
+        res = subprocess.run(
+            cmd,
+            cwd=str(REPO_ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(res.returncode, 0, f"PORT-41 default build failed: {res.stderr}")
+
+        built_diskboot = OUT_DIR / "DISKBOOT.BIN"
+        self.assertTrue(built_diskboot.is_file())
+        self.assertEqual(built_diskboot.stat().st_size, expected_size)
+        self.assertEqual(sha256_file(built_diskboot), expected_sha)
+
+        # Restore FULL_HOOKS build for remaining tests
+        subprocess.run(
+            ["python3", "-B", str(BUILD_SCRIPT), "--full-hooks"],
+            cwd=str(REPO_ROOT),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=env,
+            check=True,
+        )
+
+    def test_enabled_hooks_match_doc_table_and_labels(self):
+        """Requirement (d): hooks enabled in the build match enabled=yes rows in doc table, and every enabled row is FINSIG or VERIFIED."""
+        self._require_full_build()
+
+        doc_path = REPO_ROOT / "docs" / "PORT42_FULL_HOOKS.md"
+        self.assertTrue(doc_path.is_file(), f"Missing {doc_path}")
+        text = doc_path.read_text(encoding="utf-8")
+
+        # Parse table rows: | Hook | Address | Label | Sibling Citation | Enabled (yes/no) | Notes |
+        row_regex = re.compile(r"^\|\s*`?(\w+)`?\s*\|\s*([^|]+)\|\s*([^|]+)\|\s*([^|]+)\|\s*(yes|no)\s*\|(.*)$", re.M)
+        rows = row_regex.findall(text)
+        self.assertGreaterEqual(len(rows), 8, "Expected at least 8 evaluated hooks in doc table")
+
+        enabled_in_doc = []
+        disabled_in_doc = []
+        for hook_name, addr, label, sib, enabled, notes in rows:
+            label_clean = label.strip()
+            if enabled.strip().lower() == "yes":
+                enabled_in_doc.append(hook_name.strip())
+                # Every enabled hook MUST be labelled FINSIG or VERIFIED
+                self.assertTrue(
+                    "FINSIG" in label_clean or "VERIFIED" in label_clean,
+                    f"Enabled hook {hook_name} has invalid label '{label_clean}'; must be FINSIG or VERIFIED",
+                )
+            else:
+                disabled_in_doc.append(hook_name.strip())
+
+        # Check disassembly / symbol table of staged_core_elf
+        objdump_res = subprocess.run(
+            [str(TOOLCHAIN_OBJDUMP), "-d", str(self.staged_core_elf)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+        core_disasm = objdump_res.stdout
+        core_disasm_lower = core_disasm.lower()
+
+        # Enabled hooks mapping: hook_name -> expected intercept symbol
+        expected_intercept_symbols = {
+            "task_PhySw": "<mykbd_task>",
+            "task_InitFileModules": "<init_file_modules_task>",
+            "task_CaptSeq": "<capt_seq_task>",
+            "task_FileWrite": "<filewritetask>",
+        }
+
+        # Verify that all enabled hooks match expected set
+        self.assertEqual(
+            set(enabled_in_doc),
+            set(expected_intercept_symbols.keys()),
+            f"Doc enabled hooks {enabled_in_doc} do not match expected {list(expected_intercept_symbols.keys())}",
+        )
+
+        # Verify every enabled hook is present and hooked in the build output
+        for hook, sym in expected_intercept_symbols.items():
+            self.assertIn(
+                sym,
+                core_disasm,
+                f"Enabled hook {hook} interception symbol {sym} missing in built core binary",
+            )
+
+        # Verify every disabled hook is NOT hooked in CreateTask_my
+        ct_idx = core_disasm.find("<CreateTask_my>:")
+        self.assertGreater(ct_idx, 0, "CreateTask_my function missing in disasm")
+        ct_end_idx = core_disasm.find("exitHook>:", ct_idx)
+        ct_chunk = core_disasm[ct_idx : ct_end_idx + 200].lower()
+
+        for disabled_hook in disabled_in_doc:
+            # The literal hook address for disabled tasks should not be compared against r3 in CreateTask_my
+            # E.g. task_MovieRecord = 0xFC09AC19
+            if disabled_hook == "task_MovieRecord":
+                self.assertNotIn("fc09ac19", ct_chunk, "Disabled hook task_MovieRecord found in CreateTask_my")
+            elif disabled_hook == "task_ExpDrv":
+                self.assertNotIn("fc2c136f", ct_chunk, "Disabled hook task_ExpDrv found in CreateTask_my")
+            elif disabled_hook == "task_DvlpSeqTask":
+                self.assertNotIn("fc07b637", ct_chunk, "Disabled hook task_DvlpSeqTask found in CreateTask_my")
 
     def test_createtask_interceptions(self):
         self._require_full_build()
@@ -223,7 +443,7 @@ class TestPort42FullHooksExecution(unittest.TestCase):
         self.assertIn("-DOPT_DISABLE_FILE_WRITES=1", make_text)
 
     def test_candidate_invariance_under_full_hooks(self):
-        """Verify that PORT-24..40 candidates remain 100% byte-identical."""
+        """Requirement (c): Verify that PORT-24..40 candidates remain 100% byte-identical."""
         if not self.has_toolchain:
             self.skipTest(f"Pinned toolchain gcc not found at {TOOLCHAIN_GCC}")
 
