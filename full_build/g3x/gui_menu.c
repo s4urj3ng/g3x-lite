@@ -36,6 +36,11 @@ int gui_menu_needs_redraw(void)
 {
     return gui_menu_redraw != 0;
 }
+
+int gui_menu_get_curr_item(void)
+{
+    return gui_menu_curr_item;
+}
 #endif
 
 static int          count;

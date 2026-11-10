@@ -25,6 +25,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -84,9 +85,11 @@ class TestPort42GuiFixDoc(unittest.TestCase):
         self.assertIn("Real Opacity Buffer Array", text)
         self.assertIn("880x576 Opaque Black Background", text)
         self.assertIn("2x Integer Font Scaling (16x32)", text)
+        self.assertIn("Timed GUI State Change Detection", text)
 
         # Labels
         self.assertIn("VERIFIED by owner trial", text)
+        self.assertIn("INFERRED (owner trial to confirm)", text)
 
         # Citations
         self.assertTrue(
@@ -101,6 +104,10 @@ class TestPort42GuiFixDoc(unittest.TestCase):
             re.search(r"chdk-port/platform/(g7x|g5x)/lib\.c:\d+", text),
             "Doc must cite sibling paths with line numbers",
         )
+        self.assertTrue(
+            re.search(r"chdk-port/core/gui\.c:\d+", text),
+            "Doc must cite chdk-port/core/gui.c with line numbers",
+        )
 
     def test_doc_manifest_hashes(self):
         doc_path = REPO_ROOT / "docs" / "PORT42_GUI_FIX.md"
@@ -113,8 +120,8 @@ class TestPort42GuiFixDoc(unittest.TestCase):
 
         # Check expected baseline hash
         self.assertIn("24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9", text)
-        self.assertIn("88c41eb5d184c47b78314b946a7178aa9ac7e9708d169ea8d3a5ee895ec98b90", text)
-        self.assertIn("6e7511e5f40b690f1c501801a59acde19ba17d0abb21ee7a788aaa10407b26a0", text)
+        self.assertIn("06f8e1b6da3b9f77525cfc96ab5a25b82dca1a94da25989735826a569d04838b", text)
+        self.assertIn("d0e4648719fc37f38f49f1ad202592c87f0604bed9417e60be430c1b6a4f9e38", text)
 
 
 class TestPort42GuiFixSources(unittest.TestCase):
@@ -138,6 +145,263 @@ class TestPort42GuiFixSources(unittest.TestCase):
         self.assertIn("g3x_fill_menu_opaque_black", text)
         self.assertIn("g3x_get_menu_layout", text)
         self.assertIn("0x00800080", text)  # UYVY neutral black
+
+        # Menu navigation getter
+        self.assertIn("gui_menu_get_curr_item", text)
+
+    def test_timed_gui_state_changes_and_no_periodic_redraw(self):
+        """Verify:
+        (a) Helper-expiry transition and splash countdown each lead to a redraw request;
+        (b) No periodic forced-redraw pattern exists in the G3X_GUI_FIX build.
+        """
+        # 1. Static source audit on tools/build_port41_full.py patching logic
+        build_text = BUILD_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("gui_check_state_changed", build_text)
+        self.assertIn("struct gui_vis_sig", build_text)
+        self.assertIn("helper_due", build_text)
+        self.assertIn("gui_helper_displayat", build_text)
+        self.assertIn("splash_sec", build_text)
+        self.assertIn("gui_splash_expire", build_text)
+        self.assertIn("gui_menu_get_curr_item", build_text)
+
+        # Main loop replacement must NOT contain periodic counter patterns ((cnt++) & N)
+        self.assertNotIn("cnt++", build_text[build_text.find("main_replacement"):build_text.find("core_conf_c")])
+        self.assertNotIn("& 3", build_text[build_text.find("main_replacement"):build_text.find("core_conf_c")])
+
+        # 2. Host simulation of gui_check_state_changed using host gcc
+        harness_c = r"""
+#include <stdio.h>
+#include <stdlib.h>
+#include <assert.h>
+
+static int mock_tick = 0;
+int get_tick_count(void) { return mock_tick; }
+static int mock_half_shoot = 0;
+int kbd_is_key_pressed(int k) { return mock_half_shoot; }
+#define KEY_SHOOT_HALF 1
+#define SPLASH_TIME 40
+
+static int gui_osd_need_restore = 0;
+static int gui_mode_need_redraw = 0;
+static int mock_menu_dirty = 0;
+int gui_menu_needs_redraw(void) { return mock_menu_dirty; }
+static int mock_curr_menu_item = 0;
+int gui_menu_get_curr_item(void) { return mock_curr_menu_item; }
+
+static void *gui_mode = (void*)0x1000;
+struct {
+    struct {
+        int gui_mode;
+        int gui_mode_alt;
+        int gui_mode_none;
+    } state;
+} camera_info;
+
+struct {
+    int show_alt_helper;
+    int show_alt_helper_delay;
+} conf;
+
+static int gui_helper_displayat = 0;
+static int gui_splash = 0;
+static char *logo = (char*)0x2000;
+void gui_set_need_restore(void) { gui_osd_need_restore = 1; }
+
+#define CAM_DISP_ALT_TEXT 1
+
+struct gui_vis_sig {
+    void *mode_ptr;
+    int gui_mode;
+    int helper_due;
+    int splash_sec;
+    int menu_item;
+};
+
+static struct gui_vis_sig last_gui_sig;
+static int gui_sig_initialized = 0;
+static int gui_splash_expire = 0;
+
+int gui_check_state_changed(void)
+{
+    extern int gui_menu_needs_redraw(void);
+    extern int gui_menu_get_curr_item(void);
+
+    int dirty = gui_osd_need_restore || gui_mode_need_redraw || gui_menu_needs_redraw();
+
+    // 1. GUI mode / handler pointer
+    void *current_mode = (void*)gui_mode;
+    int current_gui_mode = camera_info.state.gui_mode;
+
+    // 2. Timed ALT helper expiry [core/gui.c:2553-2570]
+    int helper_due = 0;
+#ifdef CAM_DISP_ALT_TEXT
+    if (camera_info.state.gui_mode_alt && conf.show_alt_helper)
+    {
+        helper_due = (get_tick_count() >= gui_helper_displayat);
+    }
+#endif
+
+    // 3. Timed splash countdown / active state [core/gui.c:2387-2405]
+    int splash_sec = 0;
+    if (gui_splash > 0)
+    {
+        int now = get_tick_count();
+        if (gui_splash_expire == 0)
+        {
+            gui_splash_expire = now + (SPLASH_TIME * 80);
+        }
+        if (kbd_is_key_pressed(KEY_SHOOT_HALF) || (now >= gui_splash_expire))
+        {
+            gui_splash = 0;
+            gui_splash_expire = 0;
+            splash_sec = 0;
+            if (camera_info.state.gui_mode_none || camera_info.state.gui_mode_alt)
+                gui_set_need_restore();
+            if (logo)
+            {
+                logo = NULL;
+            }
+            dirty = 1;
+        }
+        else
+        {
+            splash_sec = (gui_splash_expire - now + 999) / 1000;
+            if (splash_sec <= 0) splash_sec = 1;
+        }
+    }
+
+    // 4. Current menu item
+    int menu_item = gui_menu_get_curr_item();
+
+    int sig_changed = 0;
+    if (!gui_sig_initialized)
+    {
+        gui_sig_initialized = 1;
+        sig_changed = 1;
+    }
+    else if (last_gui_sig.mode_ptr != current_mode ||
+             last_gui_sig.gui_mode != current_gui_mode ||
+             last_gui_sig.helper_due != helper_due ||
+             last_gui_sig.splash_sec != splash_sec ||
+             last_gui_sig.menu_item  != menu_item)
+    {
+        sig_changed = 1;
+    }
+
+    last_gui_sig.mode_ptr   = current_mode;
+    last_gui_sig.gui_mode   = current_gui_mode;
+    last_gui_sig.helper_due = helper_due;
+    last_gui_sig.splash_sec = splash_sec;
+    last_gui_sig.menu_item  = menu_item;
+
+    return dirty || sig_changed;
+}
+
+int main(void)
+{
+    // Test 1: Initial call requests redraw
+    mock_tick = 0;
+    assert(gui_check_state_changed() == 1);
+
+    // Test 2: Static state across 100 ticks produces ZERO redraw requests (no periodic forced redraw)
+    for (int i = 0; i < 100; i++) {
+        mock_tick += 20;
+        assert(gui_check_state_changed() == 0);
+    }
+
+    // Test 3: ALT helper delay and expiry transition
+    gui_mode = (void*)0x3000;
+    camera_info.state.gui_mode = 2; // GUI_MODE_ALT
+    camera_info.state.gui_mode_alt = 1;
+    conf.show_alt_helper = 1;
+    gui_helper_displayat = mock_tick + 2000; // expires 2000 ms later
+    // Mode switch itself triggers redraw
+    assert(gui_check_state_changed() == 1);
+
+    // Ticks before expiry: helper_due stays 0 -> ZERO redraw requests
+    for (int t = 0; t < 1980; t += 20) {
+        mock_tick += 20;
+        assert(gui_check_state_changed() == 0);
+    }
+
+    // Helper expiry tick: tick reaches gui_helper_displayat
+    mock_tick = gui_helper_displayat;
+    // Helper-expiry transition leads to a redraw request
+    assert(gui_check_state_changed() == 1);
+
+    // After expiry: helper_due stays 1 -> ZERO redraw requests
+    for (int i = 0; i < 50; i++) {
+        mock_tick += 20;
+        assert(gui_check_state_changed() == 0);
+    }
+
+    // Test 4: Splash countdown leads to redraw requests and terminates cleanly
+    camera_info.state.gui_mode = 0;
+    camera_info.state.gui_mode_alt = 0;
+    camera_info.state.gui_mode_none = 1;
+    gui_splash = SPLASH_TIME; // 40 units * 80 ms = 3200 ms
+    gui_splash_expire = 0;
+    mock_tick = 10000;
+
+    // Splash initiation triggers redraw request
+    assert(gui_check_state_changed() == 1);
+
+    // Step through splash duration: seconds countdown transitions trigger redraw requests
+    int splash_redraw_count = 0;
+    for (int t = 20; t <= 3500; t += 20) {
+        mock_tick += 20;
+        if (gui_check_state_changed()) {
+            splash_redraw_count++;
+            gui_osd_need_restore = 0; // simulated draw_restore()
+        }
+    }
+    // Countdown from 4 -> 3 -> 2 -> 1 -> expiry (0) = 4 countdown transitions
+    assert(splash_redraw_count >= 3 && splash_redraw_count <= 5);
+    assert(gui_splash == 0); // splash successfully completed and expired
+
+    // After splash completed: no redraw requests
+    for (int i = 0; i < 50; i++) {
+        mock_tick += 20;
+        assert(gui_check_state_changed() == 0);
+    }
+
+    // Test 5: Menu navigation triggers redraw
+    mock_curr_menu_item = 1;
+    assert(gui_check_state_changed() == 1);
+    mock_tick += 20;
+    assert(gui_check_state_changed() == 0);
+    mock_curr_menu_item = 2;
+    assert(gui_check_state_changed() == 1);
+    mock_tick += 20;
+    assert(gui_check_state_changed() == 0);
+
+    // Test 6: Half-shoot cancellation during splash
+    gui_splash = SPLASH_TIME;
+    gui_splash_expire = 0;
+    mock_tick = 20000;
+    assert(gui_check_state_changed() == 1); // Splash started
+    mock_tick += 20;
+    assert(gui_check_state_changed() == 0);
+    mock_half_shoot = 1; // User presses half shoot
+    assert(gui_check_state_changed() == 1); // Immediate cancellation redraw request
+    assert(gui_splash == 0); // Cancelled
+
+    return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            c_file = Path(tmpdir) / "test_state.c"
+            bin_file = Path(tmpdir) / "test_state"
+            c_file.write_text(harness_c, encoding="utf-8")
+            comp = subprocess.run(
+                ["gcc", "-O2", "-Wall", str(c_file), "-o", str(bin_file)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.assertEqual(comp.returncode, 0, f"Compilation of state change harness failed: {comp.stderr}")
+            run = subprocess.run([str(bin_file)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            self.assertEqual(run.returncode, 0, f"State change test harness assertion failed: {run.stderr}")
 
     def test_lib_source(self):
         lib_c = REPO_ROOT / "full_build" / "g3x" / "lib.c"
@@ -201,7 +465,7 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
         self._require_toolchain()
 
         diskboot = OUT_DIR_GUI / "DISKBOOT.BIN"
-        if not diskboot.is_file():
+        if not diskboot.is_file() or diskboot.stat().st_size != 123609:
             env = os.environ.copy()
             if WRAPPER_SCRIPT.is_file() and os.access(WRAPPER_SCRIPT, os.X_OK):
                 env["MAKEFLAGS"] = f"CC={WRAPPER_SCRIPT}"
@@ -216,10 +480,10 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
             self.assertEqual(res.returncode, 0, f"GUI fix build failed: {res.stderr}")
 
         self.assertTrue(diskboot.is_file(), f"Expected {diskboot} to exist")
-        self.assertEqual(diskboot.stat().st_size, 123361)
+        self.assertEqual(diskboot.stat().st_size, 123609)
         self.assertEqual(
             sha256_file(diskboot),
-            "88c41eb5d184c47b78314b946a7178aa9ac7e9708d169ea8d3a5ee895ec98b90",
+            "06f8e1b6da3b9f77525cfc96ab5a25b82dca1a94da25989735826a569d04838b",
         )
 
         # Check manifests
@@ -228,44 +492,95 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
             self.assertTrue(mpath.is_file(), f"Expected {mpath} to exist")
             with open(mpath, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["size"], 123361)
+            self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["size"], 123609)
             self.assertEqual(
                 data["artifacts"]["DISKBOOT.BIN"]["sha256"],
-                "88c41eb5d184c47b78314b946a7178aa9ac7e9708d169ea8d3a5ee895ec98b90",
+                "06f8e1b6da3b9f77525cfc96ab5a25b82dca1a94da25989735826a569d04838b",
             )
             self.assertEqual(data["artifacts"]["modules_count"], 34)
 
     def test_gui_fix_reproducible_build(self):
-        """Verify that two clean full builds with G3X_GUI_FIX=1 give identical hashes."""
+        """Verify that clean full builds in fresh temporary directories are reproducible."""
         self._require_toolchain()
 
-        rebuild_dir = REPO_ROOT / "out" / "port42-gui-rebuild"
-        if not (rebuild_dir / "DISKBOOT.BIN").is_file():
-            env = os.environ.copy()
-            if WRAPPER_SCRIPT.is_file() and os.access(WRAPPER_SCRIPT, os.X_OK):
-                env["MAKEFLAGS"] = f"CC={WRAPPER_SCRIPT}"
-            res = subprocess.run(
-                ["python3", "-B", str(BUILD_SCRIPT), "--gui-fix", "--out-dir", str(rebuild_dir)],
+        env = os.environ.copy()
+        if WRAPPER_SCRIPT.is_file() and os.access(WRAPPER_SCRIPT, os.X_OK):
+            env["MAKEFLAGS"] = f"CC={WRAPPER_SCRIPT}"
+
+        # 1. Test reproducibility of G3X_GUI_FIX=1: two clean builds in fresh temporary directories
+        with tempfile.TemporaryDirectory() as td1, tempfile.TemporaryDirectory() as td2:
+            res1 = subprocess.run(
+                ["python3", "-B", str(BUILD_SCRIPT), "--gui-fix", "--out-dir", td1],
                 cwd=str(REPO_ROOT),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
                 env=env,
             )
-            self.assertEqual(res.returncode, 0, f"GUI fix rebuild failed: {res.stderr}")
+            self.assertEqual(res1.returncode, 0, f"Clean build 1 (gui-fix) failed: {res1.stderr}")
 
-        s1 = snapshot_distribution(OUT_DIR_GUI)
-        s2 = snapshot_distribution(rebuild_dir)
-        self.assertIn("DISKBOOT.BIN", s1)
-        self.assertIn("DISKBOOT.BIN", s2)
-        self.assertEqual(s1, s2, "Two clean G3X_GUI_FIX=1 builds produced different hashes")
+            res2 = subprocess.run(
+                ["python3", "-B", str(BUILD_SCRIPT), "--gui-fix", "--out-dir", td2],
+                cwd=str(REPO_ROOT),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(res2.returncode, 0, f"Clean build 2 (gui-fix) failed: {res2.stderr}")
+
+            s1 = snapshot_distribution(Path(td1))
+            s2 = snapshot_distribution(Path(td2))
+            self.assertIn("DISKBOOT.BIN", s1)
+            self.assertIn("DISKBOOT.BIN", s2)
+            self.assertEqual(s1["DISKBOOT.BIN"][0], 123609)
+            self.assertEqual(
+                s1["DISKBOOT.BIN"][1],
+                "06f8e1b6da3b9f77525cfc96ab5a25b82dca1a94da25989735826a569d04838b",
+            )
+            # Compare DISKBOOT.BIN plus every CHDK/ file hash
+            self.assertEqual(s1, s2, "Two clean G3X_GUI_FIX=1 builds produced different hashes")
+
+        # 2. Test reproducibility of G3X_GUI_FIX=1 FULL_HOOKS=1 in fresh temporary directory at least once
+        with tempfile.TemporaryDirectory() as td3, tempfile.TemporaryDirectory() as td4:
+            res3 = subprocess.run(
+                ["python3", "-B", str(BUILD_SCRIPT), "--gui-fix", "--full-hooks", "--out-dir", td3],
+                cwd=str(REPO_ROOT),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(res3.returncode, 0, f"Clean build 3 (gui-fix + full-hooks) failed: {res3.stderr}")
+
+            res4 = subprocess.run(
+                ["python3", "-B", str(BUILD_SCRIPT), "--gui-fix", "--full-hooks", "--out-dir", td4],
+                cwd=str(REPO_ROOT),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(res4.returncode, 0, f"Clean build 4 (gui-fix + full-hooks) failed: {res4.stderr}")
+
+            s3 = snapshot_distribution(Path(td3))
+            s4 = snapshot_distribution(Path(td4))
+            self.assertIn("DISKBOOT.BIN", s3)
+            self.assertIn("DISKBOOT.BIN", s4)
+            self.assertEqual(s3["DISKBOOT.BIN"][0], 123665)
+            self.assertEqual(
+                s3["DISKBOOT.BIN"][1],
+                "d0e4648719fc37f38f49f1ad202592c87f0604bed9417e60be430c1b6a4f9e38",
+            )
+            # Compare DISKBOOT.BIN plus every CHDK/ file hash
+            self.assertEqual(s3, s4, "Two clean G3X_GUI_FIX=1 FULL_HOOKS=1 builds produced different hashes")
 
     def test_gui_fix_full_hooks_build_artifacts_and_manifest(self):
         """Verify G3X_GUI_FIX=1 FULL_HOOKS=1 build produces exact manifest matches."""
         self._require_toolchain()
 
         diskboot = OUT_DIR_GUI_HOOKS / "DISKBOOT.BIN"
-        if not diskboot.is_file():
+        if not diskboot.is_file() or diskboot.stat().st_size != 123665:
             env = os.environ.copy()
             if WRAPPER_SCRIPT.is_file() and os.access(WRAPPER_SCRIPT, os.X_OK):
                 env["MAKEFLAGS"] = f"CC={WRAPPER_SCRIPT}"
@@ -279,10 +594,10 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
             )
             self.assertEqual(res.returncode, 0, f"GUI fix + full hooks build failed: {res.stderr}")
 
-        self.assertEqual(diskboot.stat().st_size, 123425)
+        self.assertEqual(diskboot.stat().st_size, 123665)
         self.assertEqual(
             sha256_file(diskboot),
-            "6e7511e5f40b690f1c501801a59acde19ba17d0abb21ee7a788aaa10407b26a0",
+            "d0e4648719fc37f38f49f1ad202592c87f0604bed9417e60be430c1b6a4f9e38",
         )
 
         for mdir in [MANIFESTS_DIR, DOCS_MANIFESTS_DIR]:
@@ -290,10 +605,10 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
             self.assertTrue(mpath.is_file(), f"Expected {mpath} to exist")
             with open(mpath, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["size"], 123425)
+            self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["size"], 123665)
             self.assertEqual(
                 data["artifacts"]["DISKBOOT.BIN"]["sha256"],
-                "6e7511e5f40b690f1c501801a59acde19ba17d0abb21ee7a788aaa10407b26a0",
+                "d0e4648719fc37f38f49f1ad202592c87f0604bed9417e60be430c1b6a4f9e38",
             )
             self.assertIn("FULL_HOOKS=1", data["build"]["flags"])
             self.assertIn("G3X_GUI_FIX=1", data["build"]["flags"])

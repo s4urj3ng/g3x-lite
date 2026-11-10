@@ -23,6 +23,7 @@ The fixes confirmed on physical camera hardware during PORT-35..40 are ported in
 | **Menu Contrast Defaults**: Default `conf.menu_color` and `conf.menu_title_color` to `IDX_COLOR_BLACK` background and `IDX_COLOR_WHITE` foreground, and `conf.menu_center` to 0. | `stage_chdk/core/conf.c:201-202,254`<br>`tools/build_port41_full.py:245-263` | `scripts/build_candidate_gui3.py:1685-1698`<br>`docs/PORT40_GUI_LAYOUT.md:23-25` | VERIFIED by owner trial |
 | **880x576 Opaque Black Background**: Fill complete 880x576 menu rectangle (x:10..889, y:12..587) with solid UYVY black (`0x00800080`) and opacity `0xFF` on menu initial draw and ALT helper entry, preventing live view show-through. | `full_build/g3x/gui_menu.c:984-993,1210-1241`<br>`stage_chdk/core/gui.c:2573-2578`<br>`tools/build_port41_full.py:269-278` | `scripts/build_candidate_gui3.py:820-826,885-909`<br>`docs/PORT38_GUI4_TRIAL.md:123`<br>`docs/PORT40_GUI_LAYOUT.md:14-28` | VERIFIED by owner trial |
 | **2x Integer Font Scaling (16x32)**: Direct 16x32 font rasterizer doubling each 8x16 bit into a 2x2 square, `rbf_*` interface overrides in `gui_menu.c`, and `FONT_WIDTH=16`, `FONT_HEIGHT=32` in `gui_draw.h`/`gui_draw.c`. | `full_build/g3x/gui_menu.c:1157-1208,1243-1447`<br>`stage_chdk/core/gui_draw.h:68-70`<br>`stage_chdk/core/gui_draw.c:307-335`<br>`tools/build_port41_full.py:284-335` | `scripts/build_candidate_gui3.py:840-909,984-1221`<br>`docs/PORT40_GUI_LAYOUT.md:14-28`<br>`chdk-port/platform/g5x/lib.c:27-33` | VERIFIED by owner trial |
+| **Timed GUI State Change Detection**: Detect visible-state signature changes (GUI mode handler pointer, timed ALT helper expiry `get_tick_count() >= gui_helper_displayat`, timed splash countdown / expiry, current menu item) to trigger repaints without periodic polling or forced per-tick redraws. | `full_build/g3x/gui_menu.c:39-44`<br>`stage_chdk/core/gui.c:2387-2405,2960-3020`<br>`tools/build_port41_full.py:287-415` | `chdk-port/core/gui.c:2387-2405,2553-2570` | INFERRED (owner trial to confirm) |
 
 ---
 
@@ -34,7 +35,7 @@ Toolchain: `gcc-arm-none-eabi-5_4-2016q3` (deterministic wrapper: `scripts/gcc_d
 |---|---|---|---|---|
 | PORT-41 Default | (none) | 124,097 B | `24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9` | `manifests/port41_manifest.json` |
 | PORT-42 FULL_HOOKS | `FULL_HOOKS=1` | 124,153 B | `eb46aa339bb6557f27d992691f83ceb14cc73962625a44e0f146edde9b886dce` | `manifests/port42_full_hooks_manifest.json` |
-| PORT-42 GUI Fix | `G3X_GUI_FIX=1` | 123,361 B | `88c41eb5d184c47b78314b946a7178aa9ac7e9708d169ea8d3a5ee895ec98b90` | `manifests/port42_gui_fix_manifest.json` |
-| PORT-42 GUI Fix + FULL_HOOKS | `G3X_GUI_FIX=1 FULL_HOOKS=1` | 123,425 B | `6e7511e5f40b690f1c501801a59acde19ba17d0abb21ee7a788aaa10407b26a0` | `manifests/port42_gui_fix_full_hooks_manifest.json` |
+| PORT-42 GUI Fix | `G3X_GUI_FIX=1` | 123,609 B | `06f8e1b6da3b9f77525cfc96ab5a25b82dca1a94da25989735826a569d04838b` | `manifests/port42_gui_fix_manifest.json` |
+| PORT-42 GUI Fix + FULL_HOOKS | `G3X_GUI_FIX=1 FULL_HOOKS=1` | 123,665 B | `d0e4648719fc37f38f49f1ad202592c87f0604bed9417e60be430c1b6a4f9e38` | `manifests/port42_gui_fix_full_hooks_manifest.json` |
 
 All candidate builds (`candidate_port2a`, `gui4`, `gui5`, `shortpress`) remain bit-for-bit invariant. Bootstrap pins (`platform/g3x/libplatform.a`, `platform_camera.h`) remain unaltered.

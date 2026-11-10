@@ -284,20 +284,143 @@ def apply_gui_fix_staging_patches(stage_dir: Path) -> None:
     else:
         raise RuntimeError("is_menu_shortcut anchor not found in staged core/gui.c")
 
-    gui_state_anchor = "void gui_set_need_redraw()\n{\n    gui_mode_need_redraw = 1;\n}\n"
-    gui_state_replacement = (
-        "void gui_set_need_redraw()\n{\n    gui_mode_need_redraw = 1;\n}\n\n"
-        "/* PORT-42 GUI fix: State change detection for zero-flicker redraw */\n"
+    splash_anchor = (
+        "static void gui_handle_splash(int force_redraw)\n"
+        "{\n"
+        "    if (gui_splash)\n"
+        "    {\n"
+        "        if (camera_info.state.gui_mode_none || camera_info.state.gui_mode_alt)\n"
+        "            if (force_redraw || (gui_splash == SPLASH_TIME))\n"
+        "                gui_draw_splash();\n"
+        "\n"
+        "        // on half shoot, cancel splash screen\n"
+        "        if(kbd_is_key_pressed(KEY_SHOOT_HALF)) {\n"
+        "            gui_splash = 1;\n"
+        "        }\n"
+        "        if (--gui_splash == 0)\n"
+        "        {\n"
+        "            if (camera_info.state.gui_mode_none || camera_info.state.gui_mode_alt)\n"
+        "                gui_set_need_restore();\n"
+        "            if (logo)\n"
+        "                free(logo);\n"
+        "            logo = NULL;\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+    splash_replacement = (
+        "static void gui_handle_splash(int force_redraw)\n"
+        "{\n"
+        "    if (gui_splash)\n"
+        "    {\n"
+        "        if (camera_info.state.gui_mode_none || camera_info.state.gui_mode_alt)\n"
+        "            if (force_redraw || (gui_splash == SPLASH_TIME))\n"
+        "                gui_draw_splash();\n"
+        "\n"
+        "        /* PORT-42 GUI fix: Mark initial splash draw complete so subsequent countdown ticks do not re-render.\n"
+        "         * The timed countdown and screen restore are managed via visible-state signature change detection.\n"
+        "         * Sibling citation: core/gui.c:2387-2405 */\n"
+        "        if (gui_splash == SPLASH_TIME)\n"
+        "            gui_splash = SPLASH_TIME - 1;\n"
+        "    }\n"
+        "}\n"
+    )
+    if splash_anchor in core_gui_text:
+        core_gui_text = core_gui_text.replace(splash_anchor, splash_replacement, 1)
+    else:
+        raise RuntimeError("gui_handle_splash anchor not found in staged core/gui.c")
+
+    alt_anchor = "gui_handler altGuiHandler = { GUI_MODE_ALT, gui_chdk_draw, gui_chdk_kbd_process, gui_chdk_kbd_process_menu_btn, 0, 0, };\n"
+    alt_replacement = (
+        "gui_handler altGuiHandler = { GUI_MODE_ALT, gui_chdk_draw, gui_chdk_kbd_process, gui_chdk_kbd_process_menu_btn, 0, 0, };\n\n"
+        "/* =============================================================================\n"
+        " * PORT-42 GUI FIX: Timed & visible state change detection for zero-flicker redraw.\n"
+        " * Repaint only when dirty flags are set or visible-state signature changes.\n"
+        " * Citing core/gui.c:2387-2405,2553-2570\n"
+        " * ============================================================================= */\n"
+        "struct gui_vis_sig {\n"
+        "    void *mode_ptr;\n"
+        "    int gui_mode;\n"
+        "    int helper_due;\n"
+        "    int splash_sec;\n"
+        "    int menu_item;\n"
+        "};\n\n"
+        "static struct gui_vis_sig last_gui_sig;\n"
+        "static int gui_sig_initialized = 0;\n"
+        "static int gui_splash_expire = 0;\n\n"
         "int gui_check_state_changed(void)\n"
         "{\n"
         "    extern int gui_menu_needs_redraw(void);\n"
-        "    return gui_osd_need_restore || gui_mode_need_redraw || gui_menu_needs_redraw();\n"
+        "    extern int gui_menu_get_curr_item(void);\n\n"
+        "    int dirty = gui_osd_need_restore || gui_mode_need_redraw || gui_menu_needs_redraw();\n\n"
+        "    // 1. GUI mode / handler pointer\n"
+        "    void *current_mode = (void*)gui_mode;\n"
+        "    int current_gui_mode = camera_info.state.gui_mode;\n\n"
+        "    // 2. Timed ALT helper expiry [core/gui.c:2553-2570]\n"
+        "    int helper_due = 0;\n"
+        "#ifdef CAM_DISP_ALT_TEXT\n"
+        "    if (camera_info.state.gui_mode_alt && conf.show_alt_helper)\n"
+        "    {\n"
+        "        helper_due = (get_tick_count() >= gui_helper_displayat);\n"
+        "    }\n"
+        "#endif\n\n"
+        "    // 3. Timed splash countdown / active state [core/gui.c:2387-2405]\n"
+        "    int splash_sec = 0;\n"
+        "    if (gui_splash > 0)\n"
+        "    {\n"
+        "        int now = get_tick_count();\n"
+        "        if (gui_splash_expire == 0)\n"
+        "        {\n"
+        "            gui_splash_expire = now + (SPLASH_TIME * 80);\n"
+        "        }\n"
+        "        if (kbd_is_key_pressed(KEY_SHOOT_HALF) || (now >= gui_splash_expire))\n"
+        "        {\n"
+        "            gui_splash = 0;\n"
+        "            gui_splash_expire = 0;\n"
+        "            splash_sec = 0;\n"
+        "            if (camera_info.state.gui_mode_none || camera_info.state.gui_mode_alt)\n"
+        "                gui_set_need_restore();\n"
+        "            if (logo)\n"
+        "            {\n"
+        "                free(logo);\n"
+        "                logo = NULL;\n"
+        "            }\n"
+        "            dirty = 1;\n"
+        "        }\n"
+        "        else\n"
+        "        {\n"
+        "            splash_sec = (gui_splash_expire - now + 999) / 1000;\n"
+        "            if (splash_sec <= 0) splash_sec = 1;\n"
+        "        }\n"
+        "    }\n\n"
+        "    // 4. Current menu item\n"
+        "    int menu_item = gui_menu_get_curr_item();\n\n"
+        "    int sig_changed = 0;\n"
+        "    if (!gui_sig_initialized)\n"
+        "    {\n"
+        "        gui_sig_initialized = 1;\n"
+        "        sig_changed = 1;\n"
+        "    }\n"
+        "    else if (last_gui_sig.mode_ptr != current_mode ||\n"
+        "             last_gui_sig.gui_mode != current_gui_mode ||\n"
+        "             last_gui_sig.helper_due != helper_due ||\n"
+        "             last_gui_sig.splash_sec != splash_sec ||\n"
+        "             last_gui_sig.menu_item  != menu_item)\n"
+        "    {\n"
+        "        sig_changed = 1;\n"
+        "    }\n\n"
+        "    last_gui_sig.mode_ptr   = current_mode;\n"
+        "    last_gui_sig.gui_mode   = current_gui_mode;\n"
+        "    last_gui_sig.helper_due = helper_due;\n"
+        "    last_gui_sig.splash_sec = splash_sec;\n"
+        "    last_gui_sig.menu_item  = menu_item;\n\n"
+        "    return dirty || sig_changed;\n"
         "}\n"
     )
-    if gui_state_anchor in core_gui_text:
-        core_gui_text = core_gui_text.replace(gui_state_anchor, gui_state_replacement, 1)
+    if alt_anchor in core_gui_text:
+        core_gui_text = core_gui_text.replace(alt_anchor, alt_replacement, 1)
     else:
-        raise RuntimeError("gui_set_need_redraw anchor not found in staged core/gui.c")
+        raise RuntimeError("altGuiHandler anchor not found in staged core/gui.c")
     core_gui_c.write_text(core_gui_text, encoding="utf-8")
 
     # 4. Patch core/gui_draw.c and core/gui_draw.h: 2x integer font scaling (16x32)
@@ -632,7 +755,8 @@ def build_port41_full(
         json.dump(manifest_data, f, indent=2)
 
     # Save to manifests/ and docs/manifests/ for the new GUI fix variants
-    if gui_fix:
+    canonical_dirs = (REPO_ROOT / "out" / "port42-gui", REPO_ROOT / "out" / "port42-gui-full-hooks")
+    if gui_fix and effective_out_dir in canonical_dirs:
         for mdir in [REPO_ROOT / "manifests", REPO_ROOT / "docs" / "manifests"]:
             mdir.mkdir(parents=True, exist_ok=True)
             with open(mdir / manifest_name, "w", encoding="utf-8") as f:
