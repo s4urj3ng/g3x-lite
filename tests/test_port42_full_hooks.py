@@ -31,6 +31,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import unittest
 from pathlib import Path
@@ -53,6 +54,22 @@ def sha256_file(path: Path) -> str:
         while chunk := f.read(65536):
             h.update(chunk)
     return h.hexdigest()
+
+
+def snapshot_distribution(out_path: Path) -> dict[str, tuple[int, str]]:
+    """Capture size and SHA-256 for DISKBOOT.BIN and every file in CHDK/."""
+    snapshot: dict[str, tuple[int, str]] = {}
+    diskboot = out_path / "DISKBOOT.BIN"
+    if diskboot.is_file():
+        snapshot["DISKBOOT.BIN"] = (diskboot.stat().st_size, sha256_file(diskboot))
+    chdk_dir = out_path / "CHDK"
+    if chdk_dir.is_dir():
+        for root, dirs, files in os.walk(chdk_dir):
+            for f in sorted(files):
+                p = Path(root) / f
+                rel = str(p.relative_to(out_path))
+                snapshot[rel] = (p.stat().st_size, sha256_file(p))
+    return snapshot
 
 
 class TestPort42FullHooksDoc(unittest.TestCase):
@@ -99,9 +116,12 @@ class TestPort42FullHooksDoc(unittest.TestCase):
         # Output manifest details
         self.assertIn("DISKBOOT.BIN", text)
         self.assertIn("124,153", text)
-        self.assertIn("20871cbad4d7f04b621f8d5cad39feeb0ac8f994b266788f900745a22bdf509d", text)
+        self.assertIn("eb46aa339bb6557f27d992691f83ceb14cc73962625a44e0f146edde9b886dce", text)
         self.assertIn("port42_full_hooks_manifest.json", text)
         self.assertIn("port41_manifest.json", text)
+
+        # Anchored PORT-41 baseline SHA-256 in doc
+        self.assertIn("24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9", text)
 
         # Owner trial plan: order PORT-41 default before variant
         self.assertRegex(
@@ -119,19 +139,41 @@ class TestPort42FullHooksDoc(unittest.TestCase):
         # At most 2 power-ons
         self.assertRegex(text, r"(?i)at\s+most\s+(?:\*\*)?2\s+power-ons")
 
+        # Per-hook validation: observation without capture
+        self.assertRegex(text, r"(?i)observation\s+(?:only|without\s+capture)")
+        self.assertRegex(text, r"(?i)half-press")
+        self.assertNotIn("full shutter press", text.lower())
+        self.assertNotIn("card writes suppressed;", text.lower())
+
         # What to check per enabled hook
         self.assertIn("task_PhySw", text)
         self.assertIn("task_InitFileModules", text)
         self.assertIn("task_CaptSeq", text)
         self.assertIn("task_FileWrite", text)
 
-        # Battery-pull recovery
+        # PASS / FAIL criteria: PASS if no hang or crash
+        self.assertIn("PASS", text)
+        self.assertIn("FAIL", text)
+        self.assertRegex(text, r"(?i)no\s+hang\s+or\s+crash")
+
+        # Compile switches named and RAM-only recovery
+        self.assertIn("G3X_DISABLE_CARD_WRITES", text)
+        self.assertIn("OPT_DISABLE_FILE_WRITES", text)
         self.assertRegex(text, r"(?i)battery-pull\s+recovery")
         self.assertRegex(text, r"(?i)ram-only")
 
-        # What to note for PASS / FAIL
-        self.assertIn("PASS", text)
-        self.assertIn("FAIL", text)
+    def test_manifests_mirrored_identical(self):
+        """Nit 5: verify that manifests/ and docs/manifests/ copies are byte-identical."""
+        for m_name in ["port41_manifest.json", "port42_full_hooks_manifest.json"]:
+            primary = MANIFESTS_DIR / m_name
+            mirror = DOCS_MANIFESTS_DIR / m_name
+            self.assertTrue(primary.is_file(), f"Missing primary manifest: {primary}")
+            self.assertTrue(mirror.is_file(), f"Missing mirror manifest: {mirror}")
+            self.assertEqual(
+                primary.read_bytes(),
+                mirror.read_bytes(),
+                f"Manifest mirror {mirror} diverged from primary {primary}",
+            )
 
 
 class TestPort42FullHooksExecution(unittest.TestCase):
@@ -188,22 +230,22 @@ class TestPort42FullHooksExecution(unittest.TestCase):
         )
 
     def test_full_hooks_artifacts_and_manifest(self):
+        """Verify FULL_HOOKS variant output matches manifest completely."""
         self._require_full_build()
 
         # Check DISKBOOT.BIN
         diskboot = self.diskboot
         self.assertTrue(diskboot.is_file(), f"Expected {diskboot} to exist")
         self.assertEqual(diskboot.stat().st_size, 124153)
+        self.assertEqual(
+            sha256_file(diskboot),
+            "eb46aa339bb6557f27d992691f83ceb14cc73962625a44e0f146edde9b886dce",
+        )
 
-        # Check CHDK folder contents
-        chdk_dir = OUT_DIR / "CHDK"
-        self.assertTrue(chdk_dir.is_dir(), f"Expected {chdk_dir} to exist")
-        modules_dir = chdk_dir / "MODULES"
-        self.assertTrue(modules_dir.is_dir(), f"Expected {modules_dir} to exist")
-        flt_files = list(modules_dir.glob("*.flt"))
-        self.assertGreaterEqual(len(flt_files), 30)
+        # Snapshot actual output directory
+        actual = snapshot_distribution(OUT_DIR)
 
-        # Check committed manifests
+        # Verify against both manifest locations (primary manifests/ and mirror docs/manifests/)
         for manifest_dir in [MANIFESTS_DIR, DOCS_MANIFESTS_DIR]:
             m_path = manifest_dir / "port42_full_hooks_manifest.json"
             self.assertTrue(m_path.is_file(), f"Expected {m_path} to exist")
@@ -211,11 +253,28 @@ class TestPort42FullHooksExecution(unittest.TestCase):
                 manifest = json.load(f)
 
             self.assertIn("FULL_HOOKS=1", manifest["build"]["flags"])
-            self.assertEqual(manifest["artifacts"]["DISKBOOT.BIN"]["size"], 124153)
-            self.assertEqual(manifest["artifacts"]["DISKBOOT.BIN"]["sha256"], "20871cbad4d7f04b621f8d5cad39feeb0ac8f994b266788f900745a22bdf509d")
-            self.assertEqual(manifest["artifacts"]["modules_count"], len(flt_files))
-            self.assertIn("chdk_files", manifest["artifacts"])
-            self.assertGreaterEqual(manifest["artifacts"]["chdk_files_count"], 200)
+
+            # Construct complete expected file set from manifest
+            expected: dict[str, tuple[int, str]] = {
+                "DISKBOOT.BIN": (
+                    manifest["artifacts"]["DISKBOOT.BIN"]["size"],
+                    manifest["artifacts"]["DISKBOOT.BIN"]["sha256"],
+                )
+            }
+            for rel, info in manifest["artifacts"]["chdk_files"].items():
+                expected[rel] = (info["size"], info["sha256"])
+
+            # Full file set comparison: paths, sizes and SHA-256 hashes equal
+            self.assertEqual(
+                set(actual.keys()),
+                set(expected.keys()),
+                f"Variant output file set does not match manifest in {m_path}",
+            )
+            self.assertEqual(
+                actual,
+                expected,
+                f"Variant output file sizes or hashes do not match manifest in {m_path}",
+            )
 
     def test_variant_build_reproducibility(self):
         """Requirement (a): FULL_HOOKS=1 variant builds reproducibly (two builds give identical hashes)."""
@@ -225,7 +284,15 @@ class TestPort42FullHooksExecution(unittest.TestCase):
         if WRAPPER_SCRIPT.is_file() and os.access(WRAPPER_SCRIPT, os.X_OK):
             env["MAKEFLAGS"] = f"CC={WRAPPER_SCRIPT}"
 
-        # Re-run build using --full-hooks
+        # 1. Snapshot the variant built in setUpClass
+        snapshot1 = snapshot_distribution(OUT_DIR)
+        self.assertIn("DISKBOOT.BIN", snapshot1)
+        self.assertGreaterEqual(len(snapshot1), 200)
+
+        # 2. Rebuild into a clean output directory
+        shutil.rmtree(OUT_DIR, ignore_errors=True)
+        OUT_DIR.mkdir(parents=True, exist_ok=True)
+
         cmd = ["python3", "-B", str(BUILD_SCRIPT), "--full-hooks"]
         res = subprocess.run(
             cmd,
@@ -235,14 +302,47 @@ class TestPort42FullHooksExecution(unittest.TestCase):
             text=True,
             env=env,
         )
-        self.assertEqual(res.returncode, 0, f"Second build failed: {res.stderr}")
+        self.assertEqual(res.returncode, 0, f"Rebuild failed: {res.stderr}")
 
-        second_sha = sha256_file(self.diskboot)
-        expected_sha = "20871cbad4d7f04b621f8d5cad39feeb0ac8f994b266788f900745a22bdf509d"
+        # 3. Snapshot again
+        snapshot2 = snapshot_distribution(OUT_DIR)
+
+        # 4. Assert that the two snapshots are equal: the same file set, sizes and hashes
         self.assertEqual(
-            second_sha,
-            expected_sha,
-            f"Variant DISKBOOT.BIN SHA-256 diverged: expected {expected_sha}, got {second_sha}",
+            set(snapshot1.keys()),
+            set(snapshot2.keys()),
+            "Variant rebuild produced different file sets",
+        )
+        self.assertEqual(
+            snapshot1,
+            snapshot2,
+            "Variant rebuild produced different file sizes or SHA-256 hashes",
+        )
+
+        # 5. Only then compare the result against the committed variant manifest
+        m_path = MANIFESTS_DIR / "port42_full_hooks_manifest.json"
+        self.assertTrue(m_path.is_file(), f"Missing variant manifest: {m_path}")
+        with open(m_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+
+        expected: dict[str, tuple[int, str]] = {
+            "DISKBOOT.BIN": (
+                manifest["artifacts"]["DISKBOOT.BIN"]["size"],
+                manifest["artifacts"]["DISKBOOT.BIN"]["sha256"],
+            )
+        }
+        for rel, info in manifest["artifacts"]["chdk_files"].items():
+            expected[rel] = (info["size"], info["sha256"])
+
+        self.assertEqual(
+            set(snapshot2.keys()),
+            set(expected.keys()),
+            "Reproducible build files do not match manifest file set",
+        )
+        self.assertEqual(
+            snapshot2,
+            expected,
+            "Reproducible build sizes or hashes do not match manifest",
         )
 
     def test_port41_default_build_byte_identical_to_manifest(self):
@@ -257,6 +357,19 @@ class TestPort42FullHooksExecution(unittest.TestCase):
         expected_diskboot = manifest["artifacts"]["DISKBOOT.BIN"]
         expected_sha = expected_diskboot["sha256"]
         expected_size = expected_diskboot["size"]
+
+        # Assert manifest itself anchors the recorded PORT-41 baseline
+        recorded_baseline_sha = "24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9"
+        self.assertEqual(
+            expected_sha,
+            recorded_baseline_sha,
+            f"port41_manifest.json DISKBOOT SHA-256 must match recorded baseline {recorded_baseline_sha}",
+        )
+        self.assertEqual(expected_size, 124097)
+
+        # Clean output directory before building default build
+        shutil.rmtree(OUT_DIR, ignore_errors=True)
+        OUT_DIR.mkdir(parents=True, exist_ok=True)
 
         # Run PORT-41 default full build (no --full-hooks)
         env = os.environ.copy()
@@ -274,10 +387,33 @@ class TestPort42FullHooksExecution(unittest.TestCase):
         )
         self.assertEqual(res.returncode, 0, f"PORT-41 default build failed: {res.stderr}")
 
-        built_diskboot = OUT_DIR / "DISKBOOT.BIN"
-        self.assertTrue(built_diskboot.is_file())
-        self.assertEqual(built_diskboot.stat().st_size, expected_size)
-        self.assertEqual(sha256_file(built_diskboot), expected_sha)
+        # Snapshot default build
+        actual_default = snapshot_distribution(OUT_DIR)
+
+        # Complete manifest comparison: path set equal, sizes equal, and SHA-256 equal
+        expected_default: dict[str, tuple[int, str]] = {
+            "DISKBOOT.BIN": (expected_size, expected_sha)
+        }
+        for rel, info in manifest["artifacts"]["chdk_files"].items():
+            expected_default[rel] = (info["size"], info["sha256"])
+
+        self.assertEqual(
+            set(actual_default.keys()),
+            set(expected_default.keys()),
+            "PORT-41 default build output file set does not match manifest",
+        )
+        self.assertEqual(
+            actual_default,
+            expected_default,
+            "PORT-41 default build output sizes or hashes do not match manifest",
+        )
+
+        # Explicit anchor assertion: DISKBOOT.BIN matches recorded PORT-41 baseline
+        self.assertEqual(
+            actual_default["DISKBOOT.BIN"][1],
+            recorded_baseline_sha,
+            "PORT-41 default DISKBOOT SHA-256 diverged from recorded baseline in docs/PORT41_FULL_BUILD.md:146",
+        )
 
         # Restore FULL_HOOKS build for remaining tests
         subprocess.run(
