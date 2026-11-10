@@ -88,3 +88,7 @@ firmware/tools/video001a0_payload.bin
 !chdk-port/platform/g3x/sub/110c/stubs_min.S
 !chdk-port/platform/g3x/sub/110c/stubs_auto.S
 !chdk-port/platform/g3x/sub/110c/makefile.inc
+
+# PORT-41-R2: ignore build outputs and candidate working directories
+out/
+candidate_port*/

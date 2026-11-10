@@ -250,7 +250,7 @@ class TestPort40GuiLayout(unittest.TestCase):
         # 2. Extract camera_screen struct values from compiled candidate_main.elf
         elf_path = os.path.join(self.gui5_dir, "candidate_main.elf")
         if not os.path.isfile(elf_path):
-            build_candidate(gui5=True)
+            build_candidate_gui(gui5=True, out_dir=self.gui5_dir)
 
         nm_proc = subprocess.run(
             [str(ARM_NM), "-n", elf_path],
