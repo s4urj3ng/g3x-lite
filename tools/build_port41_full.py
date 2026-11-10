@@ -1021,14 +1021,28 @@ def build_port41_full(
     with open(effective_out_dir / "manifest.json", "w", encoding="utf-8") as f:
         json.dump(manifest_data, f, indent=2)
 
+    # In addition to port42_gui_fix_* manifests, also provide port42_gui_* aliases
+    if gui_fix and full_hooks:
+        with open(effective_out_dir / "port42_gui_full_hooks_manifest.json", "w", encoding="utf-8") as f:
+            json.dump(manifest_data, f, indent=2)
+    elif gui_fix:
+        with open(effective_out_dir / "port42_gui_manifest.json", "w", encoding="utf-8") as f:
+            json.dump(manifest_data, f, indent=2)
+
     # Save to manifests/ and docs/manifests/ for the new GUI fix variants
     canonical_dirs = (REPO_ROOT / "out" / "port42-gui", REPO_ROOT / "out" / "port42-gui-full-hooks")
     if gui_fix and effective_out_dir in canonical_dirs:
+        names = [manifest_name]
+        if gui_fix and full_hooks:
+            names.append("port42_gui_full_hooks_manifest.json")
+        elif gui_fix:
+            names.append("port42_gui_manifest.json")
         for mdir in [REPO_ROOT / "manifests", REPO_ROOT / "docs" / "manifests"]:
             mdir.mkdir(parents=True, exist_ok=True)
-            with open(mdir / manifest_name, "w", encoding="utf-8") as f:
-                json.dump(manifest_data, f, indent=2)
-            print(f"[OK] Manifest saved to {mdir / manifest_name}")
+            for name in set(names):
+                with open(mdir / name, "w", encoding="utf-8") as f:
+                    json.dump(manifest_data, f, indent=2)
+                print(f"[OK] Manifest saved to {mdir / name}")
 
     # Clean up scratch staging directory so no duplicate source files linger in workspace
     if not keep_stage and effective_stage_dir.exists():
