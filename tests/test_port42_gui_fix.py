@@ -120,8 +120,8 @@ class TestPort42GuiFixDoc(unittest.TestCase):
 
         # Check expected baseline hash
         self.assertIn("24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9", text)
-        self.assertIn("1b3d1a036530a54783696be08207081bc5da08ece5677fb6d1fc4142518a5be4", text)
-        self.assertIn("d96aed5ac212e9e1582bd7364a594df79976ac56090d579edb09223fdb6d6ff0", text)
+        self.assertIn("b9500290515af03541781587ce06095c5ae75c6f44fd31b038c659ec8341a70e", text)
+        self.assertIn("8b4bfac8064361582d3f90ad1d4bd7923c2950c0effe5a47740996f76b4994eb", text)
 
 
 class TestPort42GuiFixSources(unittest.TestCase):
@@ -164,6 +164,8 @@ class TestPort42GuiFixSources(unittest.TestCase):
         self.assertIn("splash_sec", build_text)
         self.assertIn("gui_splash_expire", build_text)
         self.assertIn("gui_menu_get_curr_item", build_text)
+        self.assertIn("console_displayed", build_text)
+        self.assertIn("console_last_modified", build_text)
 
         # Main loop replacement must NOT contain periodic counter patterns ((cnt++) & N)
         self.assertNotIn("cnt++", build_text[build_text.find("main_replacement"):build_text.find("core_conf_c")])
@@ -196,6 +198,7 @@ struct {
         int gui_mode;
         int gui_mode_alt;
         int gui_mode_none;
+        int state_kbd_script_run;
     } state;
 } camera_info;
 
@@ -226,12 +229,48 @@ struct {
     int user_menu_as_root;
     int user_menu_enable;
     int zebra_draw;
+    int console_timeout;
 } conf;
 
 static int gui_helper_displayat = 0;
 static int gui_splash = 0;
 static char *logo = (char*)0x2000;
 void gui_set_need_restore(void) { gui_osd_need_restore = 1; }
+void gui_set_need_redraw(void) { gui_mode_need_redraw = 1; }
+
+static int console_displayed = 0;
+static long console_last_modified = 0;
+
+void console_draw(int force_redraw)
+{
+    long t = get_tick_count();
+    if (t <= console_last_modified + (conf.console_timeout * 1000))
+    {
+        if ((console_displayed == 0) || force_redraw)
+        {
+            console_displayed = 1;
+        }
+    }
+    else if (console_displayed && !camera_info.state.state_kbd_script_run)
+    {
+        gui_set_need_restore();
+        console_displayed = 0;
+    }
+}
+
+void console_add_line(const char *str)
+{
+    (void)str;
+    console_displayed = 0;
+    console_last_modified = get_tick_count();
+}
+
+void console_clear(void)
+{
+    gui_set_need_restore();
+    console_displayed = 0;
+    console_last_modified = get_tick_count();
+}
 
 #define CAM_DISP_ALT_TEXT 1
 
@@ -257,6 +296,8 @@ struct gui_vis_sig {
     int user_menu_as_root;
     int user_menu_enable;
     int zebra_draw;
+    int console_displayed;
+    long console_last_modified;
 };
 
 static struct gui_vis_sig last_gui_sig;
@@ -264,6 +305,20 @@ static int gui_sig_initialized = 0;
 static int gui_splash_expire = 0;
 static int gui_splash_sec = 0;
 static int gui_helper_due = 0;
+
+void gui_redraw(int forced)
+{
+    if (gui_osd_need_restore)
+    {
+        gui_osd_need_restore = 0;
+    }
+    if (gui_mode_need_redraw)
+    {
+        gui_mode_need_redraw = 0;
+    }
+    console_draw(forced);
+    last_gui_sig.console_displayed = console_displayed;
+}
 
 void gui_maintenance_tick(void)
 {
@@ -313,6 +368,16 @@ void gui_maintenance_tick(void)
 #else
     gui_helper_due = 0;
 #endif
+
+    // 3. Console expiry / auto-hide state maintenance [core/console.c:103-107]
+    if (console_displayed && !camera_info.state.state_kbd_script_run)
+    {
+        if (now > console_last_modified + (conf.console_timeout * 1000))
+        {
+            gui_set_need_restore();
+            console_displayed = 0;
+        }
+    }
 }
 
 int gui_check_state_changed(void)
@@ -344,6 +409,8 @@ int gui_check_state_changed(void)
     current_sig.user_menu_as_root      = conf.user_menu_as_root;
     current_sig.user_menu_enable       = conf.user_menu_enable;
     current_sig.zebra_draw             = conf.zebra_draw;
+    current_sig.console_displayed      = console_displayed;
+    current_sig.console_last_modified  = console_last_modified;
 
     int sig_changed = 0;
     if (!gui_sig_initialized)
@@ -371,7 +438,9 @@ int gui_check_state_changed(void)
              last_gui_sig.subj_dist_override_koef != current_sig.subj_dist_override_koef ||
              last_gui_sig.user_menu_as_root      != current_sig.user_menu_as_root ||
              last_gui_sig.user_menu_enable       != current_sig.user_menu_enable ||
-             last_gui_sig.zebra_draw             != current_sig.zebra_draw)
+             last_gui_sig.zebra_draw             != current_sig.zebra_draw ||
+             last_gui_sig.console_displayed      != current_sig.console_displayed ||
+             last_gui_sig.console_last_modified  != current_sig.console_last_modified)
     {
         sig_changed = 1;
     }
@@ -486,6 +555,64 @@ int main(void)
     assert(gui_check_state_changed() == 1); // Immediate cancellation redraw request
     assert(gui_splash == 0); // Cancelled
 
+    // Test 7: Console script print, clear, and expiry/auto-hide
+    conf.console_timeout = 3; // 3 seconds = 3000 ms
+    mock_tick = 30000;
+    mock_half_shoot = 0;
+    camera_info.state.gui_mode = 2; // ALT mode
+    camera_info.state.gui_mode_alt = 1;
+    camera_info.state.gui_mode_none = 0;
+    gui_maintenance_tick();
+    gui_check_state_changed();
+    gui_redraw(0);
+
+    // 7a. Simulate script print (console_add_line)
+    console_add_line("script output line 1");
+    mock_tick += 20;
+    gui_maintenance_tick();
+    assert(gui_check_state_changed() == 1); // Redraw decision is true on next tick
+    gui_redraw(0); // Repaint completes
+
+    mock_tick += 20;
+    gui_maintenance_tick();
+    assert(gui_check_state_changed() == 0); // False again on tick after that
+
+    // 7b. Simulate console clear (console_clear)
+    console_clear();
+    mock_tick += 20;
+    gui_maintenance_tick();
+    assert(gui_check_state_changed() == 1); // Redraw decision is true on next tick
+    gui_redraw(0);
+
+    mock_tick += 20;
+    gui_maintenance_tick();
+    assert(gui_check_state_changed() == 0); // False again on tick after that
+
+    // 7c. Simulate console timeout expiry / auto-hide (script not running)
+    console_add_line("line before timeout");
+    mock_tick += 20;
+    gui_maintenance_tick();
+    assert(gui_check_state_changed() == 1);
+    gui_redraw(0);
+
+    // Stable ticks during display window produce zero redraw requests
+    for (int i = 0; i < 20; i++) {
+        mock_tick += 20;
+        gui_maintenance_tick();
+        assert(gui_check_state_changed() == 0);
+    }
+
+    // Advance past timeout
+    mock_tick += (conf.console_timeout * 1000) + 1;
+    camera_info.state.state_kbd_script_run = 0;
+    gui_maintenance_tick(); // Maintenance detects timeout, clears console_displayed & sets need_restore
+    assert(gui_check_state_changed() == 1); // Redraw decision is true on next tick to erase console
+    gui_redraw(0);
+
+    mock_tick += 20;
+    gui_maintenance_tick();
+    assert(gui_check_state_changed() == 0); // False again on tick after that
+
     return 0;
 }
 """
@@ -536,7 +663,7 @@ int main(void)
         # 2. Structural checks on gui_maintenance_tick in core/gui.c
         alt_repl_start = build_text.find("alt_replacement = (")
         self.assertGreater(alt_repl_start, 0)
-        alt_repl = build_text[alt_repl_start : alt_repl_start + 3500]
+        alt_repl = build_text[alt_repl_start : alt_repl_start + 4500]
 
         maint_def = alt_repl.find("void gui_maintenance_tick(void)")
         state_def = alt_repl.find("int gui_check_state_changed(void)")
@@ -550,6 +677,9 @@ int main(void)
         self.assertIn("gui_splash = 0;", maint_body)
         self.assertIn("gui_splash_expire = 0;", maint_body)
         self.assertIn("gui_helper_due = (now >= gui_helper_displayat);", maint_body)
+        # Console expiry / auto-hide must live in gui_maintenance_tick
+        self.assertIn("now > console_last_modified", maint_body)
+        self.assertIn("console_displayed = 0;", maint_body)
 
         # 3. Host C simulation: verify maintenance executes and advances splash expiry & cancel
         # even when forced = 1 (or sentinel_lost = 1) on every single tick.
@@ -649,6 +779,277 @@ int main(void)
         with tempfile.TemporaryDirectory() as tmpdir:
             c_file = Path(tmpdir) / "test_unconditional.c"
             bin_file = Path(tmpdir) / "test_unconditional"
+            c_file.write_text(harness_c, encoding="utf-8")
+            comp = subprocess.run(
+                ["gcc", "-O2", "-Wall", str(c_file), "-o", str(bin_file)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.assertEqual(comp.returncode, 0, f"Compilation failed: {comp.stderr}")
+            run = subprocess.run([str(bin_file)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            self.assertEqual(run.returncode, 0, f"Execution failed: {run.stderr}")
+
+    def test_console_script_print_clear_and_expiry_regression(self):
+        """Verify Reviewer P2 requirement:
+        Console updates trigger redraws under G3X_GUI_FIX=1:
+        (a) Static audit: console_displayed and console_last_modified are in struct gui_vis_sig,
+            gui_maintenance_tick() handles console timeout expiry,
+            core/console.c exports console_last_modified and triggers redraw on MBOX scroll,
+            gui_redraw() syncs last_gui_sig.console_displayed.
+        (b) Host C regression test: After the first repaint, keep active buffer and sentinel stable,
+            simulate script print (console_add_line) -> redraw decision is true on next tick, false again on tick after.
+            Simulate console clear (console_clear) -> redraw decision is true on next tick, false again on tick after.
+            Simulate console expiry/auto-hide -> redraw decision is true on next tick to erase console, false on tick after.
+        """
+        # 1. Static audit on tools/build_port41_full.py patching
+        build_text = BUILD_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("extern long console_last_modified;", build_text)
+        self.assertIn("long console_last_modified;", build_text)
+        self.assertIn("console_displayed = 0;", build_text)
+        self.assertIn("now > console_last_modified + (conf.console_timeout * 1000)", build_text)
+        self.assertIn("last_gui_sig.console_displayed = console_displayed;", build_text)
+        self.assertIn("gui_set_need_redraw();", build_text)
+
+        # 2. Host simulation of exact main.c redraw decision logic
+        harness_c = r"""
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <assert.h>
+
+static int mock_tick = 0;
+int get_tick_count(void) { return mock_tick; }
+
+static int gui_osd_need_restore = 0;
+static int gui_mode_need_redraw = 0;
+void gui_set_need_restore(void) { gui_osd_need_restore = 1; }
+void gui_set_need_redraw(void) { gui_mode_need_redraw = 1; }
+
+static struct {
+    struct {
+        int gui_mode;
+        int state_kbd_script_run;
+    } state;
+} camera_info;
+
+static struct {
+    int console_timeout;
+} conf;
+
+static int console_displayed = 0;
+static long console_last_modified = 0;
+
+void console_draw(int force_redraw)
+{
+    long t = get_tick_count();
+    if (t <= console_last_modified + (conf.console_timeout * 1000))
+    {
+        if ((console_displayed == 0) || force_redraw)
+        {
+            console_displayed = 1;
+        }
+    }
+    else if (console_displayed && !camera_info.state.state_kbd_script_run)
+    {
+        gui_set_need_restore();
+        console_displayed = 0;
+    }
+}
+
+void console_add_line(const char *str)
+{
+    (void)str;
+    console_displayed = 0;
+    console_last_modified = get_tick_count();
+}
+
+void console_clear(void)
+{
+    gui_set_need_restore();
+    console_displayed = 0;
+    console_last_modified = get_tick_count();
+}
+
+struct gui_vis_sig {
+    int gui_mode;
+    int console_displayed;
+    long console_last_modified;
+};
+
+static struct gui_vis_sig last_gui_sig;
+static int gui_sig_initialized = 0;
+
+void gui_redraw(int forced)
+{
+    if (gui_osd_need_restore)
+    {
+        gui_osd_need_restore = 0;
+    }
+    if (gui_mode_need_redraw)
+    {
+        gui_mode_need_redraw = 0;
+    }
+    console_draw(forced);
+    last_gui_sig.console_displayed = console_displayed;
+}
+
+void gui_maintenance_tick(void)
+{
+    int now = get_tick_count();
+    if (console_displayed && !camera_info.state.state_kbd_script_run)
+    {
+        if (now > console_last_modified + (conf.console_timeout * 1000))
+        {
+            gui_set_need_restore();
+            console_displayed = 0;
+        }
+    }
+}
+
+int gui_check_state_changed(void)
+{
+    int dirty = gui_osd_need_restore || gui_mode_need_redraw;
+
+    struct gui_vis_sig current_sig;
+    current_sig.gui_mode = camera_info.state.gui_mode;
+    current_sig.console_displayed = console_displayed;
+    current_sig.console_last_modified = console_last_modified;
+
+    int sig_changed = 0;
+    if (!gui_sig_initialized)
+    {
+        gui_sig_initialized = 1;
+        sig_changed = 1;
+    }
+    else if (last_gui_sig.gui_mode != current_sig.gui_mode ||
+             last_gui_sig.console_displayed != current_sig.console_displayed ||
+             last_gui_sig.console_last_modified != current_sig.console_last_modified)
+    {
+        sig_changed = 1;
+    }
+
+    last_gui_sig = current_sig;
+    return dirty || sig_changed;
+}
+
+int main(void)
+{
+    conf.console_timeout = 3; // 3 seconds timeout
+    camera_info.state.gui_mode = 2; // ALT mode
+    camera_info.state.state_kbd_script_run = 0;
+
+    // Stable active buffer and sentinel guards
+    int forced = 0;
+    int sentinel_lost = 0;
+    int buffer_changed = 0;
+
+    // Step 0: Initial boot / first repaint
+    mock_tick = 1000;
+    gui_maintenance_tick();
+    int state_changed = gui_check_state_changed();
+    int need_redraw = forced || sentinel_lost || buffer_changed || state_changed;
+    assert(need_redraw == 1);
+    gui_redraw(0);
+
+    // After first repaint: tick with no changes produces need_redraw == 0
+    mock_tick += 20;
+    gui_maintenance_tick();
+    state_changed = gui_check_state_changed();
+    need_redraw = forced || sentinel_lost || buffer_changed || state_changed;
+    assert(need_redraw == 0);
+
+    // Step 1: Simulate script print (console_add_line)
+    console_add_line("print statement 1");
+
+    // Next tick: redraw decision must be true
+    mock_tick += 20;
+    gui_maintenance_tick();
+    state_changed = gui_check_state_changed();
+    need_redraw = forced || sentinel_lost || buffer_changed || state_changed;
+    assert(need_redraw == 1);
+    gui_redraw(0); // Repaint completes
+
+    // Tick after that: false again if nothing changed
+    mock_tick += 20;
+    gui_maintenance_tick();
+    state_changed = gui_check_state_changed();
+    need_redraw = forced || sentinel_lost || buffer_changed || state_changed;
+    assert(need_redraw == 0);
+
+    // Another stable tick check
+    mock_tick += 20;
+    gui_maintenance_tick();
+    state_changed = gui_check_state_changed();
+    need_redraw = forced || sentinel_lost || buffer_changed || state_changed;
+    assert(need_redraw == 0);
+
+    // Step 2: Simulate console clear (console_clear)
+    console_clear();
+
+    // Next tick: redraw decision must be true
+    mock_tick += 20;
+    gui_maintenance_tick();
+    state_changed = gui_check_state_changed();
+    need_redraw = forced || sentinel_lost || buffer_changed || state_changed;
+    assert(need_redraw == 1);
+    gui_redraw(0);
+
+    // Tick after that: false again if nothing changed
+    mock_tick += 20;
+    gui_maintenance_tick();
+    state_changed = gui_check_state_changed();
+    need_redraw = forced || sentinel_lost || buffer_changed || state_changed;
+    assert(need_redraw == 0);
+
+    // Step 3: Simulate console print followed by timeout expiry / auto-hide
+    console_add_line("print statement 2");
+    mock_tick += 20;
+    gui_maintenance_tick();
+    state_changed = gui_check_state_changed();
+    need_redraw = forced || sentinel_lost || buffer_changed || state_changed;
+    assert(need_redraw == 1);
+    gui_redraw(0);
+
+    // Ticks while displayed (before timeout) remain false
+    for (int i = 0; i < 50; i++) {
+        mock_tick += 20;
+        gui_maintenance_tick();
+        state_changed = gui_check_state_changed();
+        need_redraw = forced || sentinel_lost || buffer_changed || state_changed;
+        assert(need_redraw == 0);
+    }
+
+    // Advance past timeout (3000 ms) with script inactive
+    mock_tick += (conf.console_timeout * 1000) + 1;
+    camera_info.state.state_kbd_script_run = 0;
+    gui_maintenance_tick(); // Maintenance catches expiry: calls gui_set_need_restore(), console_displayed = 0
+    state_changed = gui_check_state_changed();
+    need_redraw = forced || sentinel_lost || buffer_changed || state_changed;
+    assert(need_redraw == 1); // Redraw decision is true on next tick to erase console!
+    gui_redraw(0); // Console erased
+
+    // Tick after that: false again if nothing changed
+    mock_tick += 20;
+    gui_maintenance_tick();
+    state_changed = gui_check_state_changed();
+    need_redraw = forced || sentinel_lost || buffer_changed || state_changed;
+    assert(need_redraw == 0);
+
+    for (int i = 0; i < 50; i++) {
+        mock_tick += 20;
+        gui_maintenance_tick();
+        state_changed = gui_check_state_changed();
+        need_redraw = forced || sentinel_lost || buffer_changed || state_changed;
+        assert(need_redraw == 0);
+    }
+
+    return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            c_file = Path(tmpdir) / "test_console.c"
+            bin_file = Path(tmpdir) / "test_console"
             c_file.write_text(harness_c, encoding="utf-8")
             comp = subprocess.run(
                 ["gcc", "-O2", "-Wall", str(c_file), "-o", str(bin_file)],
@@ -883,7 +1284,7 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
         self._require_toolchain()
 
         diskboot = OUT_DIR_GUI / "DISKBOOT.BIN"
-        if not diskboot.is_file() or diskboot.stat().st_size != 123913:
+        if not diskboot.is_file() or diskboot.stat().st_size != 124025:
             env = os.environ.copy()
             if WRAPPER_SCRIPT.is_file() and os.access(WRAPPER_SCRIPT, os.X_OK):
                 env["MAKEFLAGS"] = f"CC={WRAPPER_SCRIPT}"
@@ -898,10 +1299,10 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
             self.assertEqual(res.returncode, 0, f"GUI fix build failed: {res.stderr}")
 
         self.assertTrue(diskboot.is_file(), f"Expected {diskboot} to exist")
-        self.assertEqual(diskboot.stat().st_size, 123913)
+        self.assertEqual(diskboot.stat().st_size, 124025)
         self.assertEqual(
             sha256_file(diskboot),
-            "1b3d1a036530a54783696be08207081bc5da08ece5677fb6d1fc4142518a5be4",
+            "b9500290515af03541781587ce06095c5ae75c6f44fd31b038c659ec8341a70e",
         )
 
         # Check manifests
@@ -910,10 +1311,10 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
             self.assertTrue(mpath.is_file(), f"Expected {mpath} to exist")
             with open(mpath, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["size"], 123913)
+            self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["size"], 124025)
             self.assertEqual(
                 data["artifacts"]["DISKBOOT.BIN"]["sha256"],
-                "1b3d1a036530a54783696be08207081bc5da08ece5677fb6d1fc4142518a5be4",
+                "b9500290515af03541781587ce06095c5ae75c6f44fd31b038c659ec8341a70e",
             )
             self.assertEqual(data["artifacts"]["modules_count"], 34)
 
@@ -951,10 +1352,10 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
             s2 = snapshot_distribution(Path(td2))
             self.assertIn("DISKBOOT.BIN", s1)
             self.assertIn("DISKBOOT.BIN", s2)
-            self.assertEqual(s1["DISKBOOT.BIN"][0], 123913)
+            self.assertEqual(s1["DISKBOOT.BIN"][0], 124025)
             self.assertEqual(
                 s1["DISKBOOT.BIN"][1],
-                "1b3d1a036530a54783696be08207081bc5da08ece5677fb6d1fc4142518a5be4",
+                "b9500290515af03541781587ce06095c5ae75c6f44fd31b038c659ec8341a70e",
             )
             # Compare DISKBOOT.BIN plus every CHDK/ file hash
             self.assertEqual(s1, s2, "Two clean G3X_GUI_FIX=1 builds produced different hashes")
@@ -985,10 +1386,10 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
             s4 = snapshot_distribution(Path(td4))
             self.assertIn("DISKBOOT.BIN", s3)
             self.assertIn("DISKBOOT.BIN", s4)
-            self.assertEqual(s3["DISKBOOT.BIN"][0], 123977)
+            self.assertEqual(s3["DISKBOOT.BIN"][0], 124081)
             self.assertEqual(
                 s3["DISKBOOT.BIN"][1],
-                "d96aed5ac212e9e1582bd7364a594df79976ac56090d579edb09223fdb6d6ff0",
+                "8b4bfac8064361582d3f90ad1d4bd7923c2950c0effe5a47740996f76b4994eb",
             )
             # Compare DISKBOOT.BIN plus every CHDK/ file hash
             self.assertEqual(s3, s4, "Two clean G3X_GUI_FIX=1 FULL_HOOKS=1 builds produced different hashes")
@@ -998,7 +1399,7 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
         self._require_toolchain()
 
         diskboot = OUT_DIR_GUI_HOOKS / "DISKBOOT.BIN"
-        if not diskboot.is_file() or diskboot.stat().st_size != 123977:
+        if not diskboot.is_file() or diskboot.stat().st_size != 124081:
             env = os.environ.copy()
             if WRAPPER_SCRIPT.is_file() and os.access(WRAPPER_SCRIPT, os.X_OK):
                 env["MAKEFLAGS"] = f"CC={WRAPPER_SCRIPT}"
@@ -1012,10 +1413,10 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
             )
             self.assertEqual(res.returncode, 0, f"GUI fix + full hooks build failed: {res.stderr}")
 
-        self.assertEqual(diskboot.stat().st_size, 123977)
+        self.assertEqual(diskboot.stat().st_size, 124081)
         self.assertEqual(
             sha256_file(diskboot),
-            "d96aed5ac212e9e1582bd7364a594df79976ac56090d579edb09223fdb6d6ff0",
+            "8b4bfac8064361582d3f90ad1d4bd7923c2950c0effe5a47740996f76b4994eb",
         )
 
         for mdir in [MANIFESTS_DIR, DOCS_MANIFESTS_DIR]:
@@ -1023,11 +1424,13 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
             self.assertTrue(mpath.is_file(), f"Expected {mpath} to exist")
             with open(mpath, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["size"], 123977)
+            self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["size"], 124081)
             self.assertEqual(
                 data["artifacts"]["DISKBOOT.BIN"]["sha256"],
-                "d96aed5ac212e9e1582bd7364a594df79976ac56090d579edb09223fdb6d6ff0",
+                "8b4bfac8064361582d3f90ad1d4bd7923c2950c0effe5a47740996f76b4994eb",
             )
+            self.assertIn("FULL_HOOKS=1", data["build"]["flags"])
+            self.assertIn("G3X_GUI_FIX=1", data["build"]["flags"])
             self.assertIn("FULL_HOOKS=1", data["build"]["flags"])
             self.assertIn("G3X_GUI_FIX=1", data["build"]["flags"])
 

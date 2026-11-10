@@ -276,6 +276,40 @@ def apply_gui_fix_staging_patches(stage_dir: Path) -> None:
             raise RuntimeError(f"conf anchor not found in staged core/conf.c: {old_s}")
     core_conf_c.write_text(core_conf_text, encoding="utf-8")
 
+    # 2b. Patch include/console.h and core/console.c: export console_last_modified
+    # and trigger redraw on MBOX console scroll [chdk-port/core/console.c:25,255-268]
+    core_console_h = stage_dir / "include" / "console.h"
+    core_console_h_text = core_console_h.read_text(encoding="utf-8")
+    console_h_anchor = "extern int console_displayed;\n"
+    console_h_replacement = (
+        "extern int console_displayed;\n"
+        "extern long console_last_modified;\n"
+    )
+    if console_h_anchor in core_console_h_text:
+        core_console_h_text = core_console_h_text.replace(console_h_anchor, console_h_replacement, 1)
+    else:
+        raise RuntimeError("console_displayed anchor not found in staged include/console.h")
+    core_console_h.write_text(core_console_h_text, encoding="utf-8")
+
+    core_console_c = stage_dir / "core" / "console.c"
+    core_console_text = core_console_c.read_text(encoding="utf-8")
+    console_mod_anchor = "static long console_last_modified;\n"
+    console_mod_replacement = "long console_last_modified;\n"
+    if console_mod_anchor in core_console_text:
+        core_console_text = core_console_text.replace(console_mod_anchor, console_mod_replacement, 1)
+    else:
+        raise RuntimeError("console_last_modified anchor not found in staged core/console.c")
+
+    console_scroll_anchor = "            console_redraw_flag = 1;\n"
+    console_scroll_replacement = (
+        "            extern void gui_set_need_redraw(void);\n"
+        "            console_redraw_flag = 1;\n"
+        "            gui_set_need_redraw();\n"
+    )
+    if console_scroll_anchor in core_console_text:
+        core_console_text = core_console_text.replace(console_scroll_anchor, console_scroll_replacement)
+    core_console_c.write_text(core_console_text, encoding="utf-8")
+
     # 3. Patch core/gui.c: fill 880x576 box with solid opaque black in gui_draw_alt_helper [scripts/build_candidate_gui3.py:820-826]
     # and provide gui_check_state_changed() for zero-flicker redraw
     core_gui_c = stage_dir / "core" / "gui.c"
@@ -360,6 +394,8 @@ def apply_gui_fix_staging_patches(stage_dir: Path) -> None:
         "    int user_menu_as_root;\n"
         "    int user_menu_enable;\n"
         "    int zebra_draw;\n"
+        "    int console_displayed;\n"
+        "    long console_last_modified;\n"
         "};\n\n"
         "static struct gui_vis_sig last_gui_sig;\n"
         "static int gui_sig_initialized = 0;\n"
@@ -412,7 +448,16 @@ def apply_gui_fix_staging_patches(stage_dir: Path) -> None:
         "    }\n"
         "#else\n"
         "    gui_helper_due = 0;\n"
-        "#endif\n"
+        "#endif\n\n"
+        "    // 3. Console expiry / auto-hide state maintenance [core/console.c:103-107]\n"
+        "    if (console_displayed && !camera_info.state.state_kbd_script_run)\n"
+        "    {\n"
+        "        if (now > console_last_modified + (conf.console_timeout * 1000))\n"
+        "        {\n"
+        "            gui_set_need_restore();\n"
+        "            console_displayed = 0;\n"
+        "        }\n"
+        "    }\n"
         "}\n\n"
         "int gui_check_state_changed(void)\n"
         "{\n"
@@ -441,7 +486,9 @@ def apply_gui_fix_staging_patches(stage_dir: Path) -> None:
         "    current_sig.subj_dist_override_koef = conf.subj_dist_override_koef;\n"
         "    current_sig.user_menu_as_root      = conf.user_menu_as_root;\n"
         "    current_sig.user_menu_enable       = conf.user_menu_enable;\n"
-        "    current_sig.zebra_draw             = conf.zebra_draw;\n\n"
+        "    current_sig.zebra_draw             = conf.zebra_draw;\n"
+        "    current_sig.console_displayed      = console_displayed;\n"
+        "    current_sig.console_last_modified  = console_last_modified;\n\n"
         "    int sig_changed = 0;\n"
         "    if (!gui_sig_initialized)\n"
         "    {\n"
@@ -468,7 +515,9 @@ def apply_gui_fix_staging_patches(stage_dir: Path) -> None:
         "             last_gui_sig.subj_dist_override_koef != current_sig.subj_dist_override_koef ||\n"
         "             last_gui_sig.user_menu_as_root      != current_sig.user_menu_as_root ||\n"
         "             last_gui_sig.user_menu_enable       != current_sig.user_menu_enable ||\n"
-        "             last_gui_sig.zebra_draw             != current_sig.zebra_draw)\n"
+        "             last_gui_sig.zebra_draw             != current_sig.zebra_draw ||\n"
+        "             last_gui_sig.console_displayed      != current_sig.console_displayed ||\n"
+        "             last_gui_sig.console_last_modified  != current_sig.console_last_modified)\n"
         "    {\n"
         "        sig_changed = 1;\n"
         "    }\n\n"
@@ -480,6 +529,18 @@ def apply_gui_fix_staging_patches(stage_dir: Path) -> None:
         core_gui_text = core_gui_text.replace(alt_anchor, alt_replacement, 1)
     else:
         raise RuntimeError("altGuiHandler anchor not found in staged core/gui.c")
+
+    # Patch gui_redraw to sync last_gui_sig.console_displayed with active console_displayed
+    redraw_anchor = "    if (gui_mode->redraw)\n        gui_mode->redraw(flag_gui_enforce_redraw);\n"
+    redraw_replacement = (
+        "    if (gui_mode->redraw)\n        gui_mode->redraw(flag_gui_enforce_redraw);\n\n"
+        "    /* PORT-42: Sync console_displayed in visible state signature after redraw */\n"
+        "    last_gui_sig.console_displayed = console_displayed;\n"
+    )
+    if redraw_anchor in core_gui_text:
+        core_gui_text = core_gui_text.replace(redraw_anchor, redraw_replacement, 1)
+    else:
+        raise RuntimeError("gui_mode->redraw anchor not found in staged core/gui.c")
     core_gui_c.write_text(core_gui_text, encoding="utf-8")
 
     # 4. Patch core/gui_draw.c and core/gui_draw.h: 2x integer font scaling (16x32)
