@@ -25,6 +25,7 @@ import hashlib
 import json
 import os
 import re
+import struct
 import subprocess
 import unittest
 from pathlib import Path
@@ -299,32 +300,69 @@ class TestPort41FullBuildSources(unittest.TestCase):
 class TestPort41FullBuildExecution(unittest.TestCase):
     """End-to-end execution test for standard CHDK full build."""
 
+    has_toolchain: bool = False
+    build_executed: bool = False
+    build_returncode: int = -1
+    build_stdout: str = ""
+    build_stderr: str = ""
+    before_plat_hashes: dict[str, str] = {}
+    after_plat_hashes: dict[str, str] = {}
+    before_loader_hashes: dict[str, str] = {}
+    after_loader_hashes: dict[str, str] = {}
+
+    stage_dir: Path = OUT_DIR / "stage_chdk"
+    staged_core_elf: Path = OUT_DIR / "stage_chdk" / "platform" / "g3x" / "sub" / "110c" / "main.elf"
+    staged_loader_elf: Path = OUT_DIR / "stage_chdk" / "loader" / "g3x" / "main.elf"
+    diskboot: Path = OUT_DIR / "DISKBOOT.BIN"
+    manifest_path: Path = OUT_DIR / "port41_manifest.json"
+
     @classmethod
     def setUpClass(cls):
         if not TOOLCHAIN_GCC.is_file() or not os.access(TOOLCHAIN_GCC, os.X_OK):
             cls.has_toolchain = False
-        else:
-            cls.has_toolchain = True
-
-    def test_full_build_execution_and_invariance(self):
-        if not self.has_toolchain:
-            self.skipTest(f"Pinned toolchain gcc not found at {TOOLCHAIN_GCC}; skipping execution test.")
+            return
+        cls.has_toolchain = True
 
         # Snapshot chdk-port/platform/g3x and chdk-port/loader/g3x hashes before build
-        before_plat_hashes = snapshot_hashes(CHDK_PORT_G3X)
-        before_loader_hashes = snapshot_hashes(CHDK_LOADER_G3X)
+        cls.before_plat_hashes = snapshot_hashes(CHDK_PORT_G3X)
+        cls.before_loader_hashes = snapshot_hashes(CHDK_LOADER_G3X)
 
-        # Run build script
+        # Run full build once in this shared fixture before any artifact inspection
         cmd = ["python3", "-B", str(BUILD_SCRIPT)]
-        res = subprocess.run(cmd, cwd=str(REPO_ROOT), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        res = subprocess.run(
+            cmd,
+            cwd=str(REPO_ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        cls.build_executed = True
+        cls.build_returncode = res.returncode
+        cls.build_stdout = res.stdout
+        cls.build_stderr = res.stderr
+
+        # Snapshot chdk-port/platform/g3x and chdk-port/loader/g3x hashes after build
+        cls.after_plat_hashes = snapshot_hashes(CHDK_PORT_G3X)
+        cls.after_loader_hashes = snapshot_hashes(CHDK_LOADER_G3X)
+
+    def _require_full_build(self):
+        if not self.has_toolchain:
+            self.skipTest(f"Pinned toolchain gcc not found at {TOOLCHAIN_GCC}")
         self.assertEqual(
-            res.returncode,
+            self.build_returncode,
             0,
-            f"build_port41_full.py failed with code {res.returncode}:\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}",
+            f"build_port41_full.py failed with code {self.build_returncode}:\nSTDOUT:\n{self.build_stdout}\nSTDERR:\n{self.build_stderr}",
+        )
+        self.assertTrue(
+            self.staged_core_elf.is_file(),
+            f"Expected staged core ELF {self.staged_core_elf} to exist from full build",
         )
 
+    def test_full_build_execution_and_invariance(self):
+        self._require_full_build()
+
         # Check DISKBOOT.BIN
-        diskboot = OUT_DIR / "DISKBOOT.BIN"
+        diskboot = self.diskboot
         self.assertTrue(diskboot.is_file(), f"Expected {diskboot} to exist")
         self.assertGreater(diskboot.stat().st_size, 50000, "DISKBOOT.BIN is suspiciously small")
 
@@ -339,7 +377,7 @@ class TestPort41FullBuildExecution(unittest.TestCase):
         self.assertTrue((chdk_dir / "LANG").is_dir(), "CHDK/LANG missing")
 
         # Check manifest
-        manifest_path = OUT_DIR / "port41_manifest.json"
+        manifest_path = self.manifest_path
         self.assertTrue(manifest_path.is_file(), f"Expected {manifest_path} to exist")
         with open(manifest_path, "r", encoding="utf-8") as f:
             manifest = json.load(f)
@@ -351,21 +389,19 @@ class TestPort41FullBuildExecution(unittest.TestCase):
         self.assertEqual(manifest["artifacts"]["modules_count"], len(flt_files))
 
         # Snapshot chdk-port/platform/g3x and chdk-port/loader/g3x hashes after build and assert equality
-        after_plat_hashes = snapshot_hashes(CHDK_PORT_G3X)
         self.assertEqual(
-            before_plat_hashes,
-            after_plat_hashes,
+            self.before_plat_hashes,
+            self.after_plat_hashes,
             "chdk-port/platform/g3x/ files were modified during the full build!",
         )
-        after_loader_hashes = snapshot_hashes(CHDK_LOADER_G3X)
         self.assertEqual(
-            before_loader_hashes,
-            after_loader_hashes,
+            self.before_loader_hashes,
+            self.after_loader_hashes,
             "chdk-port/loader/g3x/ files were modified during the full build!",
         )
 
         # Assert staged build config has OPT_ARAM_MALLOC disabled and no heap in 0x006CE000..0x006F0000
-        stage_dir = OUT_DIR / "stage_chdk"
+        stage_dir = self.stage_dir
         staged_sub_make = stage_dir / "platform" / "g3x" / "sub" / "110c" / "makefile.inc"
         self.assertTrue(staged_sub_make.is_file(), "staged sub/110c/makefile.inc missing")
         staged_make_text = staged_sub_make.read_text(encoding="utf-8")
@@ -396,7 +432,7 @@ class TestPort41FullBuildExecution(unittest.TestCase):
         )
 
         # Disassemble staged loader ELF
-        staged_loader_elf = stage_dir / "loader" / "g3x" / "main.elf"
+        staged_loader_elf = self.staged_loader_elf
         self.assertTrue(staged_loader_elf.is_file(), "staged loader/g3x/main.elf missing")
         objdump_res = subprocess.run(
             [str(TOOLCHAIN_OBJDUMP), "-d", str(staged_loader_elf)],
@@ -498,6 +534,269 @@ class TestPort41FullBuildExecution(unittest.TestCase):
         aram_init_chunk = core_disasm[aram_init_idx : aram_init_idx + 400]
         self.assertNotIn("chdk_heap_create", aram_init_chunk, "aram_malloc_init must not call chdk_heap_create")
         self.assertNotIn("6ce000", aram_init_chunk.lower(), "aram_malloc_init must not reference 0x006CE000")
+
+    def test_built_binary_key_constants(self):
+        """Verify key constants in built staged core ELF / disassembly / binary:
+        - CreateTask 0xBFE14A3D (hook site 0xBFE14A3C and runtime entry 0xBFE14A3D)
+        - physw_status 0x40DAC
+        - bits 17/16 (0x00020000 / 0x00010000)
+        - start cause 0x00080000
+        - opacity buffers {0x5FC40000, 0x5FB80000}
+        - 900x600/928 camera_screen struct
+        """
+        self._require_full_build()
+
+        stage_dir = self.stage_dir
+        staged_core_elf = self.staged_core_elf
+
+        # Disassemble staged core main.elf
+        core_objdump = subprocess.run(
+            [str(TOOLCHAIN_OBJDUMP), "-d", str(staged_core_elf)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+        core_disasm = core_objdump.stdout
+        core_disasm_lower = core_disasm.lower()
+
+        # Extract symbol table with arm-none-eabi-nm
+        core_nm = subprocess.run(
+            [str(TOOLCHAIN_NM), "-n", str(staged_core_elf)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+        nm_out = core_nm.stdout
+
+        # 1. CreateTask 0xBFE14A3D / hook site 0xBFE14A3C
+        self.assertTrue(
+            "bfe14a3c" in core_disasm_lower or "bfe14a3d" in core_disasm_lower,
+            "CreateTask runtime 0xBFE14A3D / hook 0xBFE14A3C missing in core disassembly",
+        )
+        self.assertIn("hook_CreateTask", nm_out, "hook_CreateTask symbol missing in core symbols")
+
+        # 2. physw_status 0x40DAC
+        self.assertIn("00040dac", core_disasm_lower, "physw_status address 0x00040DAC literal missing in core disassembly")
+        self.assertRegex(nm_out, r"00040dac\s+[Aa]\s+physw_status\b", "physw_status absolute symbol 0x40DAC missing in core symbols")
+
+        # 3. bits 17/16 (Power bit 17 = 0x00020000, Playback bit 16 = 0x00010000)
+        sp_hook_idx = core_disasm.find("<g3x_full_shortpress_boot_entry_hook>:")
+        self.assertGreater(sp_hook_idx, 0, "Missing <g3x_full_shortpress_boot_entry_hook> in core disassembly")
+        sp_hook_chunk = core_disasm[sp_hook_idx : sp_hook_idx + 800]
+        self.assertTrue(
+            "10000" in sp_hook_chunk or "65536" in sp_hook_chunk,
+            "Playback bit 16 (0x00010000 / 65536) missing in shortpress hook",
+        )
+        self.assertTrue(
+            "20000" in sp_hook_chunk or "131072" in sp_hook_chunk,
+            "Power bit 17 (0x00020000 / 131072) missing in shortpress hook",
+        )
+
+        # 4. start cause 0x00080000 (shooting mode start cause restored on Power press)
+        self.assertTrue(
+            "80000" in sp_hook_chunk or "524288" in sp_hook_chunk,
+            "Start cause 0x00080000 (524288) missing in shortpress hook",
+        )
+
+        # 5. opacity buffers {0x5FC40000, 0x5FB80000} in .data
+        data_dump = subprocess.run(
+            [str(TOOLCHAIN_OBJDUMP), "-s", "-j", ".data", str(staged_core_elf)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+        data_text = data_dump.stdout
+        self.assertIn(
+            "0000c45f",
+            data_text,
+            "Opacity buffer 0x5FC40000 (little-endian 0000c45f) missing in core .data",
+        )
+        self.assertIn(
+            "0000b85f",
+            data_text,
+            "Opacity buffer 0x5FB80000 (little-endian 0000b85f) missing in core .data",
+        )
+
+        # 6. 900x600/928 camera_screen geometry in .data
+        cam_screen_match = re.search(r"([0-9a-fA-F]{8})\s+[Dd]\s+camera_screen\b", nm_out)
+        self.assertIsNotNone(cam_screen_match, "camera_screen symbol missing in nm output")
+        cam_screen_addr = int(cam_screen_match.group(1), 16)
+
+        screen_dump = subprocess.run(
+            [
+                str(TOOLCHAIN_OBJDUMP),
+                "-s",
+                "-j",
+                ".data",
+                f"--start-address=0x{cam_screen_addr:08x}",
+                f"--stop-address=0x{cam_screen_addr + 48:08x}",
+                str(staged_core_elf),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+        hex_bytes = []
+        for line in screen_dump.stdout.splitlines():
+            parts = line.strip().split()
+            if len(parts) >= 2 and re.match(r"^[0-9a-fA-F]+$", parts[0]):
+                for word in parts[1:5]:
+                    if len(word) == 8 and re.match(r"^[0-9a-fA-F]{8}$", word):
+                        b = bytes.fromhex(word)
+                        hex_bytes.extend(b)
+        self.assertGreaterEqual(len(hex_bytes), 40, "Insufficient camera_screen data dumped from .data section")
+        ints = struct.unpack("<10I", bytes(hex_bytes[:40]))
+        self.assertEqual(ints[0], 900, "camera_screen.width must be 900")
+        self.assertEqual(ints[1], 600, "camera_screen.height must be 600")
+        self.assertEqual(ints[2], 540000, "camera_screen.size must be 540000 (900x600)")
+        self.assertEqual(ints[3], 900, "camera_screen.physical_width must be 900")
+        self.assertEqual(ints[4], 928, "camera_screen.buffer_width must be 928")
+        self.assertEqual(ints[5], 600, "camera_screen.buffer_height must be 600")
+        self.assertEqual(ints[6], 556800, "camera_screen.buffer_size must be 556800 (928x600)")
+        self.assertEqual(ints[7], 0, "camera_screen.disp_left must be 0")
+        self.assertEqual(ints[8], 899, "camera_screen.disp_right must be 899")
+        self.assertEqual(ints[9], 900, "camera_screen.disp_width must be 900")
+
+    def test_built_binary_card_write_switches_off(self):
+        """Verify card-write suppression linker wrap symbols and preprocessor flags."""
+        self._require_full_build()
+
+        stage_dir = self.stage_dir
+        staged_core_elf = self.staged_core_elf
+
+        core_nm = subprocess.run(
+            [str(TOOLCHAIN_NM), "-n", str(staged_core_elf)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+        nm_out = core_nm.stdout
+
+        for sym in [
+            "__wrap_open",
+            "__wrap_fopen",
+            "__wrap_creat",
+            "__wrap_write",
+            "__wrap_fwrite",
+            "__wrap_mkdir",
+            "__wrap_remove",
+            "__wrap_rename",
+            "__wrap_conf_save",
+            "__wrap_save_params_values",
+        ]:
+            self.assertIn(sym, nm_out, f"Linker wrap symbol {sym} missing in core binary")
+
+        staged_makefile = stage_dir / "platform" / "g3x" / "sub" / "110c" / "Makefile"
+        self.assertTrue(staged_makefile.is_file(), f"Expected {staged_makefile}")
+        make_text = staged_makefile.read_text(encoding="utf-8")
+        self.assertIn("-DG3X_DISABLE_CARD_WRITES=1", make_text)
+        self.assertIn("-DOPT_DISABLE_FILE_WRITES=1", make_text)
+
+    def test_default_build_byte_identical(self):
+        """Verify default candidate build (all flags off) is byte-identical to pinned baseline."""
+        if not self.has_toolchain:
+            self.skipTest(f"Pinned toolchain gcc not found at {TOOLCHAIN_GCC}")
+
+        import tempfile
+        import sys
+
+        scripts_dir = REPO_ROOT / "scripts"
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+        from build_candidate_gui3 import build_candidate
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            res = build_candidate(
+                ladder=False,
+                poweron_fix=False,
+                resident=False,
+                out_dir=tmpdir,
+            )
+            pinned_default_sha256 = "9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136"
+            self.assertEqual(
+                res["diskboot_sha256"],
+                pinned_default_sha256,
+                "Default candidate DISKBOOT.BIN SHA-256 diverged from pinned baseline",
+            )
+            self.assertEqual(
+                res["diskboot_size"],
+                118001,
+                "Default candidate DISKBOOT.BIN size diverged from pinned baseline",
+            )
+
+    def test_opt_in_flags_still_build(self):
+        """Verify each of the opt-in G3X_* candidate configurations still builds cleanly."""
+        if not self.has_toolchain:
+            self.skipTest(f"Pinned toolchain gcc not found at {TOOLCHAIN_GCC}")
+
+        import tempfile
+        import sys
+
+        scripts_dir = REPO_ROOT / "scripts"
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+        from build_candidate_gui3 import build_candidate
+
+        flag_cases = [
+            ("resident", {"resident": True}, "63c7942f561242b55d8226bfefe7818dd5b959aee35eae0adb4f41a4783ece5a", 124561),
+            ("osd", {"osd": True}, "683751539979f3e8956fd6c1794683c062f54385e6e1a3261b02ed8d63cc9855", 124833),
+            ("kbd", {"kbd": True}, "a750253feb0cd9bb3bb1addb4cede5585bef29a0bf26bd86d3f577fdbf41be33", 124801),
+            ("osd2", {"osd2": True}, "20d65a7d9be954d5caafe2f78751429ea388a37ca570f0bbd0d620609eb31a57", 125329),
+            ("gui4", {"gui4": True}, "14456b08fca82758262c26ad6105f784ebacaa080b7a059a622ded5a8d505fdd", 102241),
+            ("gui5", {"gui5": True}, "dd96357c050cf3b9116dcf089a731ef159477b505351f46436f983fdbf090b64", 102209),
+            ("shortpress", {"shortpress": True}, "6df54a905e36a6fe92b5a3a4ac4dd71086d3306fd0aaa31a1f1bc670f7e19461", 124945),
+            ("gui5_shortpress", {"gui5": True, "shortpress": True}, "86e12a2cfe792a8901fa2e0ec5a98f019290593e35d5c4c2e66fd3e073f16ff1", 102369),
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for name, kwargs, expected_sha, expected_size in flag_cases:
+                cand_dir = os.path.join(tmpdir, name)
+                res = build_candidate(out_dir=cand_dir, **kwargs)
+                diskboot = Path(cand_dir) / "DISKBOOT.BIN"
+                self.assertTrue(diskboot.is_file(), f"DISKBOOT.BIN for {name} candidate does not exist")
+                self.assertEqual(res["diskboot_size"], expected_size, f"Size mismatch for {name} candidate build")
+                self.assertEqual(res["diskboot_sha256"], expected_sha, f"SHA-256 mismatch for {name} candidate build")
+
+    def test_doc_manifest_and_trial_plan(self):
+        """Verify docs/PORT41_FULL_BUILD.md contains output manifest and owner trial plan."""
+        doc_path = REPO_ROOT / "docs" / "PORT41_FULL_BUILD.md"
+        self.assertTrue(doc_path.is_file(), f"Missing {doc_path}")
+        doc_text = doc_path.read_text(encoding="utf-8")
+
+        # Manifest outputs
+        self.assertIn("DISKBOOT.BIN", doc_text)
+        self.assertIn(
+            "24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9",
+            doc_text,
+            "DISKBOOT.BIN SHA-256 missing in doc",
+        )
+        self.assertIn("124,097", doc_text)
+        self.assertIn("CHDK/MODULES", doc_text)
+        self.assertIn("CHDK/FONTS", doc_text)
+        self.assertIn("CHDK/LANG", doc_text)
+        self.assertIn("port41_manifest.json", doc_text)
+
+        # Owner trial steps table: held press first, then short press
+        self.assertRegex(doc_text, r"(?i)held\s+press.*short\s+press", "Doc must present held press first, then short press")
+
+        # Expected results
+        self.assertRegex(doc_text, r"(?i)led\s+ladder")
+        self.assertRegex(doc_text, r"(?i)stock\s+ui")
+        self.assertRegex(doc_text, r"(?i)chdk\s+resident")
+        self.assertRegex(doc_text, r"(?i)alt\s+toggle.*menu")
+        self.assertRegex(doc_text, r"(?i)shooting\s+mode.*short\s+press")
+        self.assertRegex(doc_text, r"(?i)power\s+press.*turns?\s+it\s+off")
+
+        # Notes and recovery path
+        self.assertRegex(doc_text, r"(?i)what\s+to\s+note")
+        self.assertRegex(doc_text, r"(?i)recovery\s+path")
+        self.assertRegex(doc_text, r"(?i)battery\s+pull")
+        self.assertRegex(doc_text, r"(?i)ram-only")
 
 
 if __name__ == "__main__":
