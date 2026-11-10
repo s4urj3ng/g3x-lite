@@ -300,32 +300,69 @@ class TestPort41FullBuildSources(unittest.TestCase):
 class TestPort41FullBuildExecution(unittest.TestCase):
     """End-to-end execution test for standard CHDK full build."""
 
+    has_toolchain: bool = False
+    build_executed: bool = False
+    build_returncode: int = -1
+    build_stdout: str = ""
+    build_stderr: str = ""
+    before_plat_hashes: dict[str, str] = {}
+    after_plat_hashes: dict[str, str] = {}
+    before_loader_hashes: dict[str, str] = {}
+    after_loader_hashes: dict[str, str] = {}
+
+    stage_dir: Path = OUT_DIR / "stage_chdk"
+    staged_core_elf: Path = OUT_DIR / "stage_chdk" / "platform" / "g3x" / "sub" / "110c" / "main.elf"
+    staged_loader_elf: Path = OUT_DIR / "stage_chdk" / "loader" / "g3x" / "main.elf"
+    diskboot: Path = OUT_DIR / "DISKBOOT.BIN"
+    manifest_path: Path = OUT_DIR / "port41_manifest.json"
+
     @classmethod
     def setUpClass(cls):
         if not TOOLCHAIN_GCC.is_file() or not os.access(TOOLCHAIN_GCC, os.X_OK):
             cls.has_toolchain = False
-        else:
-            cls.has_toolchain = True
-
-    def test_full_build_execution_and_invariance(self):
-        if not self.has_toolchain:
-            self.skipTest(f"Pinned toolchain gcc not found at {TOOLCHAIN_GCC}; skipping execution test.")
+            return
+        cls.has_toolchain = True
 
         # Snapshot chdk-port/platform/g3x and chdk-port/loader/g3x hashes before build
-        before_plat_hashes = snapshot_hashes(CHDK_PORT_G3X)
-        before_loader_hashes = snapshot_hashes(CHDK_LOADER_G3X)
+        cls.before_plat_hashes = snapshot_hashes(CHDK_PORT_G3X)
+        cls.before_loader_hashes = snapshot_hashes(CHDK_LOADER_G3X)
 
-        # Run build script
+        # Run full build once in this shared fixture before any artifact inspection
         cmd = ["python3", "-B", str(BUILD_SCRIPT)]
-        res = subprocess.run(cmd, cwd=str(REPO_ROOT), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        res = subprocess.run(
+            cmd,
+            cwd=str(REPO_ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        cls.build_executed = True
+        cls.build_returncode = res.returncode
+        cls.build_stdout = res.stdout
+        cls.build_stderr = res.stderr
+
+        # Snapshot chdk-port/platform/g3x and chdk-port/loader/g3x hashes after build
+        cls.after_plat_hashes = snapshot_hashes(CHDK_PORT_G3X)
+        cls.after_loader_hashes = snapshot_hashes(CHDK_LOADER_G3X)
+
+    def _require_full_build(self):
+        if not self.has_toolchain:
+            self.skipTest(f"Pinned toolchain gcc not found at {TOOLCHAIN_GCC}")
         self.assertEqual(
-            res.returncode,
+            self.build_returncode,
             0,
-            f"build_port41_full.py failed with code {res.returncode}:\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}",
+            f"build_port41_full.py failed with code {self.build_returncode}:\nSTDOUT:\n{self.build_stdout}\nSTDERR:\n{self.build_stderr}",
+        )
+        self.assertTrue(
+            self.staged_core_elf.is_file(),
+            f"Expected staged core ELF {self.staged_core_elf} to exist from full build",
         )
 
+    def test_full_build_execution_and_invariance(self):
+        self._require_full_build()
+
         # Check DISKBOOT.BIN
-        diskboot = OUT_DIR / "DISKBOOT.BIN"
+        diskboot = self.diskboot
         self.assertTrue(diskboot.is_file(), f"Expected {diskboot} to exist")
         self.assertGreater(diskboot.stat().st_size, 50000, "DISKBOOT.BIN is suspiciously small")
 
@@ -340,7 +377,7 @@ class TestPort41FullBuildExecution(unittest.TestCase):
         self.assertTrue((chdk_dir / "LANG").is_dir(), "CHDK/LANG missing")
 
         # Check manifest
-        manifest_path = OUT_DIR / "port41_manifest.json"
+        manifest_path = self.manifest_path
         self.assertTrue(manifest_path.is_file(), f"Expected {manifest_path} to exist")
         with open(manifest_path, "r", encoding="utf-8") as f:
             manifest = json.load(f)
@@ -352,21 +389,19 @@ class TestPort41FullBuildExecution(unittest.TestCase):
         self.assertEqual(manifest["artifacts"]["modules_count"], len(flt_files))
 
         # Snapshot chdk-port/platform/g3x and chdk-port/loader/g3x hashes after build and assert equality
-        after_plat_hashes = snapshot_hashes(CHDK_PORT_G3X)
         self.assertEqual(
-            before_plat_hashes,
-            after_plat_hashes,
+            self.before_plat_hashes,
+            self.after_plat_hashes,
             "chdk-port/platform/g3x/ files were modified during the full build!",
         )
-        after_loader_hashes = snapshot_hashes(CHDK_LOADER_G3X)
         self.assertEqual(
-            before_loader_hashes,
-            after_loader_hashes,
+            self.before_loader_hashes,
+            self.after_loader_hashes,
             "chdk-port/loader/g3x/ files were modified during the full build!",
         )
 
         # Assert staged build config has OPT_ARAM_MALLOC disabled and no heap in 0x006CE000..0x006F0000
-        stage_dir = OUT_DIR / "stage_chdk"
+        stage_dir = self.stage_dir
         staged_sub_make = stage_dir / "platform" / "g3x" / "sub" / "110c" / "makefile.inc"
         self.assertTrue(staged_sub_make.is_file(), "staged sub/110c/makefile.inc missing")
         staged_make_text = staged_sub_make.read_text(encoding="utf-8")
@@ -397,7 +432,7 @@ class TestPort41FullBuildExecution(unittest.TestCase):
         )
 
         # Disassemble staged loader ELF
-        staged_loader_elf = stage_dir / "loader" / "g3x" / "main.elf"
+        staged_loader_elf = self.staged_loader_elf
         self.assertTrue(staged_loader_elf.is_file(), "staged loader/g3x/main.elf missing")
         objdump_res = subprocess.run(
             [str(TOOLCHAIN_OBJDUMP), "-d", str(staged_loader_elf)],
@@ -509,12 +544,10 @@ class TestPort41FullBuildExecution(unittest.TestCase):
         - opacity buffers {0x5FC40000, 0x5FB80000}
         - 900x600/928 camera_screen struct
         """
-        if not self.has_toolchain:
-            self.skipTest(f"Pinned toolchain gcc not found at {TOOLCHAIN_GCC}")
+        self._require_full_build()
 
-        stage_dir = OUT_DIR / "stage_chdk"
-        staged_core_elf = stage_dir / "platform" / "g3x" / "sub" / "110c" / "main.elf"
-        self.assertTrue(staged_core_elf.is_file(), f"Expected {staged_core_elf} to exist from full build")
+        stage_dir = self.stage_dir
+        staged_core_elf = self.staged_core_elf
 
         # Disassemble staged core main.elf
         core_objdump = subprocess.run(
@@ -630,12 +663,10 @@ class TestPort41FullBuildExecution(unittest.TestCase):
 
     def test_built_binary_card_write_switches_off(self):
         """Verify card-write suppression linker wrap symbols and preprocessor flags."""
-        if not self.has_toolchain:
-            self.skipTest(f"Pinned toolchain gcc not found at {TOOLCHAIN_GCC}")
+        self._require_full_build()
 
-        stage_dir = OUT_DIR / "stage_chdk"
-        staged_core_elf = stage_dir / "platform" / "g3x" / "sub" / "110c" / "main.elf"
-        self.assertTrue(staged_core_elf.is_file(), f"Expected {staged_core_elf}")
+        stage_dir = self.stage_dir
+        staged_core_elf = self.staged_core_elf
 
         core_nm = subprocess.run(
             [str(TOOLCHAIN_NM), "-n", str(staged_core_elf)],
@@ -740,7 +771,7 @@ class TestPort41FullBuildExecution(unittest.TestCase):
         # Manifest outputs
         self.assertIn("DISKBOOT.BIN", doc_text)
         self.assertIn(
-            "9a90ca2f4722f6c507291e45111daed899554eacf2b48542555e51169aa32e60",
+            "24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9",
             doc_text,
             "DISKBOOT.BIN SHA-256 missing in doc",
         )
