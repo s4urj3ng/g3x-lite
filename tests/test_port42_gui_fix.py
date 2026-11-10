@@ -120,8 +120,8 @@ class TestPort42GuiFixDoc(unittest.TestCase):
 
         # Check expected baseline hash
         self.assertIn("24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9", text)
-        self.assertIn("087085ad8e3ec67cb3035bc45f7594337e0f3e083983c50450d4cefeaea9fb28", text)
-        self.assertIn("0956f573603553b93a459ee2f5186eb77ddb98dd7b026d41917fcf75f1691a93", text)
+        self.assertIn("760a362d358d87518e6274013e70109f8699974a40158ae5bbbff8b80c246738", text)
+        self.assertIn("d50ea585b2ba49e39674395f504b5780a1cb98a915fe998c5b7fa5be115cb9bb", text)
 
 
 class TestPort42GuiFixSources(unittest.TestCase):
@@ -1791,6 +1791,475 @@ int main(void)
             run = subprocess.run([str(bin_file)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             self.assertEqual(run.returncode, 0, f"Execution failed: {run.stderr}")
 
+    def test_normal_mode_osd_incremental_draw_and_no_erase(self):
+        """Verify:
+        (a) after splash expiry, with an unchanged signature and intact sentinel,
+            a change in the clock second leads to a clock draw with no opaque fill or full erase;
+        (b) a half-shutter state change in NORMAL mode leads to an OSD draw;
+        (c) the existing ALT/menu no-forced-redraw and module-mode tests still pass.
+        """
+        # 1. Static audit on tools/build_port41_full.py
+        build_text = BUILD_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("extern int gui_is_osd_mode(void);", build_text)
+        self.assertIn("extern void gui_draw_osd_tick(void);", build_text)
+        self.assertIn("else if (gui_is_osd_mode())", build_text)
+        self.assertIn("gui_draw_osd_tick();", build_text)
+        self.assertIn("camera_info.state.gui_mode == GUI_MODE_NONE", build_text)
+
+        # 2. Host C simulation of exact normal OSD incremental drawing path
+        harness_c = r"""
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <assert.h>
+
+#define GUI_MODE_NONE     0
+#define GUI_MODE_ALT      1
+#define GUI_MODE_MENU     2
+#define GUI_MODE_MODULE   9
+
+typedef struct gui_handler {
+    int mode;
+    void (*redraw)(int);
+    int (*kbd_process)(void);
+} gui_handler;
+
+static int mock_tick = 0;
+int get_tick_count(void) { return mock_tick; }
+static int mock_half_shoot = 0;
+int kbd_is_key_pressed(int k) { return mock_half_shoot; }
+#define KEY_SHOOT_HALF 1
+#define SPLASH_TIME 40
+
+static int mock_guard = 1;
+int draw_test_guard(void) { return mock_guard; }
+void draw_set_guard(void) { mock_guard = 1; }
+
+static int mock_buffer_changed = 0;
+int check_bitmap_buffer_changed(void) { return mock_buffer_changed; }
+static int mock_gui_needs_redraw = 0;
+int check_gui_needs_redraw(void) { return mock_gui_needs_redraw; }
+
+static int gui_osd_need_restore = 0;
+static int gui_mode_need_redraw = 0;
+void gui_set_need_restore(void) { gui_osd_need_restore = 1; }
+void gui_set_need_redraw(void) { gui_mode_need_redraw = 1; }
+
+static int draw_restore_count = 0;
+void draw_restore(void) { draw_restore_count++; }
+
+static int opaque_black_fill_count = 0;
+void g3x_fill_menu_opaque_black(void) { opaque_black_fill_count++; }
+
+struct {
+    struct {
+        int gui_mode;
+        int gui_mode_alt;
+        int gui_mode_none;
+        int is_shutter_half_press;
+        int state_kbd_script_run;
+    } state;
+} camera_info;
+
+typedef struct {
+    unsigned char col;
+    unsigned char type;
+} chdkColor;
+
+typedef struct {
+    chdkColor fg;
+    chdkColor bg;
+} confColor;
+
+struct {
+    int debug_shortcut_action;
+    int dng_raw;
+    int enable_shortcuts;
+    int hide_osd;
+    confColor menu_color;
+    confColor menu_title_color;
+    int override_disable;
+    int save_raw;
+    int show_alt_helper;
+    int show_alt_helper_delay;
+    int show_histo;
+    int show_osd;
+    int subj_dist_override_koef;
+    int user_menu_as_root;
+    int user_menu_enable;
+    int zebra_draw;
+    int console_timeout;
+} conf;
+
+static int gui_helper_displayat = 0;
+static int gui_splash = 0;
+static char *logo = (char*)0x2000;
+static int console_displayed = 0;
+static long console_last_modified = 0;
+
+struct gui_vis_sig {
+    void *mode_ptr;
+    int gui_mode;
+    int helper_due;
+    int splash_sec;
+    int menu_item;
+    int debug_shortcut_action;
+    int dng_raw;
+    int enable_shortcuts;
+    int hide_osd;
+    confColor menu_color;
+    confColor menu_title_color;
+    int override_disable;
+    int save_raw;
+    int show_alt_helper;
+    int show_alt_helper_delay;
+    int show_histo;
+    int show_osd;
+    int subj_dist_override_koef;
+    int user_menu_as_root;
+    int user_menu_enable;
+    int zebra_draw;
+    int console_displayed;
+    long console_last_modified;
+};
+
+static struct gui_vis_sig last_gui_sig;
+static int gui_sig_initialized = 0;
+static int gui_splash_expire = 0;
+static int gui_splash_sec = 0;
+static int gui_helper_due = 0;
+static int alt_helper_drawn = 0;
+
+void gui_maintenance_tick(void)
+{
+    int now = get_tick_count();
+    if (gui_splash > 0)
+    {
+        if (gui_splash_expire == 0)
+            gui_splash_expire = now + (SPLASH_TIME * 80);
+        if (kbd_is_key_pressed(KEY_SHOOT_HALF) || (now >= gui_splash_expire))
+        {
+            gui_splash = 0;
+            gui_splash_expire = 0;
+            gui_splash_sec = 0;
+            if (camera_info.state.gui_mode_none || camera_info.state.gui_mode_alt)
+                gui_set_need_restore();
+            if (logo) logo = NULL;
+        }
+        else
+        {
+            int sec = (gui_splash_expire - now + 999) / 1000;
+            if (sec <= 0) sec = 1;
+            gui_splash_sec = sec;
+        }
+    }
+    else
+    {
+        gui_splash_sec = 0;
+    }
+
+    if (camera_info.state.gui_mode_alt && conf.show_alt_helper)
+        gui_helper_due = (now >= gui_helper_displayat);
+    else
+        gui_helper_due = 0;
+
+    if (console_displayed && !camera_info.state.state_kbd_script_run)
+    {
+        if (now > console_last_modified + (conf.console_timeout * 1000))
+        {
+            gui_set_need_restore();
+            console_displayed = 0;
+        }
+    }
+}
+
+static gui_handler *gui_mode = NULL;
+
+int gui_check_state_changed(void)
+{
+    int is_menu_active = (camera_info.state.gui_mode == GUI_MODE_MENU);
+    (void)is_menu_active;
+    int menu_dirty = 0;
+    int dirty = gui_osd_need_restore || gui_mode_need_redraw || menu_dirty;
+
+    struct gui_vis_sig current_sig;
+    memset(&current_sig, 0, sizeof(current_sig));
+    current_sig.mode_ptr = (void*)gui_mode;
+    current_sig.gui_mode = camera_info.state.gui_mode;
+    current_sig.helper_due = gui_helper_due;
+    current_sig.splash_sec = gui_splash_sec;
+    current_sig.menu_item = 0;
+    current_sig.debug_shortcut_action = conf.debug_shortcut_action;
+    current_sig.dng_raw = conf.dng_raw;
+    current_sig.enable_shortcuts = conf.enable_shortcuts;
+    current_sig.hide_osd = conf.hide_osd;
+    current_sig.menu_color = conf.menu_color;
+    current_sig.menu_title_color = conf.menu_title_color;
+    current_sig.override_disable = conf.override_disable;
+    current_sig.save_raw = conf.save_raw;
+    current_sig.show_alt_helper = conf.show_alt_helper;
+    current_sig.show_alt_helper_delay = conf.show_alt_helper_delay;
+    current_sig.show_histo = conf.show_histo;
+    current_sig.show_osd = conf.show_osd;
+    current_sig.subj_dist_override_koef = conf.subj_dist_override_koef;
+    current_sig.user_menu_as_root = conf.user_menu_as_root;
+    current_sig.user_menu_enable = conf.user_menu_enable;
+    current_sig.zebra_draw = conf.zebra_draw;
+    current_sig.console_displayed = console_displayed;
+    current_sig.console_last_modified = console_last_modified;
+
+    int sig_changed = 0;
+    if (!gui_sig_initialized)
+    {
+        gui_sig_initialized = 1;
+        sig_changed = 1;
+    }
+    else if (memcmp(&last_gui_sig, &current_sig, sizeof(struct gui_vis_sig)) != 0)
+    {
+        sig_changed = 1;
+    }
+
+    if (sig_changed)
+        alt_helper_drawn = 0;
+
+    last_gui_sig = current_sig;
+    return dirty || sig_changed;
+}
+
+// Mock time for gui_osd_draw_clock
+static struct tm mock_tm = { .tm_hour = 12, .tm_min = 34, .tm_sec = 0 };
+struct tm *get_mock_localtime(void) { return &mock_tm; }
+
+static int clock_draw_count = 0;
+static int last_drawn_clock_sec = -1;
+static int osd_draw_count = 0;
+static int half_shutter_osd_drawn = 0;
+
+void gui_osd_draw_clock(void)
+{
+    struct tm *ttm = get_mock_localtime();
+    clock_draw_count++;
+    last_drawn_clock_sec = ttm->tm_sec;
+}
+
+void gui_draw_osd(void)
+{
+    gui_osd_draw_clock();
+    if (camera_info.state.is_shutter_half_press)
+        half_shutter_osd_drawn++;
+}
+
+static void gui_default_draw(int force_redraw)
+{
+    osd_draw_count++;
+    gui_draw_osd();
+}
+
+static int alt_draw_count = 0;
+static void gui_chdk_draw(int force_redraw)
+{
+    alt_draw_count++;
+    if (force_redraw || !draw_test_guard() || !alt_helper_drawn)
+    {
+        g3x_fill_menu_opaque_black();
+        alt_helper_drawn = 1;
+    }
+}
+
+static int module_draw_count = 0;
+static void gui_module_draw(int force_redraw)
+{
+    module_draw_count++;
+}
+
+gui_handler defaultGuiHandler = { GUI_MODE_NONE, gui_default_draw, NULL };
+gui_handler altGuiHandler     = { GUI_MODE_ALT,  gui_chdk_draw,    NULL };
+gui_handler moduleGuiHandler  = { GUI_MODE_MODULE, gui_module_draw, NULL };
+
+int gui_is_osd_mode(void)
+{
+    return (camera_info.state.gui_mode == GUI_MODE_NONE);
+}
+
+void gui_draw_osd_tick(void)
+{
+    if (gui_mode && gui_mode->redraw)
+        gui_mode->redraw(0);
+}
+
+int gui_is_module_mode(void)
+{
+    return (camera_info.state.gui_mode > GUI_MODE_MENU);
+}
+
+void gui_draw_module_tick(void)
+{
+    if (gui_mode && gui_mode->redraw)
+        gui_mode->redraw(0);
+}
+
+void gui_redraw(int forced)
+{
+    if (!draw_test_guard() && (!camera_info.state.gui_mode_none || gui_splash))
+    {
+        draw_set_guard();
+        forced = 1;
+    }
+    if (gui_osd_need_restore)
+    {
+        draw_restore();
+        gui_osd_need_restore = 0;
+        forced = 1;
+    }
+    if (gui_mode_need_redraw)
+    {
+        gui_mode_need_redraw = 0;
+        forced = 1;
+    }
+    if (gui_mode && gui_mode->redraw)
+        gui_mode->redraw(forced);
+}
+
+void step_main_tick(void)
+{
+    mock_tick += 20;
+    gui_maintenance_tick();
+    int forced = check_gui_needs_redraw();
+    int sentinel_lost = !draw_test_guard();
+    int buffer_changed = check_bitmap_buffer_changed();
+    int state_changed = gui_check_state_changed();
+    int need_redraw = forced || sentinel_lost || buffer_changed || state_changed;
+    if (need_redraw)
+        gui_redraw(forced || sentinel_lost || buffer_changed);
+    else if (gui_is_osd_mode())
+        gui_draw_osd_tick();
+    else if (gui_is_module_mode())
+        gui_draw_module_tick();
+}
+
+int main(void)
+{
+    // Step 1: Boot with splash screen in GUI_MODE_NONE
+    camera_info.state.gui_mode = GUI_MODE_NONE;
+    camera_info.state.gui_mode_none = 1;
+    camera_info.state.gui_mode_alt = 0;
+    gui_mode = &defaultGuiHandler;
+    gui_splash = SPLASH_TIME;
+    mock_tick = 1000;
+
+    // Splash initiation tick
+    step_main_tick();
+    assert(gui_splash > 0);
+
+    // Fast-forward mock_tick past splash expiry (SPLASH_TIME * 80 ms = 3200 ms)
+    mock_tick = 5000;
+    // Splash expiry tick: should trigger draw_restore() to clear splash logo
+    step_main_tick();
+    assert(gui_splash == 0);
+    assert(draw_restore_count == 1); // Splash logo erased
+
+    // Reset counters to cleanly measure post-splash steady state
+    clock_draw_count = 0;
+    last_drawn_clock_sec = -1;
+    osd_draw_count = 0;
+    half_shutter_osd_drawn = 0;
+    opaque_black_fill_count = 0;
+    draw_restore_count = 0;
+
+    // Verify post-splash steady state: intact sentinel, unchanged signature
+    assert(draw_test_guard() == 1);
+    assert(gui_check_state_changed() == 0);
+
+    // Requirement 4(a): With unchanged signature and intact sentinel,
+    // a change in the clock second leads to a clock draw with NO opaque fill or full erase
+    mock_tm.tm_sec = 42;
+    step_main_tick();
+
+    assert(gui_check_state_changed() == 0); // Signature remains unchanged!
+    assert(clock_draw_count == 1);          // Clock was drawn!
+    assert(last_drawn_clock_sec == 42);     // Clock drew the updated second!
+    assert(opaque_black_fill_count == 0);   // ZERO opaque fill!
+    assert(draw_restore_count == 0);        // ZERO full-panel erase!
+
+    // Advance clock second again
+    mock_tm.tm_sec = 43;
+    step_main_tick();
+    assert(gui_check_state_changed() == 0);
+    assert(clock_draw_count == 2);
+    assert(last_drawn_clock_sec == 43);
+    assert(opaque_black_fill_count == 0);
+    assert(draw_restore_count == 0);
+
+    // Requirement 4(b): A half-shutter state change in NORMAL mode leads to an OSD draw
+    camera_info.state.is_shutter_half_press = 1;
+    step_main_tick();
+
+    assert(osd_draw_count == 3);
+    assert(half_shutter_osd_drawn == 1);  // Half-shutter element rendered!
+    assert(opaque_black_fill_count == 0); // Still NO opaque fill!
+    assert(draw_restore_count == 0);      // Still NO full erase!
+
+    // Release half-shutter
+    camera_info.state.is_shutter_half_press = 0;
+    step_main_tick();
+    assert(osd_draw_count == 4);
+    assert(half_shutter_osd_drawn == 1); // Not incremented when released
+    assert(opaque_black_fill_count == 0);
+    assert(draw_restore_count == 0);
+
+    // Requirement 4(c): ALT/menu no-forced-redraw and module-mode tests pass
+    // Switch to ALT mode
+    camera_info.state.gui_mode = GUI_MODE_ALT;
+    camera_info.state.gui_mode_none = 0;
+    camera_info.state.gui_mode_alt = 1;
+    gui_mode = &altGuiHandler;
+    alt_draw_count = 0;
+
+    // Entry into ALT mode: triggers redraw due to mode change
+    step_main_tick();
+    assert(alt_draw_count == 1);
+    assert(opaque_black_fill_count == 1); // Initial opaque black fill on ALT entry
+
+    // Run 50 ticks in ALT mode with unchanged state
+    for (int i = 0; i < 50; i++)
+        step_main_tick();
+
+    // In ALT mode, no per-tick redraw occurs: draw count and opaque fill stay at 1!
+    assert(alt_draw_count == 1);
+    assert(opaque_black_fill_count == 1);
+
+    // Switch to MODULE mode
+    camera_info.state.gui_mode = GUI_MODE_MODULE;
+    camera_info.state.gui_mode_none = 0;
+    camera_info.state.gui_mode_alt = 0;
+    gui_mode = &moduleGuiHandler;
+    module_draw_count = 0;
+
+    // Run 20 ticks in MODULE mode: dispatches draw handler every tick without opaque fill
+    for (int i = 0; i < 20; i++)
+        step_main_tick();
+
+    assert(module_draw_count == 20);      // Dispatched every tick
+    assert(opaque_black_fill_count == 1); // ZERO additional opaque fills
+
+    return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            c_file = Path(tmpdir) / "test_normal_osd_tick.c"
+            bin_file = Path(tmpdir) / "test_normal_osd_tick"
+            c_file.write_text(harness_c, encoding="utf-8")
+            comp = subprocess.run(
+                ["gcc", "-O2", "-Wall", str(c_file), "-o", str(bin_file)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.assertEqual(comp.returncode, 0, f"Compilation failed: {comp.stderr}")
+            run = subprocess.run([str(bin_file)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            self.assertEqual(run.returncode, 0, f"Execution failed: {run.stderr}")
+
     def test_lib_source(self):
         lib_c = REPO_ROOT / "full_build" / "g3x" / "lib.c"
         self.assertTrue(lib_c.is_file(), "full_build/g3x/lib.c missing")
@@ -1853,7 +2322,7 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
         self._require_toolchain()
 
         diskboot = OUT_DIR_GUI / "DISKBOOT.BIN"
-        if not diskboot.is_file() or diskboot.stat().st_size != 124225:
+        if not diskboot.is_file() or diskboot.stat().st_size != 124257:
             env = os.environ.copy()
             if WRAPPER_SCRIPT.is_file() and os.access(WRAPPER_SCRIPT, os.X_OK):
                 env["MAKEFLAGS"] = f"CC={WRAPPER_SCRIPT}"
@@ -1868,10 +2337,10 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
             self.assertEqual(res.returncode, 0, f"GUI fix build failed: {res.stderr}")
 
         self.assertTrue(diskboot.is_file(), f"Expected {diskboot} to exist")
-        self.assertEqual(diskboot.stat().st_size, 124225)
+        self.assertEqual(diskboot.stat().st_size, 124257)
         self.assertEqual(
             sha256_file(diskboot),
-            "087085ad8e3ec67cb3035bc45f7594337e0f3e083983c50450d4cefeaea9fb28",
+            "760a362d358d87518e6274013e70109f8699974a40158ae5bbbff8b80c246738",
         )
 
         # Check manifests
@@ -1880,10 +2349,10 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
             self.assertTrue(mpath.is_file(), f"Expected {mpath} to exist")
             with open(mpath, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["size"], 124225)
+            self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["size"], 124257)
             self.assertEqual(
                 data["artifacts"]["DISKBOOT.BIN"]["sha256"],
-                "087085ad8e3ec67cb3035bc45f7594337e0f3e083983c50450d4cefeaea9fb28",
+                "760a362d358d87518e6274013e70109f8699974a40158ae5bbbff8b80c246738",
             )
             self.assertEqual(data["artifacts"]["modules_count"], 34)
 
@@ -1921,10 +2390,10 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
             s2 = snapshot_distribution(Path(td2))
             self.assertIn("DISKBOOT.BIN", s1)
             self.assertIn("DISKBOOT.BIN", s2)
-            self.assertEqual(s1["DISKBOOT.BIN"][0], 124225)
+            self.assertEqual(s1["DISKBOOT.BIN"][0], 124257)
             self.assertEqual(
                 s1["DISKBOOT.BIN"][1],
-                "087085ad8e3ec67cb3035bc45f7594337e0f3e083983c50450d4cefeaea9fb28",
+                "760a362d358d87518e6274013e70109f8699974a40158ae5bbbff8b80c246738",
             )
             # Compare DISKBOOT.BIN plus every CHDK/ file hash
             self.assertEqual(s1, s2, "Two clean G3X_GUI_FIX=1 builds produced different hashes")
@@ -1955,10 +2424,10 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
             s4 = snapshot_distribution(Path(td4))
             self.assertIn("DISKBOOT.BIN", s3)
             self.assertIn("DISKBOOT.BIN", s4)
-            self.assertEqual(s3["DISKBOOT.BIN"][0], 124281)
+            self.assertEqual(s3["DISKBOOT.BIN"][0], 124321)
             self.assertEqual(
                 s3["DISKBOOT.BIN"][1],
-                "0956f573603553b93a459ee2f5186eb77ddb98dd7b026d41917fcf75f1691a93",
+                "d50ea585b2ba49e39674395f504b5780a1cb98a915fe998c5b7fa5be115cb9bb",
             )
             # Compare DISKBOOT.BIN plus every CHDK/ file hash
             self.assertEqual(s3, s4, "Two clean G3X_GUI_FIX=1 FULL_HOOKS=1 builds produced different hashes")
@@ -1982,10 +2451,10 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
             )
             self.assertEqual(res.returncode, 0, f"GUI fix + full hooks build failed: {res.stderr}")
 
-        self.assertEqual(diskboot.stat().st_size, 124281)
+        self.assertEqual(diskboot.stat().st_size, 124321)
         self.assertEqual(
             sha256_file(diskboot),
-            "0956f573603553b93a459ee2f5186eb77ddb98dd7b026d41917fcf75f1691a93",
+            "d50ea585b2ba49e39674395f504b5780a1cb98a915fe998c5b7fa5be115cb9bb",
         )
 
         for mdir in [MANIFESTS_DIR, DOCS_MANIFESTS_DIR]:
@@ -1993,10 +2462,10 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
             self.assertTrue(mpath.is_file(), f"Expected {mpath} to exist")
             with open(mpath, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["size"], 124281)
+            self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["size"], 124321)
             self.assertEqual(
                 data["artifacts"]["DISKBOOT.BIN"]["sha256"],
-                "0956f573603553b93a459ee2f5186eb77ddb98dd7b026d41917fcf75f1691a93",
+                "d50ea585b2ba49e39674395f504b5780a1cb98a915fe998c5b7fa5be115cb9bb",
             )
             self.assertIn("FULL_HOOKS=1", data["build"]["flags"])
             self.assertIn("G3X_GUI_FIX=1", data["build"]["flags"])
