@@ -38,7 +38,33 @@ The PORT-41 full build produces the standard CHDK firmware artifacts for the Can
 | Active bitmap buffer pointer | `0x0000D2A4` | `VERIFIED` | DryOS RAM / FINSIG (stubs_entry.S:190) | Pointer holding active bitmap index (`active_bitmap_buffer & 1`). |
 | Opacity buffers | `{0x5FC40000, 0x5FB80000}` | `VERIFIED` | MMIO / PORT-33,35,40 | Dual opacity buffer memory addresses. |
 | GUI5 OSD geometry | `(10, 12, 880, 576)` | `VERIFIED` | `docs/PORT40_GUI_LAYOUT.md` | Centered 880x576 OSD box with 10/12 px margins and 32 px rows. |
-| Loader overlay | `0x00008000` -> `0x003489B4` | `VERIFIED` | Sibling `g7x/loader/main.c:1-57` & `g5x/loader/main.c:1-49` | Relocates CHDK core from loader RAM to `MEMISOSTART` (`0x003489B4`), syncs cache (`0xFC418723`), and branches to Thumb core entry (`0x003489B5`). |
+| Loader D-cache clean & invalidate | `0xFC127AB1` | `VERIFIED` | ROM disassembly / PORT-1F2 / PORT-24..39 / `docs/CHDK_PORT1F2_MPU_CACHE_CORRECTION.md:114-119` | Cleans & invalidates L1 Data Cache (DCCISW all sets/ways) to PoC after core relocation. Replaces monolithic `0xFC418723`. |
+| Loader I-cache / BP invalidate | `0xFC127B09` | `VERIFIED` | ROM disassembly / PORT-1F2 / PORT-24..39 / `docs/CHDK_PORT1F2_MPU_CACHE_CORRECTION.md:114-119` | Invalidates entire L1 Instruction Cache (ICIALLU) and branch predictors (BPIALL) followed by `dsb sy` and `isb sy`. |
+| Loader handoff sequence | `0xFC127AB1` -> `dsb` -> `0xFC127B09` -> `dsb` -> `isb` -> `cpsid if` -> `bx r0` | `VERIFIED` | `chdk-port/loader/g3x/main_prototype.c:19-95` (PORT-1F2 / PORT-24..39) | Decoupled cache maintenance sequence in canonical ARMv7 order. `0xFC418723` is NOT called in loader. |
+| CHDK heap allocator / ARAM exclusion | Canon heap (`canon_malloc`) | `VERIFIED` | ROM disassembly / `docs/CHDK_PORT1A_MEMORY_OWNERSHIP.md:70-78` | AdditionAgent reserves `0x006CE000..0x006F0000` for file-read scratch. `OPT_ARAM_MALLOC` unset; CHDK delegates to Canon allocator. |
+
+---
+
+## 2.1 Remediations & Architectural Decisions (P1 Reviews)
+
+### 1. Loader Cache-Maintenance Sequence Remediated (P1 Fix 1)
+- **Problem**: Monolithic ROM subroutine `0xFC418723` (`0xFC418722`) was originally derived from sibling loaders (`g7x` / `g5x`). However, disassembly shows that `0xFC418722` invalidates the instruction cache (`0xFC127B08`) *before* cleaning the data cache (`0xFC127AB0`), as verified in `docs/CHDK_PORT1D1_MPU_CACHE_VERIFICATION.md:124-134`. Relocating executable code requires the reverse order (`docs/CHDK_PORT1F2_MPU_CACHE_CORRECTION.md:114-119`).
+- **Remediation**: Replaced `0xFC418723` with the established decoupled handoff sequence from `chdk-port/loader/g3x/main_prototype.c:69-95` (PORT-1F2 / PORT-24..39):
+  1. `core_copy(src, dst, length)`: relocates core to `MEMISOSTART` (`0x003489B4`).
+  2. Call `0xFC127AB1` (`blx r2`): DCCISW (clean and invalidate D-cache to PoC).
+  3. `dsb sy`: serialize memory completion.
+  4. Call `0xFC127B09` (`blx r2`): ICIALLU + BPIALL (invalidate I-cache and branch predictor).
+  5. `dsb sy; isb sy`: synchronize pipeline.
+  6. `cpsid if`: enforce disabled interrupt state.
+  7. `bx r0`: branch to Thumb core entry (`0x003489B5`).
+- `0xFC418723` is **not** called in the loader, verified by static checks and ELF disassembly tests in `tests/test_port41_full_build.py`.
+
+### 2. ARAM Pool Collision Avoidance (P1 Fix 2)
+- **Problem**: `full_build/g3x/sub/110c/makefile.inc` previously defined `ARAM_HEAP_START=0x006ce000` and `ARAM_HEAP_SIZE=0x00022000` with `OPT_ARAM_MALLOC=1`. As proven in `docs/CHDK_PORT1A_MEMORY_OWNERSHIP.md:70-78`, `0x006CE000..0x006F0000` is actively owned by Canon's `AdditionAgent.c` (`0xFC558866..0xFC5588C0`) as a file I/O scratch buffer. Allocating CHDK's heap there would result in memory corruption during `AdditionAgent` file reads.
+- **Remediation**:
+  1. Removed `OPT_ARAM_MALLOC`, `ARAM_HEAP_START`, and `ARAM_HEAP_SIZE` from `full_build/g3x/sub/110c/makefile.inc`.
+  2. Explicitly unset `override OPT_ARAM_MALLOC=` and `override OPT_CHDK_IN_ARAM=` so CHDK core delegates all dynamic memory allocations to Canon's allocator (`canon_malloc` via DryOS).
+  3. Staged build configuration and core binary analysis verify that no CHDK heap falls in `0x006CE000..0x006F0000`.
 
 ---
 

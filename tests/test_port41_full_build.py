@@ -127,10 +127,55 @@ class TestPort41FullBuildSources(unittest.TestCase):
         self.assertIn("check_compat", main_text)
         self.assertIn("core_copy", main_text)
         self.assertIn("MEMISOSTART", main_text)
-        self.assertIn("0xFC418723", main_text)
+        self.assertIn("0xFC127AB1", main_text, "Loader must call 0xFC127AB1 (clean D-cache)")
+        self.assertIn("0xFC127B09", main_text, "Loader must call 0xFC127B09 (invalidate I-cache)")
+        self.assertNotIn("0xFC418723", main_text, "0xFC418723 must not be present in loader")
+        self.assertNotIn("fc418723", main_text.lower(), "0xFC418723 must not be present in loader")
         self.assertTrue(
-            re.search(r"chdk-port/loader/(g7x|g5x)/main\.c:\d+", main_text),
-            "loader/main.c must cite sibling loader:line",
+            re.search(r"chdk-port/loader/(g7x|g5x|g3x)/main(_prototype)?\.c:\d+", main_text),
+            "loader/main.c must cite loader:line",
+        )
+        self.assertIn(
+            "docs/CHDK_PORT1F2_MPU_CACHE_CORRECTION.md:114-119",
+            main_text,
+            "loader/main.c must cite docs/CHDK_PORT1F2_MPU_CACHE_CORRECTION.md:114-119",
+        )
+
+    def test_heap_allocator_sources(self):
+        """Verify that CHDK heap does not overlap Canon's AdditionAgent buffer (0x006CE000..0x006F0000)."""
+        sub_make_inc = FULL_BUILD_G3X / "sub" / "110c" / "makefile.inc"
+        self.assertTrue(sub_make_inc.is_file(), "full_build/g3x/sub/110c/makefile.inc missing")
+        make_text = sub_make_inc.read_text(encoding="utf-8")
+
+        # OPT_ARAM_MALLOC must be empty/unset, not 1
+        self.assertNotRegex(
+            make_text,
+            r"^\s*override\s+OPT_ARAM_MALLOC\s*=\s*1\b",
+            "OPT_ARAM_MALLOC must not be set to 1 in full-build makefile.inc",
+        )
+        self.assertRegex(
+            make_text,
+            r"override\s+OPT_ARAM_MALLOC\s*=",
+            "OPT_ARAM_MALLOC must be explicitly unset in full-build makefile.inc",
+        )
+
+        # ARAM_HEAP_START and ARAM_HEAP_SIZE must not be active definitions
+        self.assertNotRegex(
+            make_text,
+            r"^\s*ARAM_HEAP_START\s*=",
+            "ARAM_HEAP_START must not be defined in full-build makefile.inc",
+        )
+        self.assertNotRegex(
+            make_text,
+            r"^\s*ARAM_HEAP_SIZE\s*=",
+            "ARAM_HEAP_SIZE must not be defined in full-build makefile.inc",
+        )
+
+        # Must cite docs/CHDK_PORT1A_MEMORY_OWNERSHIP.md:70-78
+        self.assertIn(
+            "docs/CHDK_PORT1A_MEMORY_OWNERSHIP.md:70-78",
+            make_text,
+            "full_build makefile.inc must cite docs/CHDK_PORT1A_MEMORY_OWNERSHIP.md:70-78",
         )
 
     def test_kbd_invariants(self):
@@ -319,8 +364,28 @@ class TestPort41FullBuildExecution(unittest.TestCase):
             "chdk-port/loader/g3x/ files were modified during the full build!",
         )
 
-        # Staged loader checks:
+        # Assert staged build config has OPT_ARAM_MALLOC disabled and no heap in 0x006CE000..0x006F0000
         stage_dir = OUT_DIR / "stage_chdk"
+        staged_sub_make = stage_dir / "platform" / "g3x" / "sub" / "110c" / "makefile.inc"
+        self.assertTrue(staged_sub_make.is_file(), "staged sub/110c/makefile.inc missing")
+        staged_make_text = staged_sub_make.read_text(encoding="utf-8")
+        self.assertNotRegex(
+            staged_make_text,
+            r"^\s*override\s+OPT_ARAM_MALLOC\s*=\s*1\b",
+            "Staged build config must not set OPT_ARAM_MALLOC=1",
+        )
+        self.assertNotRegex(
+            staged_make_text,
+            r"^\s*ARAM_HEAP_START\s*=",
+            "Staged build config must not define ARAM_HEAP_START",
+        )
+        self.assertNotRegex(
+            staged_make_text,
+            r"^\s*ARAM_HEAP_SIZE\s*=",
+            "Staged build config must not define ARAM_HEAP_SIZE",
+        )
+
+        # Staged loader checks:
         staged_loader_main_c = stage_dir / "loader" / "g3x" / "main.c"
         inert_loader_main_c = CHDK_LOADER_G3X / "main.c"
         self.assertTrue(staged_loader_main_c.is_file(), "staged loader/g3x/main.c missing")
@@ -357,6 +422,43 @@ class TestPort41FullBuildExecution(unittest.TestCase):
             "Loader must not loop immediately after check_compat",
         )
 
+        # Assert 0xFC418723 is NOT called or referenced anywhere in loader disassembly
+        self.assertNotIn(
+            "fc418723",
+            loader_disasm.lower(),
+            "0xFC418723 must NOT be called in the loader (violates D-clean before I-inv ordering)",
+        )
+
+        # Assert decoupled cache maintenance order:
+        # call 0xFC127AB1 -> dsb -> call 0xFC127B09 -> dsb -> isb -> branch to core
+        match_my_restart = re.search(r"<my_restart>:(.*?)(?:[0-9a-f]{8}\s+<|\Z)", loader_disasm, re.DOTALL)
+        self.assertTrue(match_my_restart, "my_restart symbol not found in loader disassembly")
+        my_restart_disasm = match_my_restart.group(1)
+
+        handoff_pattern = (
+            r"ldr[ \t]+r2,[ \t]*\[pc,[ \t]*#[0-9]+\][^\r\n]*?\((?P<dcache_ptr>[0-9a-f]+)[ \t]+<my_restart[^>\r\n]*>\)[^\r\n]*\r?\n"
+            r"[ \t]*[0-9a-f]+:[ \t]+[0-9a-f \t]+blx[ \t]+r2[^\r\n]*\r?\n"
+            r"[ \t]*[0-9a-f]+:[ \t]+[0-9a-f \t]+dsb[ \t]+sy[^\r\n]*\r?\n"
+            r"(?:[^\r\n]*\r?\n)*?"
+            r"[ \t]*[0-9a-f]+:[ \t]+[0-9a-f \t]+ldr[ \t]+r2,[ \t]*\[pc,[ \t]*#[0-9]+\][^\r\n]*?\((?P<icache_ptr>[0-9a-f]+)[ \t]+<my_restart[^>\r\n]*>\)[^\r\n]*\r?\n"
+            r"[ \t]*[0-9a-f]+:[ \t]+[0-9a-f \t]+blx[ \t]+r2[^\r\n]*\r?\n"
+            r"[ \t]*[0-9a-f]+:[ \t]+[0-9a-f \t]+dsb[ \t]+sy[^\r\n]*\r?\n"
+            r"[ \t]*[0-9a-f]+:[ \t]+[0-9a-f \t]+isb[ \t]+sy[^\r\n]*\r?\n"
+            r"(?:[^\r\n]*\r?\n)*?"
+            r"[ \t]*[0-9a-f]+:[ \t]+[0-9a-f \t]+bx[ \t]+r0"
+        )
+        m = re.search(handoff_pattern, my_restart_disasm)
+        self.assertIsNotNone(
+            m,
+            f"Loader handoff does not follow required order: call 0xFC127AB1 -> dsb -> call 0xFC127B09 -> dsb -> isb -> bx r0:\n{my_restart_disasm}",
+        )
+        dcache_ptr = m.group("dcache_ptr")
+        icache_ptr = m.group("icache_ptr")
+        d_match = re.search(rf"\b{dcache_ptr}:\s+fc127ab1\b", my_restart_disasm, re.IGNORECASE)
+        i_match = re.search(rf"\b{icache_ptr}:\s+fc127b09\b", my_restart_disasm, re.IGNORECASE)
+        self.assertIsNotNone(d_match, f"Target of first call (at {dcache_ptr}) is not 0xFC127AB1")
+        self.assertIsNotNone(i_match, f"Target of second call (at {icache_ptr}) is not 0xFC127B09")
+
         # Disassemble staged core main.elf to assert regression checks:
         staged_core_elf = stage_dir / "platform" / "g3x" / "sub" / "110c" / "main.elf"
         self.assertTrue(staged_core_elf.is_file(), "staged core main.elf missing")
@@ -389,6 +491,13 @@ class TestPort41FullBuildExecution(unittest.TestCase):
             r"movw\s+r2,\s*#(8192|0x2000)",
             "CreateTask_my must set kbd task stack to 0x2000 (8192 bytes)",
         )
+
+        # Heap check: verify aram_malloc_init does not create heap in 0x006CE000..0x006F0000
+        aram_init_idx = core_disasm.find("<aram_malloc_init>:")
+        self.assertGreater(aram_init_idx, 0, "Missing <aram_malloc_init> in core disassembly")
+        aram_init_chunk = core_disasm[aram_init_idx : aram_init_idx + 400]
+        self.assertNotIn("chdk_heap_create", aram_init_chunk, "aram_malloc_init must not call chdk_heap_create")
+        self.assertNotIn("6ce000", aram_init_chunk.lower(), "aram_malloc_init must not reference 0x006CE000")
 
 
 if __name__ == "__main__":

@@ -2,9 +2,9 @@
 
 MEMISOSTART=0x3489b4
 
-# ARAM heap values extracted from ROM @ 0xFC05B454 and 0xFC55888C
-ARAM_HEAP_START=0x006ce000
-ARAM_HEAP_SIZE=0x00022000
-
-override OPT_ARAM_MALLOC=1
+# OPT_ARAM_MALLOC, ARAM_HEAP_START, and ARAM_HEAP_SIZE removed per memory ownership verification:
+# 0x006CE000..0x006F0000 is AdditionAgent's file-read buffer (VERIFIED: docs/CHDK_PORT1A_MEMORY_OWNERSHIP.md:70-78).
+# OPT_ARAM_MALLOC is explicitly unset/empty so CHDK uses the Canon allocator (canon_malloc)
+# and no heap is allocated in 0x006CE000..0x006F0000.
+override OPT_ARAM_MALLOC=
 override OPT_CHDK_IN_ARAM=
