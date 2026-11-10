@@ -286,16 +286,11 @@ int vid_get_viewport_buffer_width_proper()      { return 736; }
 int vid_get_viewport_type()                     { return LV_FB_YUV8B; }
 int vid_get_aspect_ratio()                      { return LV_ASPECT_3_2; }
 
-int check_gui_needs_redraw()
-{
-    static int last_bitmap_buffer = 0;
 #if defined(G3X_GUI_FIX) && (G3X_GUI_FIX == 1)
-    extern int draw_test_guard(void);
-    if (!draw_test_guard())
-    {
-        return 1;
-    }
-#endif
+static int last_bitmap_buffer = 0;
+
+int check_bitmap_buffer_changed(void)
+{
     if (active_bitmap_buffer != last_bitmap_buffer)
     {
         last_bitmap_buffer = active_bitmap_buffer;
@@ -303,3 +298,23 @@ int check_gui_needs_redraw()
     }
     return 0;
 }
+
+int check_gui_needs_redraw(void)
+{
+    // draw_test_guard sentinel check is executed directly in main loop redraw condition
+    extern int draw_test_guard(void);
+    (void)draw_test_guard;
+    return 0;
+}
+#else
+int check_gui_needs_redraw()
+{
+    static int last_bitmap_buffer = 0;
+    if (active_bitmap_buffer != last_bitmap_buffer)
+    {
+        last_bitmap_buffer = active_bitmap_buffer;
+        return 1;
+    }
+    return 0;
+}
+#endif

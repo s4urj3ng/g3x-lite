@@ -120,8 +120,8 @@ class TestPort42GuiFixDoc(unittest.TestCase):
 
         # Check expected baseline hash
         self.assertIn("24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9", text)
-        self.assertIn("06f8e1b6da3b9f77525cfc96ab5a25b82dca1a94da25989735826a569d04838b", text)
-        self.assertIn("d0e4648719fc37f38f49f1ad202592c87f0604bed9417e60be430c1b6a4f9e38", text)
+        self.assertIn("1b3d1a036530a54783696be08207081bc5da08ece5677fb6d1fc4142518a5be4", text)
+        self.assertIn("d96aed5ac212e9e1582bd7364a594df79976ac56090d579edb09223fdb6d6ff0", text)
 
 
 class TestPort42GuiFixSources(unittest.TestCase):
@@ -156,6 +156,7 @@ class TestPort42GuiFixSources(unittest.TestCase):
         """
         # 1. Static source audit on tools/build_port41_full.py patching logic
         build_text = BUILD_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("gui_maintenance_tick", build_text)
         self.assertIn("gui_check_state_changed", build_text)
         self.assertIn("struct gui_vis_sig", build_text)
         self.assertIn("helper_due", build_text)
@@ -168,10 +169,11 @@ class TestPort42GuiFixSources(unittest.TestCase):
         self.assertNotIn("cnt++", build_text[build_text.find("main_replacement"):build_text.find("core_conf_c")])
         self.assertNotIn("& 3", build_text[build_text.find("main_replacement"):build_text.find("core_conf_c")])
 
-        # 2. Host simulation of gui_check_state_changed using host gcc
+        # 2. Host simulation of gui_maintenance_tick + gui_check_state_changed using host gcc
         harness_c = r"""
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <assert.h>
 
 static int mock_tick = 0;
@@ -197,9 +199,33 @@ struct {
     } state;
 } camera_info;
 
+typedef struct {
+    unsigned char   col;
+    unsigned char   type;
+} chdkColor;
+
+typedef struct {
+    chdkColor       fg;
+    chdkColor       bg;
+} confColor;
+
 struct {
+    int debug_shortcut_action;
+    int dng_raw;
+    int enable_shortcuts;
+    int hide_osd;
+    confColor menu_color;
+    confColor menu_title_color;
+    int override_disable;
+    int save_raw;
     int show_alt_helper;
     int show_alt_helper_delay;
+    int show_histo;
+    int show_osd;
+    int subj_dist_override_koef;
+    int user_menu_as_root;
+    int user_menu_enable;
+    int zebra_draw;
 } conf;
 
 static int gui_helper_displayat = 0;
@@ -215,37 +241,37 @@ struct gui_vis_sig {
     int helper_due;
     int splash_sec;
     int menu_item;
+    int debug_shortcut_action;
+    int dng_raw;
+    int enable_shortcuts;
+    int hide_osd;
+    confColor menu_color;
+    confColor menu_title_color;
+    int override_disable;
+    int save_raw;
+    int show_alt_helper;
+    int show_alt_helper_delay;
+    int show_histo;
+    int show_osd;
+    int subj_dist_override_koef;
+    int user_menu_as_root;
+    int user_menu_enable;
+    int zebra_draw;
 };
 
 static struct gui_vis_sig last_gui_sig;
 static int gui_sig_initialized = 0;
 static int gui_splash_expire = 0;
+static int gui_splash_sec = 0;
+static int gui_helper_due = 0;
 
-int gui_check_state_changed(void)
+void gui_maintenance_tick(void)
 {
-    extern int gui_menu_needs_redraw(void);
-    extern int gui_menu_get_curr_item(void);
+    int now = get_tick_count();
 
-    int dirty = gui_osd_need_restore || gui_mode_need_redraw || gui_menu_needs_redraw();
-
-    // 1. GUI mode / handler pointer
-    void *current_mode = (void*)gui_mode;
-    int current_gui_mode = camera_info.state.gui_mode;
-
-    // 2. Timed ALT helper expiry [core/gui.c:2553-2570]
-    int helper_due = 0;
-#ifdef CAM_DISP_ALT_TEXT
-    if (camera_info.state.gui_mode_alt && conf.show_alt_helper)
-    {
-        helper_due = (get_tick_count() >= gui_helper_displayat);
-    }
-#endif
-
-    // 3. Timed splash countdown / active state [core/gui.c:2387-2405]
-    int splash_sec = 0;
+    // 1. Splash timer, expiry and half-shutter cancellation [core/gui.c:2387-2405]
     if (gui_splash > 0)
     {
-        int now = get_tick_count();
         if (gui_splash_expire == 0)
         {
             gui_splash_expire = now + (SPLASH_TIME * 80);
@@ -254,24 +280,70 @@ int gui_check_state_changed(void)
         {
             gui_splash = 0;
             gui_splash_expire = 0;
-            splash_sec = 0;
+            gui_splash_sec = 0;
             if (camera_info.state.gui_mode_none || camera_info.state.gui_mode_alt)
                 gui_set_need_restore();
             if (logo)
             {
                 logo = NULL;
             }
-            dirty = 1;
         }
         else
         {
-            splash_sec = (gui_splash_expire - now + 999) / 1000;
-            if (splash_sec <= 0) splash_sec = 1;
+            int sec = (gui_splash_expire - now + 999) / 1000;
+            if (sec <= 0) sec = 1;
+            gui_splash_sec = sec;
         }
     }
+    else
+    {
+        gui_splash_sec = 0;
+    }
 
-    // 4. Current menu item
-    int menu_item = gui_menu_get_curr_item();
+    // 2. Helper expiry state maintenance [core/gui.c:2553-2570]
+#ifdef CAM_DISP_ALT_TEXT
+    if (camera_info.state.gui_mode_alt && conf.show_alt_helper)
+    {
+        gui_helper_due = (now >= gui_helper_displayat);
+    }
+    else
+    {
+        gui_helper_due = 0;
+    }
+#else
+    gui_helper_due = 0;
+#endif
+}
+
+int gui_check_state_changed(void)
+{
+    extern int gui_menu_needs_redraw(void);
+    extern int gui_menu_get_curr_item(void);
+
+    int dirty = gui_osd_need_restore || gui_mode_need_redraw || gui_menu_needs_redraw();
+
+    struct gui_vis_sig current_sig;
+    current_sig.mode_ptr               = (void*)gui_mode;
+    current_sig.gui_mode               = camera_info.state.gui_mode;
+    current_sig.helper_due             = gui_helper_due;
+    current_sig.splash_sec             = gui_splash_sec;
+    current_sig.menu_item              = gui_menu_get_curr_item();
+    current_sig.debug_shortcut_action  = conf.debug_shortcut_action;
+    current_sig.dng_raw                = conf.dng_raw;
+    current_sig.enable_shortcuts       = conf.enable_shortcuts;
+    current_sig.hide_osd               = conf.hide_osd;
+    current_sig.menu_color             = conf.menu_color;
+    current_sig.menu_title_color       = conf.menu_title_color;
+    current_sig.override_disable       = conf.override_disable;
+    current_sig.save_raw               = conf.save_raw;
+    current_sig.show_alt_helper        = conf.show_alt_helper;
+    current_sig.show_alt_helper_delay  = conf.show_alt_helper_delay;
+    current_sig.show_histo             = conf.show_histo;
+    current_sig.show_osd               = conf.show_osd;
+    current_sig.subj_dist_override_koef = conf.subj_dist_override_koef;
+    current_sig.user_menu_as_root      = conf.user_menu_as_root;
+    current_sig.user_menu_enable       = conf.user_menu_enable;
+    current_sig.zebra_draw             = conf.zebra_draw;
 
     int sig_changed = 0;
     if (!gui_sig_initialized)
@@ -279,20 +351,32 @@ int gui_check_state_changed(void)
         gui_sig_initialized = 1;
         sig_changed = 1;
     }
-    else if (last_gui_sig.mode_ptr != current_mode ||
-             last_gui_sig.gui_mode != current_gui_mode ||
-             last_gui_sig.helper_due != helper_due ||
-             last_gui_sig.splash_sec != splash_sec ||
-             last_gui_sig.menu_item  != menu_item)
+    else if (last_gui_sig.mode_ptr               != current_sig.mode_ptr ||
+             last_gui_sig.gui_mode               != current_sig.gui_mode ||
+             last_gui_sig.helper_due             != current_sig.helper_due ||
+             last_gui_sig.splash_sec             != current_sig.splash_sec ||
+             last_gui_sig.menu_item              != current_sig.menu_item ||
+             last_gui_sig.debug_shortcut_action  != current_sig.debug_shortcut_action ||
+             last_gui_sig.dng_raw                != current_sig.dng_raw ||
+             last_gui_sig.enable_shortcuts       != current_sig.enable_shortcuts ||
+             last_gui_sig.hide_osd               != current_sig.hide_osd ||
+             memcmp(&last_gui_sig.menu_color, &current_sig.menu_color, sizeof(confColor)) != 0 ||
+             memcmp(&last_gui_sig.menu_title_color, &current_sig.menu_title_color, sizeof(confColor)) != 0 ||
+             last_gui_sig.override_disable       != current_sig.override_disable ||
+             last_gui_sig.save_raw               != current_sig.save_raw ||
+             last_gui_sig.show_alt_helper        != current_sig.show_alt_helper ||
+             last_gui_sig.show_alt_helper_delay  != current_sig.show_alt_helper_delay ||
+             last_gui_sig.show_histo             != current_sig.show_histo ||
+             last_gui_sig.show_osd               != current_sig.show_osd ||
+             last_gui_sig.subj_dist_override_koef != current_sig.subj_dist_override_koef ||
+             last_gui_sig.user_menu_as_root      != current_sig.user_menu_as_root ||
+             last_gui_sig.user_menu_enable       != current_sig.user_menu_enable ||
+             last_gui_sig.zebra_draw             != current_sig.zebra_draw)
     {
         sig_changed = 1;
     }
 
-    last_gui_sig.mode_ptr   = current_mode;
-    last_gui_sig.gui_mode   = current_gui_mode;
-    last_gui_sig.helper_due = helper_due;
-    last_gui_sig.splash_sec = splash_sec;
-    last_gui_sig.menu_item  = menu_item;
+    last_gui_sig = current_sig;
 
     return dirty || sig_changed;
 }
@@ -301,11 +385,13 @@ int main(void)
 {
     // Test 1: Initial call requests redraw
     mock_tick = 0;
+    gui_maintenance_tick();
     assert(gui_check_state_changed() == 1);
 
     // Test 2: Static state across 100 ticks produces ZERO redraw requests (no periodic forced redraw)
     for (int i = 0; i < 100; i++) {
         mock_tick += 20;
+        gui_maintenance_tick();
         assert(gui_check_state_changed() == 0);
     }
 
@@ -316,22 +402,26 @@ int main(void)
     conf.show_alt_helper = 1;
     gui_helper_displayat = mock_tick + 2000; // expires 2000 ms later
     // Mode switch itself triggers redraw
+    gui_maintenance_tick();
     assert(gui_check_state_changed() == 1);
 
     // Ticks before expiry: helper_due stays 0 -> ZERO redraw requests
     for (int t = 0; t < 1980; t += 20) {
         mock_tick += 20;
+        gui_maintenance_tick();
         assert(gui_check_state_changed() == 0);
     }
 
     // Helper expiry tick: tick reaches gui_helper_displayat
     mock_tick = gui_helper_displayat;
     // Helper-expiry transition leads to a redraw request
+    gui_maintenance_tick();
     assert(gui_check_state_changed() == 1);
 
     // After expiry: helper_due stays 1 -> ZERO redraw requests
     for (int i = 0; i < 50; i++) {
         mock_tick += 20;
+        gui_maintenance_tick();
         assert(gui_check_state_changed() == 0);
     }
 
@@ -344,12 +434,14 @@ int main(void)
     mock_tick = 10000;
 
     // Splash initiation triggers redraw request
+    gui_maintenance_tick();
     assert(gui_check_state_changed() == 1);
 
     // Step through splash duration: seconds countdown transitions trigger redraw requests
     int splash_redraw_count = 0;
     for (int t = 20; t <= 3500; t += 20) {
         mock_tick += 20;
+        gui_maintenance_tick();
         if (gui_check_state_changed()) {
             splash_redraw_count++;
             gui_osd_need_restore = 0; // simulated draw_restore()
@@ -362,27 +454,35 @@ int main(void)
     // After splash completed: no redraw requests
     for (int i = 0; i < 50; i++) {
         mock_tick += 20;
+        gui_maintenance_tick();
         assert(gui_check_state_changed() == 0);
     }
 
     // Test 5: Menu navigation triggers redraw
     mock_curr_menu_item = 1;
+    gui_maintenance_tick();
     assert(gui_check_state_changed() == 1);
     mock_tick += 20;
+    gui_maintenance_tick();
     assert(gui_check_state_changed() == 0);
     mock_curr_menu_item = 2;
+    gui_maintenance_tick();
     assert(gui_check_state_changed() == 1);
     mock_tick += 20;
+    gui_maintenance_tick();
     assert(gui_check_state_changed() == 0);
 
     // Test 6: Half-shoot cancellation during splash
     gui_splash = SPLASH_TIME;
     gui_splash_expire = 0;
     mock_tick = 20000;
+    gui_maintenance_tick();
     assert(gui_check_state_changed() == 1); // Splash started
     mock_tick += 20;
+    gui_maintenance_tick();
     assert(gui_check_state_changed() == 0);
     mock_half_shoot = 1; // User presses half shoot
+    gui_maintenance_tick();
     assert(gui_check_state_changed() == 1); // Immediate cancellation redraw request
     assert(gui_splash == 0); // Cancelled
 
@@ -402,6 +502,324 @@ int main(void)
             self.assertEqual(comp.returncode, 0, f"Compilation of state change harness failed: {comp.stderr}")
             run = subprocess.run([str(bin_file)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             self.assertEqual(run.returncode, 0, f"State change test harness assertion failed: {run.stderr}")
+
+    def test_unconditional_gui_maintenance_and_draw_decision(self):
+        """Verify Reviewer P1 requirement:
+        (a) gui_maintenance_tick() is reached unconditionally on the forced-redraw path,
+            with no short-circuit '||' or early return skipping it before draw decisions;
+        (b) splash expiry and half-shutter cancel live in that unconditional step;
+        (c) need_redraw is computed as forced || sentinel_lost || buffer_changed || state_changed.
+        """
+        build_text = BUILD_SCRIPT.read_text(encoding="utf-8")
+
+        # 1. Structural checks on main loop patch
+        main_repl_start = build_text.find("main_replacement = (")
+        self.assertGreater(main_repl_start, 0)
+        main_repl = build_text[main_repl_start : main_repl_start + 2000]
+
+        # gui_maintenance_tick() called unconditionally
+        self.assertIn("gui_maintenance_tick();", main_repl)
+        # Check redraw condition formula
+        self.assertIn("need_redraw = forced || sentinel_lost || buffer_changed || state_changed;", main_repl)
+        self.assertIn("gui_redraw(forced || sentinel_lost || buffer_changed);", main_repl)
+
+        # Confirm gui_maintenance_tick() call appears BEFORE any need_redraw computation
+        maint_pos = main_repl.find("gui_maintenance_tick();")
+        need_pos = main_repl.find("need_redraw =")
+        self.assertGreater(need_pos, maint_pos, "gui_maintenance_tick() must be called before need_redraw computation")
+
+        # Confirm no '||' or '&&' precedes gui_maintenance_tick()
+        code_before_maint = main_repl[:maint_pos]
+        self.assertNotIn("if (", code_before_maint)
+        self.assertNotIn("||", code_before_maint)
+
+        # 2. Structural checks on gui_maintenance_tick in core/gui.c
+        alt_repl_start = build_text.find("alt_replacement = (")
+        self.assertGreater(alt_repl_start, 0)
+        alt_repl = build_text[alt_repl_start : alt_repl_start + 3500]
+
+        maint_def = alt_repl.find("void gui_maintenance_tick(void)")
+        state_def = alt_repl.find("int gui_check_state_changed(void)")
+        self.assertGreater(maint_def, 0, "gui_maintenance_tick definition missing")
+        self.assertGreater(state_def, maint_def, "gui_check_state_changed must appear after gui_maintenance_tick")
+
+        maint_body = alt_repl[maint_def:state_def]
+        # Splash expiry and half-shutter cancellation must live in gui_maintenance_tick
+        self.assertIn("kbd_is_key_pressed(KEY_SHOOT_HALF)", maint_body)
+        self.assertIn("now >= gui_splash_expire", maint_body)
+        self.assertIn("gui_splash = 0;", maint_body)
+        self.assertIn("gui_splash_expire = 0;", maint_body)
+        self.assertIn("gui_helper_due = (now >= gui_helper_displayat);", maint_body)
+
+        # 3. Host C simulation: verify maintenance executes and advances splash expiry & cancel
+        # even when forced = 1 (or sentinel_lost = 1) on every single tick.
+        harness_c = r"""
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <assert.h>
+
+static int mock_tick = 0;
+int get_tick_count(void) { return mock_tick; }
+static int mock_half_shoot = 0;
+int kbd_is_key_pressed(int k) { return mock_half_shoot; }
+#define KEY_SHOOT_HALF 1
+#define SPLASH_TIME 40
+
+static int gui_osd_need_restore = 0;
+static int gui_splash = 0;
+static char *logo = (char*)0x2000;
+void gui_set_need_restore(void) { gui_osd_need_restore = 1; }
+
+static int gui_splash_expire = 0;
+static int gui_splash_sec = 0;
+
+void gui_maintenance_tick(void)
+{
+    int now = get_tick_count();
+    if (gui_splash > 0)
+    {
+        if (gui_splash_expire == 0)
+        {
+            gui_splash_expire = now + (SPLASH_TIME * 80);
+        }
+        if (kbd_is_key_pressed(KEY_SHOOT_HALF) || (now >= gui_splash_expire))
+        {
+            gui_splash = 0;
+            gui_splash_expire = 0;
+            gui_splash_sec = 0;
+            gui_set_need_restore();
+            if (logo)
+            {
+                logo = NULL;
+            }
+        }
+        else
+        {
+            int sec = (gui_splash_expire - now + 999) / 1000;
+            if (sec <= 0) sec = 1;
+            gui_splash_sec = sec;
+        }
+    }
+    else
+    {
+        gui_splash_sec = 0;
+    }
+}
+
+int main(void)
+{
+    // Simulation 1: Under continuous forced redraw (e.g. forced = 1 or sentinel_lost = 1),
+    // gui_maintenance_tick() MUST still run and expire splash cleanly after 3200ms.
+    gui_splash = SPLASH_TIME;
+    gui_splash_expire = 0;
+    mock_tick = 5000;
+
+    int forced = 1;
+    int sentinel_lost = 1;
+    int buffer_changed = 0;
+
+    for (int t = 0; t <= 3500; t += 20) {
+        mock_tick += 20;
+        // Unconditional maintenance call on forced redraw path
+        gui_maintenance_tick();
+        int state_changed = 0;
+        int need_redraw = forced || sentinel_lost || buffer_changed || state_changed;
+        assert(need_redraw == 1);
+    }
+    // Verify splash expired to 0 despite continuous forced-redraw
+    assert(gui_splash == 0);
+    assert(gui_splash_expire == 0);
+
+    // Simulation 2: Under continuous forced redraw, half-shutter cancellation MUST cancel splash immediately
+    gui_splash = SPLASH_TIME;
+    gui_splash_expire = 0;
+    mock_tick = 20000;
+    gui_maintenance_tick();
+    assert(gui_splash > 0);
+
+    mock_tick += 20;
+    mock_half_shoot = 1; // User presses half-shutter
+    gui_maintenance_tick(); // Maintenance tick must catch cancel
+    assert(gui_splash == 0); // Immediately cancelled
+
+    return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            c_file = Path(tmpdir) / "test_unconditional.c"
+            bin_file = Path(tmpdir) / "test_unconditional"
+            c_file.write_text(harness_c, encoding="utf-8")
+            comp = subprocess.run(
+                ["gcc", "-O2", "-Wall", str(c_file), "-o", str(bin_file)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.assertEqual(comp.returncode, 0, f"Compilation failed: {comp.stderr}")
+            run = subprocess.run([str(bin_file)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            self.assertEqual(run.returncode, 0, f"Execution failed: {run.stderr}")
+
+    def test_alt_helper_conf_fields_tracked_in_signature(self):
+        """Verify Reviewer P2 requirement:
+        All conf fields read by gui_draw_alt_helper() in chdk-port/core/gui.c:2553-2700
+        are tracked in struct gui_vis_sig, and any value change triggers a redraw request.
+        Citing: chdk-port/core/gui.c:2553-2700, chdk-port/core/gui_osd.c:860-882.
+        """
+        # 1. Parse chdk-port/core/gui.c:2553-2700 to extract all conf.* fields read by helper drawing
+        gui_c_lines = (REPO_ROOT / "chdk-port" / "core" / "gui.c").read_text(encoding="utf-8").splitlines()[2552:2700]
+        helper_text = "\n".join(gui_c_lines)
+        helper_conf_fields = sorted(set(re.findall(r"\bconf\.(\w+)", helper_text)))
+
+        # Required minimums specified by reviewer
+        self.assertIn("show_histo", helper_conf_fields)
+        self.assertIn("zebra_draw", helper_conf_fields)
+        self.assertIn("show_osd", helper_conf_fields)
+        self.assertIn("save_raw", helper_conf_fields)
+        self.assertIn("override_disable", helper_conf_fields)
+
+        # 2. Verify all extracted fields are present in struct gui_vis_sig in tools/build_port41_full.py
+        build_text = BUILD_SCRIPT.read_text(encoding="utf-8")
+        sig_start = build_text.find("struct gui_vis_sig {")
+        self.assertGreater(sig_start, 0)
+        sig_end = build_text.find("};", sig_start)
+        sig_body = build_text[sig_start:sig_end]
+
+        for field in helper_conf_fields:
+            self.assertIn(
+                field,
+                sig_body,
+                f"conf.{field} read in chdk-port/core/gui.c:2553-2700 must be tracked in struct gui_vis_sig",
+            )
+
+        # 3. Host C simulation: mutate each conf field and verify gui_check_state_changed() returns 1
+        fields_c_struct = "\n    ".join(
+            f"confColor {f};" if f in ("menu_color", "menu_title_color") else f"int {f};"
+            for f in helper_conf_fields
+        )
+        fields_sig_struct = fields_c_struct
+        fields_assign = "\n    ".join(f"current_sig.{f} = conf.{f};" for f in helper_conf_fields)
+        fields_compare = " ||\n             ".join(
+            f"memcmp(&last_gui_sig.{f}, &current_sig.{f}, sizeof(confColor)) != 0"
+            if f in ("menu_color", "menu_title_color")
+            else f"last_gui_sig.{f} != current_sig.{f}"
+            for f in helper_conf_fields
+        )
+        fields_array = ", ".join(
+            f"(int*)&conf.{f}" if f in ("menu_color", "menu_title_color") else f"&conf.{f}"
+            for f in helper_conf_fields
+        )
+        num_fields = len(helper_conf_fields)
+
+        harness_c = f"""
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <assert.h>
+
+typedef struct {{
+    unsigned char   col;
+    unsigned char   type;
+}} chdkColor;
+
+typedef struct {{
+    chdkColor       fg;
+    chdkColor       bg;
+}} confColor;
+
+static int mock_tick = 0;
+int get_tick_count(void) {{ return mock_tick; }}
+int kbd_is_key_pressed(int k) {{ (void)k; return 0; }}
+int gui_menu_needs_redraw(void) {{ return 0; }}
+int gui_menu_get_curr_item(void) {{ return 0; }}
+
+static void *gui_mode = (void*)0x1000;
+struct {{
+    struct {{
+        int gui_mode;
+        int gui_mode_alt;
+        int gui_mode_none;
+    }} state;
+}} camera_info;
+
+struct {{
+    {fields_c_struct}
+}} conf;
+
+struct gui_vis_sig {{
+    void *mode_ptr;
+    int gui_mode;
+    int helper_due;
+    int splash_sec;
+    int menu_item;
+    {fields_sig_struct}
+}};
+
+static struct gui_vis_sig last_gui_sig;
+static int gui_sig_initialized = 0;
+
+int gui_check_state_changed(void)
+{{
+    int dirty = 0;
+    struct gui_vis_sig current_sig;
+    current_sig.mode_ptr = (void*)gui_mode;
+    current_sig.gui_mode = camera_info.state.gui_mode;
+    current_sig.helper_due = 0;
+    current_sig.splash_sec = 0;
+    current_sig.menu_item = 0;
+    {fields_assign}
+
+    int sig_changed = 0;
+    if (!gui_sig_initialized)
+    {{
+        gui_sig_initialized = 1;
+        sig_changed = 1;
+    }}
+    else if (last_gui_sig.mode_ptr != current_sig.mode_ptr ||
+             last_gui_sig.gui_mode != current_sig.gui_mode ||
+             {fields_compare})
+    {{
+        sig_changed = 1;
+    }}
+
+    last_gui_sig = current_sig;
+    return dirty || sig_changed;
+}}
+
+int main(void)
+{{
+    int *conf_ptrs[] = {{ {fields_array} }};
+    int count = {num_fields};
+
+    // Initialize state
+    assert(gui_check_state_changed() == 1);
+    assert(gui_check_state_changed() == 0);
+
+    // Verify each conf field mutation triggers redraw and stays clean afterwards
+    for (int i = 0; i < count; i++) {{
+        (*conf_ptrs[i]) += 1;
+        // Mutation must trigger redraw
+        assert(gui_check_state_changed() == 1);
+        // Clean tick must not trigger redraw
+        assert(gui_check_state_changed() == 0);
+    }}
+
+    return 0;
+}}
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            c_file = Path(tmpdir) / "test_conf_fields.c"
+            bin_file = Path(tmpdir) / "test_conf_fields"
+            c_file.write_text(harness_c, encoding="utf-8")
+            comp = subprocess.run(
+                ["gcc", "-O2", "-Wall", str(c_file), "-o", str(bin_file)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.assertEqual(comp.returncode, 0, f"Compilation failed: {comp.stderr}")
+            run = subprocess.run([str(bin_file)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            self.assertEqual(run.returncode, 0, f"Execution failed: {run.stderr}")
 
     def test_lib_source(self):
         lib_c = REPO_ROOT / "full_build" / "g3x" / "lib.c"
@@ -465,7 +883,7 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
         self._require_toolchain()
 
         diskboot = OUT_DIR_GUI / "DISKBOOT.BIN"
-        if not diskboot.is_file() or diskboot.stat().st_size != 123609:
+        if not diskboot.is_file() or diskboot.stat().st_size != 123913:
             env = os.environ.copy()
             if WRAPPER_SCRIPT.is_file() and os.access(WRAPPER_SCRIPT, os.X_OK):
                 env["MAKEFLAGS"] = f"CC={WRAPPER_SCRIPT}"
@@ -480,10 +898,10 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
             self.assertEqual(res.returncode, 0, f"GUI fix build failed: {res.stderr}")
 
         self.assertTrue(diskboot.is_file(), f"Expected {diskboot} to exist")
-        self.assertEqual(diskboot.stat().st_size, 123609)
+        self.assertEqual(diskboot.stat().st_size, 123913)
         self.assertEqual(
             sha256_file(diskboot),
-            "06f8e1b6da3b9f77525cfc96ab5a25b82dca1a94da25989735826a569d04838b",
+            "1b3d1a036530a54783696be08207081bc5da08ece5677fb6d1fc4142518a5be4",
         )
 
         # Check manifests
@@ -492,10 +910,10 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
             self.assertTrue(mpath.is_file(), f"Expected {mpath} to exist")
             with open(mpath, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["size"], 123609)
+            self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["size"], 123913)
             self.assertEqual(
                 data["artifacts"]["DISKBOOT.BIN"]["sha256"],
-                "06f8e1b6da3b9f77525cfc96ab5a25b82dca1a94da25989735826a569d04838b",
+                "1b3d1a036530a54783696be08207081bc5da08ece5677fb6d1fc4142518a5be4",
             )
             self.assertEqual(data["artifacts"]["modules_count"], 34)
 
@@ -533,10 +951,10 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
             s2 = snapshot_distribution(Path(td2))
             self.assertIn("DISKBOOT.BIN", s1)
             self.assertIn("DISKBOOT.BIN", s2)
-            self.assertEqual(s1["DISKBOOT.BIN"][0], 123609)
+            self.assertEqual(s1["DISKBOOT.BIN"][0], 123913)
             self.assertEqual(
                 s1["DISKBOOT.BIN"][1],
-                "06f8e1b6da3b9f77525cfc96ab5a25b82dca1a94da25989735826a569d04838b",
+                "1b3d1a036530a54783696be08207081bc5da08ece5677fb6d1fc4142518a5be4",
             )
             # Compare DISKBOOT.BIN plus every CHDK/ file hash
             self.assertEqual(s1, s2, "Two clean G3X_GUI_FIX=1 builds produced different hashes")
@@ -567,10 +985,10 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
             s4 = snapshot_distribution(Path(td4))
             self.assertIn("DISKBOOT.BIN", s3)
             self.assertIn("DISKBOOT.BIN", s4)
-            self.assertEqual(s3["DISKBOOT.BIN"][0], 123665)
+            self.assertEqual(s3["DISKBOOT.BIN"][0], 123977)
             self.assertEqual(
                 s3["DISKBOOT.BIN"][1],
-                "d0e4648719fc37f38f49f1ad202592c87f0604bed9417e60be430c1b6a4f9e38",
+                "d96aed5ac212e9e1582bd7364a594df79976ac56090d579edb09223fdb6d6ff0",
             )
             # Compare DISKBOOT.BIN plus every CHDK/ file hash
             self.assertEqual(s3, s4, "Two clean G3X_GUI_FIX=1 FULL_HOOKS=1 builds produced different hashes")
@@ -580,7 +998,7 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
         self._require_toolchain()
 
         diskboot = OUT_DIR_GUI_HOOKS / "DISKBOOT.BIN"
-        if not diskboot.is_file() or diskboot.stat().st_size != 123665:
+        if not diskboot.is_file() or diskboot.stat().st_size != 123977:
             env = os.environ.copy()
             if WRAPPER_SCRIPT.is_file() and os.access(WRAPPER_SCRIPT, os.X_OK):
                 env["MAKEFLAGS"] = f"CC={WRAPPER_SCRIPT}"
@@ -594,10 +1012,10 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
             )
             self.assertEqual(res.returncode, 0, f"GUI fix + full hooks build failed: {res.stderr}")
 
-        self.assertEqual(diskboot.stat().st_size, 123665)
+        self.assertEqual(diskboot.stat().st_size, 123977)
         self.assertEqual(
             sha256_file(diskboot),
-            "d0e4648719fc37f38f49f1ad202592c87f0604bed9417e60be430c1b6a4f9e38",
+            "d96aed5ac212e9e1582bd7364a594df79976ac56090d579edb09223fdb6d6ff0",
         )
 
         for mdir in [MANIFESTS_DIR, DOCS_MANIFESTS_DIR]:
@@ -605,10 +1023,10 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
             self.assertTrue(mpath.is_file(), f"Expected {mpath} to exist")
             with open(mpath, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["size"], 123665)
+            self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["size"], 123977)
             self.assertEqual(
                 data["artifacts"]["DISKBOOT.BIN"]["sha256"],
-                "d0e4648719fc37f38f49f1ad202592c87f0604bed9417e60be430c1b6a4f9e38",
+                "d96aed5ac212e9e1582bd7364a594df79976ac56090d579edb09223fdb6d6ff0",
             )
             self.assertIn("FULL_HOOKS=1", data["build"]["flags"])
             self.assertIn("G3X_GUI_FIX=1", data["build"]["flags"])
