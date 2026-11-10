@@ -201,6 +201,20 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
         self._require_toolchain()
 
         diskboot = OUT_DIR_GUI / "DISKBOOT.BIN"
+        if not diskboot.is_file():
+            env = os.environ.copy()
+            if WRAPPER_SCRIPT.is_file() and os.access(WRAPPER_SCRIPT, os.X_OK):
+                env["MAKEFLAGS"] = f"CC={WRAPPER_SCRIPT}"
+            res = subprocess.run(
+                ["python3", "-B", str(BUILD_SCRIPT), "--gui-fix", "--out-dir", str(OUT_DIR_GUI)],
+                cwd=str(REPO_ROOT),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(res.returncode, 0, f"GUI fix build failed: {res.stderr}")
+
         self.assertTrue(diskboot.is_file(), f"Expected {diskboot} to exist")
         self.assertEqual(diskboot.stat().st_size, 123361)
         self.assertEqual(
@@ -221,17 +235,55 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
             )
             self.assertEqual(data["artifacts"]["modules_count"], 34)
 
+    def test_gui_fix_reproducible_build(self):
+        """Verify that two clean full builds with G3X_GUI_FIX=1 give identical hashes."""
+        self._require_toolchain()
+
+        rebuild_dir = REPO_ROOT / "out" / "port42-gui-rebuild"
+        if not (rebuild_dir / "DISKBOOT.BIN").is_file():
+            env = os.environ.copy()
+            if WRAPPER_SCRIPT.is_file() and os.access(WRAPPER_SCRIPT, os.X_OK):
+                env["MAKEFLAGS"] = f"CC={WRAPPER_SCRIPT}"
+            res = subprocess.run(
+                ["python3", "-B", str(BUILD_SCRIPT), "--gui-fix", "--out-dir", str(rebuild_dir)],
+                cwd=str(REPO_ROOT),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(res.returncode, 0, f"GUI fix rebuild failed: {res.stderr}")
+
+        s1 = snapshot_distribution(OUT_DIR_GUI)
+        s2 = snapshot_distribution(rebuild_dir)
+        self.assertIn("DISKBOOT.BIN", s1)
+        self.assertIn("DISKBOOT.BIN", s2)
+        self.assertEqual(s1, s2, "Two clean G3X_GUI_FIX=1 builds produced different hashes")
+
     def test_gui_fix_full_hooks_build_artifacts_and_manifest(self):
         """Verify G3X_GUI_FIX=1 FULL_HOOKS=1 build produces exact manifest matches."""
         self._require_toolchain()
 
         diskboot = OUT_DIR_GUI_HOOKS / "DISKBOOT.BIN"
-        if diskboot.is_file():
-            self.assertEqual(diskboot.stat().st_size, 123425)
-            self.assertEqual(
-                sha256_file(diskboot),
-                "6e7511e5f40b690f1c501801a59acde19ba17d0abb21ee7a788aaa10407b26a0",
+        if not diskboot.is_file():
+            env = os.environ.copy()
+            if WRAPPER_SCRIPT.is_file() and os.access(WRAPPER_SCRIPT, os.X_OK):
+                env["MAKEFLAGS"] = f"CC={WRAPPER_SCRIPT}"
+            res = subprocess.run(
+                ["python3", "-B", str(BUILD_SCRIPT), "--gui-fix", "--full-hooks", "--out-dir", str(OUT_DIR_GUI_HOOKS)],
+                cwd=str(REPO_ROOT),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
             )
+            self.assertEqual(res.returncode, 0, f"GUI fix + full hooks build failed: {res.stderr}")
+
+        self.assertEqual(diskboot.stat().st_size, 123425)
+        self.assertEqual(
+            sha256_file(diskboot),
+            "6e7511e5f40b690f1c501801a59acde19ba17d0abb21ee7a788aaa10407b26a0",
+        )
 
         for mdir in [MANIFESTS_DIR, DOCS_MANIFESTS_DIR]:
             mpath = mdir / "port42_gui_fix_full_hooks_manifest.json"
@@ -250,7 +302,34 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
         """Verify that with GUI fix switch OFF, the default full build matches manifests/port41_manifest.json."""
         self._require_toolchain()
 
-        diskboot = OUT_DIR_FULL / "DISKBOOT.BIN"
+        verify_dir = REPO_ROOT / "out" / "port41-full-switch-off"
+        # If verify_dir doesn't exist or isn't populated with default baseline, build it
+        diskboot = verify_dir / "DISKBOOT.BIN"
+        if not diskboot.is_file() or diskboot.stat().st_size != 124097:
+            # Fall back to OUT_DIR_FULL if it already has the 124097 baseline
+            if (OUT_DIR_FULL / "DISKBOOT.BIN").is_file() and (OUT_DIR_FULL / "DISKBOOT.BIN").stat().st_size == 124097:
+                target_dir = OUT_DIR_FULL
+                diskboot = target_dir / "DISKBOOT.BIN"
+            else:
+                env = os.environ.copy()
+                env.pop("G3X_GUI_FIX", None)
+                env.pop("FULL_HOOKS", None)
+                if WRAPPER_SCRIPT.is_file() and os.access(WRAPPER_SCRIPT, os.X_OK):
+                    env["MAKEFLAGS"] = f"CC={WRAPPER_SCRIPT}"
+                res = subprocess.run(
+                    ["python3", "-B", str(BUILD_SCRIPT), "--out-dir", str(verify_dir)],
+                    cwd=str(REPO_ROOT),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    env=env,
+                )
+                self.assertEqual(res.returncode, 0, f"Full build with GUI switch off failed: {res.stderr}")
+                target_dir = verify_dir
+                diskboot = target_dir / "DISKBOOT.BIN"
+        else:
+            target_dir = verify_dir
+
         self.assertTrue(diskboot.is_file(), f"Expected {diskboot} to exist")
         self.assertEqual(diskboot.stat().st_size, 124097)
         self.assertEqual(
@@ -261,7 +340,7 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
         with open(MANIFESTS_DIR / "port41_manifest.json", "r", encoding="utf-8") as f:
             port41_manifest = json.load(f)
 
-        actual = snapshot_distribution(OUT_DIR_FULL)
+        actual = snapshot_distribution(target_dir)
         self.assertEqual(
             actual["DISKBOOT.BIN"],
             (
@@ -269,6 +348,9 @@ class TestPort42GuiFixBuildExecution(unittest.TestCase):
                 port41_manifest["artifacts"]["DISKBOOT.BIN"]["sha256"],
             ),
         )
+        for rel, info in port41_manifest["artifacts"]["chdk_files"].items():
+            self.assertIn(rel, actual, f"Missing file from switch-off build: {rel}")
+            self.assertEqual(actual[rel], (info["size"], info["sha256"]), f"Hash/size mismatch for {rel}")
 
     def test_candidate_port2a_invariance(self):
         """Verify candidate_port2a produces byte-identical DISKBOOT.BIN."""
