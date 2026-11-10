@@ -76,16 +76,63 @@ def sha256_file(path: Path) -> str:
 def snapshot_distribution(out_path: Path) -> dict[str, tuple[int, str]]:
     snapshot: dict[str, tuple[int, str]] = {}
     diskboot = out_path / "DISKBOOT.BIN"
-    if diskboot.is_file():
-        snapshot["DISKBOOT.BIN"] = (diskboot.stat().st_size, sha256_file(diskboot))
+    assert diskboot.is_file(), f"Expected DISKBOOT.BIN to exist in {out_path}"
+    snapshot["DISKBOOT.BIN"] = (diskboot.stat().st_size, sha256_file(diskboot))
+
     chdk_dir = out_path / "CHDK"
-    if chdk_dir.is_dir():
-        for root, dirs, files in os.walk(chdk_dir):
-            for f in sorted(files):
-                p = Path(root) / f
-                rel = str(p.relative_to(out_path))
-                snapshot[rel] = (p.stat().st_size, sha256_file(p))
+    assert chdk_dir.is_dir(), f"Expected CHDK/ directory to exist in {out_path}"
+    for root, dirs, files in os.walk(chdk_dir):
+        for f in sorted(files):
+            p = Path(root) / f
+            rel = str(p.relative_to(out_path))
+            snapshot[rel] = (p.stat().st_size, sha256_file(p))
     return snapshot
+
+
+_SHARED_GUI_FIX_DIR: tempfile.TemporaryDirectory | None = None
+_SHARED_GUI_FIX_SNAP: dict[str, tuple[int, str]] | None = None
+_SHARED_GUI_FIX_PROC: subprocess.CompletedProcess | None = None
+
+
+def get_shared_gui_fix_build() -> tuple[Path, subprocess.CompletedProcess, dict[str, tuple[int, str]]]:
+    """Provide a fresh, self-contained G3X_GUI_FIX=1 build in a temporary directory.
+
+    Reused across test_compiled_symbols and test_gui_fix_reproducible_build
+    so the build runs once in a clean tempdir, keeps staging intact for ELF symbol checks,
+    and acts as Build 1 for the byte-for-byte reproducibility check.
+    """
+    global _SHARED_GUI_FIX_DIR, _SHARED_GUI_FIX_SNAP, _SHARED_GUI_FIX_PROC
+    if _SHARED_GUI_FIX_DIR is None:
+        _SHARED_GUI_FIX_DIR = tempfile.TemporaryDirectory()
+        out_dir = Path(_SHARED_GUI_FIX_DIR.name)
+
+        assert WRAPPER_SCRIPT.is_file() and os.access(
+            WRAPPER_SCRIPT, os.X_OK
+        ), f"Deterministic compiler wrapper missing or not executable at {WRAPPER_SCRIPT}"
+        env = os.environ.copy()
+        env["MAKEFLAGS"] = f"CC={WRAPPER_SCRIPT}"
+
+        _SHARED_GUI_FIX_PROC = subprocess.run(
+            ["python3", "-B", str(BUILD_SCRIPT), "--gui-fix", "--keep-stage", "--out-dir", str(out_dir)],
+            cwd=str(REPO_ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+        if _SHARED_GUI_FIX_PROC.returncode == 0:
+            _SHARED_GUI_FIX_SNAP = snapshot_distribution(out_dir)
+        else:
+            _SHARED_GUI_FIX_SNAP = {}
+    return Path(_SHARED_GUI_FIX_DIR.name), _SHARED_GUI_FIX_PROC, _SHARED_GUI_FIX_SNAP
+
+
+def tearDownModule():
+    """Clean up shared temporary build directory on test module exit."""
+    global _SHARED_GUI_FIX_DIR
+    if _SHARED_GUI_FIX_DIR is not None:
+        _SHARED_GUI_FIX_DIR.cleanup()
+        _SHARED_GUI_FIX_DIR = None
 
 
 class TestPort42GuiTrialPlanDoc(unittest.TestCase):
@@ -239,6 +286,8 @@ class TestPort42GuiManifestIntegrity(unittest.TestCase):
                 self.assertTrue(path_str.startswith("CHDK/"), f"File {path_str} must be in CHDK/")
                 self.assertIn("size", info)
                 self.assertIn("sha256", info)
+                self.assertGreater(info["size"], 0)
+                self.assertEqual(len(info["sha256"]), 64)
 
 
 class TestPort42GuiSymbolAndSourceChecks(unittest.TestCase):
@@ -246,7 +295,7 @@ class TestPort42GuiSymbolAndSourceChecks(unittest.TestCase):
 
     def test_no_periodic_forced_redraw_in_gui_tick_path(self):
         """Verify no periodic forced redraw loop exists in GUI tick path."""
-        # tools/build_port41_full.py core patches
+        self.assertTrue(BUILD_SCRIPT.is_file(), f"Missing build script at {BUILD_SCRIPT}")
         build_py = BUILD_SCRIPT.read_text(encoding="utf-8")
 
         # Must have gui_maintenance_tick unconditionally called
@@ -257,15 +306,23 @@ class TestPort42GuiSymbolAndSourceChecks(unittest.TestCase):
 
         # Must NOT have periodic forced-redraw pattern ((cnt++) & N) in main loop replacement
         main_patch_start = build_py.find("main_replacement =")
+        self.assertGreater(main_patch_start, -1, "main_replacement anchor not found in build script")
         main_patch_end = build_py.find("core_conf_c =", main_patch_start)
+        self.assertGreater(main_patch_end, main_patch_start, "core_conf_c anchor not found in build script")
         main_patch = build_py[main_patch_start:main_patch_end]
         self.assertNotIn("cnt++", main_patch)
         self.assertNotIn("& 3", main_patch)
 
     def test_draw_target_uses_active_bitmap_buffer(self):
         """Verify draw target uses active_bitmap_buffer & 1."""
-        lib_c = (REPO_ROOT / "full_build" / "g3x" / "lib.c").read_text(encoding="utf-8")
-        gui_menu_c = (REPO_ROOT / "full_build" / "g3x" / "gui_menu.c").read_text(encoding="utf-8")
+        lib_c_path = REPO_ROOT / "full_build" / "g3x" / "lib.c"
+        gui_menu_c_path = REPO_ROOT / "full_build" / "g3x" / "gui_menu.c"
+        self.assertTrue(lib_c_path.is_file(), f"Missing {lib_c_path}")
+        self.assertTrue(gui_menu_c_path.is_file(), f"Missing {gui_menu_c_path}")
+        self.assertTrue(BUILD_SCRIPT.is_file(), f"Missing {BUILD_SCRIPT}")
+
+        lib_c = lib_c_path.read_text(encoding="utf-8")
+        gui_menu_c = gui_menu_c_path.read_text(encoding="utf-8")
         build_py = BUILD_SCRIPT.read_text(encoding="utf-8")
 
         # lib.c active buffer indexing
@@ -284,10 +341,18 @@ class TestPort42GuiSymbolAndSourceChecks(unittest.TestCase):
 
     def test_uyvy_black_white_constants_and_opacity(self):
         """Verify DIGIC 6 UYVY black/white constants and opacity 0xFF."""
-        gui_menu_c = (REPO_ROOT / "full_build" / "g3x" / "gui_menu.c").read_text(encoding="utf-8")
-        lib_c = (REPO_ROOT / "full_build" / "g3x" / "lib.c").read_text(encoding="utf-8")
+        gui_menu_c_path = REPO_ROOT / "full_build" / "g3x" / "gui_menu.c"
+        lib_c_path = REPO_ROOT / "full_build" / "g3x" / "lib.c"
+        doc_fix_path = REPO_ROOT / "docs" / "PORT42_GUI_FIX.md"
+        self.assertTrue(gui_menu_c_path.is_file(), f"Missing {gui_menu_c_path}")
+        self.assertTrue(lib_c_path.is_file(), f"Missing {lib_c_path}")
+        self.assertTrue(BUILD_SCRIPT.is_file(), f"Missing {BUILD_SCRIPT}")
+        self.assertTrue(doc_fix_path.is_file(), f"Missing {doc_fix_path}")
+
+        gui_menu_c = gui_menu_c_path.read_text(encoding="utf-8")
+        lib_c = lib_c_path.read_text(encoding="utf-8")
         build_py = BUILD_SCRIPT.read_text(encoding="utf-8")
-        doc_fix = (REPO_ROOT / "docs" / "PORT42_GUI_FIX.md").read_text(encoding="utf-8")
+        doc_fix = doc_fix_path.read_text(encoding="utf-8")
 
         # Neutral UYVY black (0x00800080) and opacity 0xFF
         self.assertIn("0x00800080", gui_menu_c)
@@ -310,7 +375,11 @@ class TestPort42GuiSymbolAndSourceChecks(unittest.TestCase):
 
     def test_16x32_font_routines(self):
         """Verify 16x32 font routines and 2x scaling in gui_menu.c."""
-        gui_menu_c = (REPO_ROOT / "full_build" / "g3x" / "gui_menu.c").read_text(encoding="utf-8")
+        gui_menu_c_path = REPO_ROOT / "full_build" / "g3x" / "gui_menu.c"
+        self.assertTrue(gui_menu_c_path.is_file(), f"Missing {gui_menu_c_path}")
+        self.assertTrue(BUILD_SCRIPT.is_file(), f"Missing {BUILD_SCRIPT}")
+
+        gui_menu_c = gui_menu_c_path.read_text(encoding="utf-8")
         build_py = BUILD_SCRIPT.read_text(encoding="utf-8")
 
         # Font rasterizer and dimensions
@@ -329,7 +398,9 @@ class TestPort42GuiSymbolAndSourceChecks(unittest.TestCase):
 
     def test_880x576_layout(self):
         """Verify 880x576 solid black layout."""
-        gui_menu_c = (REPO_ROOT / "full_build" / "g3x" / "gui_menu.c").read_text(encoding="utf-8")
+        gui_menu_c_path = REPO_ROOT / "full_build" / "g3x" / "gui_menu.c"
+        self.assertTrue(gui_menu_c_path.is_file(), f"Missing {gui_menu_c_path}")
+        gui_menu_c = gui_menu_c_path.read_text(encoding="utf-8")
 
         self.assertIn("880", gui_menu_c)
         self.assertIn("576", gui_menu_c)
@@ -337,22 +408,86 @@ class TestPort42GuiSymbolAndSourceChecks(unittest.TestCase):
         self.assertIn("g3x_fill_menu_opaque_black", gui_menu_c)
 
     def test_compiled_symbols(self):
-        """Verify symbols in out/port42-gui artifacts when toolchain nm is available."""
+        """Verify compiled GUI-fix symbols in stage_chdk/platform/g3x/sub/110c/main.elf.
+
+        Asserts that:
+        1. Fresh build in a temp dir with G3X_GUI_FIX=1 succeeds without errors.
+        2. Staged core ELF exists at <stage>/platform/g3x/sub/110c/main.elf (fails hard if missing).
+        3. Pinned toolchain nm executes cleanly (returncode == 0) and produces non-empty output.
+        4. Expected GUI-fix symbols are present:
+           - g3x_draw_char_16x32: 16x32 integer font glyph rasterizer
+           - g3x_fill_menu_opaque_black: solid 880x576 black menu fill targeting active_bitmap_buffer & 1
+           - gui_check_state_changed: state-change detector eliminating 4-tick forced redraw flicker
+           - vid_get_bitmap_fb: active bitmap buffer accessor masked with (active_bitmap_buffer & 1)
+           - vid_get_opacity_active_buffer: active opacity buffer accessor masked with (active_bitmap_buffer & 1)
+           - gui_maintenance_tick: unconditional GUI tick maintenance routine
+           - draw_test_guard: sentinel test verifying bitmap buffer stability
+           - draw_set_guard: sentinel setter writing 0x42 into opacity_buffer[active_bitmap_buffer & 1]
+        """
+        if not (TOOLCHAIN_GCC.is_file() and os.access(TOOLCHAIN_GCC, os.X_OK)):
+            self.skipTest(f"Pinned toolchain gcc not found at {TOOLCHAIN_GCC}")
         if not (TOOLCHAIN_NM.is_file() and os.access(TOOLCHAIN_NM, os.X_OK)):
-            self.skipTest(f"Toolchain nm not available at {TOOLCHAIN_NM}")
+            self.skipTest(f"Pinned toolchain nm not found at {TOOLCHAIN_NM}")
 
-        core_elf = OUT_DIR_GUI / "stage_chdk" / "core" / "main.elf"
-        if not core_elf.is_file():
-            # If stage_chdk was cleaned, skip ELF symbol test
-            return
+        td_path, build_proc, _ = get_shared_gui_fix_build()
+        self.assertEqual(
+            build_proc.returncode,
+            0,
+            f"G3X_GUI_FIX=1 build failed with returncode {build_proc.returncode}:\n"
+            f"STDOUT:\n{build_proc.stdout}\nSTDERR:\n{build_proc.stderr}",
+        )
 
-        res = subprocess.run([str(TOOLCHAIN_NM), str(core_elf)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        if res.returncode == 0:
-            nm_out = res.stdout
-            self.assertIn("g3x_draw_char_16x32", nm_out)
-            self.assertIn("g3x_fill_menu_opaque_black", nm_out)
-            self.assertIn("gui_maintenance_tick", nm_out)
-            self.assertIn("gui_check_state_changed", nm_out)
+        core_elf = td_path / "stage_chdk" / "platform" / "g3x" / "sub" / "110c" / "main.elf"
+        self.assertTrue(
+            core_elf.is_file(),
+            f"Staged core ELF does not exist at expected path: {core_elf}",
+        )
+        self.assertGreater(core_elf.stat().st_size, 0, f"Staged core ELF is empty: {core_elf}")
+
+        res = subprocess.run(
+            [str(TOOLCHAIN_NM), str(core_elf)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.assertEqual(
+            res.returncode,
+            0,
+            f"arm-none-eabi-nm failed on {core_elf} with returncode {res.returncode}:\n{res.stderr}",
+        )
+        nm_out = res.stdout
+        self.assertTrue(nm_out.strip(), f"arm-none-eabi-nm produced empty output for {core_elf}")
+
+        # Parse symbol table: lines are "<addr> <type> <name>"
+        parsed_symbols: dict[str, str] = {}
+        for line in nm_out.splitlines():
+            parts = line.strip().split()
+            if len(parts) >= 3:
+                parsed_symbols[parts[2]] = parts[1]
+
+        expected_symbols = {
+            "g3x_draw_char_16x32": "16x32 font character renderer",
+            "g3x_fill_menu_opaque_black": "880x576 solid black panel fill with active_bitmap_buffer & 1",
+            "gui_check_state_changed": "state-change detection avoiding periodic redraw flicker",
+            "vid_get_bitmap_fb": "active bitmap frame buffer accessor masked with & 1",
+            "vid_get_opacity_active_buffer": "active opacity buffer accessor masked with & 1",
+            "gui_maintenance_tick": "unconditional GUI maintenance tick routine",
+            "draw_test_guard": "sentinel guard test for active buffer & 1",
+            "draw_set_guard": "sentinel guard setter for active buffer & 1",
+        }
+
+        for sym, desc in expected_symbols.items():
+            self.assertIn(
+                sym,
+                parsed_symbols,
+                f"Expected GUI-fix symbol '{sym}' ({desc}) missing from nm symbol table of {core_elf}",
+            )
+            sym_type = parsed_symbols[sym]
+            self.assertIn(
+                sym_type,
+                ("T", "t"),
+                f"Symbol '{sym}' expected in text section (T/t), found type '{sym_type}'",
+            )
 
 
 class TestPort42GuiTrialExecution(unittest.TestCase):
@@ -360,31 +495,36 @@ class TestPort42GuiTrialExecution(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.has_toolchain = TOOLCHAIN_GCC.is_file() and os.access(TOOLCHAIN_GCC, os.X_OK)
+        cls.has_toolchain = (
+            TOOLCHAIN_GCC.is_file()
+            and os.access(TOOLCHAIN_GCC, os.X_OK)
+            and TOOLCHAIN_NM.is_file()
+            and os.access(TOOLCHAIN_NM, os.X_OK)
+        )
 
     def _require_toolchain(self):
         if not self.has_toolchain:
-            self.skipTest(f"Pinned toolchain gcc not found at {TOOLCHAIN_GCC}")
+            self.skipTest(f"Pinned toolchain gcc or nm not found under {TOOLCHAIN_BIN}")
 
     def test_gui_fix_reproducible_build(self):
         """Verify that GUI-fixed full build builds reproducibly in fresh temporary directories."""
         self._require_toolchain()
 
+        self.assertTrue(
+            WRAPPER_SCRIPT.is_file() and os.access(WRAPPER_SCRIPT, os.X_OK),
+            f"Deterministic compiler wrapper missing or not executable at {WRAPPER_SCRIPT}",
+        )
         env = os.environ.copy()
-        if WRAPPER_SCRIPT.is_file() and os.access(WRAPPER_SCRIPT, os.X_OK):
-            env["MAKEFLAGS"] = f"CC={WRAPPER_SCRIPT}"
+        env["MAKEFLAGS"] = f"CC={WRAPPER_SCRIPT}"
 
-        with tempfile.TemporaryDirectory() as td1, tempfile.TemporaryDirectory() as td2:
-            res1 = subprocess.run(
-                ["python3", "-B", str(BUILD_SCRIPT), "--gui-fix", "--out-dir", td1],
-                cwd=str(REPO_ROOT),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                env=env,
-            )
-            self.assertEqual(res1.returncode, 0, f"Build 1 failed: {res1.stderr}")
+        td1_path, res1, snap1 = get_shared_gui_fix_build()
+        self.assertEqual(
+            res1.returncode,
+            0,
+            f"Build 1 failed with returncode {res1.returncode}:\n{res1.stderr}",
+        )
 
+        with tempfile.TemporaryDirectory() as td2:
             res2 = subprocess.run(
                 ["python3", "-B", str(BUILD_SCRIPT), "--gui-fix", "--out-dir", td2],
                 cwd=str(REPO_ROOT),
@@ -393,21 +533,34 @@ class TestPort42GuiTrialExecution(unittest.TestCase):
                 text=True,
                 env=env,
             )
-            self.assertEqual(res2.returncode, 0, f"Build 2 failed: {res2.stderr}")
+            self.assertEqual(
+                res2.returncode,
+                0,
+                f"Build 2 failed with returncode {res2.returncode}:\n{res2.stderr}",
+            )
 
-            snap1 = snapshot_distribution(Path(td1))
             snap2 = snapshot_distribution(Path(td2))
-            self.assertEqual(snap1, snap2, "Build 1 and Build 2 must produce byte-identical distribution trees")
+            self.assertEqual(
+                snap1,
+                snap2,
+                "Build 1 and Build 2 must produce byte-identical distribution trees",
+            )
             self.assertIn("DISKBOOT.BIN", snap1)
-            self.assertEqual(snap1["DISKBOOT.BIN"], (EXPECTED_GUI_DEFAULT_SIZE, EXPECTED_GUI_DEFAULT_SHA))
+            self.assertEqual(
+                snap1["DISKBOOT.BIN"],
+                (EXPECTED_GUI_DEFAULT_SIZE, EXPECTED_GUI_DEFAULT_SHA),
+            )
 
     def test_gui_fix_full_hooks_reproducible_build(self):
         """Verify that GUI fix + FULL_HOOKS full build builds reproducibly in fresh temporary directories."""
         self._require_toolchain()
 
+        self.assertTrue(
+            WRAPPER_SCRIPT.is_file() and os.access(WRAPPER_SCRIPT, os.X_OK),
+            f"Deterministic compiler wrapper missing or not executable at {WRAPPER_SCRIPT}",
+        )
         env = os.environ.copy()
-        if WRAPPER_SCRIPT.is_file() and os.access(WRAPPER_SCRIPT, os.X_OK):
-            env["MAKEFLAGS"] = f"CC={WRAPPER_SCRIPT}"
+        env["MAKEFLAGS"] = f"CC={WRAPPER_SCRIPT}"
 
         with tempfile.TemporaryDirectory() as td1, tempfile.TemporaryDirectory() as td2:
             res1 = subprocess.run(
@@ -418,7 +571,11 @@ class TestPort42GuiTrialExecution(unittest.TestCase):
                 text=True,
                 env=env,
             )
-            self.assertEqual(res1.returncode, 0, f"Build 1 failed: {res1.stderr}")
+            self.assertEqual(
+                res1.returncode,
+                0,
+                f"Build 1 failed with returncode {res1.returncode}:\n{res1.stderr}",
+            )
 
             res2 = subprocess.run(
                 ["python3", "-B", str(BUILD_SCRIPT), "--gui-fix", "--full-hooks", "--out-dir", td2],
@@ -428,21 +585,37 @@ class TestPort42GuiTrialExecution(unittest.TestCase):
                 text=True,
                 env=env,
             )
-            self.assertEqual(res2.returncode, 0, f"Build 2 failed: {res2.stderr}")
+            self.assertEqual(
+                res2.returncode,
+                0,
+                f"Build 2 failed with returncode {res2.returncode}:\n{res2.stderr}",
+            )
 
             snap1 = snapshot_distribution(Path(td1))
             snap2 = snapshot_distribution(Path(td2))
             self.assertEqual(snap1, snap2, "FULL_HOOKS builds must be byte-identical")
             self.assertIn("DISKBOOT.BIN", snap1)
-            self.assertEqual(snap1["DISKBOOT.BIN"], (EXPECTED_GUI_HOOKS_SIZE, EXPECTED_GUI_HOOKS_SHA))
+            self.assertEqual(
+                snap1["DISKBOOT.BIN"],
+                (EXPECTED_GUI_HOOKS_SIZE, EXPECTED_GUI_HOOKS_SHA),
+            )
 
     def test_switch_off_reproduces_port41_manifest(self):
         """Verify that with fix switch off, the full build reproduces manifests/port41_manifest.json."""
         self._require_toolchain()
 
+        self.assertTrue(
+            WRAPPER_SCRIPT.is_file() and os.access(WRAPPER_SCRIPT, os.X_OK),
+            f"Deterministic compiler wrapper missing or not executable at {WRAPPER_SCRIPT}",
+        )
         env = os.environ.copy()
-        if WRAPPER_SCRIPT.is_file() and os.access(WRAPPER_SCRIPT, os.X_OK):
-            env["MAKEFLAGS"] = f"CC={WRAPPER_SCRIPT}"
+        env["MAKEFLAGS"] = f"CC={WRAPPER_SCRIPT}"
+
+        port41_manifest_path = MANIFESTS_DIR / "port41_manifest.json"
+        self.assertTrue(
+            port41_manifest_path.is_file(),
+            f"Expected port41_manifest.json at {port41_manifest_path}",
+        )
 
         with tempfile.TemporaryDirectory() as td:
             res = subprocess.run(
@@ -453,10 +626,14 @@ class TestPort42GuiTrialExecution(unittest.TestCase):
                 text=True,
                 env=env,
             )
-            self.assertEqual(res.returncode, 0, f"Switch-off build failed: {res.stderr}")
+            self.assertEqual(
+                res.returncode,
+                0,
+                f"Switch-off build failed with returncode {res.returncode}:\n{res.stderr}",
+            )
 
             actual = snapshot_distribution(Path(td))
-            with open(MANIFESTS_DIR / "port41_manifest.json", "r", encoding="utf-8") as f:
+            with open(port41_manifest_path, "r", encoding="utf-8") as f:
                 port41_manifest = json.load(f)
 
             self.assertEqual(
@@ -475,6 +652,12 @@ class TestPort42GuiTrialExecution(unittest.TestCase):
         self._require_toolchain()
 
         scripts_dir = REPO_ROOT / "scripts"
+        build_cand_py = scripts_dir / "build_candidate_gui3.py"
+        self.assertTrue(
+            build_cand_py.is_file(),
+            f"Missing candidate build script at {build_cand_py}",
+        )
+
         import sys
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
