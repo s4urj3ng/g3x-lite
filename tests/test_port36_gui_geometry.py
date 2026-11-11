@@ -594,8 +594,14 @@ class TestPort36GuiGeometry(unittest.TestCase):
         # Verify milestone header line in HANDOFF.md and PROJECT_STATE.md
         handoff_line1 = HANDOFF_DOC.read_text(encoding="utf-8").splitlines()[0]
         project_state_line1 = PROJECT_STATE_DOC.read_text(encoding="utf-8").splitlines()[0]
-        self.assertEqual(handoff_line1, "# Agent handoff — Current milestone: PORT-36")
-        self.assertEqual(project_state_line1, "# Project state — Current milestone: PORT-36")
+        self.assertEqual(
+            handoff_line1,
+            "# Agent handoff — Current milestone: PORT-42 (see PORT-36..PORT-41 Current State table)",
+        )
+        self.assertEqual(
+            project_state_line1,
+            "# Project state — Current milestone: PORT-42 (see PORT-36..PORT-41 Current State table)",
+        )
 
         # Verify evidence manifest passes tools/port11c_evidence_validator.py
         val_proc = subprocess.run(

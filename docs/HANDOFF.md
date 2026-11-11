@@ -1,4 +1,4 @@
-# Agent handoff — Current milestone: PORT-36
+# Agent handoff — Current milestone: PORT-42 (see PORT-36..PORT-41 Current State table)
 Updated: 2026-11-06
 
 ## PORT-11C — Offline Evidence Validation Harness (Gemini Worker 6, 2026-10-28)
@@ -2589,7 +2589,7 @@ python3 -B tools/port18_trial_report.py private/port18/trial_report.md --out pri
 | Milestone | Candidate / Switch | Status | Next Step |
 |---|---|---|---|
 | PORT-36 | `G3X_GUI2=1` | Merged; owner trial PASS (Mode 12 900x600, stride 928, border verified panel resolution) | Advance to PORT-37 |
-| PORT-37 | `G3X_GUI3=1` | Merged; owner trial PARTIAL (idle flicker eliminated, menu static; unpainted regions / photo show-through remained, see docs/PORT38_GUI_TRACE.md) | Advance to PORT-38 |
+| PORT-37 | `G3X_GUI3=1` | Merged; owner trial partial pass: idle flicker eliminated, but unpainted regions and photo show-through remain (see docs/PORT38_GUI_TRACE.md) | Advance to PORT-38 |
 | PORT-38 | `G3X_GUI4=1` | Merged; owner trial PASS (16x32 font, title bar PASS; edge leaks noted) | Advance to PORT-39 / PORT-40 |
 | PORT-39 | `G3X_SHORTPRESS=1` | Merged; owner trial PASS (power-cut bypassed, normal power-off PASS; start mode handed off) | Advance to PORT-40 / PORT-41 |
 | PORT-40 | `G3X_GUI5=1` | Merged; owner trial pending (centered 880x576 layout, edge leaks fixed, host tests pass) | Advance to PORT-41 |
