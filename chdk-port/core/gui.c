@@ -2437,6 +2437,10 @@ void gui_set_need_redraw()
 //-------------------------------------------------------------------
 void gui_init()
 {
+#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+    /* DBUF startup: initialize and invalidate shadow buffer */
+    g3x_dbuf_shadow_init();
+#endif
     gui_set_mode(&defaultGuiHandler);
     if (conf.start_sound > 0)
     {
@@ -2462,6 +2466,11 @@ gui_handler* gui_set_mode(gui_handler *mode)
 	
 	if ( gui_mode == mode )
 		return gui_mode;
+
+#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+    /* Invalidation: GUI handler/layer changed - clear shadow until new layer completes full draw */
+    g3x_shadow_valid = 0;
+#endif
 
 #ifdef CAM_TOUCHSCREEN_UI
     if (((gui_mode->mode == GUI_MODE_NONE) != (mode->mode == GUI_MODE_NONE)) || // Change from GUI_MODE_NONE to any other or vice-versa
@@ -2692,6 +2701,10 @@ void gui_chdk_draw(int force_redraw)
     }
 
     console_draw(force_redraw);
+#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+    /* Mark shadow valid only after complete draw of the ALT overlay layer has been written */
+    g3x_shadow_valid = 1;
+#endif
 }
 
 //-------------------------------------------------------------------
@@ -2966,13 +2979,22 @@ gui_handler altGuiHandler = { GUI_MODE_ALT, gui_chdk_draw, gui_chdk_kbd_process,
 void gui_redraw(int flag_gui_enforce_redraw)
 {
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
-    if (!draw_test_guard() && (!camera_info.state.gui_mode_none || gui_splash))
+    /* Restore on sentinel loss ONLY when shadow is valid AND a CHDK overlay layer is active */
+    if (!draw_test_guard() && (!camera_info.state.gui_mode_none || gui_splash) && g3x_shadow_valid)
     {
         extern int g3x_dbuf_restore_if_sentinel_lost(void);
         if (g3x_dbuf_restore_if_sentinel_lost())
         {
             return;
         }
+        draw_set_guard();
+        flag_gui_enforce_redraw = 1;
+#ifdef CAM_TOUCHSCREEN_UI
+        redraw_buttons = 1;
+#endif
+    }
+    else if (!draw_test_guard() && (!camera_info.state.gui_mode_none || gui_splash))
+    {
         draw_set_guard();
         flag_gui_enforce_redraw = 1;
 #ifdef CAM_TOUCHSCREEN_UI
@@ -3106,6 +3128,10 @@ void gui_activate_alt_mode()
 
         rbf_set_codepage(FONT_CP_WIN);
         vid_turn_on_updates();
+#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+        /* Invalidation: ALT exit - clear shadow so live view never restores stale overlay */
+        g3x_shadow_valid = 0;
+#endif
         gui_set_mode(&defaultGuiHandler);
 
 	    conf_update_prevent_shutdown();

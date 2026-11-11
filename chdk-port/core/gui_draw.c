@@ -72,10 +72,11 @@ static char* frame_buffer[2];
 
 static unsigned char g3x_shadow_bitmap[G3X_SHADOW_BM_SIZE] __attribute__((aligned(4)));
 static unsigned char g3x_shadow_opacity[G3X_SHADOW_OP_SIZE] __attribute__((aligned(4)));
-static int g3x_shadow_valid = 0;
+int g3x_shadow_valid = 0;
 
 void g3x_dbuf_shadow_init(void)
 {
+    /* Invalidation: DBUF startup / shadow init - clear shadow valid */
     g3x_shadow_valid = 0;
 }
 
@@ -104,7 +105,6 @@ void g3x_dbuf_shadow_draw_pixel(unsigned int offset, unsigned int offs2, unsigne
             g3x_shadow_bitmap[s_bm_offs2 + 1] = (unsigned char)y;
             g3x_shadow_bitmap[s_bm_offs2 + 2] = (unsigned char)v;
         }
-        g3x_shadow_valid = 1;
     }
 }
 
@@ -231,7 +231,6 @@ void g3x_dbuf_fast_fill_rect(coord x1, coord y1, coord x2, coord y2, color cl)
             }
         }
     }
-    g3x_shadow_valid = 1;
 }
 
 void g3x_dbuf_fill_menu_opaque_black(void)
@@ -244,11 +243,11 @@ void g3x_dbuf_fill_menu_opaque_black(void)
 
 int g3x_dbuf_shadow_restore(void)
 {
-    if (!g3x_shadow_valid)
+    /* Restore only when shadow is valid AND CHDK overlay layer is active (not in defaultGuiHandler/live view) */
+    if (!g3x_shadow_valid || camera_info.state.gui_mode_none)
     {
         return 0;
     }
-    extern void vid_bitmap_refresh(void);
     int buf_w = camera_screen.buffer_width ? camera_screen.buffer_width : 928;
     int row_bm_bytes = G3X_SHADOW_WIDTH * 2;
     int row_op_bytes = G3X_SHADOW_WIDTH;
@@ -269,12 +268,18 @@ int g3x_dbuf_shadow_restore(void)
     }
 
     draw_set_guard();
-    vid_bitmap_refresh();
+    /* NOTE: No vid_bitmap_refresh() here! On G3X (DIGIC 6), vid_bitmap_refresh calls _transfer_src_overlay,
+     * which wipes the overlay plane back to stock Canon UI (docs/PORT35_GUI_ADDRESSES.md:35).
+     * The synchronous blit into both bitmap buffers and both opacity buffers stands on its own. */
     return 1;
 }
 
 int g3x_dbuf_restore_if_sentinel_lost(void)
 {
+    if (!g3x_shadow_valid || camera_info.state.gui_mode_none)
+    {
+        return 0;
+    }
     if (!draw_test_guard())
     {
         return g3x_dbuf_shadow_restore();
@@ -829,6 +834,10 @@ int draw_test_guard()
 //-------------------------------------------------------------------
 void draw_init()
 {
+#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+    /* DBUF startup: initialize and invalidate shadow buffer */
+    g3x_dbuf_shadow_init();
+#endif
 #ifndef DRAW_ON_ACTIVE_BITMAP_BUFFER_ONLY
     frame_buffer[0] = vid_get_bitmap_fb();
     frame_buffer[1] = frame_buffer[0] + camera_screen.buffer_size;
@@ -859,6 +868,10 @@ void draw_restore()
     if(draw_is_suspended()) {
         return;
     }
+#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+    /* Invalidation: full erase via draw_restore - clear shadow */
+    g3x_shadow_valid = 0;
+#endif
     vid_bitmap_refresh();
 
     draw_set_guard();

@@ -198,6 +198,10 @@ static int decrement_factor()
 
 //-------------------------------------------------------------------
 static void gui_menu_set_curr_menu(CMenu *menu_ptr, int top_item, int curr_item) {
+#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+    /* Invalidation: menu submenu layer changed - clear shadow until complete redraw */
+    g3x_shadow_valid = 0;
+#endif
     curr_menu = menu_ptr;
     gui_menu_top_item = top_item;
     gui_menu_curr_item = curr_item;
@@ -210,6 +214,10 @@ CMenu* get_curr_menu()
 
 //-------------------------------------------------------------------
 void gui_menu_init(CMenu *menu_ptr) {
+#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+    /* Invalidation: menu initialized / layer changed - clear shadow */
+    g3x_shadow_valid = 0;
+#endif
 
     if (menu_ptr) {
         if (conf.menu_select_first_entry)
@@ -970,13 +978,18 @@ void gui_menu_draw(int enforce_redraw)
         static int dbuf_last_drawn_curr_item = -1;
         static int dbuf_last_drawn_top_item = -1;
         int is_partial_redraw = (gui_menu_redraw == 1 &&
+                                 g3x_shadow_valid &&
                                  dbuf_last_drawn_top_item == gui_menu_top_item &&
                                  dbuf_last_drawn_curr_item >= 0);
         int old_item = dbuf_last_drawn_curr_item;
         int cur_item = gui_menu_curr_item;
 #endif
 
+#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+        if (gui_menu_redraw==2 || (!is_partial_redraw))
+#else
         if (gui_menu_redraw==2)
+#endif
             gui_menu_draw_initial();
 
         gui_menu_redraw=0;
@@ -1130,6 +1143,8 @@ void gui_menu_draw(int enforce_redraw)
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
         dbuf_last_drawn_curr_item = gui_menu_curr_item;
         dbuf_last_drawn_top_item = gui_menu_top_item;
+        /* Mark shadow valid only after complete draw of the menu layer has been written */
+        g3x_shadow_valid = 1;
 #endif
     }
 }
