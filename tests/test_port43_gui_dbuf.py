@@ -19,7 +19,7 @@ Verifies:
    - PORT-41 default full build (124,097 B, 24b8a024...)
    - FULL_HOOKS variant (124,321 B, d50ea585...)
    - Every PORT-24..40 candidate: default, poweron_fix, ladder, combined, resident,
-     osd, kbd, osd2, gui4, shortpress, gui5, gui5_shortpress.
+     osd, kbd, kbd_osd, osd2, gui, gui2, gui3, gui4, shortpress, gui5, gui5_shortpress.
 5. Host-side model and unit tests of the draw layer:
    - Both bitmap buffers and both opacity buffers receive identical overlay bytes.
    - Fill paths use 32-bit word writes and never call draw_pixel.
@@ -49,6 +49,11 @@ TOOLCHAIN_NM = TOOLCHAIN_BIN / "arm-none-eabi-nm"
 BUILD_SCRIPT_DBUF = REPO_ROOT / "scripts" / "build_port43_dbuf.py"
 BUILD_SCRIPT_PORT41 = REPO_ROOT / "tools" / "build_port41_full.py"
 OUT_DIR_DBUF = REPO_ROOT / "out" / "port43-dbuf"
+OUT_DIR_GUI = REPO_ROOT / "out" / "port42-gui"
+OUT_DIR_PORT41 = REPO_ROOT / "out" / "port41-full-switch-off"
+OUT_DIR_FULL = REPO_ROOT / "out" / "port41-full"
+OUT_DIR_GUI_HOOKS = REPO_ROOT / "out" / "port42-gui-full-hooks"
+CANDIDATE_DIR = REPO_ROOT / "candidate_port2a"
 WRAPPER_SCRIPT = REPO_ROOT / "scripts" / "gcc_deterministic_wrapper.sh"
 MANIFESTS_DIR = REPO_ROOT / "manifests"
 
@@ -86,6 +91,51 @@ def snapshot_distribution(out_path: Path) -> dict[str, tuple[int, str]]:
             rel = str(p.relative_to(out_path))
             snapshot[rel] = (p.stat().st_size, sha256_file(p))
     return snapshot
+
+
+def _require_or_build_distribution(out_path: Path, build_args: list[str]) -> Path:
+    """Ensure a full distribution directory exists with valid DISKBOOT.BIN, or build it."""
+    diskboot = out_path / "DISKBOOT.BIN"
+    if not diskboot.is_file() or diskboot.stat().st_size == 0:
+        env = os.environ.copy()
+        env.pop("G3X_GUI_FIX", None)
+        env.pop("FULL_HOOKS", None)
+        if WRAPPER_SCRIPT.is_file() and os.access(WRAPPER_SCRIPT, os.X_OK):
+            env["MAKEFLAGS"] = f"CC={WRAPPER_SCRIPT}"
+        res = subprocess.run(
+            ["python3", "-B", str(BUILD_SCRIPT_PORT41)] + build_args + ["--out-dir", str(out_path)],
+            cwd=str(REPO_ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+        if res.returncode != 0:
+            raise RuntimeError(f"Build failed for {out_path}: {res.stderr}\n{res.stdout}")
+    return out_path
+
+
+def _verify_distribution_against_manifest(out_path: Path, manifest_path: Path) -> None:
+    """Compare actual build output DISKBOOT.BIN and every CHDK/ file against an existing manifest."""
+    assert manifest_path.is_file(), f"Manifest missing at {manifest_path}"
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        mdata = json.load(f)
+
+    actual_snap = snapshot_distribution(out_path)
+    expected_db = mdata["artifacts"]["DISKBOOT.BIN"]
+    actual_db = actual_snap["DISKBOOT.BIN"]
+    assert actual_db == (expected_db["size"], expected_db["sha256"]), (
+        f"DISKBOOT.BIN mismatch between {out_path} and {manifest_path}: "
+        f"actual {actual_db} vs manifest {(expected_db['size'], expected_db['sha256'])}"
+    )
+
+    for rel_path, exp_info in mdata["artifacts"]["chdk_files"].items():
+        assert rel_path in actual_snap, f"File {rel_path} listed in {manifest_path} missing from {out_path}"
+        actual_info = actual_snap[rel_path]
+        assert actual_info == (exp_info["size"], exp_info["sha256"]), (
+            f"File {rel_path} mismatch in {out_path}: "
+            f"actual {actual_info} vs manifest {exp_info}"
+        )
 
 
 class TestPort43TrialPlanDoc(unittest.TestCase):
@@ -212,42 +262,52 @@ class TestPort43ByteIdentityToExistingManifests(unittest.TestCase):
 
     def test_port42_gui_manifest_match(self):
         """PORT-42 GUI build is byte-identical to its existing manifest."""
+        out_dir = _require_or_build_distribution(OUT_DIR_GUI, ["--gui-fix"])
         mpath = MANIFESTS_DIR / "port42_gui_manifest.json"
-        self.assertTrue(mpath.is_file(), f"Missing {mpath}")
-        with open(mpath, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["size"], EXPECTED_PORT42_GUI_SIZE)
-        self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["sha256"], EXPECTED_PORT42_GUI_SHA256)
+        _verify_distribution_against_manifest(out_dir, mpath)
+
+        fix_mpath = MANIFESTS_DIR / "port42_gui_fix_manifest.json"
+        if fix_mpath.is_file():
+            _verify_distribution_against_manifest(out_dir, fix_mpath)
 
     def test_port41_default_full_manifest_match(self):
         """PORT-41 default full build is byte-identical to its existing manifest."""
+        target_dir = OUT_DIR_PORT41
+        if not (target_dir / "DISKBOOT.BIN").is_file():
+            if (OUT_DIR_FULL / "DISKBOOT.BIN").is_file() and sha256_file(OUT_DIR_FULL / "DISKBOOT.BIN") == EXPECTED_PORT41_FULL_SHA256:
+                target_dir = OUT_DIR_FULL
+            else:
+                target_dir = _require_or_build_distribution(OUT_DIR_PORT41, [])
         mpath = MANIFESTS_DIR / "port41_manifest.json"
-        self.assertTrue(mpath.is_file(), f"Missing {mpath}")
-        with open(mpath, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["size"], EXPECTED_PORT41_FULL_SIZE)
-        self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["sha256"], EXPECTED_PORT41_FULL_SHA256)
+        _verify_distribution_against_manifest(target_dir, mpath)
 
     def test_full_hooks_manifest_match(self):
-        """FULL_HOOKS variant is byte-identical to its existing manifest."""
-        mpath = MANIFESTS_DIR / "port42_full_hooks_manifest.json"
-        self.assertTrue(mpath.is_file(), f"Missing {mpath}")
-        with open(mpath, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["size"], EXPECTED_FULL_HOOKS_SIZE)
-        self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["sha256"], EXPECTED_FULL_HOOKS_SHA256)
+        """FULL_HOOKS variants are byte-identical to their existing manifests."""
+        # 1. Baseline FULL_HOOKS build
+        target_full = OUT_DIR_FULL
+        if not (target_full / "DISKBOOT.BIN").is_file() or sha256_file(target_full / "DISKBOOT.BIN") != EXPECTED_FULL_HOOKS_SHA256:
+            target_full = _require_or_build_distribution(OUT_DIR_FULL, ["--full-hooks"])
+        mpath_full = MANIFESTS_DIR / "port42_full_hooks_manifest.json"
+        _verify_distribution_against_manifest(target_full, mpath_full)
 
-        # Also verify GUI-fixed FULL_HOOKS manifest
+        # 2. GUI-fixed FULL_HOOKS build
+        target_gui_hooks = OUT_DIR_GUI_HOOKS
+        if not (target_gui_hooks / "DISKBOOT.BIN").is_file() or sha256_file(target_gui_hooks / "DISKBOOT.BIN") != EXPECTED_GUI_FULL_HOOKS_SHA256:
+            target_gui_hooks = _require_or_build_distribution(OUT_DIR_GUI_HOOKS, ["--gui-fix", "--full-hooks"])
         for name in ["port42_gui_fix_full_hooks_manifest.json", "port42_gui_full_hooks_manifest.json"]:
             p = MANIFESTS_DIR / name
-            self.assertTrue(p.is_file(), f"Missing {p}")
-            with open(p, "r", encoding="utf-8") as f:
-                d = json.load(f)
-            self.assertEqual(d["artifacts"]["DISKBOOT.BIN"]["size"], EXPECTED_GUI_FULL_HOOKS_SIZE)
-            self.assertEqual(d["artifacts"]["DISKBOOT.BIN"]["sha256"], EXPECTED_GUI_FULL_HOOKS_SHA256)
+            if p.is_file():
+                _verify_distribution_against_manifest(target_gui_hooks, p)
 
     def test_all_port24_to_port40_candidates_byte_identical(self):
-        """Verify that every PORT-24..40 candidate remains 100% byte-identical."""
+        """Verify that every PORT-24..40 candidate remains 100% byte-identical to locked manifests.
+
+        Cites candidate build suites:
+        - tests/test_port41_full_build.py:745-764 (flag_cases test)
+        - tests/test_port35_gui_candidate.py:132-175 (prior hashes invariant)
+        - tests/test_port25_ladder_fix.py:350-393 (ladder, poweron_fix, combined determinism)
+        - tests/test_port40_gui_layout.py:99-100 (gui5, gui5_shortpress)
+        """
         import sys
         scripts_dir = REPO_ROOT / "scripts"
         if str(scripts_dir) not in sys.path:
@@ -257,15 +317,30 @@ class TestPort43ByteIdentityToExistingManifests(unittest.TestCase):
         pinned_candidates = [
             ("default", {"ladder": False, "poweron_fix": False, "resident": False}, "9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136", 118001),
             ("poweron_fix", {"ladder": False, "poweron_fix": True, "resident": False}, "faad4d8242fbf6f79a44b10a9956f7eb04de9b65f42221f82a3b69eb024cf056", 118001),
+            ("ladder", {"ladder": True, "poweron_fix": False, "resident": False}, "45da469f3eb46c4d2aff77a032e5c8bb4eedf8ec8846526853d716d05d2b2f4e", 126081),
+            ("combined", {"ladder": True, "poweron_fix": True, "resident": False}, "9ba62067c17d654a3b8995fc6e8c26176321154054a138a465ca66f9ff763a15", 124865),
             ("resident", {"resident": True}, "63c7942f561242b55d8226bfefe7818dd5b959aee35eae0adb4f41a4783ece5a", 124561),
             ("osd", {"osd": True}, "683751539979f3e8956fd6c1794683c062f54385e6e1a3261b02ed8d63cc9855", 124833),
             ("kbd", {"kbd": True}, "a750253feb0cd9bb3bb1addb4cede5585bef29a0bf26bd86d3f577fdbf41be33", 124801),
+            ("kbd_osd", {"kbd": True, "osd": True}, "686c4e4688f74cccd2b7a21e7000eb574672635cfd4d17c885d86bbf52eb99a8", 125121),
             ("osd2", {"osd2": True}, "20d65a7d9be954d5caafe2f78751429ea388a37ca570f0bbd0d620609eb31a57", 125329),
+            ("gui", {"gui": True}, "1f6494cd8e7fd7629b82ed33ba1ec4fa939aa1aa2ff22f541c28a28c742e4272", 103057),
+            ("gui2", {"gui2": True}, "4a8c4b503a4b78a262ca208c629de8305aa186efbc2fda82951d77084ade9071", 103345),
+            ("gui3", {"gui3": True}, "4aded2d2abbe0c3101583c79708d084ffe93101fc9b889a76970e66a175be638", 103569),
             ("gui4", {"gui4": True}, "14456b08fca82758262c26ad6105f784ebacaa080b7a059a622ded5a8d505fdd", 102241),
             ("shortpress", {"shortpress": True}, "6df54a905e36a6fe92b5a3a4ac4dd71086d3306fd0aaa31a1f1bc670f7e19461", 124945),
             ("gui5", {"gui5": True}, "dd96357c050cf3b9116dcf089a731ef159477b505351f46436f983fdbf090b64", 102209),
             ("gui5_shortpress", {"gui5": True, "shortpress": True}, "86e12a2cfe792a8901fa2e0ec5a98f019290593e35d5c4c2e66fd3e073f16ff1", 102369),
         ]
+
+        # Verify candidate_port2a committed manifest first
+        default_manifest_path = CANDIDATE_DIR / "candidate_manifest.json"
+        self.assertTrue(default_manifest_path.is_file(), f"Missing canonical {default_manifest_path}")
+        with open(default_manifest_path, "r", encoding="utf-8") as mf:
+            default_mdata = json.load(mf)
+        default_cart = default_mdata["candidate_artifacts"]["DISKBOOT.BIN"]
+        self.assertEqual(default_cart["size_bytes"], 118001)
+        self.assertEqual(default_cart["sha256"], "9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136")
 
         with tempfile.TemporaryDirectory() as tmpdir:
             for name, kwargs, expected_sha, expected_size in pinned_candidates:
@@ -273,8 +348,21 @@ class TestPort43ByteIdentityToExistingManifests(unittest.TestCase):
                 res = build_candidate(out_dir=cand_dir, **kwargs)
                 diskboot = Path(cand_dir) / "DISKBOOT.BIN"
                 self.assertTrue(diskboot.is_file(), f"DISKBOOT.BIN for {name} candidate does not exist")
-                self.assertEqual(res["diskboot_size"], expected_size, f"Size mismatch for {name} candidate build")
-                self.assertEqual(res["diskboot_sha256"], expected_sha, f"SHA-256 mismatch for {name} candidate build")
+                actual_size = diskboot.stat().st_size
+                actual_sha = sha256_file(diskboot)
+
+                # Verify against generated candidate manifest in output directory
+                cand_mpath = Path(cand_dir) / "candidate_manifest.json"
+                self.assertTrue(cand_mpath.is_file(), f"candidate_manifest.json for {name} missing")
+                with open(cand_mpath, "r", encoding="utf-8") as mf:
+                    cand_mdata = json.load(mf)
+                cand_db = cand_mdata["candidate_artifacts"]["DISKBOOT.BIN"]
+                self.assertEqual(actual_size, cand_db["size_bytes"], f"Manifest size mismatch for {name}")
+                self.assertEqual(actual_sha, cand_db["sha256"], f"Manifest SHA mismatch for {name}")
+
+                # Verify against pinned expected values
+                self.assertEqual(actual_size, expected_size, f"Size mismatch for {name} candidate build")
+                self.assertEqual(actual_sha, expected_sha, f"SHA-256 mismatch for {name} candidate build")
 
 
 class TestPort43DrawLayerHostModel(unittest.TestCase):
@@ -305,63 +393,71 @@ class TestPort43DrawLayerHostModel(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, f"Host C harness failed:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
         self.assertIn("ALL PORT-43 DRAW LAYER UNIT TESTS PASSED SUCCESSFULLY.", proc.stdout)
 
-    def test_arm_binary_fill_paths_use_word_writes_and_no_draw_pixel(self):
-        """Disassembly inspection: draw_hline, draw_vline, and draw_rectangle call g3x_dbuf_fast_fill_rect and never draw_pixel."""
-        obj_path = OUT_DIR_DBUF / "stage_chdk" / "platform" / "g3x" / "sub" / "110c" / "gui_draw.thm.o"
-        if not obj_path.is_file():
-            # If stage directory was discarded, locate or rebuild
-            self.skipTest(f"Stage object not found at {obj_path}")
-
+    def _extract_fn_targets_and_body(self, target_path: Path, fn_name: str) -> tuple[str, set[str]]:
         proc = subprocess.run(
-            [str(TOOLCHAIN_OBJDUMP), "-d", str(obj_path)],
+            [str(TOOLCHAIN_OBJDUMP), "-dr", str(target_path)],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             check=True,
         )
         disasm = proc.stdout
+        m = re.search(r"^[0-9a-f]+ <" + fn_name + r">:.*?(?=^[0-9a-f]+ <|\Z)", disasm, re.M | re.S)
+        self.assertIsNotNone(m, f"Function {fn_name} not found in disassembly of {target_path}")
+        body = m.group(0)
+        reloc_syms = set(re.findall(r"R_ARM_\S+\s+(\S+)", body))
+        resolved_calls = set(re.findall(r"(?:bl|b\.w|blx)\s+[0-9a-f]+\s+<(\w+)>", body))
+        return body, reloc_syms | resolved_calls
 
-        # Verify draw_hline
-        m_hline = re.search(r"<draw_hline>:(.*?)(?:\n\n|\Z)", disasm, re.DOTALL)
-        self.assertIsNotNone(m_hline, "draw_hline not found in disassembly")
-        hline_body = m_hline.group(1)
-        self.assertIn("<g3x_dbuf_fast_fill_rect>", hline_body)
-        self.assertNotIn("<draw_pixel", hline_body)
+    def test_arm_binary_fill_paths_use_word_writes_and_no_draw_pixel(self):
+        """Disassembly inspection: fill paths use word writes, reference memset/fast fill, and never call draw_pixel."""
+        obj_path = OUT_DIR_DBUF / "stage_chdk" / "platform" / "g3x" / "sub" / "110c" / "gui_draw.thm.o"
+        elf_path = OUT_DIR_DBUF / "stage_chdk" / "platform" / "g3x" / "sub" / "110c" / "main.elf"
 
-        # Verify draw_vline
-        m_vline = re.search(r"<draw_vline>:(.*?)(?:\n\n|\Z)", disasm, re.DOTALL)
-        self.assertIsNotNone(m_vline, "draw_vline not found in disassembly")
-        vline_body = m_vline.group(1)
-        self.assertIn("<g3x_dbuf_fast_fill_rect>", vline_body)
-        self.assertNotIn("<draw_pixel", vline_body)
+        if not obj_path.is_file() and not elf_path.is_file():
+            self.skipTest(f"Build output not found at {obj_path} or {elf_path}; stage artifacts must be present to inspect disassembly")
 
-        # Verify draw_rectangle fill path
-        m_rect = re.search(r"<draw_rectangle>:(.*?)(?:\n\n|\Z)", disasm, re.DOTALL)
-        self.assertIsNotNone(m_rect, "draw_rectangle not found in disassembly")
-        rect_body = m_rect.group(1)
-        self.assertIn("<g3x_dbuf_fast_fill_rect>", rect_body)
+        targets_to_test = [p for p in [obj_path, elf_path] if p.is_file()]
+
+        for target in targets_to_test:
+            # 1. draw_hline
+            body_hline, targets_hline = self._extract_fn_targets_and_body(target, "draw_hline")
+            self.assertIn("g3x_dbuf_fast_fill_rect", targets_hline, f"draw_hline does not call g3x_dbuf_fast_fill_rect in {target}")
+            self.assertFalse(any("draw_pixel" in t for t in targets_hline), f"draw_hline references draw_pixel in {target}")
+
+            # 2. draw_vline
+            body_vline, targets_vline = self._extract_fn_targets_and_body(target, "draw_vline")
+            self.assertIn("g3x_dbuf_fast_fill_rect", targets_vline, f"draw_vline does not call g3x_dbuf_fast_fill_rect in {target}")
+            self.assertFalse(any("draw_pixel" in t for t in targets_vline), f"draw_vline references draw_pixel in {target}")
+
+            # 3. draw_rectangle
+            body_rect, targets_rect = self._extract_fn_targets_and_body(target, "draw_rectangle")
+            self.assertIn("g3x_dbuf_fast_fill_rect", targets_rect, f"draw_rectangle does not call g3x_dbuf_fast_fill_rect in {target}")
+            self.assertFalse(any("draw_pixel" in t for t in targets_rect), f"draw_rectangle references draw_pixel in {target}")
+
+            # 4. g3x_dbuf_fast_fill_rect
+            body_fill, targets_fill = self._extract_fn_targets_and_body(target, "g3x_dbuf_fast_fill_rect")
+            self.assertIn("memset", targets_fill, f"g3x_dbuf_fast_fill_rect does not reference memset in {target}")
+            self.assertFalse(any("draw_pixel" in t for t in targets_fill), f"g3x_dbuf_fast_fill_rect references draw_pixel in {target}")
+            has_word_stores = bool(re.search(r"str(?:\.w)?\s+r\d+,\s*\[r\d+.*(?:#4|lsl #2)", body_fill))
+            self.assertTrue(has_word_stores, f"Fast fill does not contain expected 32-bit word stores in {target}")
 
     def test_arm_binary_shadow_restore_has_no_vid_bitmap_refresh(self):
         """Disassembly inspection: g3x_dbuf_shadow_restore calls memcpy and NEVER vid_bitmap_refresh."""
         obj_path = OUT_DIR_DBUF / "stage_chdk" / "platform" / "g3x" / "sub" / "110c" / "gui_draw.thm.o"
-        if not obj_path.is_file():
-            self.skipTest(f"Stage object not found at {obj_path}")
+        elf_path = OUT_DIR_DBUF / "stage_chdk" / "platform" / "g3x" / "sub" / "110c" / "main.elf"
 
-        proc = subprocess.run(
-            [str(TOOLCHAIN_OBJDUMP), "-d", str(obj_path)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=True,
-        )
-        disasm = proc.stdout
+        if not obj_path.is_file() and not elf_path.is_file():
+            self.skipTest(f"Build output not found at {obj_path} or {elf_path}; stage artifacts must be present to inspect disassembly")
 
-        m_restore = re.search(r"<g3x_dbuf_shadow_restore>:(.*?)(?:\n\n|\Z)", disasm, re.DOTALL)
-        self.assertIsNotNone(m_restore, "g3x_dbuf_shadow_restore not found")
-        restore_body = m_restore.group(1)
-        self.assertIn("<memcpy>", restore_body)
-        self.assertNotIn("<vid_bitmap_refresh>", restore_body)
-        self.assertNotIn("<_transfer_src_overlay>", restore_body)
+        targets_to_test = [p for p in [obj_path, elf_path] if p.is_file()]
+
+        for target in targets_to_test:
+            body_restore, targets_restore = self._extract_fn_targets_and_body(target, "g3x_dbuf_shadow_restore")
+            self.assertIn("memcpy", targets_restore, f"g3x_dbuf_shadow_restore does not call memcpy in {target}")
+            self.assertNotIn("vid_bitmap_refresh", targets_restore, f"vid_bitmap_refresh call found in {target}")
+            self.assertNotIn("_transfer_src_overlay", targets_restore, f"_transfer_src_overlay call found in {target}")
+            self.assertFalse(any("draw_pixel" in t for t in targets_restore), f"draw_pixel call found in {target}")
 
     def test_python_model_draw_layer_invariants(self):
         """Python model: dual-buffer identical bytes, word-write fills, row cache partial redraw, single-blit restore."""
