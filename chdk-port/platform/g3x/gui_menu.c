@@ -1128,26 +1128,35 @@ void gui_menu_draw(int enforce_redraw)
     if (gui_menu_redraw)
     {
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
-        /* PORT-43: Partial redraw for cursor moves and item updates (gui_menu_redraw=1).
+        /* PORT-43: Partial redraw for cursor moves, item updates, and scroll (gui_menu_redraw=1).
          * Uses per-row signature cache (dbuf_row_cache) to redraw ONLY changed rows.
          * Title, header, and frame are never redrawn on gui_menu_redraw=1.
          * Full repaint (gui_menu_redraw=2) is kept strictly for:
          * 1. Menu open (gui_menu_init)
          * 2. Submenu enter/exit (gui_activate_sub_menu / gui_menu_back)
-         * 3. Scroll-offset change (gui_menu_top_item != dbuf_last_drawn_top_item)
-         * 4. Sentinel loss that shadow blit cannot recover (enforce_redraw=1 from main.c)
+         * 3. Sentinel loss that shadow blit cannot recover (enforce_redraw=1 from main.c)
          */
         int is_scroll = (gui_menu_top_item != dbuf_last_drawn_top_item);
         int is_partial = (gui_menu_redraw == 1 &&
                           g3x_shadow_valid &&
                           dbuf_row_cache_valid &&
-                          !is_scroll &&
-                          dbuf_last_drawn_curr_item >= 0);
+                          !is_scroll);
         int is_cursor_move = (gui_menu_curr_item != dbuf_last_drawn_curr_item);
+
+        if (is_scroll)
+        {
+            int k;
+            for (k = 0; k < DBUF_MAX_VISIBLE_ROWS; k++)
+            {
+                dbuf_row_cache[k].item = 0;
+                dbuf_row_cache[k].sig = 0;
+                dbuf_row_cache[k].is_selected = 0;
+            }
+        }
 #endif
 
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
-        if (gui_menu_redraw == 2 || is_scroll)
+        if (gui_menu_redraw == 2)
 #else
         if (gui_menu_redraw==2)
 #endif
@@ -1311,9 +1320,9 @@ void gui_menu_draw(int enforce_redraw)
                 dbuf_row_cache[k].is_selected = 0;
             }
         }
-        /* PORT-43: Repaint padding rows only when the number of visible items or scroll offset actually changes.
-         * Never repaint them on a value change. */
-        int padding_changed = (!is_partial || is_scroll || (visible_items != dbuf_last_drawn_visible_items));
+        /* PORT-43: Repaint padding rows on full redraw or when visible item count changed.
+         * Never repaint them when item count is unchanged. */
+        int padding_changed = (gui_menu_redraw == 2 || (visible_items != dbuf_last_drawn_visible_items));
         if (padding_changed)
 #endif
         {
