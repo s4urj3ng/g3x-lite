@@ -24,7 +24,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -1754,7 +1753,11 @@ def build_candidate_gui3_core(
     # 4. Link candidate_main.elf
     libplatform_a = str(CHDK_PORT / "platform" / "g3x" / "libplatform.a")
     if not os.path.isfile(libplatform_a):
-        ensure_libplatform_a()
+        raise FileNotFoundError(
+            f"Required platform library '{libplatform_a}' is missing. "
+            "Please ensure the platform bootstrap/validation step has produced "
+            "chdk-port/platform/g3x/libplatform.a before building candidates."
+        )
     libplatform_cand_a = os.path.join(candidate_dir, "libplatform_candidate.a")
     shutil.copyfile(libplatform_a, libplatform_cand_a)
     lib_osd2_o = os.path.join(candidate_dir, "lib.o")
@@ -1924,79 +1927,6 @@ def build_candidate_gui3_core(
     return core_elf, core_bin, boot_witness_addr, end_addr
 
 
-def ensure_libplatform_a(output_path: str | Path | None = None) -> Path:
-    """Ensure chdk-port/platform/g3x/libplatform.a exists, building from tracked sources if absent.
-
-    If output_path is provided, builds directly to output_path and returns it.
-    """
-    if output_path is not None:
-        target_a = Path(output_path)
-    else:
-        target_a = CHDK_PORT / "platform" / "g3x" / "libplatform.a"
-        if target_a.is_file():
-            return target_a
-    platform_cflags = [
-        CC,
-        "-fno-inline",
-        "-Os",
-        "-fno-strict-aliasing",
-        "-fno-schedule-insns2",
-        "-march=armv7-r",
-        "-mthumb",
-        "-DTHUMB_FW",
-        "-Iinclude",
-        "-Icore",
-        "-Imodules",
-        "-Iplatform/g3x",
-        "-Iplatform/g3x/sub/110c",
-        "-DMEMBASEADDR=0x8000",
-        "-DMEMISOSTART=0x3489b4",
-        "-DMEMISOSIZE=(&_end-&_start)",
-        "-DCAM_DIGIC=60",
-        "-DMAXRAMADDR=0x0fffffff",
-        "-DROMBASEADDR=0xFC000000",
-        "-DVER_CHDK",
-        '-DHDK_VERSION="CHDK"',
-        '-DBUILD_NUMBER="1.5.0"',
-        '-DBUILD_SVNREV="0"',
-        "-Wall",
-        "-Wno-unused",
-        "-Wno-format",
-        "-DOPT_CURVES",
-        "-DOPT_DEBUGGING",
-        "-DOPT_PTP",
-        "-DOPT_ARAM_MALLOC",
-        "-DARAM_HEAP_START=0x006ce000",
-        "-DARAM_HEAP_SIZE=0x00022000",
-        "-DOPT_DISABLE_CAM_ERROR=0",
-        "-DOPT_ARCHITECTURE=GCC_EABI_THUMB2",
-        "-mthumb-interwork",
-        "-DLOW_LEVEL",
-        '-DPLATFORM="g3x"',
-        '-DPLATFORMSUB="110c"',
-        "-DPLATFORMID=12968",
-        "-DCAMERA_g3x=1",
-        "-DCAM_DRYOS_REL=57",
-        "-nostdinc",
-    ]
-    target_a.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory() as tmp_obj_dir:
-        objs = []
-        for obj_name, src_rel in [
-            ("main.o", "platform/g3x/main.c"),
-            ("lib.o", "platform/g3x/lib.c"),
-            ("wrappers.o", "platform/g3x/wrappers.c"),
-            ("kbd.o", "platform/g3x/kbd.c"),
-            ("shooting.o", "platform/g3x/shooting.c"),
-            ("platform_palette.o", "platform/generic/palette.c"),
-        ]:
-            obj_path = os.path.join(tmp_obj_dir, obj_name)
-            run_cmd(platform_cflags + ["-c", "-o", obj_path, src_rel], cwd=str(CHDK_PORT))
-            objs.append(obj_path)
-        run_cmd([AR, "rcs", str(target_a)] + objs, cwd=tmp_obj_dir)
-    return target_a
-
-
 def build_candidate(
     ladder: bool = True,
     poweron_fix: bool = True,
@@ -2014,7 +1944,6 @@ def build_candidate(
     shortpress: bool | None = None,
 ) -> dict:
     """Execute candidate build pipeline supporting G3X_GUI5=1, G3X_GUI4=1, G3X_GUI3=1 and prior flags."""
-    ensure_libplatform_a()
     if shortpress is None:
         shortpress = os.environ.get("G3X_SHORTPRESS", "0") == "1"
 

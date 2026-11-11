@@ -770,37 +770,6 @@ class TestPort40GuiLayout(unittest.TestCase):
                     f"Symbol {sym} in lib.o must be weakened to allow candidate override",
                 )
 
-    def test_ensure_libplatform_a_isolated_fallback(self) -> None:
-        """Verify ensure_libplatform_a fallback produces byte-identical archive members in isolation."""
-        from build_candidate_gui3 import ensure_libplatform_a, AR
-        orig_lib = CHDK_PORT / "platform" / "g3x" / "libplatform.a"
-        self.assertTrue(orig_lib.is_file(), f"Shared libplatform.a must exist at {orig_lib}")
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            temp_lib = Path(tmp_dir) / "libplatform.a"
-            built_path = ensure_libplatform_a(output_path=temp_lib)
-            self.assertEqual(built_path, temp_lib)
-            self.assertTrue(temp_lib.is_file(), f"Expected fallback to produce {temp_lib}")
-
-            members = ["main.o", "lib.o", "wrappers.o", "kbd.o", "shooting.o", "platform_palette.o"]
-            for member in members:
-                orig_bytes = subprocess.run(
-                    [str(AR), "p", str(orig_lib), member],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    check=True,
-                ).stdout
-                new_bytes = subprocess.run(
-                    [str(AR), "p", str(temp_lib), member],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    check=True,
-                ).stdout
-                self.assertEqual(
-                    new_bytes,
-                    orig_bytes,
-                    f"Member {member} built by fallback does not match original byte-for-byte",
-                )
-
 
 if __name__ == "__main__":
     unittest.main()
