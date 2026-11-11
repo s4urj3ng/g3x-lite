@@ -43,7 +43,7 @@ from build_port41_full import (  # type: ignore
 
 
 def apply_dbuf_staging_patches(stage_dir: Path) -> None:
-    """Apply G3X_GUI_DBUF=1 compile flags to staging makefiles."""
+    """Apply G3X_GUI_DBUF=1 compile flags to staging makefiles and DBUF scheduler patch to core/main.c."""
     for mpath in [
         stage_dir / "platform" / "g3x" / "Makefile",
         stage_dir / "platform" / "g3x" / "sub" / "110c" / "Makefile",
@@ -64,6 +64,58 @@ def apply_dbuf_staging_patches(stage_dir: Path) -> None:
                         1,
                     )
                 mpath.write_text(mtext, encoding="utf-8")
+
+    # Patch core/main.c scheduler for G3X_GUI_DBUF=1:
+    # Under DBUF, a flip with intact sentinels in both opacity buffers causes NO redraw.
+    # Only a lost sentinel triggers restoration, and that is a single shadow blit, NOT gui_redraw.
+    core_main_c = stage_dir / "core" / "main.c"
+    if core_main_c.is_file():
+        cm_text = core_main_c.read_text(encoding="utf-8")
+        port42_scheduler = (
+            "            gui_maintenance_tick();\n"
+            "            int forced = check_gui_needs_redraw();\n"
+            "            int sentinel_lost = !draw_test_guard();\n"
+            "            int buffer_changed = check_bitmap_buffer_changed();\n"
+            "            int state_changed = gui_check_state_changed();\n"
+            "            int need_redraw = forced || sentinel_lost || buffer_changed || state_changed;\n"
+            "            if (need_redraw)\n"
+            "                gui_redraw(forced || sentinel_lost || buffer_changed);\n"
+            "            else if (gui_is_osd_mode())\n"
+            "                gui_draw_osd_tick();\n"
+            "            else if (gui_is_module_mode())\n"
+            "                gui_draw_module_tick();"
+        )
+        dbuf_scheduler = (
+            "            /* PORT-43 DBUF GUI scheduler:\n"
+            "             * Double-buffered overlay: buffer flip causes NO redraw when sentinels in both opacity buffers are intact.\n"
+            "             * Only a lost sentinel triggers restoration, and that is a single fast shadow blit, NOT gui_redraw.\n"
+            "             * Navigation and state changes trigger partial gui_redraw without enforce_redraw (redraw=1). */\n"
+            "            extern int g3x_dbuf_shadow_restore(void);\n"
+            "\n"
+            "            gui_maintenance_tick();\n"
+            "            (void)check_bitmap_buffer_changed();\n"
+            "            int forced = check_gui_needs_redraw();\n"
+            "            if (!draw_test_guard())\n"
+            "            {\n"
+            "                if (!g3x_dbuf_shadow_restore())\n"
+            "                {\n"
+            "                    forced = 1;\n"
+            "                }\n"
+            "            }\n"
+            "            int state_changed = gui_check_state_changed();\n"
+            "            int need_redraw = forced || state_changed;\n"
+            "            if (need_redraw)\n"
+            "                gui_redraw(forced);\n"
+            "            else if (gui_is_osd_mode())\n"
+            "                gui_draw_osd_tick();\n"
+            "            else if (gui_is_module_mode())\n"
+            "                gui_draw_module_tick();"
+        )
+        if port42_scheduler in cm_text:
+            cm_text = cm_text.replace(port42_scheduler, dbuf_scheduler, 1)
+            core_main_c.write_text(cm_text, encoding="utf-8")
+        else:
+            raise RuntimeError("PORT-42 scheduler anchor not found in staged core/main.c")
 
 
 def build_port43_dbuf(

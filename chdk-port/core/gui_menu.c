@@ -1100,15 +1100,21 @@ void gui_menu_draw(int enforce_redraw)
             }
         }
 
-#if defined(G3X_GUI5) && (G3X_GUI5 == 1)
-        /* PORT-40: Fill remaining rows down to num_lines with solid opaque black */
-        for (; i < num_lines; ++i, yy += rbf_font_height())
-        {
-            draw_rectangle(x, yy, x + w - 1, yy + rbf_font_height() - 1,
-                           MAKE_COLOR(COLOR_BLACK, COLOR_BLACK),
-                           RECT_BORDER0 | DRAW_FILLED);
-        }
+#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+        /* PORT-43: Skip padding fills on partial redraw so cursor moves touch only changed rows */
+        if (!is_partial_redraw)
 #endif
+        {
+#if defined(G3X_GUI5) && (G3X_GUI5 == 1)
+            /* PORT-40: Fill remaining rows down to num_lines with solid opaque black */
+            for (; i < num_lines; ++i, yy += rbf_font_height())
+            {
+                draw_rectangle(x, yy, x + w - 1, yy + rbf_font_height() - 1,
+                               MAKE_COLOR(COLOR_BLACK, COLOR_BLACK),
+                               RECT_BORDER0 | DRAW_FILLED);
+            }
+#endif
+        }
 
         // scrollbar
         if (count > num_lines)
