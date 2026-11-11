@@ -2468,8 +2468,8 @@ gui_handler* gui_set_mode(gui_handler *mode)
 		return gui_mode;
 
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
-    /* Invalidation: GUI handler/layer changed - clear shadow until new layer completes full draw */
-    g3x_shadow_valid = 0;
+    /* Invalidation: GUI handler/layer changed - reset shadow until new layer completes full draw */
+    g3x_dbuf_shadow_reset();
 #endif
 
 #ifdef CAM_TOUCHSCREEN_UI
@@ -3099,6 +3099,10 @@ void gui_activate_alt_mode()
     switch (gui_current_alt_state)
     {
     case ALT_MODE_ENTER:
+#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+        /* Invalidation: ALT enter - reset shadow */
+        g3x_dbuf_shadow_reset();
+#endif
         
 	    if (camera_info.state.state_kbd_script_run)
 	        gui_set_mode(&scriptGuiHandler);
@@ -3129,8 +3133,8 @@ void gui_activate_alt_mode()
         rbf_set_codepage(FONT_CP_WIN);
         vid_turn_on_updates();
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
-        /* Invalidation: ALT exit - clear shadow so live view never restores stale overlay */
-        g3x_shadow_valid = 0;
+        /* Invalidation: ALT exit - reset shadow so live view never restores stale overlay */
+        g3x_dbuf_shadow_reset();
 #endif
         gui_set_mode(&defaultGuiHandler);
 

@@ -70,14 +70,26 @@ static char* frame_buffer[2];
 #define G3X_SHADOW_BM_SIZE  (G3X_SHADOW_WIDTH * G3X_SHADOW_HEIGHT * 2)
 #define G3X_SHADOW_OP_SIZE  (G3X_SHADOW_WIDTH * G3X_SHADOW_HEIGHT * 1)
 
-static unsigned char g3x_shadow_bitmap[G3X_SHADOW_BM_SIZE] __attribute__((aligned(4)));
-static unsigned char g3x_shadow_opacity[G3X_SHADOW_OP_SIZE] __attribute__((aligned(4)));
+static struct {
+    unsigned char bitmap[G3X_SHADOW_BM_SIZE];
+    unsigned char opacity[G3X_SHADOW_OP_SIZE];
+} g3x_shadow __attribute__((aligned(4)));
+
+#define g3x_shadow_bitmap  (g3x_shadow.bitmap)
+#define g3x_shadow_opacity (g3x_shadow.opacity)
+
 int g3x_shadow_valid = 0;
+
+void g3x_dbuf_shadow_reset(void)
+{
+    g3x_shadow_valid = 0;
+    memset(&g3x_shadow, 0, sizeof(g3x_shadow));
+}
 
 void g3x_dbuf_shadow_init(void)
 {
-    /* Invalidation: DBUF startup / shadow init - clear shadow valid */
-    g3x_shadow_valid = 0;
+    /* Invalidation: DBUF startup / shadow init - clear shadow valid and contents */
+    g3x_dbuf_shadow_reset();
 }
 
 void g3x_dbuf_shadow_draw_pixel(unsigned int offset, unsigned int offs2, unsigned int y, unsigned int o, unsigned int u, unsigned int v, int is_odd)
@@ -642,7 +654,6 @@ static void draw_2pixels_simple(coord x, coord y, int px, int vrepeat)
             unsigned int sh_offset = (sy * G3X_SHADOW_WIDTH + sx) >> 1;
             ((unsigned short *)g3x_shadow_opacity)[sh_offset] = co;
             ((unsigned int *)g3x_shadow_bitmap)[sh_offset] = yuv;
-            g3x_shadow_valid = 1;
         }
 
         if (!vrepeat) return;
@@ -729,7 +740,6 @@ void draw_hline_simple(coord x, coord y, int len, int px)
             unsigned int sh_offset = (sy * G3X_SHADOW_WIDTH + sx) >> 1;
             ((unsigned short *)g3x_shadow_opacity)[sh_offset] = co;
             ((unsigned int *)g3x_shadow_bitmap)[sh_offset] = yuv;
-            g3x_shadow_valid = 1;
         }
     }
     if (len == -1)
@@ -869,8 +879,8 @@ void draw_restore()
         return;
     }
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
-    /* Invalidation: full erase via draw_restore - clear shadow */
-    g3x_shadow_valid = 0;
+    /* Invalidation: full erase via draw_restore - reset shadow */
+    g3x_dbuf_shadow_reset();
 #endif
     vid_bitmap_refresh();
 

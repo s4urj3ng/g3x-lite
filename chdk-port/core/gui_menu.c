@@ -199,8 +199,9 @@ static int decrement_factor()
 //-------------------------------------------------------------------
 static void gui_menu_set_curr_menu(CMenu *menu_ptr, int top_item, int curr_item) {
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
-    /* Invalidation: menu submenu layer changed - clear shadow until complete redraw */
-    g3x_shadow_valid = 0;
+    /* Invalidation: menu submenu layer changed - reset shadow until complete redraw */
+    extern void g3x_dbuf_shadow_reset(void);
+    g3x_dbuf_shadow_reset();
 #endif
     curr_menu = menu_ptr;
     gui_menu_top_item = top_item;
@@ -215,8 +216,9 @@ CMenu* get_curr_menu()
 //-------------------------------------------------------------------
 void gui_menu_init(CMenu *menu_ptr) {
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
-    /* Invalidation: menu initialized / layer changed - clear shadow */
-    g3x_shadow_valid = 0;
+    /* Invalidation: menu initialized / layer changed - reset shadow */
+    extern void g3x_dbuf_shadow_reset(void);
+    g3x_dbuf_shadow_reset();
 #endif
 
     if (menu_ptr) {
@@ -969,24 +971,26 @@ void gui_menu_draw(int enforce_redraw)
     {
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
         /*
-         * PORT-43: Partial redraw for cursor moves and item changes.
+         * PORT-43: Partial redraw for cursor moves and item updates (gui_menu_redraw=1).
          * Redraws only changed rows (gui_menu_redraw=1 path).
-         * Navigation never does a full clear-and-repaint.
-         * Citing chdk-port/core/gui_menu.c:960-970.
+         * Navigation never does a full clear-and-repaint, scrolled or not.
+         * A full clear-and-repaint is allowed only on menu entry or submenu/menu change (gui_menu_redraw=2).
+         * Citing chdk-port/core/gui_menu.c:960-1010.
          * Label: INFERRED.
          */
         static int dbuf_last_drawn_curr_item = -1;
         static int dbuf_last_drawn_top_item = -1;
+        int is_scroll = (gui_menu_top_item != dbuf_last_drawn_top_item);
         int is_partial_redraw = (gui_menu_redraw == 1 &&
                                  g3x_shadow_valid &&
-                                 dbuf_last_drawn_top_item == gui_menu_top_item &&
+                                 !is_scroll &&
                                  dbuf_last_drawn_curr_item >= 0);
         int old_item = dbuf_last_drawn_curr_item;
         int cur_item = gui_menu_curr_item;
 #endif
 
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
-        if (gui_menu_redraw==2 || (!is_partial_redraw))
+        if (gui_menu_redraw == 2)
 #else
         if (gui_menu_redraw==2)
 #endif
@@ -1001,6 +1005,9 @@ void gui_menu_draw(int enforce_redraw)
             {
                 continue;
             }
+            /* Fill that row's rectangle with g3x_dbuf_fast_fill_rect (32-bit word writes) */
+            extern void g3x_dbuf_fast_fill_rect(coord x1, coord y1, coord x2, coord y2, color cl);
+            g3x_dbuf_fast_fill_rect(x, yy, x + w - 1, yy + rbf_font_height() - 1, COLOR_BLACK);
 #endif
             cl = user_color((gui_menu_curr_item==imenu) ? conf.menu_cursor_color : conf.menu_color);
             /*
