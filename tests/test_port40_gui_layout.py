@@ -748,6 +748,76 @@ class TestPort40GuiLayout(unittest.TestCase):
         self.assertIn("w -= wplus", compiled_menu)
         self.assertIn("wplus = 8;", compiled_menu)
 
+    def test_gui5_lib_o_weakened_symbols(self) -> None:
+        """Verify lib.o produced in temporary directory has weakened display symbols."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_gui5 = os.path.join(tmp_dir, "gui5")
+            build_candidate_gui(gui5=True, out_dir=out_gui5)
+            lib_o = Path(out_gui5) / "lib.o"
+            self.assertTrue(lib_o.is_file(), f"Expected {lib_o} to exist from GUI5 build")
+            nm_proc = subprocess.run(
+                [str(ARM_NM), "-g", str(lib_o)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+                text=True,
+            )
+            nm_out = nm_proc.stdout
+            for sym in ["vid_get_bitmap_fb", "vid_get_opacity_active_buffer", "vid_bitmap_refresh"]:
+                self.assertRegex(
+                    nm_out,
+                    rf"\s+[wW]\s+{sym}\b",
+                    f"Symbol {sym} in lib.o must be weakened to allow candidate override",
+                )
+
+    def test_fallback_libplatform_a_byte_identical(self) -> None:
+        """Verify fallback libplatform.a build is byte-identical."""
+        from build_candidate_gui3 import build_fallback_libplatform_a, sha256_file
+        shared_lib = CHDK_PORT / "platform" / "g3x" / "libplatform.a"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            temp_lib = Path(tmp_dir) / "libplatform.a"
+            built_path = build_fallback_libplatform_a(output_path=temp_lib)
+            self.assertEqual(built_path, temp_lib)
+            self.assertTrue(temp_lib.is_file(), f"Expected fallback to produce {temp_lib}")
+            if shared_lib.is_file():
+                self.assertEqual(
+                    sha256_file(temp_lib),
+                    sha256_file(shared_lib),
+                    "Fallback archive SHA-256 must match shared libplatform.a",
+                )
+            else:
+                out_gui5 = os.path.join(tmp_dir, "gui5")
+                res = build_candidate_gui(gui5=True, out_dir=out_gui5)
+                self.assertEqual(
+                    res["diskboot_sha256"],
+                    PINNED_GUI5_SHA256,
+                    "GUI5 DISKBOOT.BIN SHA-256 must equal pinned GUI5 hash when built with fallback",
+                )
+
+    def test_gui5_candidate_with_simulated_missing_shared_libplatform(self) -> None:
+        """Verify GUI5 candidate builds and lib.o has weakened symbols with simulated missing shared archive."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            fake_missing = os.path.join(tmp_dir, "nonexistent", "libplatform.a")
+            out_gui5 = os.path.join(tmp_dir, "gui5")
+            res = build_candidate_gui(gui5=True, out_dir=out_gui5, libplatform_path=fake_missing)
+            self.assertEqual(res["diskboot_sha256"], PINNED_GUI5_SHA256)
+            lib_o = Path(out_gui5) / "lib.o"
+            self.assertTrue(lib_o.is_file(), f"Expected {lib_o} to exist from GUI5 build")
+            nm_proc = subprocess.run(
+                [str(ARM_NM), "-g", str(lib_o)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+                text=True,
+            )
+            nm_out = nm_proc.stdout
+            for sym in ["vid_get_bitmap_fb", "vid_get_opacity_active_buffer", "vid_bitmap_refresh"]:
+                self.assertRegex(
+                    nm_out,
+                    rf"\s+[wW]\s+{sym}\b",
+                    f"Symbol {sym} in lib.o must be weakened to allow candidate override",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
