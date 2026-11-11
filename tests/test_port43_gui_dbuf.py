@@ -20,7 +20,8 @@ Verifies:
    - FULL_HOOKS variant (124,153 B, eb46aa33...)
    - GUI_FIX + FULL_HOOKS variant (124,321 B, d50ea585...)
    - Every PORT-24..40 candidate: default, poweron_fix, ladder, combined, resident,
-     osd, kbd, kbd_osd, osd2, gui, gui2, gui3, gui4, shortpress, gui5, gui5_shortpress.
+     osd, kbd, kbd_osd, osd2, gui, gui2, gui3, gui3_diag, gui4, gui4_diag, shortpress,
+     shortpress_gui4, gui5, gui5_shortpress.
 5. Host-side model and unit tests of the draw layer:
    - Both bitmap buffers and both opacity buffers receive identical overlay bytes.
    - Fill paths use 32-bit word writes and never call draw_pixel.
@@ -159,6 +160,13 @@ PINNED_CANDIDATES = [
         "docs/PORT37_GUI_FLICKER.md",
     ),
     (
+        "gui3_diag",
+        {"gui3": True, "gui_diag": True},
+        "de066f7198ed8f56e055807eb25880c394386eaeab5aac6384cb1fa607308ed4",
+        103745,
+        "docs/PORT37_GUI_FLICKER.md",
+    ),
+    (
         "gui4",
         {"gui4": True},
         "14456b08fca82758262c26ad6105f784ebacaa080b7a059a622ded5a8d505fdd",
@@ -166,10 +174,24 @@ PINNED_CANDIDATES = [
         "docs/PORT38_GUI4_TRIAL.md",
     ),
     (
+        "gui4_diag",
+        {"gui4": True, "gui_diag": True},
+        "a4bfdeeae630e5fcac07e4b206ff2c64acea28e77f22bad49996bea460d35e1d",
+        102417,
+        "docs/PORT38_GUI4_TRIAL.md",
+    ),
+    (
         "shortpress",
         {"shortpress": True},
         "6df54a905e36a6fe92b5a3a4ac4dd71086d3306fd0aaa31a1f1bc670f7e19461",
         124945,
+        "docs/PORT39_SHORTPRESS_TRIAL.md",
+    ),
+    (
+        "shortpress_gui4",
+        {"gui4": True, "shortpress": True},
+        "4859e0886a32665e5adbf65400121bb2a503b5827aa29aa69e35dc33a465db28",
+        102401,
         "docs/PORT39_SHORTPRESS_TRIAL.md",
     ),
     (
@@ -342,6 +364,13 @@ def _verify_distribution_against_manifest(out_path: Path, manifest_path: Path) -
             f"actual {actual_info} vs manifest {exp_info}"
         )
 
+    manifest_files = set(mdata["artifacts"]["chdk_files"].keys()) | {"DISKBOOT.BIN"}
+    actual_files = set(actual_snap.keys())
+    assert actual_files == manifest_files, (
+        f"File set mismatch between {out_path} and {manifest_path}: "
+        f"extra: {actual_files - manifest_files}, missing: {manifest_files - actual_files}"
+    )
+
 
 class TestPort43TrialPlanDoc(unittest.TestCase):
     """Static verification of docs/PORT43_TRIAL_PLAN.md."""
@@ -451,6 +480,10 @@ class TestPort43BuildReproducibility(unittest.TestCase):
             self.assertEqual(snap1, snap2, "Two clean DBUF builds produced different hashes")
             self.assertEqual(snap2["DISKBOOT.BIN"], (EXPECTED_DBUF_SIZE, EXPECTED_DBUF_SHA256))
 
+        # Verify full distribution snapshot matches manifests/port43_gui_dbuf_manifest.json
+        mpath = MANIFESTS_DIR / "port43_gui_dbuf_manifest.json"
+        _verify_distribution_against_manifest(out_dbuf, mpath)
+
 
 class TestPort43ByteIdentityToExistingManifests(unittest.TestCase):
     """Verify byte-identity against all prior manifests."""
@@ -547,7 +580,8 @@ class TestPort43ByteIdentityToExistingManifests(unittest.TestCase):
         required_candidates = {
             "default", "poweron_fix", "ladder", "combined", "resident",
             "osd", "kbd", "kbd_osd", "osd2", "gui", "gui2", "gui3",
-            "gui4", "shortpress", "gui5", "gui5_shortpress"
+            "gui3_diag", "gui4", "gui4_diag", "shortpress", "shortpress_gui4",
+            "gui5", "gui5_shortpress"
         }
         present_candidates = {name for name, _, _, _, _ in PINNED_CANDIDATES}
         missing_candidates = required_candidates - present_candidates
