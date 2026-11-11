@@ -1,0 +1,57 @@
+{
+  "manifest_version": "1.0.0",
+  "task": "PORT43-DBUF-BUILD",
+  "firmware_revision": "GM1.10C",
+  "addresses": [
+    {
+      "name": "active_bitmap_buffer",
+      "address": "0x0000D2A4",
+      "type": "variable",
+      "label": "FINSIG",
+      "citation": "reference/finsig_gm110c/stubs_entry.S:193",
+      "description": "Index of active display bitmap buffer (0 or 1)"
+    },
+    {
+      "name": "bitmap_buffer",
+      "address": "0x0000D2A8",
+      "type": "variable",
+      "label": "FINSIG",
+      "citation": "reference/finsig_gm110c/stubs_entry.S:194",
+      "description": "Pointers to double-buffered display bitmap buffers"
+    },
+    {
+      "name": "_transfer_src_overlay",
+      "address": "0xFC380635",
+      "type": "function",
+      "label": "FINSIG",
+      "citation": "reference/finsig_gm110c/stubs_entry.S:352",
+      "description": "DryOS function triggering hardware overlay VRAM transfer for buffer index (0 or 1)"
+    },
+    {
+      "name": "opacity_buffer[0]",
+      "address": "0x5FC40000",
+      "type": "variable",
+      "label": "VERIFIED",
+      "citation": "osd2_test_overlay.h:131-134; chdk-port/platform/g7x/lib.c:291-292",
+      "description": "Mode 12 LCD opacity plane buffer 0 in DRAM"
+    },
+    {
+      "name": "opacity_buffer[1]",
+      "address": "0x5FB80000",
+      "type": "variable",
+      "label": "VERIFIED",
+      "citation": "osd2_test_overlay.h:131-134; chdk-port/platform/g7x/lib.c:291-292",
+      "description": "Mode 12 LCD opacity plane buffer 1 in DRAM"
+    },
+    {
+      "name": "g3x_shadow_bitmap / g3x_shadow_opacity",
+      "address": "CHDK BSS",
+      "type": "buffer",
+      "label": "INFERRED",
+      "citation": "full_build/g3x/lib.c:107-108; chdk-port/platform/g7x/lib.c:323-324; chdk-port/include/camera_info.h:94; chdk-port/core/gui_draw.c:70-85",
+      "description": "Static off-screen shadow buffers sized for full 928x600 bitmap overlay layer (1,113,600 bytes bitmap + 556,800 bytes opacity); placement in CHDK BSS guarded behind G3X_GUI_DBUF switch"
+    }
+  ],
+  "rom_ranges_read": [],
+  "notes": "No bounded ROM ranges from firmware/dumps/GM1.10C/PRIMARY.BIN were required; all stubs resolved via FINSIG or existing VERIFIED port records."
+}
