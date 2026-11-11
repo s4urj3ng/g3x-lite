@@ -30,6 +30,9 @@ static unsigned int gui_menu_stack_ptr;
 static int          gui_menu_curr_item;
 static int          gui_menu_top_item;
 static int          gui_menu_redraw;
+#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+static int          dbuf_menu_val_changed;
+#endif
 
 static int          count;
 static int          x, y;
@@ -219,6 +222,7 @@ void gui_menu_init(CMenu *menu_ptr) {
     /* Invalidation: menu initialized / layer changed - reset shadow */
     extern void g3x_dbuf_shadow_reset(void);
     g3x_dbuf_shadow_reset();
+    dbuf_menu_val_changed = 0;
 #endif
 
     if (menu_ptr) {
@@ -261,6 +265,9 @@ static int gui_menu_rows()
 // Full screen erase and redraw of menu
 void gui_menu_erase_and_redraw()
 {
+#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+    dbuf_menu_val_changed = 0;
+#endif
     gui_menu_redraw = 2;
     gui_set_need_restore();
 }
@@ -312,6 +319,9 @@ void gui_menu_back()
 // After updating a value check for callback and on_change functions and call if necessary
 static void do_callback(const CMenuItem *mi)
 {
+#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+    dbuf_menu_val_changed = 1;
+#endif
     if ((mi->type & MENUITEM_ARG_MASK) == MENUITEM_ARG_CALLBACK && mi->arg)
     {
         ((void (*)())(mi->arg))();
@@ -321,6 +331,9 @@ static void do_callback(const CMenuItem *mi)
 // Update an 'int' value, direction = 1 for increment, -1 for decrement
 static void update_int_value(const CMenuItem *mi, int direction)
 {
+#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+    dbuf_menu_val_changed = 1;
+#endif
     // do update
     *(mi->value) += int_incr * direction;
 
@@ -379,6 +392,9 @@ static void update_int_value(const CMenuItem *mi, int direction)
 // Update a 'bool' value
 static void update_bool_value(const CMenuItem *mi)
 {
+#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+    dbuf_menu_val_changed = 1;
+#endif
     // update value
     *(mi->value) = !(*(mi->value));
 
@@ -392,6 +408,9 @@ static void update_bool_value(const CMenuItem *mi)
 // Update an 'enum' value, direction = 1 for increment, -1 for decrement
 static void update_enum_value(const CMenuItem *mi, int direction)
 {
+#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+    dbuf_menu_val_changed = 1;
+#endif
     // update value
     if (mi->value)
     {
@@ -561,6 +580,9 @@ int gui_menu_kbd_process() {
         case KEY_SHOOT_HALF:
             if (!increment_factor())
                 int_incr = 1;
+#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+            dbuf_menu_val_changed = 1;
+#endif
             gui_menu_redraw=1;
             break;
         case JOGDIAL_LEFT:
@@ -657,6 +679,9 @@ int gui_menu_kbd_process() {
                         if (camera_info.state.is_shutter_half_press)
                         {
                             *(curr_menu->menu[gui_menu_curr_item].value) = 0;
+#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+                            dbuf_menu_val_changed = 1;
+#endif
                             gui_menu_redraw=1;
                         }
                         break;
@@ -710,12 +735,22 @@ int gui_menu_kbd_process() {
             break;
         case KEY_ZOOM_IN:
             if (decrement_factor())
+            {
+#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+                dbuf_menu_val_changed = 1;
+#endif
                 gui_menu_redraw = 1;
+            }
             break;
 
         case KEY_ZOOM_OUT:
             if (increment_factor())
+            {
+#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+                dbuf_menu_val_changed = 1;
+#endif
                 gui_menu_redraw = 1;
+            }
             break;
 
         case KEY_DISPLAY:
@@ -728,6 +763,9 @@ int gui_menu_kbd_process() {
                 // For cams without zoom lever, DISP adjusts increment factor
                 if (!increment_factor())
                     int_incr = 1;
+#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+                dbuf_menu_val_changed = 1;
+#endif
                 gui_menu_redraw=1;
             }
             break;
@@ -971,20 +1009,23 @@ void gui_menu_draw(int enforce_redraw)
     {
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
         /*
-         * PORT-43: Partial redraw for cursor moves and item updates (gui_menu_redraw=1).
-         * Redraws only changed rows (gui_menu_redraw=1 path).
-         * Navigation never does a full clear-and-repaint, scrolled or not.
-         * A full clear-and-repaint is allowed only on menu entry or submenu/menu change (gui_menu_redraw=2).
-         * Citing chdk-port/core/gui_menu.c:960-1010.
+         * PORT-43 Option (a): Partial redraw for cursor moves and item updates (gui_menu_redraw=1).
+         * Adapted from CHDK core gui_menu.c:960-1010 (cursor move and row redraw).
+         * Pure cursor move (no value changed, !is_scroll): redraws only the old and new cursor rows.
+         * Item value change or callback: redraws ALL visible item rows with fast row-fills plus text.
+         * Title, header, outer frame and g3x_fill_menu_opaque_black are NEVER redrawn on gui_menu_redraw=1.
+         * Full clear-and-repaint (gui_menu_redraw=2) is strictly limited to menu entry and menu/submenu changes.
          * Label: INFERRED.
          */
         static int dbuf_last_drawn_curr_item = -1;
         static int dbuf_last_drawn_top_item = -1;
         int is_scroll = (gui_menu_top_item != dbuf_last_drawn_top_item);
+        int is_cursor_move = (!dbuf_menu_val_changed && (gui_menu_curr_item != dbuf_last_drawn_curr_item));
         int is_partial_redraw = (gui_menu_redraw == 1 &&
                                  g3x_shadow_valid &&
                                  !is_scroll &&
-                                 dbuf_last_drawn_curr_item >= 0);
+                                 dbuf_last_drawn_curr_item >= 0 &&
+                                 is_cursor_move);
         int old_item = dbuf_last_drawn_curr_item;
         int cur_item = gui_menu_curr_item;
 #endif
@@ -1150,6 +1191,7 @@ void gui_menu_draw(int enforce_redraw)
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
         dbuf_last_drawn_curr_item = gui_menu_curr_item;
         dbuf_last_drawn_top_item = gui_menu_top_item;
+        dbuf_menu_val_changed = 0;
         /* Mark shadow valid only after complete draw of the menu layer has been written */
         g3x_shadow_valid = 1;
 #endif

@@ -48,8 +48,8 @@
       "address": "CHDK BSS",
       "type": "buffer",
       "label": "INFERRED",
-      "citation": "docs/PORT40_GUI_LAYOUT.md:14-28; chdk-port/core/gui_draw.c:70-75",
-      "description": "Static off-screen shadow buffers sized for 880x576 overlay layer; placement in CHDK BSS guarded behind G3X_GUI_DBUF switch"
+      "citation": "full_build/g3x/lib.c:107-108; chdk-port/platform/g7x/lib.c:323-324; chdk-port/include/camera_info.h:94; chdk-port/core/gui_draw.c:70-85",
+      "description": "Static off-screen shadow buffers sized for full 928x600 bitmap overlay layer (1,113,600 bytes bitmap + 556,800 bytes opacity); placement in CHDK BSS guarded behind G3X_GUI_DBUF switch"
     }
   ],
   "rom_ranges_read": [],
