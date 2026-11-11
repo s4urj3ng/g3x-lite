@@ -2582,3 +2582,17 @@ python3 -B tools/port18_trial_report.py private/port18/trial_report.md --out pri
   - Plain (`G3X_GUI3=1`): 103,569 B, SHA-256 `4aded2d2abbe0c3101583c79708d084ffe93101fc9b889a76970e66a175be638` (witness `0x0035CED0`).
   - DIAG (`G3X_GUI3=1` + `G3X_GUI_DIAG=1`): 103,745 B, SHA-256 `de066f7198ed8f56e055807eb25880c394386eaeab5aac6384cb1fa607308ed4` (witness `0x0035CF80`).
 - **Recovery**: RAM-only via battery pull (remove NB-10L battery >= 10 s; short tap <0.5 s boots stock firmware). Default build unchanged (`94682573...`).
+
+
+### PORT-36..PORT-41 Current State
+
+| Milestone | Candidate / Switch | Status | Next Step |
+|---|---|---|---|
+| PORT-36 | `G3X_GUI2=1` | Merged; owner trial PASS (Mode 12 900x600, stride 928, border verified panel resolution) | Advance to PORT-37 |
+| PORT-37 | `G3X_GUI3=1` | Merged; owner trial PARTIAL (idle flicker eliminated, menu static; unpainted regions / photo show-through remained, see docs/PORT38_GUI_TRACE.md) | Advance to PORT-38 |
+| PORT-38 | `G3X_GUI4=1` | Merged; owner trial PASS (16x32 font, title bar PASS; edge leaks noted) | Advance to PORT-39 / PORT-40 |
+| PORT-39 | `G3X_SHORTPRESS=1` | Merged; owner trial PASS (power-cut bypassed, normal power-off PASS; start mode handed off) | Advance to PORT-40 / PORT-41 |
+| PORT-40 | `G3X_GUI5=1` | Merged; owner trial pending (centered 880x576 layout, edge leaks fixed, host tests pass) | Advance to PORT-41 |
+| PORT-41 | Standard CHDK Full Build (`PLATFORM=g3x PLATFORMSUB=110c`) | Merged; owner trial of the PORT-41 default full build was done on 2026-11-10: boot to shooting mode, ALT key-help, short-press start and power-off PASS; overlay flicker, pink UYVY colour blocks and opacity/small font FAIL | Owner trial of the PORT42-GUI-FIX full build (fixes the PORT-41 trial failures), then the PORT-42 FULL_HOOKS variant |
+
+Next: owner trial of the PORT42-GUI-FIX full build (fixes the PORT-41 trial failures), then the PORT-42 FULL_HOOKS variant.

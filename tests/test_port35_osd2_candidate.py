@@ -342,11 +342,12 @@ class TestPort35Osd2Candidate(unittest.TestCase):
             check=True,
         )
         changed_lines = []
-        in_later_section = False
         for chunk in re.split(r"(?=^diff --git )", diff_proc.stdout, flags=re.M):
             if not chunk.strip():
                 continue
             is_handoff = "b/docs/HANDOFF.md" in chunk.splitlines()[0]
+            is_project_state = "b/docs/PROJECT_STATE.md" in chunk.splitlines()[0]
+            in_later_section = False
             for subhunk in re.split(r"(?=^@@ )", chunk, flags=re.M):
                 hunk_lines = [
                     l for l in subhunk.splitlines()
@@ -354,13 +355,16 @@ class TestPort35Osd2Candidate(unittest.TestCase):
                 ]
                 if not hunk_lines:
                     continue
-                if is_handoff:
+                if is_handoff or is_project_state:
                     for l in hunk_lines:
-                        m = re.match(r"^\+###\s+PORT-3(\d+)", l)
-                        if m and int(m.group(1)) >= 7:
+                        if l.startswith("+### PORT-36..PORT-41 Current State"):
                             in_later_section = True
-                        elif re.match(r"^[+-]###\s+PORT-", l):
-                            in_later_section = False
+                        else:
+                            m = re.match(r"^\+###\s+PORT-3(\d+)", l)
+                            if m and int(m.group(1)) >= 7:
+                                in_later_section = True
+                            elif re.match(r"^[+-]###\s+", l):
+                                in_later_section = False
                     if in_later_section and all(l.startswith("+") for l in hunk_lines):
                         continue
                 changed_lines.extend(hunk_lines)

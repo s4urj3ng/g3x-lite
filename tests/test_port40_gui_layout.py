@@ -748,6 +748,28 @@ class TestPort40GuiLayout(unittest.TestCase):
         self.assertIn("w -= wplus", compiled_menu)
         self.assertIn("wplus = 8;", compiled_menu)
 
+    def test_gui5_lib_o_weakened_symbols(self) -> None:
+        """Verify lib.o produced in temporary directory has weakened display symbols."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_gui5 = os.path.join(tmp_dir, "gui5")
+            build_candidate_gui(gui5=True, out_dir=out_gui5)
+            lib_o = Path(out_gui5) / "lib.o"
+            self.assertTrue(lib_o.is_file(), f"Expected {lib_o} to exist from GUI5 build")
+            nm_proc = subprocess.run(
+                [str(ARM_NM), "-g", str(lib_o)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+                text=True,
+            )
+            nm_out = nm_proc.stdout
+            for sym in ["vid_get_bitmap_fb", "vid_get_opacity_active_buffer", "vid_bitmap_refresh"]:
+                self.assertRegex(
+                    nm_out,
+                    rf"\s+[wW]\s+{sym}\b",
+                    f"Symbol {sym} in lib.o must be weakened to allow candidate override",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

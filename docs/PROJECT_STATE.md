@@ -1061,3 +1061,17 @@ python3 -B tools/port18_trial_report.py private/port18/trial_report.md --out pri
 - **Candidate & Build Flag (`G3X_OSD=1`)**: `G3X_OSD=1 python3 -B tools/build_candidate_port25_ladder_fix.py --osd --out-dir <out_dir>` builds the opt-in OSD test overlay candidate (`DISKBOOT.BIN` SHA-256 `683751539979f3e8956fd6c1794683c062f54385e6e1a3261b02ed8d63cc9855`, `124,833` B; loaded `candidate_main.bin` `123,392` B; linked `_end = 0x00368660 <= heap_start = 0x00368680`, `32` B clearance; `boot_witness` at `0x00361150`). Flag-off combined (`9ba62067c...`), default (`94682573...`), and `G3X_RESIDENT=1` alone (`63c7942f...`) builds remain bit-for-bit identical `[VERIFIED: docs/PORT33_OSD_ADDRESSES.md:5-17; tests/test_port33_osd_candidate.py:75-105]`.
 - **Adapted Architecture & Stubs**: Second CHDK task (`"OSDOverlay"`, priority 25, stack 0x2000) created via `_CreateTask` (`0xBFE14A3D`) once heartbeat task runs. Draws 120x40 px filled opaque rectangle at (16, 16) with 2px white border, checkerboard tiles, and "CHDK" text pattern every ~1 s for >= 30 s on UYVY bitmap (`0x0000D2A8`) and opacity (`0xFC1837FC`) buffers, calling `transfer_src_overlay` (`0xFC380635`). LED heartbeat (`0xD20B0884`) blinks at ~1 Hz uninterrupted `[VERIFIED: chdk-port/platform/g3x/sub/110c/osd_test_overlay.h:20-140; docs/PORT33_OSD_ADDRESSES.md:21-40]`.
 - **Evidence & Verification**: Bounded ROM read `0xFC1837F0..0xFC18380F` (32 B, SHA-256 `9614d061...`) verified `BmpDDev.c` opacity buffer table at `0xFC1837FC` in `evidence/port33_manifest.json`, passing `tools/port11c_evidence_validator.py`. Host tests `tests/test_port33_osd_candidate.py` (8/8 PASS) and `tests/test_port32_resident_candidate.py` (7/7 PASS) verify hash invariance, address coverage, and task wiring.
+
+
+### PORT-36..PORT-41 Current State
+
+| Milestone | Candidate / Switch | Status | Next Step |
+|---|---|---|---|
+| PORT-36 | `G3X_GUI2=1` | Merged; owner trial PASS (Mode 12 900x600, stride 928, border verified panel resolution) | Advance to PORT-37 |
+| PORT-37 | `G3X_GUI3=1` | Merged; owner trial PARTIAL (idle flicker eliminated, menu static; unpainted regions / photo show-through remained, see docs/PORT38_GUI_TRACE.md) | Advance to PORT-38 |
+| PORT-38 | `G3X_GUI4=1` | Merged; owner trial PASS (16x32 font, title bar PASS; edge leaks noted) | Advance to PORT-39 / PORT-40 |
+| PORT-39 | `G3X_SHORTPRESS=1` | Merged; owner trial PASS (power-cut bypassed, normal power-off PASS; start mode handed off) | Advance to PORT-40 / PORT-41 |
+| PORT-40 | `G3X_GUI5=1` | Merged; owner trial pending (centered 880x576 layout, edge leaks fixed, host tests pass) | Advance to PORT-41 |
+| PORT-41 | Standard CHDK Full Build (`PLATFORM=g3x PLATFORMSUB=110c`) | Merged; owner trial of the PORT-41 default full build was done on 2026-11-10: boot to shooting mode, ALT key-help, short-press start and power-off PASS; overlay flicker, pink UYVY colour blocks and opacity/small font FAIL | Owner trial of the PORT42-GUI-FIX full build (fixes the PORT-41 trial failures), then the PORT-42 FULL_HOOKS variant |
+
+Next: owner trial of the PORT42-GUI-FIX full build (fixes the PORT-41 trial failures), then the PORT-42 FULL_HOOKS variant.
