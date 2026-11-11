@@ -1924,11 +1924,17 @@ def build_candidate_gui3_core(
     return core_elf, core_bin, boot_witness_addr, end_addr
 
 
-def ensure_libplatform_a() -> None:
-    """Ensure chdk-port/platform/g3x/libplatform.a exists, building from tracked sources if absent."""
-    libplatform_a = CHDK_PORT / "platform" / "g3x" / "libplatform.a"
-    if libplatform_a.is_file():
-        return
+def ensure_libplatform_a(output_path: str | Path | None = None) -> Path:
+    """Ensure chdk-port/platform/g3x/libplatform.a exists, building from tracked sources if absent.
+
+    If output_path is provided, builds directly to output_path and returns it.
+    """
+    if output_path is not None:
+        target_a = Path(output_path)
+    else:
+        target_a = CHDK_PORT / "platform" / "g3x" / "libplatform.a"
+        if target_a.is_file():
+            return target_a
     platform_cflags = [
         CC,
         "-fno-inline",
@@ -1973,8 +1979,7 @@ def ensure_libplatform_a() -> None:
         "-DCAM_DRYOS_REL=57",
         "-nostdinc",
     ]
-    platform_dir = CHDK_PORT / "platform" / "g3x"
-    platform_dir.mkdir(parents=True, exist_ok=True)
+    target_a.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp_obj_dir:
         objs = []
         for obj_name, src_rel in [
@@ -1988,7 +1993,8 @@ def ensure_libplatform_a() -> None:
             obj_path = os.path.join(tmp_obj_dir, obj_name)
             run_cmd(platform_cflags + ["-c", "-o", obj_path, src_rel], cwd=str(CHDK_PORT))
             objs.append(obj_path)
-        run_cmd([AR, "rcs", str(libplatform_a)] + objs, cwd=tmp_obj_dir)
+        run_cmd([AR, "rcs", str(target_a)] + objs, cwd=tmp_obj_dir)
+    return target_a
 
 
 def build_candidate(
