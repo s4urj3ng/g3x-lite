@@ -31,7 +31,19 @@ static int          gui_menu_curr_item;
 static int          gui_menu_top_item;
 static int          gui_menu_redraw;
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
-static int          dbuf_menu_val_changed;
+#define DBUF_MAX_VISIBLE_ROWS 64
+
+typedef struct {
+    const CMenuItem *item;
+    unsigned int    sig;
+    int             is_selected;
+} dbuf_row_cache_entry_t;
+
+static dbuf_row_cache_entry_t dbuf_row_cache[DBUF_MAX_VISIBLE_ROWS];
+static int dbuf_row_cache_valid = 0;
+static int dbuf_last_drawn_curr_item = -1;
+static int dbuf_last_drawn_top_item = -1;
+static int dbuf_last_drawn_visible_items = -1;
 #endif
 
 static int          count;
@@ -219,10 +231,13 @@ CMenu* get_curr_menu()
 //-------------------------------------------------------------------
 void gui_menu_init(CMenu *menu_ptr) {
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
-    /* Invalidation: menu initialized / layer changed - reset shadow */
+    /* Invalidation: menu initialized / layer changed - reset shadow and row cache */
     extern void g3x_dbuf_shadow_reset(void);
     g3x_dbuf_shadow_reset();
-    dbuf_menu_val_changed = 0;
+    dbuf_row_cache_valid = 0;
+    dbuf_last_drawn_curr_item = -1;
+    dbuf_last_drawn_top_item = -1;
+    dbuf_last_drawn_visible_items = -1;
 #endif
 
     if (menu_ptr) {
@@ -266,7 +281,7 @@ static int gui_menu_rows()
 void gui_menu_erase_and_redraw()
 {
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
-    dbuf_menu_val_changed = 0;
+    dbuf_row_cache_valid = 0;
 #endif
     gui_menu_redraw = 2;
     gui_set_need_restore();
@@ -319,9 +334,6 @@ void gui_menu_back()
 // After updating a value check for callback and on_change functions and call if necessary
 static void do_callback(const CMenuItem *mi)
 {
-#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
-    dbuf_menu_val_changed = 1;
-#endif
     if ((mi->type & MENUITEM_ARG_MASK) == MENUITEM_ARG_CALLBACK && mi->arg)
     {
         ((void (*)())(mi->arg))();
@@ -331,9 +343,6 @@ static void do_callback(const CMenuItem *mi)
 // Update an 'int' value, direction = 1 for increment, -1 for decrement
 static void update_int_value(const CMenuItem *mi, int direction)
 {
-#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
-    dbuf_menu_val_changed = 1;
-#endif
     // do update
     *(mi->value) += int_incr * direction;
 
@@ -392,9 +401,6 @@ static void update_int_value(const CMenuItem *mi, int direction)
 // Update a 'bool' value
 static void update_bool_value(const CMenuItem *mi)
 {
-#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
-    dbuf_menu_val_changed = 1;
-#endif
     // update value
     *(mi->value) = !(*(mi->value));
 
@@ -408,9 +414,6 @@ static void update_bool_value(const CMenuItem *mi)
 // Update an 'enum' value, direction = 1 for increment, -1 for decrement
 static void update_enum_value(const CMenuItem *mi, int direction)
 {
-#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
-    dbuf_menu_val_changed = 1;
-#endif
     // update value
     if (mi->value)
     {
@@ -580,9 +583,6 @@ int gui_menu_kbd_process() {
         case KEY_SHOOT_HALF:
             if (!increment_factor())
                 int_incr = 1;
-#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
-            dbuf_menu_val_changed = 1;
-#endif
             gui_menu_redraw=1;
             break;
         case JOGDIAL_LEFT:
@@ -679,9 +679,6 @@ int gui_menu_kbd_process() {
                         if (camera_info.state.is_shutter_half_press)
                         {
                             *(curr_menu->menu[gui_menu_curr_item].value) = 0;
-#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
-                            dbuf_menu_val_changed = 1;
-#endif
                             gui_menu_redraw=1;
                         }
                         break;
@@ -735,22 +732,12 @@ int gui_menu_kbd_process() {
             break;
         case KEY_ZOOM_IN:
             if (decrement_factor())
-            {
-#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
-                dbuf_menu_val_changed = 1;
-#endif
                 gui_menu_redraw = 1;
-            }
             break;
 
         case KEY_ZOOM_OUT:
             if (increment_factor())
-            {
-#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
-                dbuf_menu_val_changed = 1;
-#endif
                 gui_menu_redraw = 1;
-            }
             break;
 
         case KEY_DISPLAY:
@@ -763,9 +750,6 @@ int gui_menu_kbd_process() {
                 // For cams without zoom lever, DISP adjusts increment factor
                 if (!increment_factor())
                     int_incr = 1;
-#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
-                dbuf_menu_val_changed = 1;
-#endif
                 gui_menu_redraw=1;
             }
             break;
@@ -997,6 +981,106 @@ static void menu_text(color c)
     cl = save;
 }
 
+#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+/*
+ * PORT-43: Per-visible-row signature computation.
+ * Computes a cheap signature of what the row shows:
+ * - item type, text ID, symbol, arg
+ * - selection state and int cursor position
+ * - value: bool (*val), int (*val), color (*val)
+ * - enum: string hash of current enum text
+ * - enum2: string hash of current enum2 text and *val
+ * - state_val_pair: both sub-elements' types, values and enum strings
+ * Used on partial redraw (gui_menu_redraw=1) to redraw ONLY rows whose
+ * signature changed, handling both single-item changes and callback cascades
+ * without touching unchanged rows.
+ */
+static inline unsigned int dbuf_hash_str(const char *s)
+{
+    unsigned int h = 5381;
+    if (!s) return 0;
+    while (*s) {
+        h = ((h << 5) + h) + (unsigned char)(*s++);
+    }
+    return h;
+}
+
+static unsigned int compute_row_signature(const CMenuItem *item, int is_selected)
+{
+    if (!item) return 0;
+    unsigned int sig = 17;
+    sig = sig * 31 + (unsigned int)item->type;
+    sig = sig * 31 + (unsigned int)item->text;
+    sig = sig * 31 + (unsigned int)item->symbol;
+    sig = sig * 31 + (unsigned int)item->arg;
+    sig = sig * 31 + (is_selected ? 1 : 0);
+
+    if (is_selected)
+    {
+        sig = sig * 31 + (unsigned int)menu_get_increment_factor();
+    }
+
+    int type_mask = item->type & MENUITEM_MASK;
+    if (type_mask == MENUITEM_STATE_VAL_PAIR && item->value)
+    {
+        const CMenuItem *c = (const CMenuItem*)item->value;
+        sig = sig * 31 + (unsigned int)c[0].type;
+        sig = sig * 31 + (unsigned int)c[1].type;
+        if (c[1].value)
+        {
+            if ((c[1].type & MENUITEM_MASK) == MENUITEM_ENUM)
+            {
+                const char *st = ((const char* (*)(int, int))(c[1].value))(0, c[1].arg);
+                sig = sig * 31 + dbuf_hash_str(st);
+            }
+            else
+            {
+                sig = sig * 31 + (unsigned int)*(c[1].value);
+            }
+        }
+        if (c[0].value)
+        {
+            if ((c[0].type & MENUITEM_MASK) == MENUITEM_ENUM)
+            {
+                const char *val_str = ((const char* (*)(int, int))(c[0].value))(0, c[0].arg);
+                sig = sig * 31 + dbuf_hash_str(val_str);
+            }
+            else if ((c[0].type & MENUITEM_MASK) == MENUITEM_ENUM2)
+            {
+                extern const char* gui_change_enum2(const CMenuItem *menu_item, int change);
+                const char *val_str = gui_change_enum2(c, 0);
+                sig = sig * 31 + dbuf_hash_str(val_str);
+                sig = sig * 31 + (unsigned int)*(c[0].value);
+            }
+            else
+            {
+                sig = sig * 31 + (unsigned int)*(c[0].value);
+            }
+        }
+    }
+    else if (type_mask == MENUITEM_ENUM && item->value)
+    {
+        const char *ch = ((const char* (*)(int, int))(item->value))(0, item->arg);
+        sig = sig * 31 + dbuf_hash_str(ch);
+    }
+    else if (type_mask == MENUITEM_ENUM2 && item->value)
+    {
+        extern const char* gui_change_enum2(const CMenuItem *menu_item, int change);
+        const char *ch = gui_change_enum2(item, 0);
+        sig = sig * 31 + dbuf_hash_str(ch);
+        sig = sig * 31 + (unsigned int)*(item->value);
+    }
+    else if (item->value && (type_mask == MENUITEM_BOOL ||
+                             type_mask == MENUITEM_INT ||
+                             type_mask == MENUITEM_COLOR_FG ||
+                             type_mask == MENUITEM_COLOR_BG))
+    {
+        sig = sig * 31 + (unsigned int)*(item->value);
+    }
+    return sig;
+}
+#endif
+
 void gui_menu_draw(int enforce_redraw)
 {
     int i, j;
@@ -1008,30 +1092,26 @@ void gui_menu_draw(int enforce_redraw)
     if (gui_menu_redraw)
     {
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
-        /*
-         * PORT-43 Option (a): Partial redraw for cursor moves and item updates (gui_menu_redraw=1).
-         * Adapted from CHDK core gui_menu.c:960-1010 (cursor move and row redraw).
-         * Pure cursor move (no value changed, !is_scroll): redraws only the old and new cursor rows.
-         * Item value change or callback: redraws ALL visible item rows with fast row-fills plus text.
-         * Title, header, outer frame and g3x_fill_menu_opaque_black are NEVER redrawn on gui_menu_redraw=1.
-         * Full clear-and-repaint (gui_menu_redraw=2) is strictly limited to menu entry and menu/submenu changes.
-         * Label: INFERRED.
+        /* PORT-43: Partial redraw for cursor moves and item updates (gui_menu_redraw=1).
+         * Uses per-row signature cache (dbuf_row_cache) to redraw ONLY changed rows.
+         * Title, header, and frame are never redrawn on gui_menu_redraw=1.
+         * Full repaint (gui_menu_redraw=2) is kept strictly for:
+         * 1. Menu open (gui_menu_init)
+         * 2. Submenu enter/exit (gui_activate_sub_menu / gui_menu_back)
+         * 3. Scroll-offset change (gui_menu_top_item != dbuf_last_drawn_top_item)
+         * 4. Sentinel loss that shadow blit cannot recover (enforce_redraw=1 from main.c)
          */
-        static int dbuf_last_drawn_curr_item = -1;
-        static int dbuf_last_drawn_top_item = -1;
         int is_scroll = (gui_menu_top_item != dbuf_last_drawn_top_item);
-        int is_cursor_move = (!dbuf_menu_val_changed && (gui_menu_curr_item != dbuf_last_drawn_curr_item));
-        int is_partial_redraw = (gui_menu_redraw == 1 &&
-                                 g3x_shadow_valid &&
-                                 !is_scroll &&
-                                 dbuf_last_drawn_curr_item >= 0 &&
-                                 is_cursor_move);
-        int old_item = dbuf_last_drawn_curr_item;
-        int cur_item = gui_menu_curr_item;
+        int is_partial = (gui_menu_redraw == 1 &&
+                          g3x_shadow_valid &&
+                          dbuf_row_cache_valid &&
+                          !is_scroll &&
+                          dbuf_last_drawn_curr_item >= 0);
+        int is_cursor_move = (gui_menu_curr_item != dbuf_last_drawn_curr_item);
 #endif
 
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
-        if (gui_menu_redraw == 2)
+        if (gui_menu_redraw == 2 || is_scroll)
 #else
         if (gui_menu_redraw==2)
 #endif
@@ -1039,12 +1119,29 @@ void gui_menu_draw(int enforce_redraw)
 
         gui_menu_redraw=0;
 
+        int visible_items = 0;
         for (imenu=gui_menu_top_item, i=0, yy=y; curr_menu->menu[imenu].text && i<num_lines; ++imenu, ++i, yy+=rbf_font_height())
         {
+            visible_items++;
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
-            if (is_partial_redraw && imenu != cur_item && imenu != old_item)
+            const CMenuItem *cur_item = &curr_menu->menu[imenu];
+            int is_sel = (gui_menu_curr_item == imenu);
+            unsigned int cur_sig = compute_row_signature(cur_item, is_sel);
+            int row_changed = (!is_partial ||
+                               !dbuf_row_cache_valid ||
+                               i >= DBUF_MAX_VISIBLE_ROWS ||
+                               dbuf_row_cache[i].item != cur_item ||
+                               dbuf_row_cache[i].sig != cur_sig ||
+                               dbuf_row_cache[i].is_selected != is_sel);
+            if (!row_changed)
             {
                 continue;
+            }
+            if (i < DBUF_MAX_VISIBLE_ROWS)
+            {
+                dbuf_row_cache[i].item = cur_item;
+                dbuf_row_cache[i].sig = cur_sig;
+                dbuf_row_cache[i].is_selected = is_sel;
             }
             /* Fill that row's rectangle with g3x_dbuf_fast_fill_rect (32-bit word writes) */
             extern void g3x_dbuf_fast_fill_rect(coord x1, coord y1, coord x2, coord y2, color cl);
@@ -1162,36 +1259,60 @@ void gui_menu_draw(int enforce_redraw)
         }
 
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
-        /* PORT-43: Skip padding fills on partial redraw so cursor moves touch only changed rows */
-        if (!is_partial_redraw)
+        if (!is_partial)
+        {
+            int k;
+            for (k = visible_items; k < DBUF_MAX_VISIBLE_ROWS; k++)
+            {
+                dbuf_row_cache[k].item = 0;
+                dbuf_row_cache[k].sig = 0;
+                dbuf_row_cache[k].is_selected = 0;
+            }
+        }
+        /* PORT-43: Repaint padding rows only when the number of visible items or scroll offset actually changes.
+         * Never repaint them on a value change. */
+        int padding_changed = (!is_partial || is_scroll || (visible_items != dbuf_last_drawn_visible_items));
+        if (padding_changed)
 #endif
         {
 #if defined(G3X_GUI5) && (G3X_GUI5 == 1)
             /* PORT-40: Fill remaining rows down to num_lines with solid opaque black */
             for (; i < num_lines; ++i, yy += rbf_font_height())
             {
+#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+                extern void g3x_dbuf_fast_fill_rect(coord x1, coord y1, coord x2, coord y2, color cl);
+                g3x_dbuf_fast_fill_rect(x, yy, x + w - 1, yy + rbf_font_height() - 1, COLOR_BLACK);
+#else
                 draw_rectangle(x, yy, x + w - 1, yy + rbf_font_height() - 1,
                                MAKE_COLOR(COLOR_BLACK, COLOR_BLACK),
                                RECT_BORDER0 | DRAW_FILLED);
+#endif
             }
 #endif
         }
 
         // scrollbar
-        if (count > num_lines)
+#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+        /* Under DBUF, redraw scrollbar only on full repaint, scroll change, or cursor move */
+        if (!is_partial || is_scroll || is_cursor_move)
+#endif
         {
-            i = num_lines*rbf_font_height()-1 -1;           // full height
-            j = i*num_lines/count;                          // bar height
-            if (j<20) j=20;
-            i = (i-j)*((gui_menu_curr_item<0)?0:gui_menu_curr_item)/(count-1);   // top pos
-            draw_rectangle((x+w)+2, y+1,   (x+w)+6, y+1+i,                             MAKE_COLOR(COLOR_BLACK, COLOR_BLACK), RECT_BORDER0|DRAW_FILLED|RECT_ROUND_CORNERS);
-            draw_rectangle((x+w)+2, y+i+j, (x+w)+6, y+num_lines*rbf_font_height()-1-1, MAKE_COLOR(COLOR_BLACK, COLOR_BLACK), RECT_BORDER0|DRAW_FILLED|RECT_ROUND_CORNERS);
-            draw_rectangle((x+w)+2, y+1+i, (x+w)+6, y+i+j,                             MAKE_COLOR(COLOR_WHITE, COLOR_WHITE), RECT_BORDER0|DRAW_FILLED|RECT_ROUND_CORNERS);
+            if (count > num_lines)
+            {
+                i = num_lines*rbf_font_height()-1 -1;           // full height
+                j = i*num_lines/count;                          // bar height
+                if (j<20) j=20;
+                i = (i-j)*((gui_menu_curr_item<0)?0:gui_menu_curr_item)/(count-1);   // top pos
+                draw_rectangle((x+w)+2, y+1,   (x+w)+6, y+1+i,                             MAKE_COLOR(COLOR_BLACK, COLOR_BLACK), RECT_BORDER0|DRAW_FILLED|RECT_ROUND_CORNERS);
+                draw_rectangle((x+w)+2, y+i+j, (x+w)+6, y+num_lines*rbf_font_height()-1-1, MAKE_COLOR(COLOR_BLACK, COLOR_BLACK), RECT_BORDER0|DRAW_FILLED|RECT_ROUND_CORNERS);
+                draw_rectangle((x+w)+2, y+1+i, (x+w)+6, y+i+j,                             MAKE_COLOR(COLOR_WHITE, COLOR_WHITE), RECT_BORDER0|DRAW_FILLED|RECT_ROUND_CORNERS);
+            }
         }
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
         dbuf_last_drawn_curr_item = gui_menu_curr_item;
         dbuf_last_drawn_top_item = gui_menu_top_item;
-        dbuf_menu_val_changed = 0;
+        dbuf_last_drawn_visible_items = visible_items;
+        dbuf_row_cache_valid = 1;
         /* Mark shadow valid only after complete draw of the menu layer has been written */
         g3x_shadow_valid = 1;
 #endif
