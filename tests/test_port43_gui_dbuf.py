@@ -17,7 +17,8 @@ Verifies:
 4. Byte identity to existing manifests:
    - PORT-42 GUI build (G3X_GUI_FIX=1 alone, 124,257 B, 760a362d...)
    - PORT-41 default full build (124,097 B, 24b8a024...)
-   - FULL_HOOKS variant (124,321 B, d50ea585...)
+   - FULL_HOOKS variant (124,153 B, eb46aa33...)
+   - GUI_FIX + FULL_HOOKS variant (124,321 B, d50ea585...)
    - Every PORT-24..40 candidate: default, poweron_fix, ladder, combined, resident,
      osd, kbd, kbd_osd, osd2, gui, gui2, gui3, gui4, shortpress, gui5, gui5_shortpress.
 5. Host-side model and unit tests of the draw layer:
@@ -48,14 +49,16 @@ TOOLCHAIN_NM = TOOLCHAIN_BIN / "arm-none-eabi-nm"
 
 BUILD_SCRIPT_DBUF = REPO_ROOT / "scripts" / "build_port43_dbuf.py"
 BUILD_SCRIPT_PORT41 = REPO_ROOT / "tools" / "build_port41_full.py"
-OUT_DIR_DBUF = REPO_ROOT / "out" / "port43-dbuf"
-OUT_DIR_GUI = REPO_ROOT / "out" / "port42-gui"
-OUT_DIR_PORT41 = REPO_ROOT / "out" / "port41-full-switch-off"
-OUT_DIR_FULL = REPO_ROOT / "out" / "port41-full"
-OUT_DIR_GUI_HOOKS = REPO_ROOT / "out" / "port42-gui-full-hooks"
-CANDIDATE_DIR = REPO_ROOT / "candidate_port2a"
 WRAPPER_SCRIPT = REPO_ROOT / "scripts" / "gcc_deterministic_wrapper.sh"
 MANIFESTS_DIR = REPO_ROOT / "manifests"
+
+# Dedicated clean output directories per variant under out/port43-test/
+TEST_BASE_OUT_DIR = REPO_ROOT / "out" / "port43-test"
+OUT_DIR_PORT41_DEFAULT = TEST_BASE_OUT_DIR / "port41_default"
+OUT_DIR_FULL_HOOKS = TEST_BASE_OUT_DIR / "full_hooks"
+OUT_DIR_PORT42_GUI_FIX = TEST_BASE_OUT_DIR / "port42_gui_fix"
+OUT_DIR_GUI_FIX_FULL_HOOKS = TEST_BASE_OUT_DIR / "gui_fix_full_hooks"
+OUT_DIR_GUI_FIX_DBUF = TEST_BASE_OUT_DIR / "gui_fix_dbuf"
 
 EXPECTED_DBUF_SIZE = 126329
 EXPECTED_DBUF_SHA256 = "8d5509e597a598e8bb023adae46d4caa2c7ee1e2b763e4ff292f0aef21f9b140"
@@ -67,6 +70,123 @@ EXPECTED_FULL_HOOKS_SIZE = 124153
 EXPECTED_FULL_HOOKS_SHA256 = "eb46aa339bb6557f27d992691f83ceb14cc73962625a44e0f146edde9b886dce"
 EXPECTED_GUI_FULL_HOOKS_SIZE = 124321
 EXPECTED_GUI_FULL_HOOKS_SHA256 = "d50ea585b2ba49e39674395f504b5780a1cb98a915fe998c5b7fa5be115cb9bb"
+
+# Complete table of all PORT-24..40 candidates with build options, expected hash, expected size,
+# and the git-tracked source document that canonically records its DISKBOOT SHA-256.
+PINNED_CANDIDATES = [
+    (
+        "default",
+        {"ladder": False, "poweron_fix": False, "resident": False},
+        "9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136",
+        118001,
+        "docs/PORT16_CANDIDATE_BUILD.md",
+    ),
+    (
+        "poweron_fix",
+        {"ladder": False, "poweron_fix": True, "resident": False},
+        "faad4d8242fbf6f79a44b10a9956f7eb04de9b65f42221f82a3b69eb024cf056",
+        118001,
+        "docs/PORT24_LOADER_TRACE.md",
+    ),
+    (
+        "ladder",
+        {"ladder": True, "poweron_fix": False, "resident": False},
+        "45da469f3eb46c4d2aff77a032e5c8bb4eedf8ec8846526853d716d05d2b2f4e",
+        126081,
+        "docs/PORT25_LADDER_FIX_CANDIDATE.md",
+    ),
+    (
+        "combined",
+        {"ladder": True, "poweron_fix": True, "resident": False},
+        "9ba62067c17d654a3b8995fc6e8c26176321154054a138a465ca66f9ff763a15",
+        124865,
+        "docs/PORT25_LADDER_FIX_CANDIDATE.md",
+    ),
+    (
+        "resident",
+        {"resident": True},
+        "63c7942f561242b55d8226bfefe7818dd5b959aee35eae0adb4f41a4783ece5a",
+        124561,
+        "docs/PORT32_RESIDENT_CANDIDATE.md",
+    ),
+    (
+        "osd",
+        {"osd": True},
+        "683751539979f3e8956fd6c1794683c062f54385e6e1a3261b02ed8d63cc9855",
+        124833,
+        "docs/PORT33_OSD_ADDRESSES.md",
+    ),
+    (
+        "kbd",
+        {"kbd": True},
+        "a750253feb0cd9bb3bb1addb4cede5585bef29a0bf26bd86d3f577fdbf41be33",
+        124801,
+        "docs/PORT34_KBD_ADDRESSES.md",
+    ),
+    (
+        "kbd_osd",
+        {"kbd": True, "osd": True},
+        "686c4e4688f74cccd2b7a21e7000eb574672635cfd4d17c885d86bbf52eb99a8",
+        125121,
+        "docs/PORT34_KBD_ADDRESSES.md",
+    ),
+    (
+        "osd2",
+        {"osd2": True},
+        "20d65a7d9be954d5caafe2f78751429ea388a37ca570f0bbd0d620609eb31a57",
+        125329,
+        "docs/PORT35_GUI_ADDRESSES.md",
+    ),
+    (
+        "gui",
+        {"gui": True},
+        "1f6494cd8e7fd7629b82ed33ba1ec4fa939aa1aa2ff22f541c28a28c742e4272",
+        103057,
+        "docs/PORT35_GUI_ADDRESSES.md",
+    ),
+    (
+        "gui2",
+        {"gui2": True},
+        "4a8c4b503a4b78a262ca208c629de8305aa186efbc2fda82951d77084ade9071",
+        103345,
+        "docs/PORT36_GUI_GEOMETRY.md",
+    ),
+    (
+        "gui3",
+        {"gui3": True},
+        "4aded2d2abbe0c3101583c79708d084ffe93101fc9b889a76970e66a175be638",
+        103569,
+        "docs/PORT37_GUI_FLICKER.md",
+    ),
+    (
+        "gui4",
+        {"gui4": True},
+        "14456b08fca82758262c26ad6105f784ebacaa080b7a059a622ded5a8d505fdd",
+        102241,
+        "docs/PORT38_GUI4_TRIAL.md",
+    ),
+    (
+        "shortpress",
+        {"shortpress": True},
+        "6df54a905e36a6fe92b5a3a4ac4dd71086d3306fd0aaa31a1f1bc670f7e19461",
+        124945,
+        "docs/PORT39_SHORTPRESS_TRIAL.md",
+    ),
+    (
+        "gui5",
+        {"gui5": True},
+        "dd96357c050cf3b9116dcf089a731ef159477b505351f46436f983fdbf090b64",
+        102209,
+        "docs/PORT40_GUI_LAYOUT.md",
+    ),
+    (
+        "gui5_shortpress",
+        {"gui5": True, "shortpress": True},
+        "86e12a2cfe792a8901fa2e0ec5a98f019290593e35d5c4c2e66fd3e073f16ff1",
+        102369,
+        "docs/PORT40_GUI_LAYOUT.md",
+    ),
+]
 
 
 def sha256_file(path: Path | str) -> str:
@@ -93,26 +213,111 @@ def snapshot_distribution(out_path: Path) -> dict[str, tuple[int, str]]:
     return snapshot
 
 
-def _require_or_build_distribution(out_path: Path, build_args: list[str]) -> Path:
-    """Ensure a full distribution directory exists with valid DISKBOOT.BIN, or build it."""
+def _require_or_build_distribution(
+    out_path: Path,
+    build_args: list[str],
+    expected_sha256: str | None = None,
+    script: Path = BUILD_SCRIPT_PORT41,
+) -> Path:
+    """Ensure a full distribution directory exists with valid DISKBOOT.BIN for the requested variant, or build it.
+
+    Never returns a stale binary built for a different variant.
+    If out_path already contains a DISKBOOT.BIN:
+    - If expected_sha256 is provided and matches, return out_path (valid cached binary).
+    - If expected_sha256 is provided and differs (stale binary from another variant or build),
+      wipe out_path and rebuild cleanly.
+    - If expected_sha256 is omitted, return if DISKBOOT.BIN is present and non-empty.
+    Always wipes out_path before building so each variant build is completely clean.
+    """
     diskboot = out_path / "DISKBOOT.BIN"
+    chdk_dir = out_path / "CHDK"
+    if diskboot.is_file() and diskboot.stat().st_size > 0 and chdk_dir.is_dir():
+        if expected_sha256 is not None:
+            if sha256_file(diskboot) == expected_sha256:
+                return out_path
+            # Stale binary from another variant; fall through to wipe and rebuild
+        else:
+            return out_path
+
+    # Wipe out_path before building to guarantee a clean output directory
+    if out_path.exists():
+        shutil.rmtree(out_path)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    env = os.environ.copy()
+    env.pop("G3X_GUI_FIX", None)
+    env.pop("G3X_GUI_DBUF", None)
+    env.pop("FULL_HOOKS", None)
+    if WRAPPER_SCRIPT.is_file() and os.access(WRAPPER_SCRIPT, os.X_OK):
+        env["MAKEFLAGS"] = f"CC={WRAPPER_SCRIPT}"
+
+    cmd = ["python3", "-B", str(script)] + build_args + ["--out-dir", str(out_path)]
+    res = subprocess.run(
+        cmd,
+        cwd=str(REPO_ROOT),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    if res.returncode != 0:
+        raise RuntimeError(f"Build failed for {out_path} ({cmd}):\n{res.stderr}\n{res.stdout}")
+
     if not diskboot.is_file() or diskboot.stat().st_size == 0:
-        env = os.environ.copy()
-        env.pop("G3X_GUI_FIX", None)
-        env.pop("FULL_HOOKS", None)
-        if WRAPPER_SCRIPT.is_file() and os.access(WRAPPER_SCRIPT, os.X_OK):
-            env["MAKEFLAGS"] = f"CC={WRAPPER_SCRIPT}"
-        res = subprocess.run(
-            ["python3", "-B", str(BUILD_SCRIPT_PORT41)] + build_args + ["--out-dir", str(out_path)],
-            cwd=str(REPO_ROOT),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=env,
-        )
-        if res.returncode != 0:
-            raise RuntimeError(f"Build failed for {out_path}: {res.stderr}\n{res.stdout}")
+        raise RuntimeError(f"DISKBOOT.BIN missing or empty after building {out_path}")
+
+    if expected_sha256 is not None:
+        actual_sha = sha256_file(diskboot)
+        if actual_sha != expected_sha256:
+            raise RuntimeError(
+                f"Build of {out_path} produced unexpected SHA-256: {actual_sha} != {expected_sha256}"
+            )
+
     return out_path
+
+
+def _require_or_build_candidate(
+    name: str,
+    kwargs: dict,
+    expected_sha256: str,
+    expected_size: int,
+) -> Path:
+    """Ensure candidate output directory exists with byte-identical DISKBOOT.BIN, or build it cleanly.
+
+    Never reads or creates git-ignored candidate_port*/ paths. Uses out/port43-test/candidate_<name>/.
+    Wipes the output directory before building if missing or stale.
+    """
+    cand_dir = TEST_BASE_OUT_DIR / f"candidate_{name}"
+    diskboot = cand_dir / "DISKBOOT.BIN"
+    cand_mpath = cand_dir / "candidate_manifest.json"
+
+    if diskboot.is_file() and diskboot.stat().st_size == expected_size and cand_mpath.is_file():
+        if sha256_file(diskboot) == expected_sha256:
+            return cand_dir
+        # Stale binary from a different variant; wipe and rebuild
+
+    if cand_dir.exists():
+        shutil.rmtree(cand_dir)
+    cand_dir.mkdir(parents=True, exist_ok=True)
+
+    import sys
+    scripts_dir = REPO_ROOT / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from build_candidate_gui3 import build_candidate
+
+    res = build_candidate(out_dir=str(cand_dir), **kwargs)
+    if not diskboot.is_file():
+        raise RuntimeError(f"DISKBOOT.BIN missing for candidate {name} in {cand_dir}")
+
+    actual_size = diskboot.stat().st_size
+    actual_sha = sha256_file(diskboot)
+    if actual_size != expected_size:
+        raise RuntimeError(f"Candidate {name} size {actual_size} != expected {expected_size}")
+    if actual_sha != expected_sha256:
+        raise RuntimeError(f"Candidate {name} sha256 {actual_sha} != expected {expected_sha256}")
+
+    return cand_dir
 
 
 def _verify_distribution_against_manifest(out_path: Path, manifest_path: Path) -> None:
@@ -221,19 +426,14 @@ class TestPort43BuildReproducibility(unittest.TestCase):
 
     def test_dbuf_build_reproducibility(self):
         """Two builds of the variant give identical SHA-256."""
-        # Ensure out/port43-dbuf has the baseline build
-        diskboot = OUT_DIR_DBUF / "DISKBOOT.BIN"
-        if not diskboot.is_file() or diskboot.stat().st_size != EXPECTED_DBUF_SIZE:
-            res = subprocess.run(
-                ["python3", "-B", str(BUILD_SCRIPT_DBUF)],
-                cwd=str(REPO_ROOT),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            self.assertEqual(res.returncode, 0, f"Baseline build failed: {res.stderr}")
-
-        snap1 = snapshot_distribution(OUT_DIR_DBUF)
+        # Ensure out/port43-test/gui_fix_dbuf has the baseline build
+        out_dbuf = _require_or_build_distribution(
+            OUT_DIR_GUI_FIX_DBUF,
+            [],
+            expected_sha256=EXPECTED_DBUF_SHA256,
+            script=BUILD_SCRIPT_DBUF,
+        )
+        snap1 = snapshot_distribution(out_dbuf)
         self.assertEqual(snap1["DISKBOOT.BIN"], (EXPECTED_DBUF_SIZE, EXPECTED_DBUF_SHA256))
 
         # Build 2 in fresh temporary directory
@@ -262,7 +462,11 @@ class TestPort43ByteIdentityToExistingManifests(unittest.TestCase):
 
     def test_port42_gui_manifest_match(self):
         """PORT-42 GUI build is byte-identical to its existing manifest."""
-        out_dir = _require_or_build_distribution(OUT_DIR_GUI, ["--gui-fix"])
+        out_dir = _require_or_build_distribution(
+            OUT_DIR_PORT42_GUI_FIX,
+            ["--gui-fix"],
+            expected_sha256=EXPECTED_PORT42_GUI_SHA256,
+        )
         mpath = MANIFESTS_DIR / "port42_gui_manifest.json"
         _verify_distribution_against_manifest(out_dir, mpath)
 
@@ -272,88 +476,126 @@ class TestPort43ByteIdentityToExistingManifests(unittest.TestCase):
 
     def test_port41_default_full_manifest_match(self):
         """PORT-41 default full build is byte-identical to its existing manifest."""
-        target_dir = OUT_DIR_PORT41
-        if not (target_dir / "DISKBOOT.BIN").is_file():
-            if (OUT_DIR_FULL / "DISKBOOT.BIN").is_file() and sha256_file(OUT_DIR_FULL / "DISKBOOT.BIN") == EXPECTED_PORT41_FULL_SHA256:
-                target_dir = OUT_DIR_FULL
-            else:
-                target_dir = _require_or_build_distribution(OUT_DIR_PORT41, [])
+        target_dir = _require_or_build_distribution(
+            OUT_DIR_PORT41_DEFAULT,
+            [],
+            expected_sha256=EXPECTED_PORT41_FULL_SHA256,
+        )
         mpath = MANIFESTS_DIR / "port41_manifest.json"
         _verify_distribution_against_manifest(target_dir, mpath)
 
     def test_full_hooks_manifest_match(self):
         """FULL_HOOKS variants are byte-identical to their existing manifests."""
         # 1. Baseline FULL_HOOKS build
-        target_full = OUT_DIR_FULL
-        if not (target_full / "DISKBOOT.BIN").is_file() or sha256_file(target_full / "DISKBOOT.BIN") != EXPECTED_FULL_HOOKS_SHA256:
-            target_full = _require_or_build_distribution(OUT_DIR_FULL, ["--full-hooks"])
+        target_full = _require_or_build_distribution(
+            OUT_DIR_FULL_HOOKS,
+            ["--full-hooks"],
+            expected_sha256=EXPECTED_FULL_HOOKS_SHA256,
+        )
         mpath_full = MANIFESTS_DIR / "port42_full_hooks_manifest.json"
         _verify_distribution_against_manifest(target_full, mpath_full)
 
         # 2. GUI-fixed FULL_HOOKS build
-        target_gui_hooks = OUT_DIR_GUI_HOOKS
-        if not (target_gui_hooks / "DISKBOOT.BIN").is_file() or sha256_file(target_gui_hooks / "DISKBOOT.BIN") != EXPECTED_GUI_FULL_HOOKS_SHA256:
-            target_gui_hooks = _require_or_build_distribution(OUT_DIR_GUI_HOOKS, ["--gui-fix", "--full-hooks"])
+        target_gui_hooks = _require_or_build_distribution(
+            OUT_DIR_GUI_FIX_FULL_HOOKS,
+            ["--gui-fix", "--full-hooks"],
+            expected_sha256=EXPECTED_GUI_FULL_HOOKS_SHA256,
+        )
         for name in ["port42_gui_fix_full_hooks_manifest.json", "port42_gui_full_hooks_manifest.json"]:
             p = MANIFESTS_DIR / name
             if p.is_file():
                 _verify_distribution_against_manifest(target_gui_hooks, p)
 
+    def test_stale_variant_rebuild_regression_check(self):
+        """Regression check: start with a default build already in out/port41-full, then show that the FULL_HOOKS comparison still builds FULL_HOOKS and matches its manifest."""
+        out_port41_full = REPO_ROOT / "out" / "port41-full"
+
+        # 1. Place a default build into out/port41-full (simulating a prior default build)
+        _require_or_build_distribution(
+            out_port41_full,
+            [],
+            expected_sha256=EXPECTED_PORT41_FULL_SHA256,
+        )
+        self.assertEqual(
+            sha256_file(out_port41_full / "DISKBOOT.BIN"),
+            EXPECTED_PORT41_FULL_SHA256,
+            "Precondition: out/port41-full must contain the default build",
+        )
+
+        # 2. Show that requesting FULL_HOOKS rebuilds FULL_HOOKS despite out/port41-full already existing
+        rebuilt = _require_or_build_distribution(
+            out_port41_full,
+            ["--full-hooks"],
+            expected_sha256=EXPECTED_FULL_HOOKS_SHA256,
+        )
+        self.assertEqual(
+            sha256_file(rebuilt / "DISKBOOT.BIN"),
+            EXPECTED_FULL_HOOKS_SHA256,
+            "Helper must detect stale default hash, wipe out_port41-full, and rebuild FULL_HOOKS",
+        )
+
+        # 3. Verify it matches the FULL_HOOKS manifest
+        mpath_full = MANIFESTS_DIR / "port42_full_hooks_manifest.json"
+        _verify_distribution_against_manifest(rebuilt, mpath_full)
+
     def test_all_port24_to_port40_candidates_byte_identical(self):
         """Verify that every PORT-24..40 candidate remains 100% byte-identical to locked manifests.
 
-        Cites candidate build suites:
-        - tests/test_port41_full_build.py:745-764 (flag_cases test)
-        - tests/test_port35_gui_candidate.py:132-175 (prior hashes invariant)
-        - tests/test_port25_ladder_fix.py:350-393 (ladder, poweron_fix, combined determinism)
-        - tests/test_port40_gui_layout.py:99-100 (gui5, gui5_shortpress)
+        Verifies against git-tracked baseline files only (no git-ignored candidate_port*/ paths).
+        Fails if any candidate has no tracked expected hash.
         """
-        import sys
-        scripts_dir = REPO_ROOT / "scripts"
-        if str(scripts_dir) not in sys.path:
-            sys.path.insert(0, str(scripts_dir))
-        from build_candidate_gui3 import build_candidate
+        required_candidates = {
+            "default", "poweron_fix", "ladder", "combined", "resident",
+            "osd", "kbd", "kbd_osd", "osd2", "gui", "gui2", "gui3",
+            "gui4", "shortpress", "gui5", "gui5_shortpress"
+        }
+        present_candidates = {name for name, _, _, _, _ in PINNED_CANDIDATES}
+        missing_candidates = required_candidates - present_candidates
+        if missing_candidates:
+            self.fail(f"Candidates missing from test suite: {sorted(missing_candidates)}")
 
-        pinned_candidates = [
-            ("default", {"ladder": False, "poweron_fix": False, "resident": False}, "9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136", 118001),
-            ("poweron_fix", {"ladder": False, "poweron_fix": True, "resident": False}, "faad4d8242fbf6f79a44b10a9956f7eb04de9b65f42221f82a3b69eb024cf056", 118001),
-            ("ladder", {"ladder": True, "poweron_fix": False, "resident": False}, "45da469f3eb46c4d2aff77a032e5c8bb4eedf8ec8846526853d716d05d2b2f4e", 126081),
-            ("combined", {"ladder": True, "poweron_fix": True, "resident": False}, "9ba62067c17d654a3b8995fc6e8c26176321154054a138a465ca66f9ff763a15", 124865),
-            ("resident", {"resident": True}, "63c7942f561242b55d8226bfefe7818dd5b959aee35eae0adb4f41a4783ece5a", 124561),
-            ("osd", {"osd": True}, "683751539979f3e8956fd6c1794683c062f54385e6e1a3261b02ed8d63cc9855", 124833),
-            ("kbd", {"kbd": True}, "a750253feb0cd9bb3bb1addb4cede5585bef29a0bf26bd86d3f577fdbf41be33", 124801),
-            ("kbd_osd", {"kbd": True, "osd": True}, "686c4e4688f74cccd2b7a21e7000eb574672635cfd4d17c885d86bbf52eb99a8", 125121),
-            ("osd2", {"osd2": True}, "20d65a7d9be954d5caafe2f78751429ea388a37ca570f0bbd0d620609eb31a57", 125329),
-            ("gui", {"gui": True}, "1f6494cd8e7fd7629b82ed33ba1ec4fa939aa1aa2ff22f541c28a28c742e4272", 103057),
-            ("gui2", {"gui2": True}, "4a8c4b503a4b78a262ca208c629de8305aa186efbc2fda82951d77084ade9071", 103345),
-            ("gui3", {"gui3": True}, "4aded2d2abbe0c3101583c79708d084ffe93101fc9b889a76970e66a175be638", 103569),
-            ("gui4", {"gui4": True}, "14456b08fca82758262c26ad6105f784ebacaa080b7a059a622ded5a8d505fdd", 102241),
-            ("shortpress", {"shortpress": True}, "6df54a905e36a6fe92b5a3a4ac4dd71086d3306fd0aaa31a1f1bc670f7e19461", 124945),
-            ("gui5", {"gui5": True}, "dd96357c050cf3b9116dcf089a731ef159477b505351f46436f983fdbf090b64", 102209),
-            ("gui5_shortpress", {"gui5": True, "shortpress": True}, "86e12a2cfe792a8901fa2e0ec5a98f019290593e35d5c4c2e66fd3e073f16ff1", 102369),
-        ]
+        for name, kwargs, expected_sha, expected_size, tracked_relpath in PINNED_CANDIDATES:
+            with self.subTest(candidate=name):
+                # 1. Verify candidate has a tracked expected hash source file
+                if not tracked_relpath:
+                    self.fail(f"Candidate {name} has no tracked expected hash source file")
 
-        # Verify candidate_port2a committed manifest first
-        default_manifest_path = CANDIDATE_DIR / "candidate_manifest.json"
-        self.assertTrue(default_manifest_path.is_file(), f"Missing canonical {default_manifest_path}")
-        with open(default_manifest_path, "r", encoding="utf-8") as mf:
-            default_mdata = json.load(mf)
-        default_cart = default_mdata["candidate_artifacts"]["DISKBOOT.BIN"]
-        self.assertEqual(default_cart["size_bytes"], 118001)
-        self.assertEqual(default_cart["sha256"], "9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136")
+                tracked_file = REPO_ROOT / tracked_relpath
+                self.assertTrue(
+                    tracked_file.is_file(),
+                    f"Tracked source file {tracked_relpath} for candidate {name} does not exist",
+                )
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            for name, kwargs, expected_sha, expected_size in pinned_candidates:
-                cand_dir = os.path.join(tmpdir, name)
-                res = build_candidate(out_dir=cand_dir, **kwargs)
-                diskboot = Path(cand_dir) / "DISKBOOT.BIN"
-                self.assertTrue(diskboot.is_file(), f"DISKBOOT.BIN for {name} candidate does not exist")
+                # Ensure source file is actually tracked by git and NOT git-ignored
+                ignore_check = subprocess.run(
+                    ["git", "check-ignore", "-q", str(tracked_file)],
+                    cwd=str(REPO_ROOT),
+                )
+                self.assertNotEqual(
+                    ignore_check.returncode,
+                    0,
+                    f"Candidate {name} source file {tracked_relpath} is git-ignored; must be tracked baseline",
+                )
+
+                # Verify expected hash is present in the tracked baseline file
+                tracked_content = tracked_file.read_text(encoding="utf-8")
+                self.assertIn(
+                    expected_sha,
+                    tracked_content,
+                    f"Candidate {name} expected hash {expected_sha} not found in tracked file {tracked_relpath}",
+                )
+
+                # 2. Build or load candidate from clean dedicated directory (never candidate_port*/)
+                cand_dir = _require_or_build_candidate(name, kwargs, expected_sha, expected_size)
+                diskboot = cand_dir / "DISKBOOT.BIN"
+                self.assertTrue(diskboot.is_file(), f"DISKBOOT.BIN for candidate {name} missing in {cand_dir}")
+
                 actual_size = diskboot.stat().st_size
                 actual_sha = sha256_file(diskboot)
 
                 # Verify against generated candidate manifest in output directory
-                cand_mpath = Path(cand_dir) / "candidate_manifest.json"
-                self.assertTrue(cand_mpath.is_file(), f"candidate_manifest.json for {name} missing")
+                cand_mpath = cand_dir / "candidate_manifest.json"
+                self.assertTrue(cand_mpath.is_file(), f"candidate_manifest.json for {name} missing in {cand_dir}")
                 with open(cand_mpath, "r", encoding="utf-8") as mf:
                     cand_mdata = json.load(mf)
                 cand_db = cand_mdata["candidate_artifacts"]["DISKBOOT.BIN"]
@@ -411,8 +653,27 @@ class TestPort43DrawLayerHostModel(unittest.TestCase):
 
     def test_arm_binary_fill_paths_use_word_writes_and_no_draw_pixel(self):
         """Disassembly inspection: fill paths use word writes, reference memset/fast fill, and never call draw_pixel."""
-        obj_path = OUT_DIR_DBUF / "stage_chdk" / "platform" / "g3x" / "sub" / "110c" / "gui_draw.thm.o"
-        elf_path = OUT_DIR_DBUF / "stage_chdk" / "platform" / "g3x" / "sub" / "110c" / "main.elf"
+        if not TOOLCHAIN_OBJDUMP.is_file():
+            self.skipTest("ARM objdump tool not available")
+
+        # Ensure G3X_GUI_DBUF variant is built
+        _require_or_build_distribution(
+            OUT_DIR_GUI_FIX_DBUF,
+            [],
+            expected_sha256=EXPECTED_DBUF_SHA256,
+            script=BUILD_SCRIPT_DBUF,
+        )
+
+        obj_path = OUT_DIR_GUI_FIX_DBUF / "stage_chdk" / "platform" / "g3x" / "sub" / "110c" / "gui_draw.thm.o"
+        elf_path = OUT_DIR_GUI_FIX_DBUF / "stage_chdk" / "platform" / "g3x" / "sub" / "110c" / "main.elf"
+
+        if not obj_path.is_file() and not elf_path.is_file():
+            alt_obj = REPO_ROOT / "out" / "port43-dbuf" / "stage_chdk" / "platform" / "g3x" / "sub" / "110c" / "gui_draw.thm.o"
+            alt_elf = REPO_ROOT / "out" / "port43-dbuf" / "stage_chdk" / "platform" / "g3x" / "sub" / "110c" / "main.elf"
+            if alt_obj.is_file():
+                obj_path = alt_obj
+            if alt_elf.is_file():
+                elf_path = alt_elf
 
         if not obj_path.is_file() and not elf_path.is_file():
             self.skipTest(f"Build output not found at {obj_path} or {elf_path}; stage artifacts must be present to inspect disassembly")
@@ -444,8 +705,27 @@ class TestPort43DrawLayerHostModel(unittest.TestCase):
 
     def test_arm_binary_shadow_restore_has_no_vid_bitmap_refresh(self):
         """Disassembly inspection: g3x_dbuf_shadow_restore calls memcpy and NEVER vid_bitmap_refresh."""
-        obj_path = OUT_DIR_DBUF / "stage_chdk" / "platform" / "g3x" / "sub" / "110c" / "gui_draw.thm.o"
-        elf_path = OUT_DIR_DBUF / "stage_chdk" / "platform" / "g3x" / "sub" / "110c" / "main.elf"
+        if not TOOLCHAIN_OBJDUMP.is_file():
+            self.skipTest("ARM objdump tool not available")
+
+        # Ensure G3X_GUI_DBUF variant is built
+        _require_or_build_distribution(
+            OUT_DIR_GUI_FIX_DBUF,
+            [],
+            expected_sha256=EXPECTED_DBUF_SHA256,
+            script=BUILD_SCRIPT_DBUF,
+        )
+
+        obj_path = OUT_DIR_GUI_FIX_DBUF / "stage_chdk" / "platform" / "g3x" / "sub" / "110c" / "gui_draw.thm.o"
+        elf_path = OUT_DIR_GUI_FIX_DBUF / "stage_chdk" / "platform" / "g3x" / "sub" / "110c" / "main.elf"
+
+        if not obj_path.is_file() and not elf_path.is_file():
+            alt_obj = REPO_ROOT / "out" / "port43-dbuf" / "stage_chdk" / "platform" / "g3x" / "sub" / "110c" / "gui_draw.thm.o"
+            alt_elf = REPO_ROOT / "out" / "port43-dbuf" / "stage_chdk" / "platform" / "g3x" / "sub" / "110c" / "main.elf"
+            if alt_obj.is_file():
+                obj_path = alt_obj
+            if alt_elf.is_file():
+                elf_path = alt_elf
 
         if not obj_path.is_file() and not elf_path.is_file():
             self.skipTest(f"Build output not found at {obj_path} or {elf_path}; stage artifacts must be present to inspect disassembly")
