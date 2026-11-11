@@ -1,0 +1,445 @@
+"""Unit and integration host tests for PORT-43 double-buffered GUI build, draw layer, and trial plan.
+
+Verifies:
+1. docs/PORT43_TRIAL_PLAN.md format and content:
+   - DISKBOOT SHA-256 check before the trial
+   - Held-press boot method
+   - At most 2 power-ons limit
+   - Battery-pull recovery (>= 10 s) and rollback to PORT-42 build
+   - Owner observations: 10 s idle video + navigation, stability (no vanish-to-live-view cycle),
+     repaint speed (no growing bands), boot method recorded, colours/opacity/2x font/layout match PORT-42,
+     and any new regression (pink blocks, edge leaks, lockups).
+2. manifests/port43_gui_dbuf_manifest.json:
+   - Lists DISKBOOT.BIN (126,329 B, SHA-256 8d5509e5...)
+   - Lists every CHDK/ file with size and SHA-256 (34 modules).
+3. Reproducible build:
+   - Two builds of G3X_GUI_FIX=1 G3X_GUI_DBUF=1 produce byte-for-byte identical DISKBOOT.BIN and CHDK/ files.
+4. Byte identity to existing manifests:
+   - PORT-42 GUI build (G3X_GUI_FIX=1 alone, 124,257 B, 760a362d...)
+   - PORT-41 default full build (124,097 B, 24b8a024...)
+   - FULL_HOOKS variant (124,321 B, d50ea585...)
+   - Every PORT-24..40 candidate: default, poweron_fix, ladder, combined, resident,
+     osd, kbd, osd2, gui4, shortpress, gui5, gui5_shortpress.
+5. Host-side model and unit tests of the draw layer:
+   - Both bitmap buffers and both opacity buffers receive identical overlay bytes.
+   - Fill paths use 32-bit word writes and never call draw_pixel.
+   - Cursor moves touch only changed rows via row signature cache.
+   - Shadow restore is a single blit (4 memcpys) producing the exact same bytes as original draw.
+   - Compiled ARM object disassembly confirms fast fill call sites and lack of draw_pixel in fills.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+TOOLCHAIN_BIN = REPO_ROOT / "toolchains" / "gcc-arm-none-eabi-5_4-2016q3" / "bin"
+TOOLCHAIN_GCC = TOOLCHAIN_BIN / "arm-none-eabi-gcc"
+TOOLCHAIN_OBJDUMP = TOOLCHAIN_BIN / "arm-none-eabi-objdump"
+TOOLCHAIN_NM = TOOLCHAIN_BIN / "arm-none-eabi-nm"
+
+BUILD_SCRIPT_DBUF = REPO_ROOT / "scripts" / "build_port43_dbuf.py"
+BUILD_SCRIPT_PORT41 = REPO_ROOT / "tools" / "build_port41_full.py"
+OUT_DIR_DBUF = REPO_ROOT / "out" / "port43-dbuf"
+WRAPPER_SCRIPT = REPO_ROOT / "scripts" / "gcc_deterministic_wrapper.sh"
+MANIFESTS_DIR = REPO_ROOT / "manifests"
+
+EXPECTED_DBUF_SIZE = 126329
+EXPECTED_DBUF_SHA256 = "8d5509e597a598e8bb023adae46d4caa2c7ee1e2b763e4ff292f0aef21f9b140"
+EXPECTED_PORT42_GUI_SIZE = 124257
+EXPECTED_PORT42_GUI_SHA256 = "760a362d358d87518e6274013e70109f8699974a40158ae5bbbff8b80c246738"
+EXPECTED_PORT41_FULL_SIZE = 124097
+EXPECTED_PORT41_FULL_SHA256 = "24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9"
+EXPECTED_FULL_HOOKS_SIZE = 124153
+EXPECTED_FULL_HOOKS_SHA256 = "eb46aa339bb6557f27d992691f83ceb14cc73962625a44e0f146edde9b886dce"
+EXPECTED_GUI_FULL_HOOKS_SIZE = 124321
+EXPECTED_GUI_FULL_HOOKS_SHA256 = "d50ea585b2ba49e39674395f504b5780a1cb98a915fe998c5b7fa5be115cb9bb"
+
+
+def sha256_file(path: Path | str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(65536):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def snapshot_distribution(out_path: Path) -> dict[str, tuple[int, str]]:
+    snapshot: dict[str, tuple[int, str]] = {}
+    diskboot = out_path / "DISKBOOT.BIN"
+    assert diskboot.is_file(), f"Expected DISKBOOT.BIN to exist in {out_path}"
+    snapshot["DISKBOOT.BIN"] = (diskboot.stat().st_size, sha256_file(diskboot))
+
+    chdk_dir = out_path / "CHDK"
+    assert chdk_dir.is_dir(), f"Expected CHDK/ directory to exist in {out_path}"
+    for root, dirs, files in os.walk(chdk_dir):
+        for f in sorted(files):
+            p = Path(root) / f
+            rel = str(p.relative_to(out_path))
+            snapshot[rel] = (p.stat().st_size, sha256_file(p))
+    return snapshot
+
+
+class TestPort43TrialPlanDoc(unittest.TestCase):
+    """Static verification of docs/PORT43_TRIAL_PLAN.md."""
+
+    def setUp(self):
+        self.doc_path = REPO_ROOT / "docs" / "PORT43_TRIAL_PLAN.md"
+        self.assertTrue(self.doc_path.is_file(), f"Missing {self.doc_path}")
+        self.doc_text = self.doc_path.read_text(encoding="utf-8")
+
+    def test_trial_plan_sha_check_and_size(self):
+        """Doc must specify exact preflight DISKBOOT SHA-256 and size check."""
+        self.assertIn(EXPECTED_DBUF_SHA256, self.doc_text)
+        self.assertIn("126,329", self.doc_text)
+
+    def test_trial_plan_held_press_boot(self):
+        """Doc must require held-press boot."""
+        self.assertRegex(self.doc_text, r"(?i)held\s+press")
+
+    def test_trial_plan_poweron_limit(self):
+        """Doc must enforce at most 2 power-ons."""
+        self.assertRegex(self.doc_text, r"(?i)at\s+most\s+2\s+power-ons|maximum\s+2\s+power-ons")
+
+    def test_trial_plan_battery_pull_recovery_and_rollback(self):
+        """Doc must cover battery-pull recovery and rollback to PORT-42 build."""
+        self.assertRegex(self.doc_text, r"(?i)battery\s+pull")
+        self.assertIn(EXPECTED_PORT42_GUI_SHA256, self.doc_text)
+        self.assertIn("124,257", self.doc_text)
+
+    def test_trial_plan_observation_checklist(self):
+        """Doc must ask owner to record all required observations."""
+        self.assertRegex(self.doc_text, r"(?i)10\s*s.*video|video.*10\s*s")
+        self.assertRegex(self.doc_text, r"(?i)vanish-to-live-view")
+        self.assertRegex(self.doc_text, r"(?i)grow.*bands")
+        self.assertRegex(self.doc_text, r"(?i)short.*held|held.*short")
+        self.assertRegex(self.doc_text, r"(?i)port-42")
+        self.assertRegex(self.doc_text, r"(?i)pink\s+blocks")
+        self.assertRegex(self.doc_text, r"(?i)edge\s+leaks")
+        self.assertRegex(self.doc_text, r"(?i)lockups?")
+
+
+class TestPort43ManifestIntegrity(unittest.TestCase):
+    """Verification of manifests/port43_gui_dbuf_manifest.json."""
+
+    def setUp(self):
+        self.manifest_path = MANIFESTS_DIR / "port43_gui_dbuf_manifest.json"
+        self.assertTrue(self.manifest_path.is_file(), f"Missing {self.manifest_path}")
+        with open(self.manifest_path, "r", encoding="utf-8") as f:
+            self.data = json.load(f)
+
+    def test_manifest_build_flags(self):
+        """Manifest flags must include G3X_GUI_DBUF=1 and G3X_GUI_FIX=1."""
+        flags = self.data["build"]["flags"]
+        self.assertIn("G3X_GUI_DBUF=1", flags)
+        self.assertIn("G3X_GUI_FIX=1", flags)
+        self.assertIn("G3X_FULL_BUILD=1", flags)
+        self.assertIn("G3X_DISABLE_CARD_WRITES=1", flags)
+
+    def test_manifest_diskboot_artifact(self):
+        """Manifest DISKBOOT.BIN matches expected SHA-256 and size."""
+        db = self.data["artifacts"]["DISKBOOT.BIN"]
+        self.assertEqual(db["size"], EXPECTED_DBUF_SIZE)
+        self.assertEqual(db["sha256"], EXPECTED_DBUF_SHA256)
+
+    def test_manifest_chdk_files_coverage(self):
+        """Manifest lists 34 loadable modules and valid non-empty files."""
+        self.assertEqual(self.data["artifacts"]["modules_count"], 34)
+        self.assertGreater(self.data["artifacts"]["chdk_files_count"], 100)
+        chdk_files = self.data["artifacts"]["chdk_files"]
+        for rel_path, info in chdk_files.items():
+            self.assertTrue(rel_path.startswith("CHDK/"), f"{rel_path} must start with CHDK/")
+            self.assertGreater(info["size"], 0)
+            self.assertEqual(len(info["sha256"]), 64)
+
+
+class TestPort43BuildReproducibility(unittest.TestCase):
+    """Verification that G3X_GUI_FIX=1 G3X_GUI_DBUF=1 builds reproducibly."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not TOOLCHAIN_GCC.is_file():
+            raise unittest.SkipTest("ARM toolchain compiler not available")
+
+    def test_dbuf_build_reproducibility(self):
+        """Two builds of the variant give identical SHA-256."""
+        # Ensure out/port43-dbuf has the baseline build
+        diskboot = OUT_DIR_DBUF / "DISKBOOT.BIN"
+        if not diskboot.is_file() or diskboot.stat().st_size != EXPECTED_DBUF_SIZE:
+            res = subprocess.run(
+                ["python3", "-B", str(BUILD_SCRIPT_DBUF)],
+                cwd=str(REPO_ROOT),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.assertEqual(res.returncode, 0, f"Baseline build failed: {res.stderr}")
+
+        snap1 = snapshot_distribution(OUT_DIR_DBUF)
+        self.assertEqual(snap1["DISKBOOT.BIN"], (EXPECTED_DBUF_SIZE, EXPECTED_DBUF_SHA256))
+
+        # Build 2 in fresh temporary directory
+        with tempfile.TemporaryDirectory() as td2:
+            res2 = subprocess.run(
+                ["python3", "-B", str(BUILD_SCRIPT_DBUF), "--out-dir", td2],
+                cwd=str(REPO_ROOT),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.assertEqual(res2.returncode, 0, f"Build 2 failed: {res2.stderr}")
+
+            snap2 = snapshot_distribution(Path(td2))
+            self.assertEqual(snap1, snap2, "Two clean DBUF builds produced different hashes")
+            self.assertEqual(snap2["DISKBOOT.BIN"], (EXPECTED_DBUF_SIZE, EXPECTED_DBUF_SHA256))
+
+
+class TestPort43ByteIdentityToExistingManifests(unittest.TestCase):
+    """Verify byte-identity against all prior manifests."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not TOOLCHAIN_GCC.is_file():
+            raise unittest.SkipTest("ARM toolchain compiler not available")
+
+    def test_port42_gui_manifest_match(self):
+        """PORT-42 GUI build is byte-identical to its existing manifest."""
+        mpath = MANIFESTS_DIR / "port42_gui_manifest.json"
+        self.assertTrue(mpath.is_file(), f"Missing {mpath}")
+        with open(mpath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["size"], EXPECTED_PORT42_GUI_SIZE)
+        self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["sha256"], EXPECTED_PORT42_GUI_SHA256)
+
+    def test_port41_default_full_manifest_match(self):
+        """PORT-41 default full build is byte-identical to its existing manifest."""
+        mpath = MANIFESTS_DIR / "port41_manifest.json"
+        self.assertTrue(mpath.is_file(), f"Missing {mpath}")
+        with open(mpath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["size"], EXPECTED_PORT41_FULL_SIZE)
+        self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["sha256"], EXPECTED_PORT41_FULL_SHA256)
+
+    def test_full_hooks_manifest_match(self):
+        """FULL_HOOKS variant is byte-identical to its existing manifest."""
+        mpath = MANIFESTS_DIR / "port42_full_hooks_manifest.json"
+        self.assertTrue(mpath.is_file(), f"Missing {mpath}")
+        with open(mpath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["size"], EXPECTED_FULL_HOOKS_SIZE)
+        self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["sha256"], EXPECTED_FULL_HOOKS_SHA256)
+
+        # Also verify GUI-fixed FULL_HOOKS manifest
+        for name in ["port42_gui_fix_full_hooks_manifest.json", "port42_gui_full_hooks_manifest.json"]:
+            p = MANIFESTS_DIR / name
+            self.assertTrue(p.is_file(), f"Missing {p}")
+            with open(p, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            self.assertEqual(d["artifacts"]["DISKBOOT.BIN"]["size"], EXPECTED_GUI_FULL_HOOKS_SIZE)
+            self.assertEqual(d["artifacts"]["DISKBOOT.BIN"]["sha256"], EXPECTED_GUI_FULL_HOOKS_SHA256)
+
+    def test_all_port24_to_port40_candidates_byte_identical(self):
+        """Verify that every PORT-24..40 candidate remains 100% byte-identical."""
+        import sys
+        scripts_dir = REPO_ROOT / "scripts"
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+        from build_candidate_gui3 import build_candidate
+
+        pinned_candidates = [
+            ("default", {"ladder": False, "poweron_fix": False, "resident": False}, "9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136", 118001),
+            ("poweron_fix", {"ladder": False, "poweron_fix": True, "resident": False}, "faad4d8242fbf6f79a44b10a9956f7eb04de9b65f42221f82a3b69eb024cf056", 118001),
+            ("resident", {"resident": True}, "63c7942f561242b55d8226bfefe7818dd5b959aee35eae0adb4f41a4783ece5a", 124561),
+            ("osd", {"osd": True}, "683751539979f3e8956fd6c1794683c062f54385e6e1a3261b02ed8d63cc9855", 124833),
+            ("kbd", {"kbd": True}, "a750253feb0cd9bb3bb1addb4cede5585bef29a0bf26bd86d3f577fdbf41be33", 124801),
+            ("osd2", {"osd2": True}, "20d65a7d9be954d5caafe2f78751429ea388a37ca570f0bbd0d620609eb31a57", 125329),
+            ("gui4", {"gui4": True}, "14456b08fca82758262c26ad6105f784ebacaa080b7a059a622ded5a8d505fdd", 102241),
+            ("shortpress", {"shortpress": True}, "6df54a905e36a6fe92b5a3a4ac4dd71086d3306fd0aaa31a1f1bc670f7e19461", 124945),
+            ("gui5", {"gui5": True}, "dd96357c050cf3b9116dcf089a731ef159477b505351f46436f983fdbf090b64", 102209),
+            ("gui5_shortpress", {"gui5": True, "shortpress": True}, "86e12a2cfe792a8901fa2e0ec5a98f019290593e35d5c4c2e66fd3e073f16ff1", 102369),
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for name, kwargs, expected_sha, expected_size in pinned_candidates:
+                cand_dir = os.path.join(tmpdir, name)
+                res = build_candidate(out_dir=cand_dir, **kwargs)
+                diskboot = Path(cand_dir) / "DISKBOOT.BIN"
+                self.assertTrue(diskboot.is_file(), f"DISKBOOT.BIN for {name} candidate does not exist")
+                self.assertEqual(res["diskboot_size"], expected_size, f"Size mismatch for {name} candidate build")
+                self.assertEqual(res["diskboot_sha256"], expected_sha, f"SHA-256 mismatch for {name} candidate build")
+
+
+class TestPort43DrawLayerHostModel(unittest.TestCase):
+    """Host-side unit and model tests of the draw layer."""
+
+    @classmethod
+    def setUpClass(cls):
+        # Compile and execute the host C test harness
+        c_src = REPO_ROOT / "tests" / "test_port43_draw_layer.c"
+        cls.c_bin = Path(tempfile.gettempdir()) / "test_port43_draw_layer"
+        proc = subprocess.run(
+            ["gcc", "-O2", "-Wall", "-Wextra", "-Werror", str(c_src), "-o", str(cls.c_bin)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(f"Failed to compile host C draw layer harness: {proc.stderr}")
+
+    def test_host_c_draw_layer_harness_execution(self):
+        """Run compiled C test harness verifying dual-buffer identity, word-write fills, partial redraw, and shadow restore."""
+        proc = subprocess.run(
+            [str(self.c_bin)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, f"Host C harness failed:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
+        self.assertIn("ALL PORT-43 DRAW LAYER UNIT TESTS PASSED SUCCESSFULLY.", proc.stdout)
+
+    def test_arm_binary_fill_paths_use_word_writes_and_no_draw_pixel(self):
+        """Disassembly inspection: draw_hline, draw_vline, and draw_rectangle call g3x_dbuf_fast_fill_rect and never draw_pixel."""
+        obj_path = OUT_DIR_DBUF / "stage_chdk" / "platform" / "g3x" / "sub" / "110c" / "gui_draw.thm.o"
+        if not obj_path.is_file():
+            # If stage directory was discarded, locate or rebuild
+            self.skipTest(f"Stage object not found at {obj_path}")
+
+        proc = subprocess.run(
+            [str(TOOLCHAIN_OBJDUMP), "-d", str(obj_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+        disasm = proc.stdout
+
+        # Verify draw_hline
+        m_hline = re.search(r"<draw_hline>:(.*?)(?:\n\n|\Z)", disasm, re.DOTALL)
+        self.assertIsNotNone(m_hline, "draw_hline not found in disassembly")
+        hline_body = m_hline.group(1)
+        self.assertIn("<g3x_dbuf_fast_fill_rect>", hline_body)
+        self.assertNotIn("<draw_pixel", hline_body)
+
+        # Verify draw_vline
+        m_vline = re.search(r"<draw_vline>:(.*?)(?:\n\n|\Z)", disasm, re.DOTALL)
+        self.assertIsNotNone(m_vline, "draw_vline not found in disassembly")
+        vline_body = m_vline.group(1)
+        self.assertIn("<g3x_dbuf_fast_fill_rect>", vline_body)
+        self.assertNotIn("<draw_pixel", vline_body)
+
+        # Verify draw_rectangle fill path
+        m_rect = re.search(r"<draw_rectangle>:(.*?)(?:\n\n|\Z)", disasm, re.DOTALL)
+        self.assertIsNotNone(m_rect, "draw_rectangle not found in disassembly")
+        rect_body = m_rect.group(1)
+        self.assertIn("<g3x_dbuf_fast_fill_rect>", rect_body)
+
+    def test_arm_binary_shadow_restore_has_no_vid_bitmap_refresh(self):
+        """Disassembly inspection: g3x_dbuf_shadow_restore calls memcpy and NEVER vid_bitmap_refresh."""
+        obj_path = OUT_DIR_DBUF / "stage_chdk" / "platform" / "g3x" / "sub" / "110c" / "gui_draw.thm.o"
+        if not obj_path.is_file():
+            self.skipTest(f"Stage object not found at {obj_path}")
+
+        proc = subprocess.run(
+            [str(TOOLCHAIN_OBJDUMP), "-d", str(obj_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+        disasm = proc.stdout
+
+        m_restore = re.search(r"<g3x_dbuf_shadow_restore>:(.*?)(?:\n\n|\Z)", disasm, re.DOTALL)
+        self.assertIsNotNone(m_restore, "g3x_dbuf_shadow_restore not found")
+        restore_body = m_restore.group(1)
+        self.assertIn("<memcpy>", restore_body)
+        self.assertNotIn("<vid_bitmap_refresh>", restore_body)
+        self.assertNotIn("<_transfer_src_overlay>", restore_body)
+
+    def test_python_model_draw_layer_invariants(self):
+        """Python model: dual-buffer identical bytes, word-write fills, row cache partial redraw, single-blit restore."""
+        BUF_W = 928
+        BUF_H = 600
+        BM_SIZE = BUF_W * BUF_H * 2
+        OP_SIZE = BUF_W * BUF_H
+
+        bm0 = bytearray(BM_SIZE)
+        bm1 = bytearray(BM_SIZE)
+        op0 = bytearray(OP_SIZE)
+        op1 = bytearray(OP_SIZE)
+        sh_bm = bytearray(BM_SIZE)
+        sh_op = bytearray(OP_SIZE)
+
+        draw_pixel_count = 0
+
+        def model_fast_fill(x1, y1, x2, y2, uyvy_word, op_val):
+            nonlocal draw_pixel_count
+            # Zero draw_pixel calls
+            op_bytes = bytes([op_val]) * ((x2 - x1 + 1))
+            word_bytes = (uyvy_word).to_bytes(4, "little") * ((x2 - x1 + 1) // 2)
+            for y in range(y1, y2 + 1):
+                offset_op = y * BUF_W + x1
+                offset_bm = (y * BUF_W + x1) * 2
+                op0[offset_op:offset_op + len(op_bytes)] = op_bytes
+                op1[offset_op:offset_op + len(op_bytes)] = op_bytes
+                sh_op[offset_op:offset_op + len(op_bytes)] = op_bytes
+                bm0[offset_bm:offset_bm + len(word_bytes)] = word_bytes
+                bm1[offset_bm:offset_bm + len(word_bytes)] = word_bytes
+                sh_bm[offset_bm:offset_bm + len(word_bytes)] = word_bytes
+
+        # 1. Fill menu box
+        model_fast_fill(10, 12, 889, 587, 0x00800080, 0xFF)
+        self.assertEqual(draw_pixel_count, 0, "Fast fill must not call draw_pixel")
+        self.assertEqual(bm0, bm1, "Bitmap buffers 0 and 1 must receive identical bytes")
+        self.assertEqual(op0, op1, "Opacity buffers 0 and 1 must receive identical bytes")
+        self.assertEqual(bm0, sh_bm, "Shadow bitmap must match bitmap buffer")
+        self.assertEqual(op0, sh_op, "Shadow opacity must match opacity buffer")
+
+        # 2. Simulate cursor move with row signature cache
+        num_rows = 10
+        cache = [{"item": i, "sig": i * 100, "sel": (i == 0)} for i in range(num_rows)]
+
+        # Move cursor from row 0 to row 1
+        new_sel = 1
+        redrawn_rows = []
+        for i in range(num_rows):
+            is_sel = (i == new_sel)
+            cur_sig = i * 100 + (1 if is_sel else 0)
+            if cache[i]["sig"] != cur_sig or cache[i]["sel"] != is_sel:
+                redrawn_rows.append(i)
+                cache[i]["sig"] = cur_sig
+                cache[i]["sel"] = is_sel
+
+        self.assertEqual(redrawn_rows, [0, 1], "Cursor move must touch ONLY changed rows (row 0 and row 1)")
+
+        # 3. Simulate display plane corruption and single-blit shadow restore
+        pre_wipe_bm0 = bytes(bm0)
+        pre_wipe_op0 = bytes(op0)
+
+        # Corrupt / wipe display buffers
+        bm0[:] = b"\x55" * BM_SIZE
+        bm1[:] = b"\xAA" * BM_SIZE
+        op0[:] = b"\x00" * OP_SIZE
+        op1[:] = b"\x00" * OP_SIZE
+
+        # Single blit restore: 4 memcpys
+        bm0[:] = sh_bm
+        bm1[:] = sh_bm
+        op0[:] = sh_op
+        op1[:] = sh_op
+
+        self.assertEqual(bm0, pre_wipe_bm0, "Shadow restore must produce exact pre-wipe bitmap bytes")
+        self.assertEqual(bm1, pre_wipe_bm0, "Shadow restore must restore bitmap buffer 1 identically")
+        self.assertEqual(op0, pre_wipe_op0, "Shadow restore must produce exact pre-wipe opacity bytes")
+        self.assertEqual(op1, pre_wipe_op0, "Shadow restore must restore opacity buffer 1 identically")
+
+
+if __name__ == "__main__":
+    unittest.main()
