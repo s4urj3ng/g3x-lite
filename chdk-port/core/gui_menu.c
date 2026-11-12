@@ -231,6 +231,9 @@ CMenu* get_curr_menu()
 //-------------------------------------------------------------------
 void gui_menu_init(CMenu *menu_ptr) {
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+    /* PORT-44: Lazy runtime allocation on first menu entry */
+    extern void g3x_dbuf_shadow_ensure_allocated(void);
+    g3x_dbuf_shadow_ensure_allocated();
     /* Invalidation: menu initialized / layer changed - reset shadow and row cache */
     extern void g3x_dbuf_shadow_reset(void);
     g3x_dbuf_shadow_reset();
@@ -1322,8 +1325,12 @@ void gui_menu_draw(int enforce_redraw)
         dbuf_last_drawn_top_item = gui_menu_top_item;
         dbuf_last_drawn_visible_items = visible_items;
         dbuf_row_cache_valid = 1;
-        /* Mark shadow valid only after complete draw of the menu layer has been written */
-        g3x_shadow_valid = 1;
+        /* Mark shadow valid only after complete draw of the menu layer has been written and buffer allocated */
+        extern int g3x_dbuf_shadow_is_allocated(void);
+        if (g3x_dbuf_shadow_is_allocated())
+        {
+            g3x_shadow_valid = 1;
+        }
 #endif
     }
 }
