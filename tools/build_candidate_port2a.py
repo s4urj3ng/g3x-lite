@@ -418,15 +418,6 @@ SECTIONS
         ld_script = "tools/link-boot.ld"
         trace_ld_flags = []
 
-    libplatform_a = os.path.join(CHDK_PORT, "platform", "g3x", "libplatform.a")
-    canonical_sha = "c8eba0e13f263cb1b884f6f53ef6e055fb48e57a60ca7637e442fec98210b035"
-    if not os.path.isfile(libplatform_a) or sha256_file(libplatform_a) != canonical_sha:
-        sys_scripts = os.path.join(REPO_ROOT, "scripts")
-        if sys_scripts not in sys.path:
-            sys.path.insert(0, sys_scripts)
-        from build_candidate_gui3 import build_fallback_libplatform_a
-        build_fallback_libplatform_a(libplatform_a)
-
     ld_cmd = [
         CC,
         "-nostdlib",
@@ -438,7 +429,7 @@ SECTIONS
         core_elf,
         "-Wl,--start-group",
         os.path.join(SUB_DIR, "entry.o"),
-        libplatform_a,
+        os.path.join(CHDK_PORT, "platform", "g3x", "libplatform.a"),
         lib_proto_a,
         os.path.join(CHDK_PORT, "lib", "font", ".o2", "libfont.a"),
         os.path.join(CHDK_PORT, "lib", "math", ".o2", "libmath.a"),

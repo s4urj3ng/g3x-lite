@@ -1219,15 +1219,6 @@ def ensure_bootstrap():
         bootstrap_script = TOOLS_DIR / "bootstrap_chdk_platform.py"
         run_cmd(["python3", "-B", str(bootstrap_script)], cwd=str(REPO_ROOT))
 
-    libplatform_a = CHDK_PORT / "platform" / "g3x" / "libplatform.a"
-    canonical_sha = "c8eba0e13f263cb1b884f6f53ef6e055fb48e57a60ca7637e442fec98210b035"
-    if not libplatform_a.is_file() or sha256_file(str(libplatform_a)) != canonical_sha:
-        sys_scripts = str(REPO_ROOT / "scripts")
-        if sys_scripts not in sys.path:
-            sys.path.insert(0, sys_scripts)
-        from build_candidate_gui3 import build_fallback_libplatform_a
-        build_fallback_libplatform_a(libplatform_a)
-
 
 def build_candidate_core_ladder_fix(
     ladder: bool = True,
