@@ -2468,6 +2468,11 @@ gui_handler* gui_set_mode(gui_handler *mode)
 		return gui_mode;
 
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+    if (mode && mode->mode != GUI_MODE_NONE)
+    {
+        extern void g3x_dbuf_shadow_ensure_allocated(void);
+        g3x_dbuf_shadow_ensure_allocated();
+    }
     /* Invalidation: GUI handler/layer changed - reset shadow until new layer completes full draw */
     g3x_dbuf_shadow_reset();
 #endif
@@ -2702,8 +2707,12 @@ void gui_chdk_draw(int force_redraw)
 
     console_draw(force_redraw);
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
-    /* Mark shadow valid only after complete draw of the ALT overlay layer has been written */
-    g3x_shadow_valid = 1;
+    /* Mark shadow valid only after complete draw of the ALT overlay layer has been written and buffer allocated */
+    extern int g3x_dbuf_shadow_is_allocated(void);
+    if (g3x_dbuf_shadow_is_allocated())
+    {
+        g3x_shadow_valid = 1;
+    }
 #endif
 }
 
@@ -3100,6 +3109,9 @@ void gui_activate_alt_mode()
     {
     case ALT_MODE_ENTER:
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+        /* PORT-44: Lazy runtime allocation on first ALT entry */
+        extern void g3x_dbuf_shadow_ensure_allocated(void);
+        g3x_dbuf_shadow_ensure_allocated();
         /* Invalidation: ALT enter - reset shadow */
         g3x_dbuf_shadow_reset();
 #endif

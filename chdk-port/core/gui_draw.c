@@ -55,71 +55,143 @@ static char* frame_buffer[2];
 
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
 /*
- * PORT-43: Shadow buffer sized to the FULL bitmap layer (928x600).
- * Sizing citations:
- * - full_build/g3x/lib.c:107-108 (camera_screen.buffer_width = 928, camera_screen.buffer_height = 600)
- * - chdk-port/platform/g7x/lib.c:323-324 (camera_screen.buffer_width = 928, camera_screen.buffer_height = 600)
- * - chdk-port/platform/g5x/lib.c:182-183 (camera_screen.buffer_width = 928, camera_screen.buffer_height = 600)
- * - chdk-port/include/camera_info.h:94 (buffer_width, buffer_height, buffer_size: physical size of bitmap screen)
+ * PORT-44: Runtime heap-allocated shadow buffer sized to the drawn menu rectangle (880x576).
  *
- * Buffer dimensions:
- * - Width:  928 (stride)
- * - Height: 600
- * - Bitmap:  928 * 600 * 2 = 1,113,600 bytes (UYVY 16bpp)
- * - Opacity: 928 * 600 * 1 =   556,800 bytes (8bpp)
- * - Total:   1,670,400 bytes (~1.63 MB)
+ * Background & Hypothesis (PORT-44 task):
+ * In PORT-43, static g3x_shadow (928x600 bitmap + opacity, 1,670,400 bytes) in BSS moved core _end
+ * from 0x003687b0 (PORT-42) to 0x00500fd0 (+1,673,248 bytes).
+ * The PORT-27 heap-start raise sets the firmware heap at _end (new_sa = &_end).
+ * Raising the heap base past 0x00500fd0 deprived DryOS of ~1.67 MB of heap RAM,
+ * causing firmware startup allocations to fail and preventing camera boot.
  *
- * Covers 100% of rendered CHDK layers (880x576 menu, ALT title & script lines at y=568..599, x=0, console, OSD).
- * Memory placement: static BSS in CHDK binary (MEMISOSTART=0x3489b4, ends well below ARAM_HEAP_START=0x6ce000).
- * Label: INFERRED (static BSS placement in CHDK binary; safely within available DRAM).
+ * PORT-44 Fix:
+ * 1. Remove static g3x_shadow from BSS entirely. No large static arrays in BSS.
+ * 2. Size shadow strictly to the drawn menu rectangle:
+ *    Width:  880 (stride = 880 pixels, even)
+ *    Height: 576 rows
+ *    Origin: (G3X_MENU_X0 = 10, G3X_MENU_Y0 = 12)
+ *    Bitmap:  880 * 576 * 2 = 1,013,760 bytes (UYVY 16bpp)
+ *    Opacity: 880 * 576 * 1 =   506,880 bytes (8bpp)
+ *    Total:   1,520,640 bytes (~1.45 MiB)
+ * 3. Allocate lazily on the first GUI/ALT entry from the firmware heap:
+ *    - First try CHDK malloc(G3X_SHADOW_TOTAL_SIZE) -> delegates to canon_malloc / DryOS _malloc
+ *    - If NULL, fallback to umalloc(G3X_SHADOW_TOTAL_SIZE) -> delegates to _AllocateUncacheableMemory
+ *    - Allocate once and reuse; never free and reallocate on every entry.
+ *    - Never allocate during boot or from startup / CreateTask hook path.
+ * 4. Fallback on NULL:
+ *    - If allocation returns NULL, run with dual-buffer writes only (no shadow).
+ *    - Do not retry every frame (g3x_shadow_alloc_attempted flag).
+ *    - Every shadow access checks for NULL, with zero out-of-bounds writes and no crash.
+ *
+ * Citations:
+ * - reference/finsig_gm110c/stubs_entry.S:308: NHSTUB(malloc, 0xfc381525) [FINSIG]
+ * - reference/finsig_gm110c/stubs_entry.S:197: NHSTUB(AllocateUncacheableMemory, 0xfc144471) [FINSIG]
+ * - chdk-port/core/memmgmt.c:284-297 (malloc delegates to canon_malloc)
+ * - chdk-port/platform/generic/wrappers.c:1020-1031 (canon_malloc calls _malloc)
+ * - chdk-port/platform/generic/wrappers.c:1045-1057 (umalloc calls _AllocateUncacheableMemory)
+ * - chdk-port/platform/g7x/sub/100c/stubs_entry.S:285: NHSTUB(malloc, 0xfc3623b9)
+ * - chdk-port/platform/g5x/sub/100c/stubs_entry.S:286: NHSTUB(malloc, 0xfc3bf235)
+ * - chdk-port/platform/g7x/sub/100c/stubs_entry.S:181: NHSTUB(AllocateUncacheableMemory, 0xfc0ef0cd)
+ * - chdk-port/platform/g5x/sub/100c/stubs_entry.S:191: NHSTUB(AllocateUncacheableMemory, 0xfc16f5f1)
  */
-#define G3X_SHADOW_WIDTH    928
-#define G3X_SHADOW_HEIGHT   600
-#define G3X_SHADOW_BM_SIZE  (G3X_SHADOW_WIDTH * G3X_SHADOW_HEIGHT * 2)
-#define G3X_SHADOW_OP_SIZE  (G3X_SHADOW_WIDTH * G3X_SHADOW_HEIGHT * 1)
+#define G3X_MENU_X0         10
+#define G3X_MENU_Y0         12
+#define G3X_MENU_WIDTH      880
+#define G3X_MENU_HEIGHT     576
+#define G3X_MENU_X1         (G3X_MENU_X0 + G3X_MENU_WIDTH - 1)  /* 889 */
+#define G3X_MENU_Y1         (G3X_MENU_Y0 + G3X_MENU_HEIGHT - 1) /* 587 */
 
-static struct {
-    unsigned char bitmap[G3X_SHADOW_BM_SIZE];
-    unsigned char opacity[G3X_SHADOW_OP_SIZE];
-} g3x_shadow __attribute__((aligned(4)));
+#define G3X_SHADOW_WIDTH    G3X_MENU_WIDTH
+#define G3X_SHADOW_HEIGHT   G3X_MENU_HEIGHT
+#define G3X_SHADOW_BM_SIZE  (G3X_SHADOW_WIDTH * G3X_SHADOW_HEIGHT * 2) /* 1,013,760 B */
+#define G3X_SHADOW_OP_SIZE  (G3X_SHADOW_WIDTH * G3X_SHADOW_HEIGHT * 1) /*   506,880 B */
+#define G3X_SHADOW_TOTAL_SIZE (G3X_SHADOW_BM_SIZE + G3X_SHADOW_OP_SIZE) /* 1,520,640 B */
 
-#define g3x_shadow_bitmap  (g3x_shadow.bitmap)
-#define g3x_shadow_opacity (g3x_shadow.opacity)
+static unsigned char *g3x_shadow_bitmap = 0;
+static unsigned char *g3x_shadow_opacity = 0;
+static int g3x_shadow_alloc_attempted = 0;
 
 int g3x_shadow_valid = 0;
+
+int g3x_dbuf_shadow_is_allocated(void)
+{
+    return (g3x_shadow_bitmap != 0 && g3x_shadow_opacity != 0);
+}
+
+void g3x_dbuf_shadow_ensure_allocated(void)
+{
+    if (g3x_shadow_alloc_attempted)
+        return;
+    g3x_shadow_alloc_attempted = 1;
+
+    void *buf = malloc(G3X_SHADOW_TOTAL_SIZE);
+    if (!buf)
+    {
+        buf = umalloc(G3X_SHADOW_TOTAL_SIZE);
+    }
+    if (buf)
+    {
+        g3x_shadow_bitmap = (unsigned char *)buf;
+        g3x_shadow_opacity = (unsigned char *)buf + G3X_SHADOW_BM_SIZE;
+        memset(buf, 0, G3X_SHADOW_TOTAL_SIZE);
+    }
+    else
+    {
+        g3x_shadow_bitmap = 0;
+        g3x_shadow_opacity = 0;
+        g3x_shadow_valid = 0;
+    }
+}
 
 void g3x_dbuf_shadow_reset(void)
 {
     g3x_shadow_valid = 0;
-    memset(&g3x_shadow, 0, sizeof(g3x_shadow));
+    if (g3x_shadow_bitmap && g3x_shadow_opacity)
+    {
+        memset(g3x_shadow_bitmap, 0, G3X_SHADOW_BM_SIZE);
+        memset(g3x_shadow_opacity, 0, G3X_SHADOW_OP_SIZE);
+    }
 }
 
 void g3x_dbuf_shadow_init(void)
 {
-    /* Invalidation: DBUF startup / shadow init - clear shadow valid and contents */
-    g3x_dbuf_shadow_reset();
+    /* Invalidation: DBUF startup / shadow init - clear shadow valid.
+     * Never allocate here (boot / spytask start). */
+    g3x_shadow_valid = 0;
 }
 
 void g3x_dbuf_shadow_draw_pixel(unsigned int offset, unsigned int offs2, unsigned int y, unsigned int o, unsigned int u, unsigned int v, int is_odd)
 {
-    if (offset < G3X_SHADOW_OP_SIZE)
+    (void)offs2;
+    if (!g3x_shadow_bitmap || !g3x_shadow_opacity)
+        return;
+
+    int buf_w = camera_screen.buffer_width ? camera_screen.buffer_width : 928;
+    int screen_y = (int)(offset / buf_w);
+    int screen_x = (int)(offset % buf_w);
+
+    if (screen_x >= G3X_MENU_X0 && screen_x <= G3X_MENU_X1 &&
+        screen_y >= G3X_MENU_Y0 && screen_y <= G3X_MENU_Y1)
     {
-        g3x_shadow_opacity[offset] = (unsigned char)o;
-        if (is_odd)
+        int rx = screen_x - G3X_MENU_X0;
+        int ry = screen_y - G3X_MENU_Y0;
+        unsigned int sh_offset = (unsigned int)(ry * G3X_SHADOW_WIDTH + rx);
+        unsigned int sh_offs2 = (sh_offset >> 1) << 2;
+
+        if (sh_offset < G3X_SHADOW_OP_SIZE)
         {
-            g3x_shadow_bitmap[offs2 + 3] = (unsigned char)y;
+            g3x_shadow_opacity[sh_offset] = (unsigned char)o;
+            if (is_odd)
+            {
+                g3x_shadow_bitmap[sh_offs2 + 3] = (unsigned char)y;
+            }
+            else
+            {
+                g3x_shadow_bitmap[sh_offs2 + 0] = (unsigned char)u;
+                g3x_shadow_bitmap[sh_offs2 + 1] = (unsigned char)y;
+                g3x_shadow_bitmap[sh_offs2 + 2] = (unsigned char)v;
+            }
         }
-        else
-        {
-            g3x_shadow_bitmap[offs2 + 0] = (unsigned char)u;
-            g3x_shadow_bitmap[offs2 + 1] = (unsigned char)y;
-            g3x_shadow_bitmap[offs2 + 2] = (unsigned char)v;
-        }
-    }
-    else
-    {
-        /* Any draw outside full layer invalidates shadow so restore is never attempted */
-        g3x_shadow_valid = 0;
     }
 }
 
@@ -166,14 +238,19 @@ void g3x_dbuf_fast_fill_rect(coord x1, coord y1, coord x2, coord y2, color cl)
                 opacity_buffer[b][offset] = op_byte;
                 ((unsigned char*)bitmap_buffer[b])[offs2 + 3] = (unsigned char)y_luma;
             }
-            if (offset < G3X_SHADOW_OP_SIZE)
+            if (g3x_shadow_opacity && g3x_shadow_bitmap &&
+                cur_x >= G3X_MENU_X0 && cur_x <= G3X_MENU_X1 &&
+                y >= G3X_MENU_Y0 && y <= G3X_MENU_Y1)
             {
-                g3x_shadow_opacity[offset] = op_byte;
-                g3x_shadow_bitmap[offs2 + 3] = (unsigned char)y_luma;
-            }
-            else
-            {
-                g3x_shadow_valid = 0;
+                int rx = cur_x - G3X_MENU_X0;
+                int ry = y - G3X_MENU_Y0;
+                unsigned int sh_offset = (unsigned int)(ry * G3X_SHADOW_WIDTH + rx);
+                unsigned int sh_offs2 = (sh_offset >> 1) << 2;
+                if (sh_offset < G3X_SHADOW_OP_SIZE)
+                {
+                    g3x_shadow_opacity[sh_offset] = op_byte;
+                    g3x_shadow_bitmap[sh_offs2 + 3] = (unsigned char)y_luma;
+                }
             }
             cur_x++;
         }
@@ -196,18 +273,30 @@ void g3x_dbuf_fast_fill_rect(coord x1, coord y1, coord x2, coord y2, color cl)
                 p1[w] = uyvy_word;
             }
 
-            if ((offset_op + n_pixels) <= G3X_SHADOW_OP_SIZE)
+            if (g3x_shadow_opacity && g3x_shadow_bitmap &&
+                y >= G3X_MENU_Y0 && y <= G3X_MENU_Y1)
             {
-                memset(&g3x_shadow_opacity[offset_op], op_byte, n_pixels);
-                unsigned int *sp = (unsigned int *)(&g3x_shadow_bitmap[offset_fb]);
-                for (int sw = 0; sw < pairs; ++sw)
+                int sh_x_start = cur_x > G3X_MENU_X0 ? cur_x : G3X_MENU_X0;
+                int sh_x_end = (cur_x + n_pixels - 1) < G3X_MENU_X1 ? (cur_x + n_pixels - 1) : G3X_MENU_X1;
+                if (sh_x_start <= sh_x_end)
                 {
-                    sp[sw] = uyvy_word;
+                    int ry = y - G3X_MENU_Y0;
+                    int rx_start = sh_x_start - G3X_MENU_X0;
+                    int sh_pixels = sh_x_end - sh_x_start + 1;
+                    unsigned int sh_op_off = (unsigned int)(ry * G3X_SHADOW_WIDTH + rx_start);
+                    unsigned int sh_bm_off = sh_op_off * 2;
+
+                    if ((sh_op_off + sh_pixels) <= G3X_SHADOW_OP_SIZE)
+                    {
+                        memset(&g3x_shadow_opacity[sh_op_off], op_byte, sh_pixels);
+                        int sh_pairs = sh_pixels / 2;
+                        unsigned int *sp = (unsigned int *)(&g3x_shadow_bitmap[sh_bm_off]);
+                        for (int sw = 0; sw < sh_pairs; ++sw)
+                        {
+                            sp[sw] = uyvy_word;
+                        }
+                    }
                 }
-            }
-            else
-            {
-                g3x_shadow_valid = 0;
             }
             cur_x += n_pixels;
         }
@@ -224,16 +313,21 @@ void g3x_dbuf_fast_fill_rect(coord x1, coord y1, coord x2, coord y2, color cl)
                 ((unsigned char*)bitmap_buffer[b])[offs2 + 1] = (unsigned char)y_luma;
                 ((unsigned char*)bitmap_buffer[b])[offs2 + 2] = (unsigned char)v_val;
             }
-            if (offset < G3X_SHADOW_OP_SIZE)
+            if (g3x_shadow_opacity && g3x_shadow_bitmap &&
+                cur_x >= G3X_MENU_X0 && cur_x <= G3X_MENU_X1 &&
+                y >= G3X_MENU_Y0 && y <= G3X_MENU_Y1)
             {
-                g3x_shadow_opacity[offset] = op_byte;
-                g3x_shadow_bitmap[offs2 + 0] = (unsigned char)u_val;
-                g3x_shadow_bitmap[offs2 + 1] = (unsigned char)y_luma;
-                g3x_shadow_bitmap[offs2 + 2] = (unsigned char)v_val;
-            }
-            else
-            {
-                g3x_shadow_valid = 0;
+                int rx = cur_x - G3X_MENU_X0;
+                int ry = y - G3X_MENU_Y0;
+                unsigned int sh_offset = (unsigned int)(ry * G3X_SHADOW_WIDTH + rx);
+                unsigned int sh_offs2 = (sh_offset >> 1) << 2;
+                if (sh_offset < G3X_SHADOW_OP_SIZE)
+                {
+                    g3x_shadow_opacity[sh_offset] = op_byte;
+                    g3x_shadow_bitmap[sh_offs2 + 0] = (unsigned char)u_val;
+                    g3x_shadow_bitmap[sh_offs2 + 1] = (unsigned char)y_luma;
+                    g3x_shadow_bitmap[sh_offs2 + 2] = (unsigned char)v_val;
+                }
             }
         }
     }
@@ -246,21 +340,28 @@ void g3x_dbuf_fill_menu_opaque_black(void)
 
 int g3x_dbuf_shadow_restore(void)
 {
-    /* Restore only when shadow is valid AND CHDK overlay layer is active (not in defaultGuiHandler/live view) */
-    if (!g3x_shadow_valid || camera_info.state.gui_mode_none)
+    /* Restore only when shadow is valid, buffer allocated, AND CHDK overlay layer is active (not in defaultGuiHandler/live view) */
+    if (!g3x_shadow_valid || !g3x_shadow_bitmap || !g3x_shadow_opacity || camera_info.state.gui_mode_none)
     {
         return 0;
     }
     int buf_w = camera_screen.buffer_width ? camera_screen.buffer_width : 928;
-    int buf_h = camera_screen.buffer_height ? camera_screen.buffer_height : 600;
-    int total_bm_bytes = buf_w * buf_h * 2;
-    int total_op_bytes = buf_w * buf_h;
 
-    memcpy(bitmap_buffer[0], g3x_shadow_bitmap, total_bm_bytes);
-    memcpy(bitmap_buffer[1], g3x_shadow_bitmap, total_bm_bytes);
+    for (int ry = 0; ry < G3X_SHADOW_HEIGHT; ++ry)
+    {
+        int screen_y = G3X_MENU_Y0 + ry;
+        unsigned int offset_op = (unsigned int)(screen_y * buf_w + G3X_MENU_X0);
+        unsigned int offset_bm = offset_op * 2;
 
-    memcpy((void*)opacity_buffer[0], g3x_shadow_opacity, total_op_bytes);
-    memcpy((void*)opacity_buffer[1], g3x_shadow_opacity, total_op_bytes);
+        unsigned char *src_op = g3x_shadow_opacity + ry * G3X_SHADOW_WIDTH;
+        unsigned char *src_bm = g3x_shadow_bitmap + (ry * G3X_SHADOW_WIDTH) * 2;
+
+        memcpy((void*)&opacity_buffer[0][offset_op], src_op, G3X_SHADOW_WIDTH);
+        memcpy((void*)&opacity_buffer[1][offset_op], src_op, G3X_SHADOW_WIDTH);
+
+        memcpy((void*)&bitmap_buffer[0][offset_bm], src_bm, G3X_SHADOW_WIDTH * 2);
+        memcpy((void*)&bitmap_buffer[1][offset_bm], src_bm, G3X_SHADOW_WIDTH * 2);
+    }
 
     draw_set_guard();
     /* NOTE: No vid_bitmap_refresh() here! On G3X (DIGIC 6), vid_bitmap_refresh calls _transfer_src_overlay,
@@ -271,7 +372,7 @@ int g3x_dbuf_shadow_restore(void)
 
 int g3x_dbuf_restore_if_sentinel_lost(void)
 {
-    if (!g3x_shadow_valid || camera_info.state.gui_mode_none)
+    if (!g3x_shadow_valid || !g3x_shadow_bitmap || !g3x_shadow_opacity || camera_info.state.gui_mode_none)
     {
         return 0;
     }
@@ -629,21 +730,20 @@ static void draw_2pixels_simple(coord x, coord y, int px, int vrepeat)
         bbu1[offset] = yuv;
 
         // Shadow copy update (16-bit opacity word, 32-bit UYVY bitmap word)
-        if (!conf.rotate_osd)
+        if (!conf.rotate_osd && g3x_shadow_opacity && g3x_shadow_bitmap)
         {
-            if (offset < (G3X_SHADOW_OP_SIZE / 2))
+            if (x >= G3X_MENU_X0 && (x + 1) <= G3X_MENU_X1 &&
+                cur_y >= G3X_MENU_Y0 && cur_y <= G3X_MENU_Y1)
             {
-                ((unsigned short *)g3x_shadow_opacity)[offset] = co;
-                ((unsigned int *)g3x_shadow_bitmap)[offset] = yuv;
+                int rx = x - G3X_MENU_X0;
+                int ry = cur_y - G3X_MENU_Y0;
+                unsigned int sh_pair = (unsigned int)((ry * G3X_SHADOW_WIDTH + rx) >> 1);
+                if (sh_pair < (G3X_SHADOW_OP_SIZE / 2))
+                {
+                    ((unsigned short *)g3x_shadow_opacity)[sh_pair] = co;
+                    ((unsigned int *)g3x_shadow_bitmap)[sh_pair] = yuv;
+                }
             }
-            else
-            {
-                g3x_shadow_valid = 0;
-            }
-        }
-        else
-        {
-            g3x_shadow_valid = 0;
         }
 
         if (!vrepeat) return;
@@ -713,7 +813,8 @@ void draw_hline_simple(coord x, coord y, int len, int px)
     unsigned int *bbu0 = (unsigned int *)bitmap_buffer[0];
     unsigned int *bbu1 = (unsigned int *)bitmap_buffer[1];
 
-    for (; len>0; len-=2, offset+=2)
+    int cur_x = (x & 1) ? (x + 1) : x;
+    for (; len>0; len-=2, offset+=2, cur_x+=2)
     {
         unsigned int pair_idx = offset >> 1;
         obu0[pair_idx] = co;
@@ -721,21 +822,20 @@ void draw_hline_simple(coord x, coord y, int len, int px)
         bbu0[pair_idx] = yuv;
         bbu1[pair_idx] = yuv;
 
-        if (!conf.rotate_osd)
+        if (!conf.rotate_osd && g3x_shadow_opacity && g3x_shadow_bitmap)
         {
-            if (pair_idx < (G3X_SHADOW_OP_SIZE / 2))
+            if (cur_x >= G3X_MENU_X0 && (cur_x + 1) <= G3X_MENU_X1 &&
+                y >= G3X_MENU_Y0 && y <= G3X_MENU_Y1)
             {
-                ((unsigned short *)g3x_shadow_opacity)[pair_idx] = co;
-                ((unsigned int *)g3x_shadow_bitmap)[pair_idx] = yuv;
+                int rx = cur_x - G3X_MENU_X0;
+                int ry = y - G3X_MENU_Y0;
+                unsigned int sh_pair = (unsigned int)((ry * G3X_SHADOW_WIDTH + rx) >> 1);
+                if (sh_pair < (G3X_SHADOW_OP_SIZE / 2))
+                {
+                    ((unsigned short *)g3x_shadow_opacity)[sh_pair] = co;
+                    ((unsigned int *)g3x_shadow_bitmap)[sh_pair] = yuv;
+                }
             }
-            else
-            {
-                g3x_shadow_valid = 0;
-            }
-        }
-        else
-        {
-            g3x_shadow_valid = 0;
         }
     }
     if (len == -1)

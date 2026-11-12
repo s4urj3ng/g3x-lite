@@ -145,7 +145,7 @@ extern color chdkColorToCanonColor(chdkColor c);
 extern twoColors user_color(confColor c);
 
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
-/* PORT-43: G3X_GUI_DBUF=1 Double-Buffered Fast Fills, Shadow Buffer & Sentinel Restore */
+/* PORT-43/44: G3X_GUI_DBUF=1 Double-Buffered Fast Fills, Shadow Buffer & Sentinel Restore */
 extern int  g3x_shadow_valid;
 extern void g3x_dbuf_shadow_reset(void);
 extern void g3x_dbuf_fast_fill_rect(coord x1, coord y1, coord x2, coord y2, color cl);
@@ -154,6 +154,8 @@ extern int  g3x_dbuf_shadow_restore(void);
 extern int  g3x_dbuf_restore_if_sentinel_lost(void);
 extern void g3x_dbuf_shadow_draw_pixel(unsigned int offset, unsigned int offs2, unsigned int y, unsigned int o, unsigned int u, unsigned int v, int is_odd);
 extern void g3x_dbuf_fill_menu_opaque_black(void);
+extern void g3x_dbuf_shadow_ensure_allocated(void);
+extern int  g3x_dbuf_shadow_is_allocated(void);
 #endif
 
 //-------------------------------------------------------------------
