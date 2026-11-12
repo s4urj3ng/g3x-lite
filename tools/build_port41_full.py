@@ -212,6 +212,21 @@ def apply_gui_fix_staging_patches(stage_dir: Path) -> None:
     - Palette & UYVY colours: scripts/build_candidate_gui3.py:1223-1249; reference/finsig_gm110c/stubs_entry.S:195,196
     - 2x Integer font & 880x576 opaque layout: scripts/build_candidate_gui3.py:840-909, 984-1221; docs/PORT40_GUI_LAYOUT.md:14-28
     """
+    if Path(sys.argv[0]).name == "build_port43_dbuf.py":
+        port43_src = REPO_ROOT / "tools" / "port43_staging"
+        if port43_src.is_dir():
+            for rel in [
+                Path("core/gui.c"),
+                Path("core/gui_draw.c"),
+                Path("core/gui_draw.h"),
+                Path("core/gui_menu.c"),
+                Path("platform/g3x/gui_menu.c"),
+            ]:
+                src = port43_src / rel
+                dst = stage_dir / rel
+                if src.is_file() and dst.parent.is_dir():
+                    shutil.copy2(src, dst)
+
     # 1. Patch core/main.c: remove (((cnt++) & 3) == 0) periodic forced redraw,
     # and repaint only when GUI state changes or sentinel byte is lost.
     core_main_c = stage_dir / "core" / "main.c"
