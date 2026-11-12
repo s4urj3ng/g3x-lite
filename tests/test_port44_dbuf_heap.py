@@ -68,9 +68,12 @@ OUT_DIR_FULL_HOOKS = TEST_BASE_OUT_DIR / "full_hooks"
 OUT_DIR_PORT42_GUI_FIX = TEST_BASE_OUT_DIR / "port42_gui_fix"
 OUT_DIR_GUI_FIX_FULL_HOOKS = TEST_BASE_OUT_DIR / "gui_fix_full_hooks"
 OUT_DIR_PORT44_DBUF_HEAP = TEST_BASE_OUT_DIR / "port44_dbuf_heap"
+OUT_DIR_PORT44_DBUF_FULL_HOOKS = TEST_BASE_OUT_DIR / "port44_dbuf_full_hooks"
 
 EXPECTED_PORT44_DBUF_SIZE = 126769
 EXPECTED_PORT44_DBUF_SHA256 = "2017b13c3330cd30edf9a8923d58a2fb12f6a4d1f77c9f51923bc60f79247382"
+EXPECTED_PORT44_DBUF_FULL_HOOKS_SIZE = 126825
+EXPECTED_PORT44_DBUF_FULL_HOOKS_SHA256 = "8eb61842fac88baf8147320e5359f5896c87da8c24c1b6a00ff953caa9293746"
 EXPECTED_PORT43_DBUF_SIZE = 126329
 EXPECTED_PORT43_DBUF_SHA256 = "8d5509e597a598e8bb023adae46d4caa2c7ee1e2b763e4ff292f0aef21f9b140"
 EXPECTED_PORT42_GUI_SIZE = 124257
@@ -373,8 +376,12 @@ def _verify_distribution_against_manifest(out_path: Path, manifest_path: Path) -
 
 def extract_symbols_and_end(elf_path: Path) -> tuple[int, list[tuple[str, int, str, int]]]:
     """Extract core _end and all symbols with (name, size, type, address) using arm-none-eabi-nm."""
+    elf_p = Path(elf_path)
+    if not elf_p.is_file():
+        raise FileNotFoundError(f"ELF binary not found: {elf_p}")
+
     proc = subprocess.run(
-        [str(TOOLCHAIN_NM), "-S", str(elf_path)],
+        [str(TOOLCHAIN_NM), "-S", str(elf_p)],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -400,7 +407,23 @@ def extract_symbols_and_end(elf_path: Path) -> tuple[int, list[tuple[str, int, s
             if name == "_end":
                 core_end = addr
 
-    assert core_end is not None, f"_end symbol not found in {elf_path}"
+    assert core_end is not None, f"_end symbol not found in {elf_p}"
+    return core_end, symbols
+
+
+def check_elf_end_guard(
+    elf_path: Path,
+    recorded_port42_end: int = PORT42_RECORDED_END,
+    max_margin: int = PORT44_END_MARGIN,
+    max_symbol_size: int = MAX_SYMBOL_SIZE,
+) -> tuple[int, list[tuple[str, int, str, int]]]:
+    """Check _end guard directly from an ELF binary path. Fails if ELF is missing or limits exceeded."""
+    elf_p = Path(elf_path)
+    if not elf_p.is_file():
+        raise FileNotFoundError(f"ELF binary not found at {elf_p}")
+    core_end, symbols = extract_symbols_and_end(elf_p)
+    assert len(symbols) > 0, f"No symbols extracted from {elf_p}"
+    verify_end_guard(core_end, symbols, recorded_port42_end, max_margin, max_symbol_size)
     return core_end, symbols
 
 
@@ -614,15 +637,60 @@ class TestPort44ByteIdentityToExistingManifests(unittest.TestCase):
 
 
 class TestPort44EndGuard(unittest.TestCase):
-    """Verification of the _end guard and demonstration of failure on PORT-43 layout."""
+    """Verification of the _end guard across all full-build variants and demonstration of failure on PORT-43 layout."""
 
     @classmethod
     def setUpClass(cls):
         if not TOOLCHAIN_NM.is_file():
             raise unittest.SkipTest("ARM toolchain nm not available")
 
-    def test_port44_end_guard_passes(self):
-        """PORT-44 core _end is <= PORT42_RECORDED_END + 64 KiB, and all symbols <= 64 KiB."""
+    def test_all_full_build_variants_pass_end_guard(self):
+        """Parametrized guard over EVERY full-build variant:
+        PORT-41 default, GUI_FIX, FULL_HOOKS, GUI_FIX+FULL_HOOKS, GUI_FIX+DBUF (PORT-44), and DBUF+FULL_HOOKS.
+        Fails if any variant's main.elf is missing, asserts symbols were inspected, and checks both limits.
+        """
+        variants = [
+            ("PORT-41 default", OUT_DIR_PORT41_DEFAULT, [], EXPECTED_PORT41_FULL_SHA256, BUILD_SCRIPT_PORT41),
+            ("PORT-42 GUI_FIX", OUT_DIR_PORT42_GUI_FIX, ["--gui-fix"], EXPECTED_PORT42_GUI_SHA256, BUILD_SCRIPT_PORT41),
+            ("FULL_HOOKS", OUT_DIR_FULL_HOOKS, ["--full-hooks"], EXPECTED_FULL_HOOKS_SHA256, BUILD_SCRIPT_PORT41),
+            ("GUI_FIX+FULL_HOOKS", OUT_DIR_GUI_FIX_FULL_HOOKS, ["--gui-fix", "--full-hooks"], EXPECTED_GUI_FULL_HOOKS_SHA256, BUILD_SCRIPT_PORT41),
+            ("GUI_FIX+DBUF (PORT-44)", OUT_DIR_PORT44_DBUF_HEAP, [], EXPECTED_PORT44_DBUF_SHA256, BUILD_SCRIPT_PORT44),
+            ("DBUF+FULL_HOOKS", OUT_DIR_PORT44_DBUF_FULL_HOOKS, ["--full-hooks"], EXPECTED_PORT44_DBUF_FULL_HOOKS_SHA256, BUILD_SCRIPT_PORT44),
+        ]
+        for name, out_dir, args, sha, script in variants:
+            with self.subTest(variant=name):
+                dist_dir = _require_or_build_distribution(out_dir, args, expected_sha256=sha, script=script)
+                elf_path = dist_dir / "stage_chdk" / "platform" / "g3x" / "sub" / "110c" / "main.elf"
+                self.assertTrue(elf_path.is_file(), f"main.elf missing for variant '{name}' at {elf_path}")
+
+                core_end, symbols = extract_symbols_and_end(elf_path)
+                self.assertGreater(len(symbols), 0, f"No symbols inspected for variant '{name}' in {elf_path}")
+
+                # Check limit 1: core _end <= PORT42_RECORDED_END + PORT44_END_MARGIN (64 KiB)
+                delta = core_end - PORT42_RECORDED_END
+                self.assertLessEqual(
+                    core_end,
+                    PORT42_RECORDED_END + PORT44_END_MARGIN,
+                    f"Variant '{name}' core _end 0x{core_end:08x} exceeds limit (delta {delta} B > {PORT44_END_MARGIN} B)",
+                )
+
+                # Check limit 2: no single BSS or data symbol is larger than 64 KiB
+                bss_data_count = 0
+                for sname, size, stype, _addr in symbols:
+                    if stype in ("b", "B", "d", "D"):
+                        bss_data_count += 1
+                        self.assertLessEqual(
+                            size,
+                            MAX_SYMBOL_SIZE,
+                            f"Variant '{name}' symbol '{sname}' ({size} B) exceeds max size {MAX_SYMBOL_SIZE} B",
+                        )
+                self.assertGreater(bss_data_count, 0, f"No BSS/data symbols found in variant '{name}'")
+
+                # Verify guard helper succeeds
+                verify_end_guard(core_end, symbols)
+
+    def test_port44_end_guard_specific_values(self):
+        """PORT-44 core _end is exactly 0x00369490 (delta = +3296 B vs PORT-42), and symbols <= 64 KiB."""
         out_dbuf = _require_or_build_distribution(
             OUT_DIR_PORT44_DBUF_HEAP,
             [],
@@ -630,42 +698,28 @@ class TestPort44EndGuard(unittest.TestCase):
             script=BUILD_SCRIPT_PORT44,
         )
         elf_path = out_dbuf / "stage_chdk" / "platform" / "g3x" / "sub" / "110c" / "main.elf"
-        if not elf_path.is_file():
-            alt_elf = REPO_ROOT / "out" / "port44-dbuf" / "stage_chdk" / "platform" / "g3x" / "sub" / "110c" / "main.elf"
-            if alt_elf.is_file():
-                elf_path = alt_elf
-
         self.assertTrue(elf_path.is_file(), f"main.elf missing in {elf_path}")
         core_end, symbols = extract_symbols_and_end(elf_path)
 
-        # Core _end should be 0x00369490 (delta = +3296 B)
+        self.assertGreater(len(symbols), 0)
         self.assertEqual(core_end, 0x00369490)
         delta = core_end - PORT42_RECORDED_END
         self.assertEqual(delta, 3296)
         self.assertLessEqual(delta, PORT44_END_MARGIN)
 
-        # Verify end guard executes cleanly
         verify_end_guard(core_end, symbols)
 
-        # Verify no single BSS or data symbol exceeds 64 KiB
         for name, size, stype, _addr in symbols:
             if stype in ("b", "B", "d", "D"):
                 self.assertLessEqual(size, MAX_SYMBOL_SIZE, f"Symbol {name} ({size} B) exceeds 64 KiB")
 
-    def test_other_full_build_variants_pass_end_guard(self):
-        """PORT-41 default, PORT-42 GUI_FIX, and FULL_HOOKS satisfy the _end guard."""
-        variants = [
-            (OUT_DIR_PORT41_DEFAULT, [], EXPECTED_PORT41_FULL_SHA256, BUILD_SCRIPT_PORT41),
-            (OUT_DIR_PORT42_GUI_FIX, ["--gui-fix"], EXPECTED_PORT42_GUI_SHA256, BUILD_SCRIPT_PORT41),
-            (OUT_DIR_FULL_HOOKS, ["--full-hooks"], EXPECTED_FULL_HOOKS_SHA256, BUILD_SCRIPT_PORT41),
-        ]
-        for out_dir, args, sha, script in variants:
-            with self.subTest(variant=out_dir.name):
-                dist_dir = _require_or_build_distribution(out_dir, args, expected_sha256=sha, script=script)
-                elf_path = dist_dir / "stage_chdk" / "platform" / "g3x" / "sub" / "110c" / "main.elf"
-                if elf_path.is_file():
-                    core_end, symbols = extract_symbols_and_end(elf_path)
-                    verify_end_guard(core_end, symbols)
+    def test_end_guard_fails_on_nonexistent_elf(self):
+        """Negative test: with the ELF path pointed at a nonexistent file, the helper must raise."""
+        nonexistent = REPO_ROOT / "nonexistent" / "fake_main.elf"
+        with self.assertRaises(FileNotFoundError):
+            extract_symbols_and_end(nonexistent)
+        with self.assertRaises(FileNotFoundError):
+            check_elf_end_guard(nonexistent)
 
     def test_end_guard_fails_on_port43_recorded_values(self):
         """The _end guard must fail when evaluated against recorded PORT-43 layout values."""
@@ -728,6 +782,52 @@ class TestPort44EndGuard(unittest.TestCase):
         )
 
 
+class FixedBuffer:
+    """Fixed-size bounds-checked buffer wrapper preventing resizing and detecting out-of-bounds writes."""
+
+    def __init__(self, size: int):
+        self._buf = bytearray(size)
+        self._fixed_size = size
+
+    @property
+    def size(self) -> int:
+        return self._fixed_size
+
+    def __len__(self) -> int:
+        return len(self._buf)
+
+    def __getitem__(self, key):
+        return self._buf[key]
+
+    def __setitem__(self, key, value):
+        if isinstance(key, slice):
+            start = 0 if key.start is None else key.start
+            stop = len(self._buf) if key.stop is None else key.stop
+            step = 1 if key.step is None else key.step
+            if step != 1:
+                raise ValueError("Step != 1 not supported")
+            if start < 0 or stop < 0 or start > self._fixed_size or stop > self._fixed_size:
+                raise IndexError(f"Slice [{start}:{stop}] out of bounds for buffer of size {self._fixed_size}")
+            if start > stop:
+                raise IndexError(f"Slice start {start} > stop {stop}")
+            if len(value) != (stop - start):
+                raise ValueError(f"Value length {len(value)} does not match slice length {stop - start}")
+            self._buf[start:stop] = value
+            assert len(self._buf) == self._fixed_size, "Buffer size altered by slice assignment!"
+        elif isinstance(key, int):
+            if key < 0 or key >= self._fixed_size:
+                raise IndexError(f"Index {key} out of bounds for buffer of size {self._fixed_size}")
+            self._buf[key] = value
+            assert len(self._buf) == self._fixed_size, "Buffer size altered by index assignment!"
+        else:
+            raise TypeError(f"Invalid key type {type(key)}")
+
+    def __eq__(self, other):
+        if isinstance(other, FixedBuffer):
+            return self._buf == other._buf
+        return self._buf == other
+
+
 class TestPort44DrawLayerHostModel(unittest.TestCase):
     """Host-side unit and model tests of the draw layer, lazy allocation, and NULL fallback."""
 
@@ -735,14 +835,32 @@ class TestPort44DrawLayerHostModel(unittest.TestCase):
     def setUpClass(cls):
         c_src = REPO_ROOT / "tests" / "test_port44_draw_layer.c"
         cls.c_bin = Path(tempfile.gettempdir()) / "test_port44_draw_layer"
-        proc = subprocess.run(
-            ["gcc", "-O2", "-Wall", "-Wextra", "-Werror", str(c_src), "-o", str(cls.c_bin)],
+
+        # Check if -fsanitize=address is available on host gcc
+        asan_flags = ["-fsanitize=address"]
+        test_cmd = ["gcc", "-fsanitize=address", "-x", "c", "-", "-o", "/dev/null"]
+        proc_test = subprocess.run(
+            test_cmd,
+            input="int main(void){return 0;}\n",
+            text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
         )
+        if proc_test.returncode != 0:
+            asan_flags = []
+
+        cmd = ["gcc", "-O2", "-Wall", "-Wextra", "-Werror"] + asan_flags + [str(c_src), "-o", str(cls.c_bin)]
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if proc.returncode != 0:
-            raise RuntimeError(f"Failed to compile host C draw layer harness: {proc.stderr}")
+            # Fallback without -fsanitize=address if unavailable or failed
+            proc = subprocess.run(
+                ["gcc", "-O2", "-Wall", "-Wextra", "-Werror", str(c_src), "-o", str(cls.c_bin)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            if proc.returncode != 0:
+                raise RuntimeError(f"Failed to compile host C draw layer harness: {proc.stderr}")
 
     def test_host_c_draw_layer_harness_execution(self):
         """Run compiled C test harness verifying dual-buffer, word fills, cursor move, and NULL shadow fallback."""
@@ -754,6 +872,21 @@ class TestPort44DrawLayerHostModel(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, f"Host C harness failed:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
         self.assertIn("ALL PORT-44 DRAW LAYER UNIT TESTS PASSED SUCCESSFULLY.", proc.stdout)
+
+    def test_host_c_draw_layer_mutation_detection(self):
+        """Mutation tests: intentional writes one past BM_SIZE/OP_SIZE in C harness fallback path MUST abort."""
+        for flag in ["--mutate-bm-fallback", "--mutate-op-fallback"]:
+            proc = subprocess.run(
+                [str(self.c_bin), flag],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.assertNotEqual(
+                proc.returncode,
+                0,
+                f"Expected C harness to abort with {flag}, but it exited with 0",
+            )
 
     def _extract_fn_targets_and_body(self, target_path: Path, fn_name: str) -> tuple[str, set[str]]:
         proc = subprocess.run(
@@ -860,15 +993,15 @@ class TestPort44DrawLayerHostModel(unittest.TestCase):
         SH_W = 880
         SH_H = 576
 
-        bm0 = bytearray(BM_SIZE)
-        bm1 = bytearray(BM_SIZE)
-        op0 = bytearray(OP_SIZE)
-        op1 = bytearray(OP_SIZE)
+        bm0 = FixedBuffer(BM_SIZE)
+        bm1 = FixedBuffer(BM_SIZE)
+        op0 = FixedBuffer(OP_SIZE)
+        op1 = FixedBuffer(OP_SIZE)
 
         # 1. Simulate allocation on first GUI entry
         alloc_attempted = False
-        sh_bm: bytearray | None = None
-        sh_op: bytearray | None = None
+        sh_bm: FixedBuffer | None = None
+        sh_op: FixedBuffer | None = None
 
         def ensure_alloc(force_fail=False):
             nonlocal alloc_attempted, sh_bm, sh_op
@@ -876,8 +1009,8 @@ class TestPort44DrawLayerHostModel(unittest.TestCase):
                 return
             alloc_attempted = True
             if not force_fail:
-                sh_bm = bytearray(SH_W * SH_H * 2)
-                sh_op = bytearray(SH_W * SH_H)
+                sh_bm = FixedBuffer(SH_W * SH_H * 2)
+                sh_op = FixedBuffer(SH_W * SH_H)
 
         def model_fast_fill(x1, y1, x2, y2, uyvy_word, op_val):
             op_bytes = bytes([op_val]) * (x2 - x1 + 1)
@@ -913,6 +1046,10 @@ class TestPort44DrawLayerHostModel(unittest.TestCase):
         model_fast_fill(MENU_X0, MENU_Y0, MENU_X1, MENU_Y1, 0x00800080, 0xFF)
         self.assertEqual(bm0, bm1, "Dual bitmap buffers must be identical")
         self.assertEqual(op0, op1, "Dual opacity buffers must be identical")
+        self.assertEqual(len(bm0), BM_SIZE)
+        self.assertEqual(len(bm1), BM_SIZE)
+        self.assertEqual(len(op0), OP_SIZE)
+        self.assertEqual(len(op1), OP_SIZE)
 
         # Test cursor move: touches only changed rows
         num_rows = 10
@@ -938,13 +1075,46 @@ class TestPort44DrawLayerHostModel(unittest.TestCase):
         self.assertIsNone(sh_op)
 
         # Drawing with NULL shadow must succeed into bm0/1 without exception or OOB writes
-        bm0[:] = b"\x00" * BM_SIZE
-        bm1[:] = b"\x00" * BM_SIZE
-        op0[:] = b"\x00" * OP_SIZE
-        op1[:] = b"\x00" * OP_SIZE
+        bm0[0:BM_SIZE] = b"\x00" * BM_SIZE
+        bm1[0:BM_SIZE] = b"\x00" * BM_SIZE
+        op0[0:OP_SIZE] = b"\x00" * OP_SIZE
+        op1[0:OP_SIZE] = b"\x00" * OP_SIZE
         model_fast_fill(MENU_X0, MENU_Y0, MENU_X1, MENU_Y1, 0x00800080, 0xFF)
         self.assertEqual(bm0, bm1, "In fallback mode, dual bitmap buffers must receive identical bytes")
         self.assertEqual(op0, op1, "In fallback mode, dual opacity buffers must receive identical bytes")
+        self.assertEqual(len(bm0), BM_SIZE)
+        self.assertEqual(len(bm1), BM_SIZE)
+        self.assertEqual(len(op0), OP_SIZE)
+        self.assertEqual(len(op1), OP_SIZE)
+
+        # Mutation / self-tests in Python:
+        # 1. Intentional single-index write one past BM_SIZE and OP_SIZE
+        with self.assertRaises(IndexError):
+            bm0[BM_SIZE] = 0xAA
+        with self.assertRaises(IndexError):
+            bm1[BM_SIZE] = 0xAA
+        with self.assertRaises(IndexError):
+            op0[OP_SIZE] = 0xAA
+        with self.assertRaises(IndexError):
+            op1[OP_SIZE] = 0xAA
+
+        # 2. Intentional slice write one past BM_SIZE and OP_SIZE
+        with self.assertRaises(IndexError):
+            bm0[BM_SIZE:BM_SIZE + 1] = b"\xAA"
+        with self.assertRaises(IndexError):
+            op0[OP_SIZE:OP_SIZE + 1] = b"\xAA"
+
+        # 3. Intentional resizing attempt via slice
+        with self.assertRaises(ValueError):
+            bm0[0:4] = b"\x00" * 8  # Length mismatch
+
+        # 4. On NULL-shadow fallback path: intentional write one past MUST fail and be detected
+        with self.assertRaises(IndexError):
+            model_fast_fill(0, BUF_H - 1, 10, BUF_H + 1, 0x00800080, 0xFF)
+        with self.assertRaises(IndexError):
+            bm0[BM_SIZE] = 0x55
+        with self.assertRaises(IndexError):
+            op0[OP_SIZE] = 0x55
 
 
 if __name__ == "__main__":

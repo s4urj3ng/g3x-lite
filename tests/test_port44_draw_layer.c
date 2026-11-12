@@ -43,24 +43,24 @@
 #define CANARY_SIZE 4096
 #define CANARY_BYTE 0x5A
 
-static uint8_t bm_canary_pre0[CANARY_SIZE];
-static uint8_t bitmap_buf0[BM_SIZE];
-static uint8_t bm_canary_post0[CANARY_SIZE];
+/* Guarded buffer structures guarantee strict contiguous layout: [guard_pre | buf | guard_post] */
+typedef struct {
+    uint8_t guard_pre[CANARY_SIZE];
+    uint8_t buf[BM_SIZE];
+    uint8_t guard_post[CANARY_SIZE];
+} guarded_bm_buf_t;
 
-static uint8_t bm_canary_pre1[CANARY_SIZE];
-static uint8_t bitmap_buf1[BM_SIZE];
-static uint8_t bm_canary_post1[CANARY_SIZE];
+typedef struct {
+    uint8_t guard_pre[CANARY_SIZE];
+    uint8_t buf[OP_SIZE];
+    uint8_t guard_post[CANARY_SIZE];
+} guarded_op_buf_t;
 
-static uint8_t op_canary_pre0[CANARY_SIZE];
-static uint8_t opacity_buf0[OP_SIZE];
-static uint8_t op_canary_post0[CANARY_SIZE];
+static guarded_bm_buf_t g_bm_buffers[2];
+static guarded_op_buf_t g_op_buffers[2];
 
-static uint8_t op_canary_pre1[CANARY_SIZE];
-static uint8_t opacity_buf1[OP_SIZE];
-static uint8_t op_canary_post1[CANARY_SIZE];
-
-static uint8_t *bitmap_buffer[2] = { bitmap_buf0, bitmap_buf1 };
-static uint8_t *opacity_buffer[2] = { opacity_buf0, opacity_buf1 };
+static uint8_t *bitmap_buffer[2] = { g_bm_buffers[0].buf, g_bm_buffers[1].buf };
+static uint8_t *opacity_buffer[2] = { g_op_buffers[0].buf, g_op_buffers[1].buf };
 
 /* Runtime heap-allocated shadow pointers */
 static unsigned char *g3x_shadow_bitmap = NULL;
@@ -76,27 +76,28 @@ static int mock_umalloc_calls = 0;
 static int mock_malloc_force_fail = 0;
 
 void init_canaries(void) {
-    memset(bm_canary_pre0, CANARY_BYTE, CANARY_SIZE);
-    memset(bm_canary_post0, CANARY_BYTE, CANARY_SIZE);
-    memset(bm_canary_pre1, CANARY_BYTE, CANARY_SIZE);
-    memset(bm_canary_post1, CANARY_BYTE, CANARY_SIZE);
-    memset(op_canary_pre0, CANARY_BYTE, CANARY_SIZE);
-    memset(op_canary_post0, CANARY_BYTE, CANARY_SIZE);
-    memset(op_canary_pre1, CANARY_BYTE, CANARY_SIZE);
-    memset(op_canary_post1, CANARY_BYTE, CANARY_SIZE);
+    for (int b = 0; b < 2; b++) {
+        memset(g_bm_buffers[b].guard_pre, CANARY_BYTE, CANARY_SIZE);
+        memset(g_bm_buffers[b].guard_post, CANARY_BYTE, CANARY_SIZE);
+        memset(g_op_buffers[b].guard_pre, CANARY_BYTE, CANARY_SIZE);
+        memset(g_op_buffers[b].guard_post, CANARY_BYTE, CANARY_SIZE);
+    }
+}
+
+int check_canaries_intact(void) {
+    for (int b = 0; b < 2; b++) {
+        for (int i = 0; i < CANARY_SIZE; i++) {
+            if (g_bm_buffers[b].guard_pre[i] != CANARY_BYTE) return 0;
+            if (g_bm_buffers[b].guard_post[i] != CANARY_BYTE) return 0;
+            if (g_op_buffers[b].guard_pre[i] != CANARY_BYTE) return 0;
+            if (g_op_buffers[b].guard_post[i] != CANARY_BYTE) return 0;
+        }
+    }
+    return 1;
 }
 
 void verify_canaries(void) {
-    for (int i = 0; i < CANARY_SIZE; i++) {
-        assert(bm_canary_pre0[i] == CANARY_BYTE);
-        assert(bm_canary_post0[i] == CANARY_BYTE);
-        assert(bm_canary_pre1[i] == CANARY_BYTE);
-        assert(bm_canary_post1[i] == CANARY_BYTE);
-        assert(op_canary_pre0[i] == CANARY_BYTE);
-        assert(op_canary_post0[i] == CANARY_BYTE);
-        assert(op_canary_pre1[i] == CANARY_BYTE);
-        assert(op_canary_post1[i] == CANARY_BYTE);
-    }
+    assert(check_canaries_intact() == 1);
 }
 
 void vid_bitmap_refresh(void) {
@@ -381,9 +382,32 @@ void simulate_menu_draw(int redraw_mode, int curr_item, int top_item, int num_li
     }
 }
 
-int main(void) {
+int main(int argc, char **argv) {
     printf("PORT-44 Draw Layer Unit Test Harness running...\n");
     init_canaries();
+
+    /* Optional CLI mutation modes for external process-level assertion */
+    if (argc > 1) {
+        if (strcmp(argv[1], "--mutate-bm-fallback") == 0) {
+            g3x_shadow_alloc_attempted = 0;
+            mock_malloc_force_fail = 1;
+            g3x_dbuf_shadow_ensure_allocated();
+            assert(g3x_shadow_bitmap == NULL);
+            /* Intentional write one past BM_SIZE on fallback path */
+            bitmap_buffer[0][BM_SIZE] = 0xDE;
+            verify_canaries(); /* Must abort via assert */
+            return 0;
+        } else if (strcmp(argv[1], "--mutate-op-fallback") == 0) {
+            g3x_shadow_alloc_attempted = 0;
+            mock_malloc_force_fail = 1;
+            g3x_dbuf_shadow_ensure_allocated();
+            assert(g3x_shadow_opacity == NULL);
+            /* Intentional write one past OP_SIZE on fallback path */
+            opacity_buffer[0][OP_SIZE] = 0xAD;
+            verify_canaries(); /* Must abort via assert */
+            return 0;
+        }
+    }
 
     /* ==============================================================
      * TEST 1: Allocation happens only on first GUI/ALT entry, NOT at init
@@ -414,16 +438,16 @@ int main(void) {
     /* ==============================================================
      * TEST 2: Dual-buffer receives identical bytes (bitmap & opacity)
      * ============================================================== */
-    memset(bitmap_buf0, 0, BM_SIZE);
-    memset(bitmap_buf1, 0, BM_SIZE);
-    memset(opacity_buf0, 0, OP_SIZE);
-    memset(opacity_buf1, 0, OP_SIZE);
+    memset(bitmap_buffer[0], 0, BM_SIZE);
+    memset(bitmap_buffer[1], 0, BM_SIZE);
+    memset(opacity_buffer[0], 0, OP_SIZE);
+    memset(opacity_buffer[1], 0, OP_SIZE);
     g3x_dbuf_shadow_reset();
     verify_canaries();
 
     draw_pixel(100, 100, 0xFF0000FF);
-    assert(memcmp(bitmap_buf0, bitmap_buf1, BM_SIZE) == 0);
-    assert(memcmp(opacity_buf0, opacity_buf1, OP_SIZE) == 0);
+    assert(memcmp(bitmap_buffer[0], bitmap_buffer[1], BM_SIZE) == 0);
+    assert(memcmp(opacity_buffer[0], opacity_buffer[1], OP_SIZE) == 0);
     verify_canaries();
     printf("  [PASS] draw_pixel writes identical bytes to both bitmap and opacity buffers\n");
 
@@ -433,8 +457,8 @@ int main(void) {
     draw_pixel_calls = 0;
     g3x_dbuf_fast_fill_rect(G3X_MENU_X0, G3X_MENU_Y0, G3X_MENU_X1, G3X_MENU_Y1, 0xFF000000);
     assert(draw_pixel_calls == 0);
-    assert(memcmp(bitmap_buf0, bitmap_buf1, BM_SIZE) == 0);
-    assert(memcmp(opacity_buf0, opacity_buf1, OP_SIZE) == 0);
+    assert(memcmp(bitmap_buffer[0], bitmap_buffer[1], BM_SIZE) == 0);
+    assert(memcmp(opacity_buffer[0], opacity_buffer[1], OP_SIZE) == 0);
     verify_canaries();
     printf("  [PASS] fast_fill_rect uses word writes and zero draw_pixel calls\n");
 
@@ -469,14 +493,14 @@ int main(void) {
     uint8_t *orig_bm = malloc(BM_SIZE);
     uint8_t *orig_op = malloc(OP_SIZE);
     assert(orig_bm && orig_op);
-    memcpy(orig_bm, bitmap_buf0, BM_SIZE);
-    memcpy(orig_op, opacity_buf0, OP_SIZE);
+    memcpy(orig_bm, bitmap_buffer[0], BM_SIZE);
+    memcpy(orig_op, opacity_buffer[0], OP_SIZE);
 
     /* Corrupt display plane */
-    memset(bitmap_buf0, 0xDE, BM_SIZE);
-    memset(bitmap_buf1, 0xAD, BM_SIZE);
-    memset(opacity_buf0, 0xBE, OP_SIZE);
-    memset(opacity_buf1, 0xEF, OP_SIZE);
+    memset(bitmap_buffer[0], 0xDE, BM_SIZE);
+    memset(bitmap_buffer[1], 0xAD, BM_SIZE);
+    memset(opacity_buffer[0], 0xBE, OP_SIZE);
+    memset(opacity_buffer[1], 0xEF, OP_SIZE);
     guard_set = 0;
 
     vid_bitmap_refresh_calls = 0;
@@ -489,10 +513,10 @@ int main(void) {
         int screen_y = G3X_MENU_Y0 + ry;
         unsigned int offset_op = (unsigned int)(screen_y * BUF_W + G3X_MENU_X0);
         unsigned int offset_bm = offset_op * 2;
-        assert(memcmp(&bitmap_buf0[offset_bm], &orig_bm[offset_bm], G3X_SHADOW_WIDTH * 2) == 0);
-        assert(memcmp(&bitmap_buf1[offset_bm], &orig_bm[offset_bm], G3X_SHADOW_WIDTH * 2) == 0);
-        assert(memcmp(&opacity_buf0[offset_op], &orig_op[offset_op], G3X_SHADOW_WIDTH) == 0);
-        assert(memcmp(&opacity_buf1[offset_op], &orig_op[offset_op], G3X_SHADOW_WIDTH) == 0);
+        assert(memcmp(&bitmap_buffer[0][offset_bm], &orig_bm[offset_bm], G3X_SHADOW_WIDTH * 2) == 0);
+        assert(memcmp(&bitmap_buffer[1][offset_bm], &orig_bm[offset_bm], G3X_SHADOW_WIDTH * 2) == 0);
+        assert(memcmp(&opacity_buffer[0][offset_op], &orig_op[offset_op], G3X_SHADOW_WIDTH) == 0);
+        assert(memcmp(&opacity_buffer[1][offset_op], &orig_op[offset_op], G3X_SHADOW_WIDTH) == 0);
     }
 
     verify_canaries();
@@ -530,24 +554,24 @@ int main(void) {
     assert(mock_umalloc_calls == 1);
 
     /* Reset buffers & verify canaries */
-    memset(bitmap_buf0, 0, BM_SIZE);
-    memset(bitmap_buf1, 0, BM_SIZE);
-    memset(opacity_buf0, 0, OP_SIZE);
-    memset(opacity_buf1, 0, OP_SIZE);
+    memset(bitmap_buffer[0], 0, BM_SIZE);
+    memset(bitmap_buffer[1], 0, BM_SIZE);
+    memset(opacity_buffer[0], 0, OP_SIZE);
+    memset(opacity_buffer[1], 0, OP_SIZE);
     verify_canaries();
 
     /* Draw pixel with NULL shadow: must write to bitmap/opacity buffers with ZERO crashes or OOB writes */
     draw_pixel(50, 50, 0xFF123456);
-    assert(memcmp(bitmap_buf0, bitmap_buf1, BM_SIZE) == 0);
-    assert(memcmp(opacity_buf0, opacity_buf1, OP_SIZE) == 0);
+    assert(memcmp(bitmap_buffer[0], bitmap_buffer[1], BM_SIZE) == 0);
+    assert(memcmp(opacity_buffer[0], opacity_buffer[1], OP_SIZE) == 0);
     verify_canaries();
 
     /* Fast fill with NULL shadow: must write to bitmap/opacity buffers with ZERO crashes or OOB writes */
     draw_pixel_calls = 0;
     g3x_dbuf_fast_fill_rect(G3X_MENU_X0, G3X_MENU_Y0, G3X_MENU_X1, G3X_MENU_Y1, 0xFF000000);
     assert(draw_pixel_calls == 0);
-    assert(memcmp(bitmap_buf0, bitmap_buf1, BM_SIZE) == 0);
-    assert(memcmp(opacity_buf0, opacity_buf1, OP_SIZE) == 0);
+    assert(memcmp(bitmap_buffer[0], bitmap_buffer[1], BM_SIZE) == 0);
+    assert(memcmp(opacity_buffer[0], opacity_buffer[1], OP_SIZE) == 0);
     verify_canaries();
 
     /* Shadow restore with NULL shadow: must safely return 0 without writing or crashing */
@@ -561,6 +585,59 @@ int main(void) {
     verify_canaries();
 
     printf("  [PASS] NULL shadow fallback: dual-buffer writes succeed, 0 crashes, 0 out-of-bounds writes\n");
+
+    /* ==============================================================
+     * TEST 7: Mutation / self-tests for bounds checking:
+     * An intentional write one past BM_SIZE/OP_SIZE (including on the NULL-shadow
+     * fallback path) MUST be detected by the canary guard and make the check fail.
+     * ============================================================== */
+    /* 1. Normal mode: intentional write one past BM_SIZE on buffer 0 */
+    assert(check_canaries_intact() == 1);
+    bitmap_buffer[0][BM_SIZE] = 0x99;
+    assert(check_canaries_intact() == 0);
+    init_canaries();
+    assert(check_canaries_intact() == 1);
+
+    /* 2. Normal mode: intentional write one past OP_SIZE on buffer 0 */
+    opacity_buffer[0][OP_SIZE] = 0x99;
+    assert(check_canaries_intact() == 0);
+    init_canaries();
+    assert(check_canaries_intact() == 1);
+
+    /* 3. Normal mode: intentional write one past BM_SIZE on buffer 1 */
+    bitmap_buffer[1][BM_SIZE] = 0x99;
+    assert(check_canaries_intact() == 0);
+    init_canaries();
+    assert(check_canaries_intact() == 1);
+
+    /* 4. Normal mode: intentional write one past OP_SIZE on buffer 1 */
+    opacity_buffer[1][OP_SIZE] = 0x99;
+    assert(check_canaries_intact() == 0);
+    init_canaries();
+    assert(check_canaries_intact() == 1);
+
+    /* 5. NULL-shadow fallback path: verify clean operations, then intentional write one past */
+    g3x_shadow_bitmap = NULL;
+    g3x_shadow_opacity = NULL;
+    g3x_shadow_valid = 0;
+    init_canaries();
+    draw_pixel(25, 25, 0xFF112233);
+    g3x_dbuf_fast_fill_rect(G3X_MENU_X0, G3X_MENU_Y0, G3X_MENU_X1, G3X_MENU_Y1, 0xFF000000);
+    verify_canaries();
+
+    /* Intentional write one past BM_SIZE on NULL-shadow fallback path */
+    bitmap_buffer[0][BM_SIZE] = 0xCC;
+    assert(check_canaries_intact() == 0);
+    init_canaries();
+    assert(check_canaries_intact() == 1);
+
+    /* Intentional write one past OP_SIZE on NULL-shadow fallback path */
+    opacity_buffer[0][OP_SIZE] = 0xCC;
+    assert(check_canaries_intact() == 0);
+    init_canaries();
+    assert(check_canaries_intact() == 1);
+
+    printf("  [PASS] Mutation self-tests: one-past writes reliably detected on both normal and fallback paths\n");
 
     printf("ALL PORT-44 DRAW LAYER UNIT TESTS PASSED SUCCESSFULLY.\n");
     return 0;
