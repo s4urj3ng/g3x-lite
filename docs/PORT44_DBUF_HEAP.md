@@ -137,12 +137,15 @@ When `G3X_GUI_DBUF` is disabled, the build produces byte-identical binaries to p
 
 ## 6. Deliverable Binary Manifest (PORT-44 G3X_GUI_DBUF=1)
 
-- **Build Command**: `python3 scripts/build_port43_dbuf.py --out-dir out/port44-dbuf`
+- **Build Command**: `python3 tools/build_port44_dbuf_heap.py --out-dir out/port44-dbuf` (or `python3 scripts/build_port43_dbuf.py --out-dir out/port44-dbuf`)
 - **Toolchain**: `toolchains/gcc-arm-none-eabi-5_4-2016q3` (pinned GCC 5.4.1)
 - **Compile Flags**: `PLATFORM=g3x PLATFORMSUB=110c G3X_FULL_BUILD=1 G3X_GUI_FIX=1 G3X_GUI_DBUF=1 OPT_CAPSTONE_TOOLS=0`
 - **Output Artifact**: `out/port44-dbuf/DISKBOOT.BIN`
   - **Size**: 126,769 bytes
   - **SHA-256**: `2017b13c3330cd30edf9a8923d58a2fb12f6a4d1f77c9f51923bc60f79247382`
+- **Manifest**: `manifests/port44_dbuf_heap_manifest.json`
+- **Trial Plan**: `docs/PORT44_TRIAL_PLAN.md`
+- **Host Tests**: `tests/test_port44_dbuf_heap.py`, `tests/test_port44_draw_layer.c`
 - **Core Symbols**:
   - `_start`: `0x003489b4`
   - `_end`: `0x00369490` (Delta vs PORT-42: `+3,296 bytes` / `+3.22 KiB`)
