@@ -68,10 +68,10 @@ Option B is recommended. The build task should detect display buffer flips and s
   Restore from the PORT-44 heap shadow (`g3x_dbuf_shadow_restore()` in `chdk-port/core/gui_draw.c:341-371` [source (PORT-44)]) as soon as an `active_bitmap_buffer` flip or sentinel loss is detected, only while ALT/menu is active (`!camera_info.state.gui_mode_none`) and the shadow is valid (`g3x_shadow_valid && g3x_shadow_bitmap != NULL`).
   `g3x_dbuf_shadow_restore()` performs a fast row-by-row shadow blit into both bitmap framebuffers (`bitmap_buffer[0/1]` at `0x0000D2A8` [FINSIG]) and both opacity planes (`opacity_buffer[0/1]` at `0x5FC40000`/`0x5FB80000` [INFERRED (ROM read, 0xFC18347E..0xFC18381F)]). This minimizes visual overdraw duration after Canon stock UI writes, but operates asynchronously after the event.
 - **Multi-Point Sentinel Upgrade**:
-  In PORT-44, `draw_test_guard()` only inspected pixel (0,0) (`opacity_buffer[0/1][0] == 0x42`). When Canon stock UI redraws AF tracking frames and scene indicators in central/marginal areas, pixel (0,0) is untouched, so sentinel loss went undetected. The guard test should check four perimeter points or corner bounds (`G3X_MENU_X0, G3X_MENU_Y0` through `G3X_MENU_X1, G3X_MENU_Y1`), triggering immediate `g3x_dbuf_shadow_restore()` when an AF box intersects the menu.
+  In PORT-44, `draw_test_guard()` only inspected pixel (0,0) (`opacity_buffer[0/1][0] == 0x42`). When Canon stock UI redraws AF tracking frames and scene indicators in central/marginal areas, pixel (0,0) is untouched, so sentinel loss went undetected. The implementation checks four margin points outside the menu, in addition to (0,0). A buffer flip or corruption of a monitored point triggers asynchronous `g3x_dbuf_shadow_restore()`. Overdraw confined to the menu interior with no buffer flip can remain undetected.
 - **Gate and Fallback Mechanism**:
-  - **Strict Gate**: Asynchronous restore is gated strictly: `if (!camera_info.state.gui_mode_none && g3x_shadow_valid && g3x_shadow_bitmap != NULL && g3x_shadow_opacity != NULL)`. When ALT/menu is inactive or the shadow is NULL/invalid, zero writes occur.
-  - **Fallback to PORT-44**: When the shadow buffer is NULL (`!g3x_shadow_valid` or heap allocation failure), CHDK falls back to PORT-44 behavior: buffer-change polling via `check_gui_needs_redraw()`, setting `forced = 1` and calling full `gui_redraw()`. As documented in sibling G5 X (`chdk-port/platform/g5x/lib.c:206-209`), this polling reduces flickering without relying on the shadow buffer.
+  - **Strict Gate**: Asynchronous restore is gated strictly: `if (!camera_info.state.gui_mode_none && g3x_shadow_valid && g3x_shadow_bitmap != NULL && g3x_shadow_opacity != NULL)`. When ALT/menu is inactive, no extra restore occurs. With a NULL/invalid shadow, the scheduler uses the PORT-44 guard-loss fallback; the ordinary (0,0) guard remains in use.
+  - **Fallback to PORT-44**: When the shadow buffer is NULL (`!g3x_shadow_valid` or heap allocation failure), CHDK falls back to PORT-44 behavior: ignore buffer flips while guards are intact; set `forced = 1` and call `gui_redraw(1)` on guard loss. The implemented scheduler is in `scripts/build_port43_dbuf.py:282-326`.
 
 ---
 
@@ -93,10 +93,10 @@ FINSIG addresses: `transfer_src_overlay` = `0xFC380635` [FINSIG], `ScreenLock` =
 ## 5. Build Instructions
 
 - **Detection Point**: Detect `active_bitmap_buffer` (`0x0000D2A4` [FINSIG]) toggles and perimeter sentinel loss in CHDK RAM code (`check_gui_needs_redraw()` in `chdk-port/platform/g3x/lib.c:136-145` [HISTORICAL_CHDK] / `gui_redraw()` in `chdk-port/core/gui.c:2988-3006`).
-- **Gate**: Asynchronous restore is strictly gated: `if (!camera_info.state.gui_mode_none && g3x_shadow_valid && g3x_shadow_bitmap != NULL && g3x_shadow_opacity != NULL)`. When ALT/menu is off or shadow is NULL, execution is an instantaneous no-op with zero writes and zero CPU overhead.
+- **Gate**: Asynchronous restore is strictly gated: `if (!camera_info.state.gui_mode_none && g3x_shadow_valid && g3x_shadow_bitmap != NULL && g3x_shadow_opacity != NULL)`. With ALT/menu off, there is no extra restore or perimeter guard write. With a NULL shadow, the PORT-44 guard-loss fallback remains active. The scheduler still polls each tick.
 - **Restore Operation**: Restore from the PORT-44 runtime heap shadow via `g3x_dbuf_shadow_restore()` (`chdk-port/core/gui_draw.c:341-371` [source (PORT-44)]) asynchronously upon detection; never claim restore happens before scanout.
-- **Memory**: No boot allocation, no static buffers; uses PORT-44 runtime heap shadow (`malloc` on ALT entry, `free` on exit).
-- **Fallback**: If `g3x_shadow_bitmap` is NULL or heap allocation fails, fall back to PORT-44 behavior (conventional `gui_redraw()` polling via `check_gui_needs_redraw()`, `chdk-port/platform/g5x/lib.c:206-209`), which reduces flicker without relying on the shadow buffer.
+- **Memory**: No boot allocation, no static buffers; uses the PORT-44 runtime heap shadow (one lazy allocation attempt on ALT/menu entry, retained and invalidated on exit).
+- **Fallback**: If `g3x_shadow_bitmap` is NULL or heap allocation fails, fall back to PORT-44 behavior: ignore flips with intact guards and request `gui_redraw(1)` on guard loss.
 
 ---
 
@@ -114,14 +114,14 @@ The Option B overlay protection design is implemented behind the opt-in build fl
 - **Output Directory**: `out/port45-no-overdraw/`
 - **DISKBOOT.BIN Size**: 126,977 bytes
 - **DISKBOOT.BIN SHA-256**: `2be1877e495a0d2aee07851eee6e0294eb2d62ba9db2707b929fa2cf7927a684`
-- **Manifest**: `out/port45-no-overdraw/port45_no_overdraw_manifest.json`
+- **Tracked manifest**: [`manifests/port45_gui_nooverdraw_manifest.json`](../manifests/port45_gui_nooverdraw_manifest.json); generated copy: `out/port45-no-overdraw/port45_no_overdraw_manifest.json`.
 
 ### Memory & Symbol Verification
 - **_end Symbol**: `0x00369560` (link_bss_end).
 - **Delta vs PORT-42 Baseline (`0x003687b0`)**: +3,504 bytes (~3.42 KiB), well within the 64 KiB margin (65,536 bytes).
 - **Static Buffers Added**: 0 bytes (no static overlay or shadow buffers added).
 - **Largest Symbol in BSS/Data**: `font_data` (3,473 bytes); no symbol approaches 64 KiB.
-- **Boot Allocation**: 0 bytes allocated during boot. Shadow buffer is allocated lazily on heap upon ALT mode entry and freed on exit.
+- **Boot Allocation**: 0 bytes allocated during boot. The shadow has one lazy heap allocation attempt upon ALT/menu entry and is retained and invalidated on exit; no new shadow allocation occurs during boot.
 
 ### Runtime Behavior & Acceptance Criteria
 1. **ALT Gating**: Active only while CHDK ALT mode or CHDK menu is active (`!camera_info.state.gui_mode_none`). With ALT off, `draw_set_guard()` and `draw_test_guard()` write and test only sentinel (0, 0), matching PORT-44 byte-for-byte. Zero extra pixels are written at startup (`draw_init`) or at `draw_restore()`.
@@ -133,4 +133,163 @@ The Option B overlay protection design is implemented behind the opt-in build fl
    Because these pixels lie outside the menu fill area, drawing the CHDK menu never trips a sentinel. Any stock UI overdraw (e.g. AF boxes, face detection frames) touching the perimeter immediately triggers asynchronous shadow restore.
 3. **NULL Shadow Fallback**: If the shadow buffer is NULL or unavailable, buffer flips are ignored (causing zero redraws when guards are intact), and only sentinel corruption triggers `forced = 1` -> `gui_redraw(1)`, identically matching PORT-44 behavior with no crashes or tick-by-tick thrashing.
 4. **Byte Identity**: Builds without `G3X_GUI_NOOVERDRAW=1` remain 100% byte-identical to existing baseline manifests (verified by 24 tests in `tests/test_port44_dbuf_heap.py`).
+
+## 7. Owner trial plan (future owner execution only)
+
+This task performed host builds and tests only. Hardware results remain **UNKNOWN**.
+
+1. Before an independently authorized trial, verify the candidate against
+   [`port45_gui_nooverdraw_manifest.json`](../manifests/port45_gui_nooverdraw_manifest.json):
+   `DISKBOOT.BIN`, **126,977 bytes**, SHA-256
+   `2be1877e495a0d2aee07851eee6e0294eb2d62ba9db2707b929fa2cf7927a684`.
+2. Start with a **short press** of Power (less than 0.5 s). Observe normal boot,
+   live view and controls before entering ALT. Stop on a failed boot or freeze.
+3. Enter ALT and open the CHDK menu. Keep ALT/menu on for **at least 10 s**,
+   moving the camera across a detailed scene and repeatedly half-pressing the
+   shutter to trigger **AF**. Navigate several menu rows too.
+4. Report whether the menu remains readable and opaque during motion/AF; note
+   flicker, erased areas, stock AF-box show-through, colour/font/layout changes,
+   freezes or resets. Exit ALT and compare live view, controls and normal power-off
+   with PORT-44. A short video is useful. This asynchronous polling design cannot
+   guarantee an undisturbed scanout or detect every interior-only stock write.
+5. Stop and roll back on any regression. The known PORT-44 rollback DISKBOOT is
+   **126,769 bytes**, SHA-256
+   `2017b13c3330cd30edf9a8923d58a2fb12f6a4d1f77c9f51923bc60f79247382`
+   ([manifest](../manifests/port44_dbuf_heap_manifest.json)). If the camera is
+   unresponsive, use **battery-pull recovery**: remove the NB-10L battery, wait at
+   least **10 s**, and leave power removed while the owner restores the known-good
+   PORT-44 candidate using their established rollback procedure. Reinsert the
+   battery and verify recovery; stop further trials if recovery fails.
+
+## 8. Host evidence for PORT45-TESTS-TRIAL-R2
+
+**VERIFIED**, retrieved 2026-11-13 against source commit
+[`19fec9339f7a80c3c1f2a471dfcfc913b96f92e7`](https://github.com/s4urj3ng/g3x-lite/tree/19fec9339f7a80c3c1f2a471dfcfc913b96f92e7):
+the pinned ARM toolchain completed two clean builds in separate staging trees.
+All **243 distribution files** (DISKBOOT plus **242 CHDK files**, including 34
+modules) have equal file sets, sizes, SHA-256 hashes and actual bytes. The tracked
+manifest records the measured hash and size of every distribution file. Staging
+objects and the manifest itself are build metadata, outside that distribution.
+
+Reproduce the clean builds and PORT-45 checks from the repository root:
+
+```sh
+mkdir -p out/port45-validation/tmp
+export TMPDIR="$PWD/out/port45-validation/tmp"
+python3 -B scripts/build_port45_no_overdraw.py > out/port45-validation/build-first.log 2>&1
+python3 -B scripts/build_port45_no_overdraw.py --out-dir out/port45-validation/second > out/port45-validation/build-second.log 2>&1
+python3 -B scripts/test_port45_no_overdraw.py -v
+python3 -B -m unittest tests.test_port44_dbuf_heap -v
+```
+
+The first two commands use the scripts' default clean staging behavior, without
+`--no-clean`. [`scripts/test_port45_no_overdraw.py`](../scripts/test_port45_no_overdraw.py)
+checks every distribution byte against the second build and every hash/size
+against the tracked manifest. [`tests/test_port45_validation.py`](../tests/test_port45_validation.py)
+exposes these checks to `port_tests` discovery. The test fixture also removes both
+cached distribution trees and builds them again, so subsequent test runs exercise
+clean builds of the current sources. The compiler reports GNU ARM Embedded
+5.4.1 20160919, branch revision 240496.
+
+**VERIFIED** memory results from pinned `arm-none-eabi-nm -S` on each staged
+`platform/g3x/sub/110c/main.elf`. Fresh clean builds of the seven other variants
+are recorded under `out/port45-validation/r2/baselines/`; each applicable existing
+distribution manifest was checked without changing its expected hashes.
+Measured summaries are in `out/port45-validation/r2/baseline-results.json` and
+`out/port45-validation/r2/nooverdraw-results.json` (ignored host evidence):
+
+| Full-build variant | `_end` | Difference from PORT-42 |
+| --- | --- | ---: |
+| Default PORT-41 | `0x003686b0` | -256 B |
+| PORT-42 GUI_FIX | `0x003687b0` | 0 B |
+| FULL_HOOKS | `0x003686f0` | -192 B |
+| GUI_FIX + FULL_HOOKS | `0x003687f0` | +64 B |
+| PORT-44 DBUF | `0x00369490` | +3,296 B |
+| DBUF + FULL_HOOKS | `0x003694c0` | +3,344 B |
+| NOOVERDRAW | `0x00369560` | +3,504 B |
+| NOOVERDRAW + FULL_HOOKS | `0x003695a0` | +3,568 B |
+
+NOOVERDRAW is **208 bytes above PORT-44's `0x00369490`**. Every variant is within
+65,536 bytes of PORT-42, and **every sized core symbol**, including text, is at
+most 65,536 bytes. The largest is `font_data`, 3,473 bytes, in all eight variants.
+
+**VERIFIED**: all 24 PORT-44 regression tests pass, comparing full distributions
+against the existing default, GUI_FIX, FULL_HOOKS, GUI_FIX + FULL_HOOKS and DBUF
+manifests, and checking the pinned DISKBOOT hashes and sizes of all 19 PORT-24..40
+candidates. This host initially contained a stale ignored `libplatform.a`: its
+embedded `lib.o` had an extra `update_screen_dimensions` stub absent from the
+baseline object/source. The exact local repair was:
+
+```sh
+toolchains/gcc-arm-none-eabi-5_4-2016q3/bin/arm-none-eabi-ar r chdk-port/platform/g3x/libplatform.a chdk-port/platform/g3x/lib.o
+```
+
+No baseline hash was changed; the rebuilt candidates then matched their pinned
+hashes. The archive and build outputs remain ignored and uncommitted.
+
+The R2 discovery run additionally exposed nondeterministic timestamps/ownership
+in that ignored archive. All six member names and object bytes compared equal
+using pinned `ar t` / `ar p` against the deterministic output of
+[`build_fallback_libplatform_a()`](../scripts/build_candidate_gui3.py#L1940).
+The shared ignored archive was replaced with that output (SHA-256
+`c8eba0e13f263cb1b884f6f53ef6e055fb48e57a60ca7637e442fec98210b035`),
+preserving every member's contents. No tracked source or baseline manifest was
+changed by either local archive repair.
+
+To recreate the deterministic ignored archive from current sources, after
+checking that the pinned candidate hashes still match:
+
+```sh
+TMPDIR="$PWD/out/port45-validation/tmp" python3 -B - <<'PY'
+import sys
+sys.path.insert(0, "scripts")
+from build_candidate_gui3 import build_fallback_libplatform_a
+build_fallback_libplatform_a("chdk-port/platform/g3x/libplatform.a")
+PY
+```
+
+**VERIFIED**: all eight PORT-45 checks pass. The host model compiles the built
+variant's actual C guard, restore, allocation/init and scheduler branch, with
+mock framebuffers and camera state. It checks ALT-off equivalence, restores both
+bitmap/opacity planes byte-for-byte after simulated overdraw, NULL and half-NULL
+or invalid shadows, no shadow allocation during boot, one lazy allocation on
+entry, and canaries. A NULL host restore-service pointer models an unavailable
+hook and requests the ordinary guard-loss redraw without crashing. Production
+calls the statically linked restore function; it has no optional firmware display
+hook. Mutation checks reject removal of ALT gating, omission of an opacity-plane
+restore and introduction of boot shadow allocation.
+
+**VERIFIED**: `python3 -B tools/validate_candidate_port2a.py` passes all offline
+candidate checks. The optional `--use-existing-inspector` build initially refused
+the stale owner-local `0x0035f780` inspector metadata. The candidate instead uses
+the already generated, verified inspector assets from the passing default
+candidate under `out/port43-test/candidate_default/`, associated with
+`copy_inspector_artifacts()` and recorded by `generate_manifest()` from
+`tools/build_candidate_port2a.py`. The stale owner-local assets were left intact.
+
+`port_tests` discovery uses `test_port*.py`, which excludes the forbidden
+`tests/test_validate_witness_inspector.py`. It also explicitly skips
+`TestPort19WitnessAddress.test_validator_rejects_self_consistent_0035f780_under_python_optimize`,
+because that method invokes `tools/build_witness_inspector.py`'s payload builder.
+The four pre-existing PORT-27 NO-GO skips remain in place. No repository test or
+CI configuration was changed to apply this run-local safety exclusion.
+
+**VERIFIED final R2 results (2026-11-13)**: discovery completed **1,428 tests in
+529.316 s, OK (skipped=5)**, including all eight PORT-45 checks. The earlier sole
+archive-metadata failure passed both its focused rerun and this full rerun.
+`python3 -B tools/validate_candidate_port2a.py` then passed every offline check;
+`git diff --check` passed. Exact final invocations and retained host logs:
+
+```sh
+TMPDIR="$PWD/out/port45-validation/tmp" python3 -B out/port45-validation/r2/run_port_tests.py > out/port45-validation/r2/port-tests-rerun.log 2>&1
+python3 -B tools/validate_candidate_port2a.py > out/port45-validation/r2/candidate-validation-final.log 2>&1
+```
+
+The ignored run-local runner performs ordinary unittest `test_port*.py`
+discovery and applies only the PORT-19 safety skip named above.
+
+**INFERRED**: these results support the intended host control flow. **UNKNOWN**:
+actual camera timing, visible flicker under AF/motion, allocator success on the
+camera and physical-device safety. No new ROM inspection or hardware operation
+was performed for this task.
 

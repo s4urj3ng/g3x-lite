@@ -3,7 +3,7 @@
 
 Verifies:
 1. Pinned build artifacts and manifest for G3X_GUI_NOOVERDRAW=1.
-2. Memory layout & _end guard (< 64 KiB above PORT-42 baseline, no symbol > 64 KiB).
+2. Memory layout & _end guard (within 64 KiB of PORT-42, no symbol > 64 KiB).
 3. Build flag dependency: G3X_GUI_NOOVERDRAW=1 requires G3X_GUI_DBUF=1 in Makefile (single location).
 4. Host C model simulation:
    (i)   ALT off: Sequence of guard writes is byte-for-byte the PORT-44 sequence
@@ -18,8 +18,10 @@ Verifies:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -28,10 +30,22 @@ import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 TOOLCHAIN_BIN = REPO_ROOT / "toolchains" / "gcc-arm-none-eabi-5_4-2016q3" / "bin"
 TOOLCHAIN_NM = TOOLCHAIN_BIN / "arm-none-eabi-nm"
 OUT_DIR = REPO_ROOT / "out" / "port45-no-overdraw"
 PORT42_BASELINE_END = 0x003687B0
+MANIFEST = REPO_ROOT / "manifests" / "port45_gui_nooverdraw_manifest.json"
+SECOND_OUT_DIR = REPO_ROOT / "out" / "port45-validation" / "second"
+
+
+def c_function(source: str, name: str) -> str:
+    """Extract a complete top-level C function, failing if its definition moves."""
+    match = re.search(r"^(?:void|int) " + re.escape(name) + r"\([^;\n]*\)\s*\{.*?^\}", source, re.M | re.S)
+    if match is None:
+        raise AssertionError(f"Missing C definition: {name}")
+    return match.group(0)
+
 
 EXPECTED_DISKBOOT_SIZE = 126977
 EXPECTED_DISKBOOT_SHA256 = "2be1877e495a0d2aee07851eee6e0294eb2d62ba9db2707b929fa2cf7927a684"
@@ -40,13 +54,24 @@ EXPECTED_DISKBOOT_SHA256 = "2be1877e495a0d2aee07851eee6e0294eb2d62ba9db2707b929f
 class TestPort45ArtifactsAndMemory(unittest.TestCase):
     """Artifact integrity, symbols, and _end guard tests for PORT-45 build."""
 
+    @classmethod
+    def setUpClass(cls):
+        from tests.test_port44_dbuf_heap import _require_or_build_distribution
+        # Reproducibility must exercise current sources, even with cached outputs.
+        if OUT_DIR.exists():
+            shutil.rmtree(OUT_DIR)
+        _require_or_build_distribution(
+            OUT_DIR, [], EXPECTED_DISKBOOT_SHA256,
+            script=REPO_ROOT / "scripts/build_port45_no_overdraw.py")
+
     def test_diskboot_bin_exists_and_hash(self):
         diskboot = OUT_DIR / "DISKBOOT.BIN"
         self.assertTrue(diskboot.is_file(), f"Missing {diskboot}")
         self.assertEqual(diskboot.stat().st_size, EXPECTED_DISKBOOT_SIZE)
+        self.assertEqual(hashlib.sha256(diskboot.read_bytes()).hexdigest(), EXPECTED_DISKBOOT_SHA256)
 
     def test_manifest_contents(self):
-        manifest_path = OUT_DIR / "port45_no_overdraw_manifest.json"
+        manifest_path = MANIFEST
         self.assertTrue(manifest_path.is_file(), f"Missing {manifest_path}")
         with open(manifest_path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -64,6 +89,28 @@ class TestPort45ArtifactsAndMemory(unittest.TestCase):
             diskboot_info.get("sha256"),
             EXPECTED_DISKBOOT_SHA256,
         )
+        from tests.test_port44_dbuf_heap import _verify_distribution_against_manifest
+        _verify_distribution_against_manifest(OUT_DIR, MANIFEST)
+        self.assertEqual(artifacts["chdk_files_count"], len(artifacts["chdk_files"]))
+        modules = {Path(p).name: info for p, info in artifacts["chdk_files"].items()
+                   if p.startswith("CHDK/MODULES/") and p.endswith(".flt")}
+        self.assertEqual(artifacts["modules"], modules)
+        self.assertEqual(artifacts["modules_count"], len(modules))
+
+    def test_two_clean_distributions_are_byte_identical(self):
+        """Compare the complete file sets, hashes, sizes, and actual bytes."""
+        from tests.test_port44_dbuf_heap import snapshot_distribution, _require_or_build_distribution
+        if SECOND_OUT_DIR.exists():
+            shutil.rmtree(SECOND_OUT_DIR)
+        _require_or_build_distribution(
+            SECOND_OUT_DIR, [], EXPECTED_DISKBOOT_SHA256,
+            script=REPO_ROOT / "scripts/build_port45_no_overdraw.py")
+        first = snapshot_distribution(OUT_DIR)
+        self.assertEqual(first, snapshot_distribution(SECOND_OUT_DIR))
+        for relative in first:
+            with self.subTest(file=relative):
+                self.assertEqual((OUT_DIR / relative).read_bytes(),
+                                 (SECOND_OUT_DIR / relative).read_bytes())
 
     def test_end_guard_and_symbol_sizes(self):
         elf_path = OUT_DIR / "stage_chdk" / "platform" / "g3x" / "sub" / "110c" / "main.elf"
@@ -88,7 +135,7 @@ class TestPort45ArtifactsAndMemory(unittest.TestCase):
         self.assertIsNotNone(end_val, "Symbol '_end' not found in main.elf")
         delta = end_val - PORT42_BASELINE_END
         self.assertGreaterEqual(delta, 0, f"_end {hex(end_val)} is below PORT-42 baseline {hex(PORT42_BASELINE_END)}")
-        self.assertLess(
+        self.assertLessEqual(
             delta,
             65536,
             f"_end delta {delta} bytes exceeds 64 KiB margin (end={hex(end_val)}, baseline={hex(PORT42_BASELINE_END)})",
@@ -115,11 +162,37 @@ class TestPort45ArtifactsAndMemory(unittest.TestCase):
                 except ValueError:
                     pass
 
-        self.assertLess(
+        self.assertLessEqual(
             max_symbol_size,
             65536,
             f"Symbol {max_symbol_name} size {max_symbol_size} exceeds 64 KiB",
         )
+        self.assertEqual(end_val, 0x00369560)
+        self.assertEqual(end_val - 0x00369490, 208)
+
+    def test_all_full_build_variants_end_and_all_symbol_sizes(self):
+        """Extend PORT-44's six variants to NOOVERDRAW with and without FULL_HOOKS."""
+        from tests import test_port44_dbuf_heap as baseline
+        variants = [
+            (baseline.OUT_DIR_PORT41_DEFAULT, [], baseline.BUILD_SCRIPT_PORT41),
+            (baseline.OUT_DIR_PORT42_GUI_FIX, ["--gui-fix"], baseline.BUILD_SCRIPT_PORT41),
+            (baseline.OUT_DIR_FULL_HOOKS, ["--full-hooks"], baseline.BUILD_SCRIPT_PORT41),
+            (baseline.OUT_DIR_GUI_FIX_FULL_HOOKS, ["--gui-fix", "--full-hooks"], baseline.BUILD_SCRIPT_PORT41),
+            (baseline.OUT_DIR_PORT44_DBUF_HEAP, [], baseline.BUILD_SCRIPT_PORT44),
+            (baseline.OUT_DIR_PORT44_DBUF_FULL_HOOKS, ["--full-hooks"], baseline.BUILD_SCRIPT_PORT44),
+            (OUT_DIR, [], REPO_ROOT / "scripts/build_port45_no_overdraw.py"),
+            (REPO_ROOT / "out/port45-validation/full-hooks", ["--full-hooks"],
+             REPO_ROOT / "scripts/build_port45_no_overdraw.py"),
+        ]
+        for out_dir, args, script in variants:
+            with self.subTest(variant=out_dir.name):
+                baseline._require_or_build_distribution(out_dir, args, script=script)
+                end, symbols = baseline.extract_symbols_and_end(
+                    out_dir / "stage_chdk/platform/g3x/sub/110c/main.elf")
+                self.assertLessEqual(abs(end - PORT42_BASELINE_END), 65536)
+                self.assertTrue(symbols)
+                for name, size, _kind, _address in symbols:
+                    self.assertLessEqual(size, 65536, name)
 
     def test_build_flag_dependency_enforcement(self):
         """Verifies G3X_GUI_NOOVERDRAW=1 requires G3X_GUI_DBUF=1 in Makefile (single location)."""
@@ -140,7 +213,16 @@ class TestPort45HostSimulation(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.temp_dir = tempfile.mkdtemp(prefix="port45_test_")
+        # Permit running the host model alone on a fresh checkout.
+        from tests.test_port44_dbuf_heap import _require_or_build_distribution
+        if OUT_DIR.exists() and not (OUT_DIR / "stage_chdk/core/gui_draw.c").is_file():
+            shutil.rmtree(OUT_DIR)
+        _require_or_build_distribution(
+            OUT_DIR, [], EXPECTED_DISKBOOT_SHA256,
+            script=REPO_ROOT / "scripts/build_port45_no_overdraw.py")
+        temp_root = REPO_ROOT / "out" / "port45-validation"
+        temp_root.mkdir(parents=True, exist_ok=True)
+        cls.temp_dir = tempfile.mkdtemp(prefix="port45_test_", dir=temp_root)
         cls.c_src = Path(cls.temp_dir) / "sim_nooverdraw.c"
         cls.c_bin = Path(cls.temp_dir) / "sim_nooverdraw"
 
@@ -616,7 +698,147 @@ int main(void) {
     return 0;
 }
 """
+        # Compile the built variant's real C guard/restore/scheduler code in the
+        # host model. Keep only framebuffer, camera state, and hook fault stubs.
+        # This prevents the model from passing when the firmware source regresses.
+        stage = OUT_DIR / "stage_chdk"
+        draw_source = (stage / "core/gui_draw.c").read_text(encoding="utf-8")
+        main_source = (stage / "core/main.c").read_text(encoding="utf-8")
+        guard_source = draw_source.split(
+            "#if defined(G3X_GUI_NOOVERDRAW) && (G3X_GUI_NOOVERDRAW == 1)", 1)[1]
+        for name in ("g3x_dbuf_shadow_is_allocated", "draw_set_guard", "draw_test_guard"):
+            model_name = name.replace("draw_set_guard", "port45_draw_set_guard").replace(
+                "draw_test_guard", "port45_draw_test_guard")
+            source = draw_source if name == "g3x_dbuf_shadow_is_allocated" else guard_source
+            actual = c_function(source, name).replace(name + "(", model_name + "(")
+            # Record real guard writes for the existing PORT-44 comparison.
+            for buf in (0, 1):
+                for offset in ("0", "offsets[i]"):
+                    actual = actual.replace(f"opacity_buffer[{buf}][{offset}] = 0x42;",
+                                            f"write_opacity_pixel({buf}, {offset}, 0x42);")
+            c_code = c_code.replace(c_function(c_code, model_name), actual)
+
+        for macro in re.findall(r"^#define (G3X_\w+)\s", c_code, re.M):
+            definition = re.search(r"^#define " + macro + r"\s+.*$", draw_source, re.M)
+            if definition is None:
+                raise AssertionError(f"Missing source macro: {macro}")
+            c_code = re.sub(r"^#define " + macro + r"\s+.*$", lambda _m: definition[0],
+                            c_code, flags=re.M)
+
+        restore = c_function(draw_source, "g3x_dbuf_shadow_restore")
+        restore = restore.replace("g3x_dbuf_shadow_restore(", "raw_shadow_restore(").replace(
+            "draw_set_guard();", "port45_draw_set_guard();")
+        restore = restore.replace("    int buf_w =", "    restore_calls++;\n    int buf_w =", 1)
+        # No optional firmware hook exists: these fault-injection seams model an
+        # unavailable restore service. Production links the function directly.
+        restore += """
+static int (*restore_hook)(void) = raw_shadow_restore;
+int g3x_dbuf_shadow_restore(void) {
+    return restore_hook ? restore_hook() : 0;
+}
+"""
+        c_code = c_code.replace(c_function(c_code, "g3x_dbuf_shadow_restore"), restore)
+
+        scheduler = main_source.split("/* PORT-45 NOOVERDRAW GUI scheduler:", 1)[1]
+        scheduler = scheduler.split("gui_maintenance_tick();", 1)[1]
+        scheduler = scheduler.split("int state_changed =", 1)[0]
+        scheduler = scheduler.replace("draw_test_guard()", "port45_draw_test_guard()")
+        c_code = c_code.replace(c_function(c_code, "port45_scheduler_tick"),
+                                "int port45_scheduler_tick(void) {\n" + scheduler + "return forced;\n}")
+        # Baseline guard must not accidentally use NOOVERDRAW perimeter checks.
+        c_code = c_code.replace("if (!port45_draw_test_guard() && chdk_overlay_active)",
+                                "if ((opacity_buffer[0][0] != 0x42 || opacity_buffer[1][0] != 0x42) && chdk_overlay_active)")
+
+        allocator = c_function(draw_source, "g3x_dbuf_shadow_ensure_allocated")
+        allocator = re.sub(r"\bmalloc\(", "counted_malloc(", allocator)
+        allocator = re.sub(r"\bumalloc\(", "counted_malloc(", allocator)
+        allocation_model = """
+static int allocation_calls;
+static int allocation_force_fail;
+static int g3x_shadow_alloc_attempted;
+static void *counted_malloc(size_t size) {
+    allocation_calls++;
+    return allocation_force_fail ? NULL : malloc(size);
+}
+""" + allocator + "\n" + c_function(draw_source, "g3x_dbuf_shadow_init")
+        c_code = c_code.replace("int main(void) {", allocation_model + "\nint main(void) {")
+        c_code = c_code.replace("    init_canaries();", """
+    /* Real startup invalidation + ALT-off guard/ticks never allocate a shadow. */
+    camera_info.state.gui_mode_none = 1;
+    g3x_dbuf_shadow_init();
+    port45_draw_set_guard();
+    for (int tick = 0; tick < 10; tick++) {
+        active_bitmap_buffer ^= 1;
+        assert(port45_scheduler_tick() == port44_scheduler_tick());
+    }
+    assert(allocation_calls == 0);
+    assert(g3x_shadow_alloc_attempted == 0);
+    assert(restore_calls == 0);
+    camera_info.state.gui_mode_none = 0;
+    g3x_dbuf_shadow_ensure_allocated(); /* first ALT entry */
+    assert(allocation_calls == 1);
+    assert(g3x_dbuf_shadow_is_allocated());
+    g3x_dbuf_shadow_ensure_allocated();
+    assert(allocation_calls == 1);
+    free(g3x_shadow_bitmap);
+    g3x_shadow_bitmap = g3x_shadow_opacity = NULL;
+    last_bitmap_buffer = active_bitmap_buffer;
+    init_canaries();
+""")
+        c_code = c_code.replace("    free(heap_buf);", """
+    /* Valid shadow, lost sentinel, but NULL restore service: ordinary redraw. */
+    restore_hook = NULL;
+    restore_calls = 0;
+    opacity_buffer[0][0] = 0;
+    assert(port44_scheduler_tick() == 1);
+    assert(port45_scheduler_tick() == 1);
+    assert(restore_calls == 0);
+    restore_hook = raw_shadow_restore;
+
+    /* ALT off with a valid stale shadow, buffer flips AND lost guards. */
+    camera_info.state.gui_mode_none = 1;
+    for (int tick = 0; tick < 10; tick++) {
+        active_bitmap_buffer ^= 1;
+        assert(port45_scheduler_tick() == 0);
+        assert(port44_scheduler_tick() == 0);
+        assert(restore_calls == 0);
+    }
+
+    /* Each half-NULL shadow and an invalid shadow safely use PORT-44 fallback. */
+    camera_info.state.gui_mode_none = 0;
+    for (int missing = 0; missing < 3; missing++) {
+        g3x_shadow_bitmap = missing == 0 ? NULL : heap_buf;
+        g3x_shadow_opacity = missing == 1 ? NULL : heap_buf + G3X_SHADOW_BM_SIZE;
+        g3x_shadow_valid = missing != 2;
+        port45_draw_set_guard();
+        active_bitmap_buffer ^= 1;
+        assert(port45_scheduler_tick() == 0);
+        opacity_buffer[1][0] = 0;
+        assert(port45_scheduler_tick() == port44_scheduler_tick());
+        assert(port45_scheduler_tick() == 1);
+        assert(restore_calls == 0);
+    }
+    assert(check_canaries());
+    /* Both malloc and umalloc fail: real allocator invalidates the shadow. */
+    int previous_allocations = allocation_calls;
+    allocation_force_fail = 1;
+    g3x_shadow_alloc_attempted = 0;
+    g3x_dbuf_shadow_ensure_allocated();
+    assert(allocation_calls == previous_allocations + 2);
+    assert(!g3x_dbuf_shadow_is_allocated());
+    assert(!g3x_shadow_valid);
+    g3x_dbuf_shadow_ensure_allocated();
+    assert(allocation_calls == previous_allocations + 2);
+    port45_draw_set_guard();
+    active_bitmap_buffer ^= 1;
+    assert(port45_scheduler_tick() == 0);
+    opacity_buffer[0][0] = 0;
+    assert(port45_scheduler_tick() == 1);
+    assert(check_canaries());
+    free(heap_buf);
+""")
         cls.c_src.write_text(c_code, encoding="utf-8")
+        cls.c_code = c_code
 
         asan_flags = ["-fsanitize=address"]
         test_cmd = ["gcc", "-fsanitize=address", "-x", "c", "-", "-o", "/dev/null"]
@@ -655,6 +877,27 @@ int main(void) {
         )
         self.assertEqual(proc.returncode, 0, f"Host simulation failed:\n{proc.stdout}\n{proc.stderr}")
         self.assertIn("ALL PORT-45 SIMULATION TESTS PASSED SUCCESSFULLY.", proc.stdout)
+
+    def test_model_rejects_gate_restore_and_boot_allocation_regressions(self):
+        mutations = {
+            "alt_gate": ("int chdk_overlay_active = !camera_info.state.gui_mode_none;",
+                         "int chdk_overlay_active = 1;"),
+            "restore": ("memcpy((void*)&opacity_buffer[1][offset_op], src_op, G3X_SHADOW_WIDTH);",
+                        "/* mutation: second opacity plane not restored */"),
+            "boot_allocation": ("void g3x_dbuf_shadow_init(void)\n{",
+                                "void g3x_dbuf_shadow_init(void)\n{\n    free(counted_malloc(1));"),
+        }
+        for name, (before, after) in mutations.items():
+            with self.subTest(mutation=name):
+                self.assertIn(before, self.c_code)
+                source = Path(self.temp_dir) / f"mutation_{name}.c"
+                binary = source.with_suffix("")
+                source.write_text(self.c_code.replace(before, after), encoding="utf-8")
+                subprocess.run(["gcc", "-O2", "-Wall", "-Wextra", "-Werror",
+                                str(source), "-o", str(binary)], check=True, capture_output=True)
+                result = subprocess.run([str(binary)], capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0, f"Undetected mutation: {name}")
+                self.assertIn("Assertion", result.stderr)
 
 
 if __name__ == "__main__":
