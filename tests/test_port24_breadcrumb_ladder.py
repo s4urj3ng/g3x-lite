@@ -184,9 +184,13 @@ class TestPort24BreadcrumbLadder(unittest.TestCase):
             check=True,
         )
         tracked_files = [Path(p).name for p in res_tracked.stdout.splitlines()]
+        # PORT-41: platform files tracked for the standard CHDK build
         expected_tracked = {
+            "boot.c",
             "boot_prototype.c",
             "boot_witness.h",
+            "capt_seq.c",
+            "filewrite.c",
             "g3x_trace.c",
             "g3x_trace.h",
             "kbd_candidate.h",
@@ -194,8 +198,13 @@ class TestPort24BreadcrumbLadder(unittest.TestCase):
             "loader_entry_breadcrumb.S",
             "loader_entry_led.S",
             "loader_main_breadcrumb.c",
+            "makefile.inc",
+            "movie_rec.c",
             "osd2_test_overlay.h",
             "osd_test_overlay.h",
+            "stubs_auto.S",
+            "stubs_entry.S",
+            "stubs_min.S",
             "stubs_prototype.S",
         }
         self.assertEqual(

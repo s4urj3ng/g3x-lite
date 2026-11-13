@@ -69,3 +69,26 @@ firmware/tools/video001_limits_probe_gm110c.m
 firmware/tools/video001a0_loader_gm110c.m
 firmware/tools/video001a0_payload.S
 firmware/tools/video001a0_payload.bin
+
+# PORT-41: track local-only g3x platform files
+!chdk-port/platform/g3x/Makefile
+!chdk-port/platform/g3x/makefile.inc
+!chdk-port/platform/g3x/lib.c
+!chdk-port/platform/g3x/kbd.c
+!chdk-port/platform/g3x/main.c
+!chdk-port/platform/g3x/shooting.c
+!chdk-port/platform/g3x/wrappers.c
+!chdk-port/platform/g3x/platform_camera.h
+!chdk-port/platform/g3x/platform_kbd.h
+!chdk-port/platform/g3x/sub/110c/boot.c
+!chdk-port/platform/g3x/sub/110c/capt_seq.c
+!chdk-port/platform/g3x/sub/110c/movie_rec.c
+!chdk-port/platform/g3x/sub/110c/filewrite.c
+!chdk-port/platform/g3x/sub/110c/stubs_entry.S
+!chdk-port/platform/g3x/sub/110c/stubs_min.S
+!chdk-port/platform/g3x/sub/110c/stubs_auto.S
+!chdk-port/platform/g3x/sub/110c/makefile.inc
+
+# PORT-41-R2: ignore build outputs and candidate working directories
+out/
+candidate_port*/

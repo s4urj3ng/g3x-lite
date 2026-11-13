@@ -1,0 +1,69 @@
+{
+  "milestone": "PORT-43",
+  "target": "G3X_GUI_FIX=1 G3X_GUI_DBUF=1",
+  "recorded_start": "0x003489b4",
+  "recorded_end": "0x00500fd0",
+  "recorded_delta_vs_port42": 1673248,
+  "symbols": [
+    {
+      "name": "g3x_shadow",
+      "size": 1670400,
+      "type": "b",
+      "address": "0x00367568"
+    },
+    {
+      "name": "font_data",
+      "size": 3473,
+      "type": "d",
+      "address": "0x00364bd4"
+    },
+    {
+      "name": "symbol_hash_table",
+      "size": 3160,
+      "type": "D",
+      "address": "0x003667ac"
+    },
+    {
+      "name": "osd_conf_info",
+      "size": 2320,
+      "type": "d",
+      "address": "0x003635bc"
+    },
+    {
+      "name": "conf_info",
+      "size": 2128,
+      "type": "d",
+      "address": "0x00363ecc"
+    },
+    {
+      "name": "conf",
+      "size": 2088,
+      "type": "B",
+      "address": "0x00500680"
+    },
+    {
+      "name": "console_buf",
+      "size": 1350,
+      "type": "b",
+      "address": "0x004ffc38"
+    },
+    {
+      "name": "dbuf_row_cache",
+      "size": 768,
+      "type": "b",
+      "address": "0x004ff694"
+    },
+    {
+      "name": "shutter_speeds_table",
+      "size": 696,
+      "type": "D",
+      "address": "0x00361704"
+    },
+    {
+      "name": "conf_map_1_2",
+      "size": 606,
+      "type": "d",
+      "address": "0x0035dc68"
+    }
+  ]
+}
