@@ -331,12 +331,64 @@ def apply_no_overdraw_staging_patches(stage_dir: Path) -> None:
 
 
 
+def apply_kbd_check_staging_patches(stage_dir: Path) -> None:
+    """Add the ALT diagnostic after either DBUF scheduler has been selected."""
+    for rel in ["platform/g3x/Makefile", "platform/g3x/sub/110c/Makefile"]:
+        mpath = stage_dir / rel
+        text = mpath.read_text(encoding="utf-8")
+        text = (
+            "ifeq ($(G3X_KBD_CHECK),1)\n"
+            "ifneq ($(G3X_GUI_DBUF),1)\n"
+            "$(error G3X_KBD_CHECK=1 requires G3X_GUI_DBUF=1)\n"
+            "endif\n"
+            "endif\n\n"
+        ) + text
+        anchor = "CFLAGS += -DG3X_FULL_BUILD=1"
+        if text.count(anchor) != 1:
+            raise RuntimeError(f"PORT-46 compile flag anchor not found in {rel}")
+        text = text.replace(anchor, anchor + " -DG3X_KBD_CHECK=1", 1)
+        mpath.write_text(text, encoding="utf-8")
+
+    gui = stage_dir / "core/gui.c"
+    text = gui.read_text(encoding="utf-8")
+    anchor = "void gui_chdk_draw(int force_redraw)\n"
+    if text.count(anchor) != 1:
+        raise RuntimeError("PORT-46 ALT draw definition anchor not found")
+    text = text.replace(anchor, '#include "../platform/g3x/kbd_check.h"\n\n' + anchor, 1)
+    anchor = "    console_draw(force_redraw);\n"
+    if text.count(anchor) != 1:
+        raise RuntimeError("PORT-46 ALT console draw anchor not found")
+    text = text.replace(anchor, anchor + (
+        "#if defined(G3X_KBD_CHECK) && (G3X_KBD_CHECK == 1)\n"
+        "    gui_kbd_check_draw();\n"
+        "#endif\n"
+    ), 1)
+    gui.write_text(text, encoding="utf-8")
+
+    main = stage_dir / "core/main.c"
+    text = main.read_text(encoding="utf-8")
+    anchor = "            else if (gui_is_module_mode())\n"
+    if text.count(anchor) != 1:
+        raise RuntimeError("PORT-46 DBUF idle scheduler anchor not found")
+    text = text.replace(anchor, (
+        "#if defined(G3X_KBD_CHECK) && (G3X_KBD_CHECK == 1)\n"
+        "            else if (camera_info.state.gui_mode_alt)\n"
+        "            {\n"
+        "                extern void gui_kbd_check_draw(void);\n"
+        "                gui_kbd_check_draw();\n"
+        "            }\n"
+        "#endif\n"
+    ) + anchor, 1)
+    main.write_text(text, encoding="utf-8")
+
+
 def build_port43_dbuf(
     clean_stage: bool = True,
     keep_stage: bool = True,
     full_hooks: bool = False,
     no_overdraw: bool = False,
     out_dir: Path | str | None = None,
+    kbd_check: bool = False,
 ) -> int:
     gcc_path = TOOLCHAIN_BIN / "arm-none-eabi-gcc"
     if not gcc_path.is_file() or not os.access(gcc_path, os.X_OK):
@@ -353,6 +405,11 @@ def build_port43_dbuf(
 
     if out_dir is not None:
         effective_out_dir = Path(out_dir).resolve()
+    elif kbd_check:
+        suffix = "-no-overdraw" if no_overdraw else ""
+        if full_hooks:
+            suffix += "-full-hooks"
+        effective_out_dir = REPO_ROOT / "out" / ("port46-kbd-check" + suffix)
     elif no_overdraw:
         if full_hooks:
             effective_out_dir = REPO_ROOT / "out" / "port45-no-overdraw-full-hooks"
@@ -406,7 +463,10 @@ def build_port43_dbuf(
 
     # Apply GUI fix patches
     print("G3X_GUI_FIX=1: Applying GUI flicker, colour and 2x font staging patches...")
-    apply_gui_fix_staging_patches(effective_stage_dir)
+    if kbd_check:
+        apply_gui_fix_staging_patches(effective_stage_dir, legacy_dbuf_snapshot=False)
+    else:
+        apply_gui_fix_staging_patches(effective_stage_dir)
 
     # Apply DBUF compile flag patches
     print("G3X_GUI_DBUF=1: Applying double-buffered overlay staging patches...")
@@ -417,6 +477,9 @@ def build_port43_dbuf(
         print("G3X_GUI_NOOVERDRAW=1: Applying opt-in overlay protection staging patches...")
         apply_no_overdraw_staging_patches(effective_stage_dir)
 
+    if kbd_check:
+        print("G3X_KBD_CHECK=1: Applying ALT key-check draw hooks...")
+        apply_kbd_check_staging_patches(effective_stage_dir)
 
     # Clean platform objects in staging copy
     for subpath in ["platform/g3x", "platform/g3x/sub/110c", "loader/g3x"]:
@@ -434,6 +497,8 @@ def build_port43_dbuf(
             ]
             if no_overdraw:
                 clean_cmd.append("G3X_GUI_NOOVERDRAW=1")
+            if kbd_check:
+                clean_cmd.append("G3X_KBD_CHECK=1")
             if full_hooks:
                 clean_cmd.append("FULL_HOOKS=1")
             clean_cmd.append("clean")
@@ -459,6 +524,8 @@ def build_port43_dbuf(
     ]
     if no_overdraw:
         cmd.append("G3X_GUI_NOOVERDRAW=1")
+    if kbd_check:
+        cmd.append("G3X_KBD_CHECK=1")
     if full_hooks:
         cmd.append("FULL_HOOKS=1")
     cmd.append("fir")
@@ -472,6 +539,8 @@ def build_port43_dbuf(
     env["G3X_GUI_DBUF"] = "1"
     if no_overdraw:
         env["G3X_GUI_NOOVERDRAW"] = "1"
+    if kbd_check:
+        env["G3X_KBD_CHECK"] = "1"
     if full_hooks:
         env["FULL_HOOKS"] = "1"
 
@@ -533,10 +602,14 @@ def build_port43_dbuf(
     ]
     if no_overdraw:
         build_flags.append("G3X_GUI_NOOVERDRAW=1")
+    if kbd_check:
+        build_flags.append("G3X_KBD_CHECK=1")
     if full_hooks:
         build_flags.insert(1, "FULL_HOOKS=1")
 
     manifest_name = "port45_no_overdraw_manifest.json" if no_overdraw else "port43_dbuf_manifest.json"
+    if kbd_check:
+        manifest_name = "port46_kbd_check_manifest.json"
     manifest_data = {
         "build": {
             "platform": "g3x",
@@ -586,6 +659,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="PORT-43 DBUF CHDK Full Build for PowerShot G3 X")
     parser.add_argument("--full-hooks", action="store_true", help="Enable FULL_HOOKS=1")
     parser.add_argument("--no-overdraw", action="store_true", help="Enable G3X_GUI_NOOVERDRAW=1 opt-in overlay protection")
+    parser.add_argument("--kbd-check", action="store_true", default=os.environ.get("G3X_KBD_CHECK") == "1", help="Enable G3X_KBD_CHECK=1 ALT key diagnostic (also accepts environment flag)")
     parser.add_argument("--no-clean", action="store_true", help="Do not clean staging before building")
     parser.add_argument("--discard-stage", action="store_true", help="Remove stage directory after build")
     parser.add_argument("--out-dir", type=str, default=None, help="Custom output directory")
@@ -597,6 +671,7 @@ def main() -> int:
         full_hooks=args.full_hooks,
         no_overdraw=args.no_overdraw,
         out_dir=args.out_dir,
+        kbd_check=args.kbd_check,
     )
 
 

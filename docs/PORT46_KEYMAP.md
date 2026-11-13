@@ -1,6 +1,6 @@
 # PORT-46 — G3X GM1.10C keymap comparison
 
-Retrieved locally **2026-11-13 UTC**, baseline [16158c6ef08f8f7cfba55a0dec0dd61b69c6382e](https://github.com/s4urj3ng/g3x-lite/commit/16158c6ef08f8f7cfba55a0dec0dd61b69c6382e). Documentation only; no source changes.
+Retrieved locally **2026-11-13 UTC**, comparison baseline [16158c6ef08f8f7cfba55a0dec0dd61b69c6382e](https://github.com/s4urj3ng/g3x-lite/commit/16158c6ef08f8f7cfba55a0dec0dd61b69c6382e). The comparison was documentation only; the subsequent opt-in diagnostic implementation is recorded below.
 
 `wN.bN` = zero-based physw word/bit. `C:n` = `chdk-port/platform/g3x/kbd.c:n`; `F:n` = `reference/finsig_gm110c/physw_bits.txt:n`. Siblings appear G7X → G5X → SX60HS; differing assignments are explicit. `keep` retains the current mapping **or omission**.
 
@@ -39,7 +39,7 @@ ALT evidence: `chdk-port/platform/g3x/platform_camera.h:18-20` offers WiFi/Video
 
 ## Evidence manifest
 
-**No ROM read was done (0 ranges, 0 bytes).** Existing FINSIG text supplies every numeric entry used above. Its 50-entry validity warning remains applicable (`F:1`); words 1/2 contain flags/unnamed switches, not additional identified CHDK keys (`F:21-51`), and the trailing `F:52` entry is not promoted to a key. Re-reading raw tuples would not establish missing physical names. No build or hardware operation was performed.
+**No ROM read was done (0 ranges, 0 bytes).** Existing FINSIG text supplies every numeric entry used above. Its 50-entry validity warning remains applicable (`F:1`); words 1/2 contain flags/unnamed switches, not additional identified CHDK keys (`F:21-51`), and the trailing `F:52` entry is not promoted to a key. Re-reading raw tuples would not establish missing physical names. The comparison involved no build or hardware operation; subsequent offline builds are recorded below.
 
 Local text identities (SHA-256; retrieved 2026-11-13 UTC; ignored inputs are not claimed to exist in the baseline commit):
 
@@ -61,4 +61,95 @@ FINSIG generation provenance: `reference/finsig_gm110c/README.md:3-10` (2026-11-
 
 ## Revision validation
 
-Build-suite failures are tracked in PORT46-BASELINE-FIX.
+The baseline build-suite repair is recorded in [PORT46_BASELINE.md](PORT46_BASELINE.md).
+
+## Opt-in key-check implementation — PORT46-KBD-BUILD-R
+
+Inspected locally **2026-11-13 UTC**, implementation base
+[`70accc9ea48d11916f3e9cec027457e0601eb4de`](https://github.com/s4urj3ng/g3x-lite/commit/70accc9ea48d11916f3e9cec027457e0601eb4de).
+**VERIFIED:** the table still has **zero unconditional `fix` rows**. Both the
+foundation and full-build keymaps remain unchanged. `KEYS_MASK0/1/2` remain
+`0x000533F9 / 0 / 0`; Power w0.b17 remains intentionally outside the override
+mask. No historical candidate mapping was added.
+
+| Address, bit or hook | Implementation / evidence | Change |
+|---|---|---|
+| All keymap bits and `KEYS_MASK0/1/2` | Table and Masks section above; `chdk-port/platform/g3x/kbd.c:29-45`, `full_build/g3x/kbd.c:36-52`, `chdk-port/platform/g3x/platform_kbd.h:8-10` | **None**; all `keep` rows retained, including intentional Power pass-through. |
+| `physw_status` at `0x00040DAC`; words 0/1/2 at `0x00040DAC/0x00040DB0/0x00040DB4` | **VERIFIED** existing FINSIG base symbol: [`reference/finsig_gm110c/stubs_entry.S:173`](https://github.com/s4urj3ng/g3x-lite/blob/70accc9ea48d11916f3e9cec027457e0601eb4de/reference/finsig_gm110c/stubs_entry.S#L173); **INFERRED** subsequent word addresses from the existing 32-bit array layout. `chdk-port/platform/g3x/kbd_check.h:16-19` uses the symbol, with no literal address. | **No address or bit changed**; three volatile reads per diagnostic draw, no writes. |
+| ALT redraw hook | `scripts/build_port43_dbuf.py:352-366` inserts `gui_kbd_check_draw()` immediately after `console_draw(force_redraw)` in staged `core/gui.c:2713`, inside `gui_chdk_draw()`, before DBUF marks the shadow valid. | Added only for `G3X_KBD_CHECK=1`. |
+| ALT idle hook | `scripts/build_port43_dbuf.py:368-382` inserts an ALT-only idle branch before `gui_is_module_mode()` in the selected DBUF/NOOVERDRAW scheduler; staged DBUF `core/main.c:355-358`. | Updates held keys, releases and raw words on idle ticks without a full overlay redraw. No diagnostic call in NONE/menu/module idle modes. |
+| Draw target and font | `chdk-port/platform/g3x/kbd_check.h:41-48`; existing `draw_string()` → PORT-44 draw/opacity/shadow path; existing GUI_FIX 2x font (`FONT_WIDTH=16`, `FONT_HEIGHT=32`). | Fixed 46-cell white-on-black line, centered at `(82,504)` on the existing 900×600 logical screen; 736×32 pixels within the 880×576 overlay. |
+
+The line is `%-19s %08x %08x %08x`: the decoded CHDK `KEY_*` name (or `none`),
+then `physw_status[0]`, `[1]`, `[2]`, in that order. Fixed name padding clears
+the previous longer name on release. Decode uses the existing
+`kbd_get_pressed_key()` (`chdk-port/core/kbd_common.c:356-366`): active-low
+`kbd_new_state`, first matching keymap entry, preserving composite shutter
+precedence. The displayed raw hex words are the values currently stored in
+`physw_status`, without masking or inversion by the diagnostic. They may
+already contain the existing CHDK/Canon keyboard processing overrides
+(`chdk-port/core/kbd_common.c:169-183,246-251`); this is not a second hardware
+read or an atomic snapshot synchronized with the keyboard task.
+
+**VERIFIED by source and host execution:** the diagnostic returns immediately
+outside ALT, before sampling, formatting or drawing. The only new text buffer
+is automatic `char line[47]`; names and format are read-only literals. It adds
+no static buffer, writable state, boot hook, allocator call, firmware address
+change or key bit write. PORT-44's existing lazy shadow allocation on first
+overlay entry is retained. Without the opt-in, no diagnostic source or hook
+is staged. `legacy_dbuf_snapshot=False` is selected only for this new variant,
+so the legacy PORT-43 snapshot remains reproducible while PORT-46 uses the
+PORT-44 heap-backed draw layer.
+
+Reproduce offline with the pinned `gcc-arm-none-eabi-5_4-2016q3` toolchain:
+
+```sh
+G3X_KBD_CHECK=1 python3 -B scripts/build_port43_dbuf.py --out-dir out/port46-kbd-check
+G3X_KBD_CHECK=1 python3 -B scripts/build_port43_dbuf.py --no-overdraw --out-dir out/port46-kbd-check-no-overdraw
+python3 -B -m unittest discover -s tests -p test_port46_kbd_check.py -v
+```
+
+The CLI also accepts `--kbd-check`. The DBUF builder supplies `G3X_GUI_DBUF=1`
+and `G3X_GUI_FIX=1`; both platform makefiles and the diagnostic header reject
+KBD_CHECK without DBUF. Each new distribution has a
+`port46_kbd_check_manifest.json` with flags, toolchain and all file hashes.
+No new manifest pins replace any earlier candidate's expected bytes.
+
+**VERIFIED offline build results:**
+
+| Variant | DISKBOOT.BIN bytes / SHA-256 | `_end` | `gui_kbd_check_draw` linked address (not a ROM hook) |
+|---|---|---|---|
+| KBD_CHECK + DBUF | 127,233 / `890bc9ddc9152e49a46a95947ca1852e89f0eae62fa128391e5dea1c5f3d43f0` | `0x00369660` | `0x0034EF4C` |
+| KBD_CHECK + DBUF + NOOVERDRAW | 127,449 / `7c91eaa622ff0ca44b8d60219da1418ca34dc4a837a6112c39b6bbd31e285798` | `0x00369730` | `0x0034F020` |
+
+Both pass the PORT-44 `_end <= 0x003687B0 + 65536` guard and the no-data/BSS-symbol
+over 64 KiB guard. The host harness compiles the actual diagnostic header,
+foundation keymap and common decoder; it checks all 14 names, composite shutter
+precedence, `none`, release padding, zero/all-one/high-bit hex words, screen
+bounds and zero decoder/draw calls with ALT off. The two build checks verify
+actual symbols, font dimensions, both draw hooks and unchanged staged keymaps
+and masks. Logs are retained under `out/port46-validation/` and
+`out/port46-test/` as ignored local artifacts.
+
+**VERIFIED final regression run:** **1,432 tests in 931.138 s, OK (skipped=5)**,
+exit status 0 (`out/port46-validation/port-tests.log:5122-5124`). This includes
+all four new PORT-46 tests, both opt-in builds, all 19 legacy candidate pins,
+default/GUI_FIX/FULL_HOOKS distributions, and PORT-43/44/45 reproducibility,
+manifest, memory and draw-layer checks. The new standalone distribution also
+matches the separate explicit `--kbd-check` build byte-for-byte. The full run
+uses the reproduction harness in [PORT46_BASELINE.md](PORT46_BASELINE.md):
+four existing PORT-27 NO-GO skips plus the indirect PORT-19 witness-builder
+test skipped as required by `AGENTS.md:45`. Neither forbidden witness builder
+nor `tests/test_validate_witness_inspector.py` was run.
+
+The compiled PORT-46 and PORT-44 GUI objects have the same **142 writable
+symbol names, types and sizes**, after normalizing compiler-generated local
+numeric suffixes (`out/port46-validation/gui-writable-symbols.json`). This
+independently confirms that the diagnostic adds no writable static state.
+`git diff --check` passes. Changes remain uncommitted for AgentBridge; outputs
+and logs remain ignored.
+
+**UNKNOWN:** physical-camera appearance and timing. No camera operations,
+deployment, SD writing or new ROM investigation were performed; hardware
+remains **STRICT NO-GO**. `PROJECT_STATE.md` and `HANDOFF.md` are intentionally
+unchanged under AgentBridge's per-task coordination rule.
