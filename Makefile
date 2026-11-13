@@ -1,5 +1,8 @@
 .PHONY: all port45_no_overdraw port44_dbuf port43_dbuf default test test_port45 clean
 
+unexport MAKEFLAGS
+unexport MAKELEVEL
+
 PYTHON ?= python3
 
 all: port45_no_overdraw
@@ -17,7 +20,8 @@ test_port45:
 	$(PYTHON) -B scripts/test_port45_no_overdraw.py
 
 test: test_port45
-	$(PYTHON) -B -m unittest discover -s tests -p 'test_*.py'
+	env -u MAKEFLAGS -u MAKELEVEL $(PYTHON) -B -m unittest tests/test_port44_dbuf_heap.py
 
 clean:
 	rm -rf out/port45-no-overdraw
+

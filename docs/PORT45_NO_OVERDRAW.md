@@ -107,25 +107,30 @@ The Option B overlay protection design is implemented behind the opt-in build fl
 ### Build Flags and Toolchain
 - **Build Invocation**: `python3 scripts/build_port45_no_overdraw.py` (or `make port45_no_overdraw`).
 - **Flags**: `G3X_GUI_FIX=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1`.
-- **Enforcement**: Build systems (`chdk-port/platform/g3x/Makefile`, `makefile.inc`, `sub/110c/Makefile`) strictly validate that `G3X_GUI_NOOVERDRAW=1` requires `G3X_GUI_DBUF=1`.
+- **Enforcement**: Build dependency is defined solely in `chdk-port/platform/g3x/Makefile` (and staged to `sub/110c/Makefile` by the build script), strictly enforcing that `G3X_GUI_NOOVERDRAW=1` requires `G3X_GUI_DBUF=1`. To avoid redundant flag definitions, `makefile.inc` is left unmodified.
 - **Toolchain**: Pinned `toolchains/gcc-arm-none-eabi-5_4-2016q3`.
 
 ### Artifacts & Hashes
 - **Output Directory**: `out/port45-no-overdraw/`
-- **DISKBOOT.BIN Size**: 126,929 bytes
-- **DISKBOOT.BIN SHA-256**: `acf8a062cac5034686971d5eb32a692de202c406b1b6a02f170ba6bd74f339ab`
+- **DISKBOOT.BIN Size**: 126,977 bytes
+- **DISKBOOT.BIN SHA-256**: `2be1877e495a0d2aee07851eee6e0294eb2d62ba9db2707b929fa2cf7927a684`
 - **Manifest**: `out/port45-no-overdraw/port45_no_overdraw_manifest.json`
 
 ### Memory & Symbol Verification
-- **_end Symbol**: `0x00369530` (link_bss_end).
-- **Delta vs PORT-42 Baseline (`0x003687b0`)**: +3,456 bytes (~3.375 KiB), well within the 64 KiB margin (65,536 bytes).
+- **_end Symbol**: `0x00369560` (link_bss_end).
+- **Delta vs PORT-42 Baseline (`0x003687b0`)**: +3,504 bytes (~3.42 KiB), well within the 64 KiB margin (65,536 bytes).
 - **Static Buffers Added**: 0 bytes (no static overlay or shadow buffers added).
 - **Largest Symbol in BSS/Data**: `font_data` (3,473 bytes); no symbol approaches 64 KiB.
 - **Boot Allocation**: 0 bytes allocated during boot. Shadow buffer is allocated lazily on heap upon ALT mode entry and freed on exit.
 
 ### Runtime Behavior & Acceptance Criteria
-1. **ALT Gating**: Active only while CHDK ALT mode or CHDK menu is active (`!camera_info.state.gui_mode_none`). With ALT off, execution path equals PORT-44 (zero shadow restore writes).
-2. **Sentinel Protection**: 5-point perimeter sentinel monitoring ((0,0) and 4 menu corners: (10, 12), (889, 12), (10, 587), (889, 587)). Any stock UI overdraw intersecting the menu perimeter immediately triggers asynchronous shadow restore.
-3. **NULL Shadow Fallback**: If shadow allocation fails or hook/shadow is invalid, falls back to `forced = 1` -> `gui_redraw(1)` (PORT-44 full redraw) without memory faults or crashes.
+1. **ALT Gating**: Active only while CHDK ALT mode or CHDK menu is active (`!camera_info.state.gui_mode_none`). With ALT off, `draw_set_guard()` and `draw_test_guard()` write and test only sentinel (0, 0), matching PORT-44 byte-for-byte. Zero extra pixels are written at startup (`draw_init`) or at `draw_restore()`.
+2. **Sentinel Protection**: 5-point perimeter sentinel monitoring: sentinel (0,0) and 4 margin corners placed outside the 880x576 menu fill (`[10,889] x [12,587]`) but inside the 928x600 bitmap buffer (display 900x600):
+   - Top-Left: `(8, 10)`
+   - Top-Right: `(891, 10)`
+   - Bottom-Left: `(8, 589)`
+   - Bottom-Right: `(891, 589)`
+   Because these pixels lie outside the menu fill area, drawing the CHDK menu never trips a sentinel. Any stock UI overdraw (e.g. AF boxes, face detection frames) touching the perimeter immediately triggers asynchronous shadow restore.
+3. **NULL Shadow Fallback**: If the shadow buffer is NULL or unavailable, buffer flips are ignored (causing zero redraws when guards are intact), and only sentinel corruption triggers `forced = 1` -> `gui_redraw(1)`, identically matching PORT-44 behavior with no crashes or tick-by-tick thrashing.
 4. **Byte Identity**: Builds without `G3X_GUI_NOOVERDRAW=1` remain 100% byte-identical to existing baseline manifests (verified by 24 tests in `tests/test_port44_dbuf_heap.py`).
 
