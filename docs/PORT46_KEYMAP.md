@@ -28,6 +28,8 @@ Retrieved locally **2026-11-13 UTC**, comparison baseline [16158c6ef08f8f7cfba55
 | KEY_POWER | w0.b17, `0x00020000` (C:43) | w0.b17, event 0x100 (F:18) | `chdk-port/platform/g7x/kbd.c:50` — commented out; `chdk-port/platform/g5x/kbd.c:35` — mapped; `chdk-port/platform/sx60hs/kbd.c:47` — commented out; all w0.b17 | FINSIG | keep |
 | KEY_AE_LOCK (historical candidate) | absent | w0.b28, `0x10000000`, event 0x11 (F:20); name unknown | `chdk-port/platform/g7x/kbd.c:34-52`; `chdk-port/platform/g5x/kbd.c:21-40`; `chdk-port/platform/sx60hs/kbd.c:29-56` — absent in all | HISTORICAL_CHDK | keep |
 
+**VERIFIED (source policy):** Power is unmasked on purpose so CHDK does not swallow it; the `KEY_POWER` row above and `chdk-port/platform/g3x/platform_kbd.h:4-10` agree with mapped-but-unmasked G5X Power (`chdk-port/platform/g5x/kbd.c:35`, `chdk-port/platform/g5x/platform_kbd.h:5-7`).
+
 ALT evidence: `chdk-port/platform/g3x/platform_camera.h:18-20` offers WiFi/Video/Display/Playback. **INFERRED from source:** initial `KEY_PRINT` (`chdk-port/core/conf.c:515`) is invalid and normalization selects first option WiFi (`chdk-port/core/conf.c:69-71`, `chdk-port/core/gui.c:2080-2103`). Playback is assigned only if the candidate sees `conf.alt_mode_button == 0` (`chdk-port/platform/g3x/sub/110c/kbd_candidate.h:218-220`). The owner's saved selection is **UNKNOWN**.
 
 ## Masks
@@ -153,3 +155,181 @@ and logs remain ignored.
 deployment, SD writing or new ROM investigation were performed; hardware
 remains **STRICT NO-GO**. `PROJECT_STATE.md` and `HANDOFF.md` are intentionally
 unchanged under AgentBridge's per-task coordination rule.
+
+## PORT46-TESTS-TRIAL host evidence
+
+Inspected locally **2026-11-13 UTC**, source revision
+[`b473a91c1e01f6aa6b91bdd1668b916552462be8`](https://github.com/s4urj3ng/g3x-lite/commit/b473a91c1e01f6aa6b91bdd1668b916552462be8).
+The new pins are in
+[`manifests/port46_kbd_check_manifest.json`](../manifests/port46_kbd_check_manifest.json),
+under `variants.dbuf` and `variants.no-overdraw`. Each contains the complete
+`DISKBOOT.BIN` and `CHDK/` file inventory, sizes, SHA-256 hashes, build flags
+and two clean build paths. The verification metadata identifies the actual
+pinned compiler and deterministic wrapper. These pins do not supersede any
+legacy manifest.
+
+The model in [`tests/test_port46_kbd_check.py`](../tests/test_port46_kbd_check.py)
+checks the FINSIG-labelled documentation rows against an independent key/event
+oracle, the existing FINSIG text and both keymaps, including composite shutter
+precedence. Historical candidates remain unmapped. **VERIFIED:** with
+`G3X_KBD_CHECK=1`, the masks cover all override keys; the sole uncovered mapped
+key is `KEY_POWER`, word 0 bit 17 (`0x00020000`). The accepted criterion
+explicitly allows intentional Power pass-through. The model's
+`INTENTIONALLY_UNMASKED_KEYS` allowlist cites this document's `KEY_POWER` row
+and G5X's mapped-but-unmasked Power sources. It requires every other
+FINSIG-mapped key to decode correctly and be covered, every allowlisted key
+to be absent from all three masks, and every allowlist entry to exist in the
+FINSIG doc table. The source citations are checked too. Physical key
+names for historical candidates and camera behavior remain **UNKNOWN**.
+
+To repeat the scoped host checks from the worktree root (no witness builder):
+
+```sh
+mkdir -p out/port46-test/tmp
+TMPDIR="$PWD/out/port46-test/tmp" python3 -B -m unittest tests.test_port46_kbd_check tests.test_port44_dbuf_heap tests.test_port45_validation -v
+```
+
+**VERIFIED final runs:** PORT-46 **7/7 PASS** (149.900 s;
+`out/port46-test/validation-final.log:12-14`); PORT-44/45 **32/32 PASS**
+(260.979 s; `out/port46-test/legacy-regressions.log:62-64`). Both requested
+variants reproduce all **243 files** exactly across two clean builds, including
+34 modules and 242 total CHDK files. Existing default, GUI_FIX, FULL_HOOKS,
+PORT-44 and PORT-45 distributions and all 19 PORT-24..40 candidate pins pass
+their unchanged baseline comparisons. The `_end` and writable-symbol guards
+pass for all **12 current full-build combinations**: four baseline variants,
+DBUF and NOOVERDRAW each with/without FULL_HOOKS, and KBD_CHECK with/without
+NOOVERDRAW and FULL_HOOKS. The superseded PORT-43 static-shadow layout remains
+a negative guard fixture. Exact ELF `_end` values are retained locally in
+`out/port46-test/end-guards.json`. The owner's read-only hash-check command
+below also passes for both distributions. `git diff --check` passes.
+
+Outputs and logs remain ignored; the three deliverable files are uncommitted
+for AgentBridge. `PROJECT_STATE.md` and `HANDOFF.md` remain unchanged. No ROM
+investigation, witness builder, camera operation, deployment or SD write was
+performed. The previous Power-policy blocker is resolved by the accepted,
+cited Power exception and its strict non-masking assertion.
+
+**VERIFIED revision validation (2026-11-13 UTC):** inspected starting revision
+[`c9b0479c6bc5d710a31117a13151c8fb77bc0d4b`](https://github.com/s4urj3ng/g3x-lite/commit/c9b0479c6bc5d710a31117a13151c8fb77bc0d4b).
+`port_tests`, using the safe discovery harness in
+[PORT46_BASELINE.md](PORT46_BASELINE.md), passed **1,435 tests in 858.591 s,
+OK (skipped=5)** (`out/port46-test/revision2/port_tests.log:5103-5105`): four
+existing PORT-27 NO-GO skips and the forbidden indirect witness-builder test.
+`python3 -B tools/validate_candidate_port2a.py` (`candidate_validate`) also
+passed (exit 0; `out/port46-test/revision2/candidate_validate.log`). Both
+KBD_CHECK variants reproduced all 243 files against the unchanged manifest;
+legacy byte-identity checks and all 12 current full-build combinations' `_end`
+guards passed. Four in-memory mutations were rejected: an undocumented
+allowlist key, masked Power, uncovered Menu and an incorrect key mapping
+(`out/port46-test/revision2/model-mutations.log`). No build hashes changed;
+the manifests, byte-identity tests, guard tests and owner trial plan remain
+unchanged. Only this document and the keymap model test are modified in this
+revision, left uncommitted for AgentBridge. Hardware behavior remains
+**UNKNOWN**; no hardware action was performed.
+
+## Owner trial plan — pending separate owner approval
+
+This is an owner-executed future plan, not a hardware trial performed by this
+worker. Hardware remains **STRICT NO-GO** until separately approved.
+
+1. Select **one** distribution: `dbuf` (KBD_CHECK) or `no-overdraw`
+   (KBD_CHECK + NOOVERDRAW). Check SHA-256 and size of `DISKBOOT.BIN` and
+   **every CHDK/ file**, including the exact file set, against that variant in
+   `manifests/port46_kbd_check_manifest.json`. Use the local distribution path;
+   this read-only check does not prepare or write an SD card:
+
+   ```sh
+   python3 - dbuf out/port46-test/dbuf <<'PY'
+   import hashlib, json, pathlib, sys
+   variant, folder = sys.argv[1:]
+   root = pathlib.Path(folder)
+   manifest = json.loads(pathlib.Path('manifests/port46_kbd_check_manifest.json').read_text())
+   artifacts = manifest['variants'][variant]['artifacts']
+   expected = dict(artifacts['chdk_files'])
+   expected['DISKBOOT.BIN'] = {k: artifacts['DISKBOOT.BIN'][k] for k in ('size', 'sha256')}
+   actual = {'DISKBOOT.BIN'} | {p.relative_to(root).as_posix() for p in (root / 'CHDK').rglob('*') if p.is_file()}
+   assert actual == set(expected), 'file inventory mismatch'
+   for name, info in expected.items():
+       data = (root / name).read_bytes()
+       assert len(data) == info['size'], name + ': size mismatch'
+       assert hashlib.sha256(data).hexdigest() == info['sha256'], name + ': SHA-256 mismatch'
+   print(variant, 'PASS:', len(expected), 'files')
+   PY
+   ```
+
+   For the combined variant, substitute `no-overdraw out/port46-test/no-overdraw`
+   for the two arguments. Stop on any mismatch.
+2. Try a **short press** of Power to boot. Record boot mode and outcome. If
+   that fails, use a **held press** as fallback and record the result; at most
+   two boot attempts before recovery.
+3. Enter **ALT** with the configured toggle. Source normalization defaults to
+   WiFi; the saved selection may instead be Video, Display or Playback.
+   Record the selection and whether the diagnostic line appears. If ALT
+   cannot be entered, stop and report it.
+4. In ALT, press and release each identifiable button in the report table,
+   one at a time. Write the **displayed key name** and all three **hex words**
+   in order (`physw_status[0] [1] [2]`), plus the release line. Do not derive
+   raw words from the bit masks: existing keyboard processing may override
+   them. Use two passes with a different configured ALT toggle to observe
+   the original toggle; record an ALT exit if its line cannot be captured.
+   Treat historical names as candidates, not established physical mappings;
+   record `none`, unavailable or unobservable as applicable. Shutter full
+   normally includes half; FULL_ONLY may not be independently observable.
+5. Open the CHDK menu and exercise **up/down/left/right/set/menu**, **zoom
+   out/in**, and **shutter half/full**. Record actual responses, stuck keys,
+   flicker or missing controls; the diagnostic is an ALT line and need not
+   remain visible inside the menu. Leave the menu, **leave ALT**, and check
+   that the **stock UI is normal**, with no diagnostic line or stuck buttons.
+   If checking Power, do it last in a separate ALT pass: it intentionally
+   passes through and may shut down normally before a line can be recorded.
+   Record shutdown instead of inventing a key/hex observation.
+
+## Owner report template
+
+```text
+Date / camera model / firmware:
+Variant (dbuf or no-overdraw) / source revision:
+Manifest SHA-256 / all file sizes and hashes PASS or first mismatch:
+Boot short press:       held press fallback (if used):
+Configured ALT toggle / ALT entry and diagnostic visible:
+CHDK menu up/down/left/right/set/menu/zoom/shutter half/full results:
+ALT exit / stock UI normal / diagnostic gone / stuck keys:
+Unexpected behavior / recovery used / rollback needed:
+```
+
+Fill each row with the literal displayed name and three eight-digit hex
+words; use `unobservable` with a reason when necessary. Record release as
+`name w0 w1 w2` too. Historical candidate rows make no prediction of a
+physical name or decoded result.
+
+| Button / condition | Displayed key name | Hex w0 | Hex w1 | Hex w2 | Release line / notes |
+|---|---|---|---|---|---|
+| Shutter full (half + full) | | | | | |
+| Shutter half | | | | | |
+| Shutter full-only, if observable | | | | | |
+| Zoom out (historical candidate) | | | | | |
+| Zoom in (historical candidate) | | | | | |
+| Video | | | | | |
+| Menu | | | | | |
+| Up | | | | | |
+| Down | | | | | |
+| Right | | | | | |
+| Left | | | | | |
+| Set | | | | | |
+| Erase (historical candidate, if identifiable) | | | | | |
+| Display | | | | | |
+| WiFi | | | | | |
+| Shortcut / Print (historical candidate, if identifiable) | | | | | |
+| Playback | | | | | |
+| Power (last; may shut down) | | | | | |
+| AE-lock (historical candidate, if identifiable) | | | | | |
+
+## Recovery and rollback
+
+On a freeze or abnormal behavior, stop the trial and use a **battery pull**;
+record the last action and displayed line. Roll back to the **PORT-44 DBUF**
+build, checking `DISKBOOT.BIN` and every `CHDK/` file against
+[`manifests/port44_dbuf_heap_manifest.json`](../manifests/port44_dbuf_heap_manifest.json).
+Its DISKBOOT is 126,769 bytes, SHA-256
+`2017b13c3330cd30edf9a8923d58a2fb12f6a4d1f77c9f51923bc60f79247382`.
+Do not substitute the historical PORT-43 static-shadow build.
