@@ -28,6 +28,8 @@ Retrieved locally **2026-11-13 UTC**, comparison baseline [16158c6ef08f8f7cfba55
 | KEY_POWER | w0.b17, `0x00020000` (C:43) | w0.b17, event 0x100 (F:18) | `chdk-port/platform/g7x/kbd.c:50` — commented out; `chdk-port/platform/g5x/kbd.c:35` — mapped; `chdk-port/platform/sx60hs/kbd.c:47` — commented out; all w0.b17 | FINSIG | keep |
 | KEY_AE_LOCK (historical candidate) | absent | w0.b28, `0x10000000`, event 0x11 (F:20); name unknown | `chdk-port/platform/g7x/kbd.c:34-52`; `chdk-port/platform/g5x/kbd.c:21-40`; `chdk-port/platform/sx60hs/kbd.c:29-56` — absent in all | HISTORICAL_CHDK | keep |
 
+**VERIFIED (source policy):** Power is unmasked on purpose so CHDK does not swallow it; the `KEY_POWER` row above and `chdk-port/platform/g3x/platform_kbd.h:4-10` agree with mapped-but-unmasked G5X Power (`chdk-port/platform/g5x/kbd.c:35`, `chdk-port/platform/g5x/platform_kbd.h:5-7`).
+
 ALT evidence: `chdk-port/platform/g3x/platform_camera.h:18-20` offers WiFi/Video/Display/Playback. **INFERRED from source:** initial `KEY_PRINT` (`chdk-port/core/conf.c:515`) is invalid and normalization selects first option WiFi (`chdk-port/core/conf.c:69-71`, `chdk-port/core/gui.c:2080-2103`). Playback is assigned only if the candidate sees `conf.alt_mode_button == 0` (`chdk-port/platform/g3x/sub/110c/kbd_candidate.h:218-220`). The owner's saved selection is **UNKNOWN**.
 
 ## Masks
@@ -171,10 +173,13 @@ checks the FINSIG-labelled documentation rows against an independent key/event
 oracle, the existing FINSIG text and both keymaps, including composite shutter
 precedence. Historical candidates remain unmapped. **VERIFIED:** with
 `G3X_KBD_CHECK=1`, the masks cover all override keys; the sole uncovered mapped
-key is `KEY_POWER`, word 0 bit 17 (`0x00020000`). **CONTRADICTED:** literal
-coverage of *every* mapped key. The intentional Power pass-through policy in
-the Masks section and implementation remains unchanged; the host test records
-this exception explicitly rather than claiming full coverage. Physical key
+key is `KEY_POWER`, word 0 bit 17 (`0x00020000`). The accepted criterion
+explicitly allows intentional Power pass-through. The model's
+`INTENTIONALLY_UNMASKED_KEYS` allowlist cites this document's `KEY_POWER` row
+and G5X's mapped-but-unmasked Power sources. It requires every other
+FINSIG-mapped key to decode correctly and be covered, every allowlisted key
+to be absent from all three masks, and every allowlist entry to exist in the
+FINSIG doc table. The source citations are checked too. Physical key
 names for historical candidates and camera behavior remain **UNKNOWN**.
 
 To repeat the scoped host checks from the worktree root (no witness builder):
@@ -201,8 +206,26 @@ below also passes for both distributions. `git diff --check` passes.
 Outputs and logs remain ignored; the three deliverable files are uncommitted
 for AgentBridge. `PROJECT_STATE.md` and `HANDOFF.md` remain unchanged. No ROM
 investigation, witness builder, camera operation, deployment or SD write was
-performed. The literal all-mapped mask criterion remains blocked on the Power
-policy conflict described above; the passing policy test does not satisfy it.
+performed. The previous Power-policy blocker is resolved by the accepted,
+cited Power exception and its strict non-masking assertion.
+
+**VERIFIED revision validation (2026-11-13 UTC):** inspected starting revision
+[`c9b0479c6bc5d710a31117a13151c8fb77bc0d4b`](https://github.com/s4urj3ng/g3x-lite/commit/c9b0479c6bc5d710a31117a13151c8fb77bc0d4b).
+`port_tests`, using the safe discovery harness in
+[PORT46_BASELINE.md](PORT46_BASELINE.md), passed **1,435 tests in 858.591 s,
+OK (skipped=5)** (`out/port46-test/revision2/port_tests.log:5103-5105`): four
+existing PORT-27 NO-GO skips and the forbidden indirect witness-builder test.
+`python3 -B tools/validate_candidate_port2a.py` (`candidate_validate`) also
+passed (exit 0; `out/port46-test/revision2/candidate_validate.log`). Both
+KBD_CHECK variants reproduced all 243 files against the unchanged manifest;
+legacy byte-identity checks and all 12 current full-build combinations' `_end`
+guards passed. Four in-memory mutations were rejected: an undocumented
+allowlist key, masked Power, uncovered Menu and an incorrect key mapping
+(`out/port46-test/revision2/model-mutations.log`). No build hashes changed;
+the manifests, byte-identity tests, guard tests and owner trial plan remain
+unchanged. Only this document and the keymap model test are modified in this
+revision, left uncommitted for AgentBridge. Hardware behavior remains
+**UNKNOWN**; no hardware action was performed.
 
 ## Owner trial plan — pending separate owner approval
 

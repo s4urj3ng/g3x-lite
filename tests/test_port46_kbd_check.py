@@ -40,6 +40,28 @@ EXPECTED_EVENTS = {
     17: 0x100, 18: 0x00,
 }
 
+# Policy exceptions require a FINSIG table row and sibling source evidence.
+# G5X maps Power but leaves its bit out of all three override masks too.
+INTENTIONALLY_UNMASKED_KEYS = {
+    "KEY_POWER": {
+        "doc_row": "docs/PORT46_KEYMAP.md:28",
+        "sibling_keymap": "chdk-port/platform/g5x/kbd.c:35",
+        "sibling_masks": "chdk-port/platform/g5x/platform_kbd.h:5",
+    },
+}
+
+
+def read_documented_rows():
+    doc = (ROOT / "docs/PORT46_KEYMAP.md").read_text().split("## Masks")[0]
+    return [line.split("|") for line in doc.splitlines() if line.startswith("| KEY_")]
+
+
+def documented_key(row):
+    key = re.search(r"KEY_\w+", row[1])[0]
+    word, first_bit = map(int, re.search(r"w(\d+)\.b(\d+)", row[3]).groups())
+    bits = [first_bit, *map(int, re.findall(r"\+b(\d+)", row[3]))]
+    return word, key, sum(1 << bit for bit in bits)
+
 
 def read_keymap(path):
     table = re.search(r"KeyMap keymap\[\] = \{.*?\n\};", path.read_text(), re.S)
@@ -69,16 +91,10 @@ def distribution_snapshot(path):
 
 class TestPort46KeymapModel(unittest.TestCase):
     def test_documented_finsig_bits_decode_to_expected_keys(self):
-        doc = (ROOT / "docs/PORT46_KEYMAP.md").read_text().split("## Masks")[0]
-        rows = [line.split("|") for line in doc.splitlines() if line.startswith("| KEY_")]
+        rows = read_documented_rows()
         verified = [row for row in rows if row[5].strip() == "FINSIG"]
         self.assertEqual(len(verified), len(EXPECTED_KEYS))
-        documented = []
-        for row in verified:
-            key = re.search(r"KEY_\w+", row[1])[0]
-            word, first_bit = map(int, re.search(r"w(\d+)\.b(\d+)", row[3]).groups())
-            bits = [first_bit, *map(int, re.findall(r"\+b(\d+)", row[3]))]
-            documented.append((word, key, sum(1 << bit for bit in bits)))
+        documented = [documented_key(row) for row in verified]
         self.assertEqual(documented, EXPECTED_KEYS)
 
         finsig = (ROOT / "reference/finsig_gm110c/physw_bits.txt").read_text()
@@ -108,17 +124,41 @@ class TestPort46KeymapModel(unittest.TestCase):
                 self.assertFalse(any(state[g] & mask == 0 for g, _, mask in actual))
 
     def test_kbd_check_masks_cover_override_keys_and_preserve_power_passthrough(self):
-        """Literal all-key coverage is contradicted by the documented Power policy."""
+        """Cover every documented mapping except cited, strictly unmasked keys."""
+        documented = [documented_key(row) for row in read_documented_rows()
+                      if row[5].strip() == "FINSIG"]
+        self.assertLessEqual(set(INTENTIONALLY_UNMASKED_KEYS),
+                             {key for _, key, _ in documented},
+                             "Unmasked allowlist contains a key absent from the FINSIG doc table")
+
+        def cited_line(citation):
+            path, line = citation.rsplit(":", 1)
+            return (ROOT / path).read_text().splitlines()[int(line) - 1]
+
+        for key, evidence in INTENTIONALLY_UNMASKED_KEYS.items():
+            with self.subTest(exception=key):
+                word, _, bits = next(entry for entry in documented if entry[1] == key)
+                self.assertEqual(cited_line(evidence["doc_row"]).split("|")[1].strip(), key)
+                self.assertIn(key, cited_line(evidence["sibling_keymap"]))
+                sibling = ROOT / evidence["sibling_keymap"].rsplit(":", 1)[0]
+                self.assertIn((word, key, bits), read_keymap(sibling))
+                self.assertRegex(cited_line(evidence["sibling_masks"]), r"^#define KEYS_MASK\d ")
+                sibling_masks = ROOT / evidence["sibling_masks"].rsplit(":", 1)[0]
+                for mask in read_masks(sibling_masks):
+                    self.assertEqual(bits & mask, 0, evidence)
+
         for base in [ROOT / "chdk-port/platform/g3x", ROOT / "full_build/g3x"]:
             masks = read_masks(base / "platform_kbd.h")
             self.assertEqual(masks, [0x000533f9, 0, 0])
-            uncovered = [(word, key, bits & ~masks[word])
-                         for word, key, bits in read_keymap(base / "kbd.c")
-                         if bits & ~masks[word]]
-            self.assertEqual(uncovered, [(0, "KEY_POWER", 0x00020000)])
-            for word, key, bits in EXPECTED_KEYS:
-                if key != "KEY_POWER":
-                    self.assertEqual(bits & masks[word], bits, key)
+            actual = read_keymap(base / "kbd.c")
+            for word, key, bits in documented:
+                with self.subTest(source=base, key=key):
+                    self.assertIn((word, key, bits), actual)
+                    if key in INTENTIONALLY_UNMASKED_KEYS:
+                        for mask in masks:
+                            self.assertEqual(bits & mask, 0, key)
+                    else:
+                        self.assertEqual(bits & masks[word], bits, key)
 
 
 class TestPort46HostDiagnostic(unittest.TestCase):
