@@ -1,6 +1,13 @@
 # CHDK platform configuration for Canon PowerShot G3 X
 # Target: GM1.10C, Platform ID 0x32A8 (12968 decimal)
 
+ifeq ($(G3X_GUI_NOOVERDRAW),1)
+ifneq ($(G3X_GUI_DBUF),1)
+$(error G3X_GUI_NOOVERDRAW=1 requires G3X_GUI_DBUF=1)
+endif
+CFLAGS += -DG3X_GUI_NOOVERDRAW=1
+endif
+
 # mandatory for DIGIC 6
 THUMB_FW=1
 

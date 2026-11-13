@@ -121,10 +121,183 @@ def apply_dbuf_staging_patches(stage_dir: Path) -> None:
             raise RuntimeError("PORT-42 scheduler anchor not found in staged core/main.c")
 
 
+def apply_no_overdraw_staging_patches(stage_dir: Path) -> None:
+    """Apply G3X_GUI_NOOVERDRAW=1 compile flags, multi-point sentinel check, and NOOVERDRAW scheduler."""
+    for mpath in [
+        stage_dir / "platform" / "g3x" / "Makefile",
+        stage_dir / "platform" / "g3x" / "sub" / "110c" / "Makefile",
+    ]:
+        if mpath.is_file():
+            mtext = mpath.read_text(encoding="utf-8")
+            if "-DG3X_GUI_NOOVERDRAW=1" not in mtext:
+                if "-DG3X_GUI_DBUF=1" in mtext:
+                    mtext = mtext.replace(
+                        "-DG3X_GUI_DBUF=1",
+                        "-DG3X_GUI_DBUF=1 -DG3X_GUI_NOOVERDRAW=1",
+                        1,
+                    )
+                else:
+                    mtext = mtext.replace(
+                        "CFLAGS += -DG3X_FULL_BUILD=1",
+                        "CFLAGS += -DG3X_FULL_BUILD=1 -DG3X_GUI_FIX=1 -DG3X_GUI_DBUF=1 -DG3X_GUI_NOOVERDRAW=1",
+                        1,
+                    )
+                mpath.write_text(mtext, encoding="utf-8")
+
+    # 1. Multi-point perimeter sentinels in core/gui_draw.c
+    core_draw_c = stage_dir / "core" / "gui_draw.c"
+    if core_draw_c.is_file():
+        cd_text = core_draw_c.read_text(encoding="utf-8")
+        port44_guards = (
+            "#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)\n"
+            "void draw_set_guard(void)\n"
+            "{\n"
+            "    opacity_buffer[0][0] = 0x42;\n"
+            "    opacity_buffer[1][0] = 0x42;\n"
+            "}\n"
+            "\n"
+            "int draw_test_guard(void)\n"
+            "{\n"
+            "    if (opacity_buffer[0][0] != 0x42 || opacity_buffer[1][0] != 0x42) return 0;\n"
+            "    return 1;\n"
+            "}\n"
+            "#else"
+        )
+        nooverdraw_guards = (
+            "#if defined(G3X_GUI_NOOVERDRAW) && (G3X_GUI_NOOVERDRAW == 1)\n"
+            "/* PORT-45: Multi-point perimeter sentinels: (0,0) and 4 menu corners:\n"
+            " * (G3X_MENU_X0, G3X_MENU_Y0) = (10, 12)\n"
+            " * (G3X_MENU_X1, G3X_MENU_Y0) = (889, 12)\n"
+            " * (G3X_MENU_X0, G3X_MENU_Y1) = (10, 587)\n"
+            " * (G3X_MENU_X1, G3X_MENU_Y1) = (889, 587)\n"
+            " */\n"
+            "void draw_set_guard(void)\n"
+            "{\n"
+            "    int buf_w = camera_screen.buffer_width ? camera_screen.buffer_width : 928;\n"
+            "    unsigned int offsets[5] = {\n"
+            "        0,\n"
+            "        (unsigned int)(G3X_MENU_Y0 * buf_w + G3X_MENU_X0),\n"
+            "        (unsigned int)(G3X_MENU_Y0 * buf_w + G3X_MENU_X1),\n"
+            "        (unsigned int)(G3X_MENU_Y1 * buf_w + G3X_MENU_X0),\n"
+            "        (unsigned int)(G3X_MENU_Y1 * buf_w + G3X_MENU_X1)\n"
+            "    };\n"
+            "    for (int i = 0; i < 5; i++) {\n"
+            "        opacity_buffer[0][offsets[i]] = 0x42;\n"
+            "        opacity_buffer[1][offsets[i]] = 0x42;\n"
+            "    }\n"
+            "}\n"
+            "\n"
+            "int draw_test_guard(void)\n"
+            "{\n"
+            "    int buf_w = camera_screen.buffer_width ? camera_screen.buffer_width : 928;\n"
+            "    unsigned int offsets[5] = {\n"
+            "        0,\n"
+            "        (unsigned int)(G3X_MENU_Y0 * buf_w + G3X_MENU_X0),\n"
+            "        (unsigned int)(G3X_MENU_Y0 * buf_w + G3X_MENU_X1),\n"
+            "        (unsigned int)(G3X_MENU_Y1 * buf_w + G3X_MENU_X0),\n"
+            "        (unsigned int)(G3X_MENU_Y1 * buf_w + G3X_MENU_X1)\n"
+            "    };\n"
+            "    for (int i = 0; i < 5; i++) {\n"
+            "        if (opacity_buffer[0][offsets[i]] != 0x42 || opacity_buffer[1][offsets[i]] != 0x42)\n"
+            "            return 0;\n"
+            "    }\n"
+            "    return 1;\n"
+            "}\n"
+            "#elif defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)\n"
+            "void draw_set_guard(void)\n"
+            "{\n"
+            "    opacity_buffer[0][0] = 0x42;\n"
+            "    opacity_buffer[1][0] = 0x42;\n"
+            "}\n"
+            "\n"
+            "int draw_test_guard(void)\n"
+            "{\n"
+            "    if (opacity_buffer[0][0] != 0x42 || opacity_buffer[1][0] != 0x42) return 0;\n"
+            "    return 1;\n"
+            "}\n"
+            "#else"
+        )
+        if port44_guards in cd_text:
+            cd_text = cd_text.replace(port44_guards, nooverdraw_guards, 1)
+            core_draw_c.write_text(cd_text, encoding="utf-8")
+        else:
+            raise RuntimeError("PORT-44 guard anchor not found in staged core/gui_draw.c")
+
+    # 2. Patch stage_chdk/core/main.c scheduler for G3X_GUI_NOOVERDRAW=1
+    core_main_c = stage_dir / "core" / "main.c"
+    if core_main_c.is_file():
+        cm_text = core_main_c.read_text(encoding="utf-8")
+        dbuf_scheduler = (
+            "            /* PORT-43 DBUF GUI scheduler:\n"
+            "             * Double-buffered overlay: buffer flip causes NO redraw when sentinels in both opacity buffers are intact.\n"
+            "             * Only a lost sentinel triggers restoration, and that is a single fast shadow blit, NOT gui_redraw.\n"
+            "             * Sentinel loss triggers shadow restore ONLY when the shadow is valid AND a CHDK overlay layer is currently active (not in defaultGuiHandler/live view).\n"
+            "             * Navigation and state changes trigger partial gui_redraw without enforce_redraw (redraw=1). */\n"
+            "            extern int g3x_dbuf_shadow_restore(void);\n"
+            "            extern int g3x_shadow_valid;\n"
+            "\n"
+            "            gui_maintenance_tick();\n"
+            "            (void)check_bitmap_buffer_changed();\n"
+            "            int forced = check_gui_needs_redraw();\n"
+            "            int chdk_overlay_active = !camera_info.state.gui_mode_none;\n"
+            "            if (!draw_test_guard() && chdk_overlay_active)\n"
+            "            {\n"
+            "                if (!g3x_shadow_valid || !g3x_dbuf_shadow_restore())\n"
+            "                {\n"
+            "                    forced = 1;\n"
+            "                }\n"
+            "            }\n"
+            "            int state_changed = gui_check_state_changed();\n"
+            "            int need_redraw = forced || state_changed;\n"
+            "            if (need_redraw)\n"
+            "                gui_redraw(forced);\n"
+            "            else if (gui_is_osd_mode())\n"
+            "                gui_draw_osd_tick();\n"
+            "            else if (gui_is_module_mode())\n"
+            "                gui_draw_module_tick();"
+        )
+        nooverdraw_scheduler = (
+            "            /* PORT-45 NOOVERDRAW GUI scheduler:\n"
+            "             * Double-buffered overlay with asynchronous heap shadow restore on buffer flip or sentinel loss.\n"
+            "             * Active only while CHDK ALT mode or menu is active.\n"
+            "             * Fallback to PORT-44 if shadow is NULL or unavailable. */\n"
+            "            extern int g3x_dbuf_shadow_restore(void);\n"
+            "            extern int g3x_shadow_valid;\n"
+            "            extern int g3x_dbuf_shadow_is_allocated(void);\n"
+            "\n"
+            "            gui_maintenance_tick();\n"
+            "            int buffer_changed = check_bitmap_buffer_changed();\n"
+            "            int forced = check_gui_needs_redraw();\n"
+            "            int chdk_overlay_active = !camera_info.state.gui_mode_none;\n"
+            "            if (chdk_overlay_active && (buffer_changed || !draw_test_guard()))\n"
+            "            {\n"
+            "                if (!g3x_shadow_valid || !g3x_dbuf_shadow_is_allocated() || !g3x_dbuf_shadow_restore())\n"
+            "                {\n"
+            "                    forced = 1;\n"
+            "                }\n"
+            "            }\n"
+            "            int state_changed = gui_check_state_changed();\n"
+            "            int need_redraw = forced || state_changed;\n"
+            "            if (need_redraw)\n"
+            "                gui_redraw(forced);\n"
+            "            else if (gui_is_osd_mode())\n"
+            "                gui_draw_osd_tick();\n"
+            "            else if (gui_is_module_mode())\n"
+            "                gui_draw_module_tick();"
+        )
+        if dbuf_scheduler in cm_text:
+            cm_text = cm_text.replace(dbuf_scheduler, nooverdraw_scheduler, 1)
+            core_main_c.write_text(cm_text, encoding="utf-8")
+        else:
+            raise RuntimeError("DBUF scheduler anchor not found in staged core/main.c")
+
+
+
 def build_port43_dbuf(
     clean_stage: bool = True,
     keep_stage: bool = True,
     full_hooks: bool = False,
+    no_overdraw: bool = False,
     out_dir: Path | str | None = None,
 ) -> int:
     gcc_path = TOOLCHAIN_BIN / "arm-none-eabi-gcc"
@@ -142,6 +315,11 @@ def build_port43_dbuf(
 
     if out_dir is not None:
         effective_out_dir = Path(out_dir).resolve()
+    elif no_overdraw:
+        if full_hooks:
+            effective_out_dir = REPO_ROOT / "out" / "port45-no-overdraw-full-hooks"
+        else:
+            effective_out_dir = REPO_ROOT / "out" / "port45-no-overdraw"
     elif full_hooks:
         effective_out_dir = REPO_ROOT / "out" / "port43-dbuf-full-hooks"
     else:
@@ -196,6 +374,12 @@ def build_port43_dbuf(
     print("G3X_GUI_DBUF=1: Applying double-buffered overlay staging patches...")
     apply_dbuf_staging_patches(effective_stage_dir)
 
+    # Apply NOOVERDRAW compile flag and scheduler/sentinel patches if requested
+    if no_overdraw:
+        print("G3X_GUI_NOOVERDRAW=1: Applying opt-in overlay protection staging patches...")
+        apply_no_overdraw_staging_patches(effective_stage_dir)
+
+
     # Clean platform objects in staging copy
     for subpath in ["platform/g3x", "platform/g3x/sub/110c", "loader/g3x"]:
         p = effective_stage_dir / subpath
@@ -210,6 +394,8 @@ def build_port43_dbuf(
                 "G3X_GUI_FIX=1",
                 "G3X_GUI_DBUF=1",
             ]
+            if no_overdraw:
+                clean_cmd.append("G3X_GUI_NOOVERDRAW=1")
             if full_hooks:
                 clean_cmd.append("FULL_HOOKS=1")
             clean_cmd.append("clean")
@@ -233,6 +419,8 @@ def build_port43_dbuf(
         "G3X_GUI_FIX=1",
         "G3X_GUI_DBUF=1",
     ]
+    if no_overdraw:
+        cmd.append("G3X_GUI_NOOVERDRAW=1")
     if full_hooks:
         cmd.append("FULL_HOOKS=1")
     cmd.append("fir")
@@ -244,6 +432,8 @@ def build_port43_dbuf(
         env["MAKEFLAGS"] = f"CC={wrapper_script}"
     env["G3X_GUI_FIX"] = "1"
     env["G3X_GUI_DBUF"] = "1"
+    if no_overdraw:
+        env["G3X_GUI_NOOVERDRAW"] = "1"
     if full_hooks:
         env["FULL_HOOKS"] = "1"
 
@@ -303,10 +493,12 @@ def build_port43_dbuf(
         "G3X_GUI_FIX=1",
         "G3X_GUI_DBUF=1",
     ]
+    if no_overdraw:
+        build_flags.append("G3X_GUI_NOOVERDRAW=1")
     if full_hooks:
         build_flags.insert(1, "FULL_HOOKS=1")
 
-    manifest_name = "port43_dbuf_manifest.json"
+    manifest_name = "port45_no_overdraw_manifest.json" if no_overdraw else "port43_dbuf_manifest.json"
     manifest_data = {
         "build": {
             "platform": "g3x",
@@ -355,6 +547,7 @@ def build_port43_dbuf(
 def main() -> int:
     parser = argparse.ArgumentParser(description="PORT-43 DBUF CHDK Full Build for PowerShot G3 X")
     parser.add_argument("--full-hooks", action="store_true", help="Enable FULL_HOOKS=1")
+    parser.add_argument("--no-overdraw", action="store_true", help="Enable G3X_GUI_NOOVERDRAW=1 opt-in overlay protection")
     parser.add_argument("--no-clean", action="store_true", help="Do not clean staging before building")
     parser.add_argument("--discard-stage", action="store_true", help="Remove stage directory after build")
     parser.add_argument("--out-dir", type=str, default=None, help="Custom output directory")
@@ -364,8 +557,10 @@ def main() -> int:
         clean_stage=not args.no_clean,
         keep_stage=not args.discard_stage,
         full_hooks=args.full_hooks,
+        no_overdraw=args.no_overdraw,
         out_dir=args.out_dir,
     )
+
 
 
 if __name__ == "__main__":

@@ -133,6 +133,45 @@ int vid_get_viewport_buffer_width_proper()      { return 736; }
 int vid_get_viewport_type()                     { return LV_FB_YUV8B; }
 int vid_get_aspect_ratio()                      { return LV_ASPECT_3_2; }
 
+#if defined(G3X_GUI_NOOVERDRAW) && (G3X_GUI_NOOVERDRAW == 1)
+/* PORT-45: G3X_GUI_NOOVERDRAW=1 opt-in overlay protection
+ * Citing sibling G5 X (chdk-port/platform/g5x/lib.c:211-220) for active_bitmap_buffer toggle polling
+ * and docs/PORT45_NO_OVERDRAW.md Section 3/5.
+ */
+static int last_bitmap_buffer = 0;
+
+int check_bitmap_buffer_changed(void)
+{
+    if (active_bitmap_buffer != last_bitmap_buffer)
+    {
+        last_bitmap_buffer = active_bitmap_buffer;
+        return 1;
+    }
+    return 0;
+}
+
+int check_gui_needs_redraw(void)
+{
+    return 0;
+}
+#elif defined(G3X_GUI_FIX) && (G3X_GUI_FIX == 1)
+static int last_bitmap_buffer = 0;
+
+int check_bitmap_buffer_changed(void)
+{
+    if (active_bitmap_buffer != last_bitmap_buffer)
+    {
+        last_bitmap_buffer = active_bitmap_buffer;
+        return 1;
+    }
+    return 0;
+}
+
+int check_gui_needs_redraw(void)
+{
+    return 0;
+}
+#else
 int check_gui_needs_redraw()
 {
     static int last_bitmap_buffer = 0;
@@ -143,3 +182,5 @@ int check_gui_needs_redraw()
     }
     return 0;
 }
+#endif
+

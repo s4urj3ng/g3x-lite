@@ -18,6 +18,8 @@ The table below catalogs display refresh, overlay transfer, stock UI rendering, 
 | Mode 12 LCD opacity buffers (`opacity_buffer[0/1]`) | `chdk-port/platform/g7x/lib.c:291` | `0x5FC40000` / `0x5FB80000` | INFERRED (ROM read, 0xFC18347E..0xFC18381F) |
 | VRAM transfer manager structure base (`VTM_Data`) | `chdk-port/platform/sx710hs/sub/100a/stubs_min.S:26` | `0x0000D264` | INFERRED (chdk-port/platform/sx710hs/sub/100a/stubs_min.S:26) |
 | Active buffer toggle check (`check_gui_needs_redraw`) | `chdk-port/platform/g5x/lib.c:211-220` | `chdk-port/platform/g3x/lib.c:136-145` | HISTORICAL_CHDK |
+| Active buffer changed check (`check_bitmap_buffer_changed`) | `chdk-port/platform/g5x/lib.c:211-220` | `chdk-port/platform/g3x/lib.c:143-151` | HISTORICAL_CHDK |
+| Multi-point perimeter sentinels (`draw_set_guard` / `draw_test_guard`) | `chdk-port/platform/g5x/lib.c:211-220` & `g7x/lib.c:303-358` | `stage_chdk/core/gui_draw.c:145-188` | source (PORT-45) |
 | Fast runtime heap shadow restore (`g3x_dbuf_shadow_restore`) | N/A (PORT-44 G3X implementation) | `chdk-port/core/gui_draw.c:341-371` | source (PORT-44) |
 | Stock UI face / AF frame task (`task_FaceFrame`) | `chdk-port/platform/g5x/notes.txt:6-7` | `0xFC0BFDE3` | FINSIG |
 | Stock UI LCD control task (`task_LcdConTask`) | `chdk-port/platform/g7x/sub/100c/funcs_by_name.csv:899` | `0xFC1828F5` | FINSIG |
@@ -95,3 +97,35 @@ FINSIG addresses: `transfer_src_overlay` = `0xFC380635` [FINSIG], `ScreenLock` =
 - **Restore Operation**: Restore from the PORT-44 runtime heap shadow via `g3x_dbuf_shadow_restore()` (`chdk-port/core/gui_draw.c:341-371` [source (PORT-44)]) asynchronously upon detection; never claim restore happens before scanout.
 - **Memory**: No boot allocation, no static buffers; uses PORT-44 runtime heap shadow (`malloc` on ALT entry, `free` on exit).
 - **Fallback**: If `g3x_shadow_bitmap` is NULL or heap allocation fails, fall back to PORT-44 behavior (conventional `gui_redraw()` polling via `check_gui_needs_redraw()`, `chdk-port/platform/g5x/lib.c:206-209`), which reduces flicker without relying on the shadow buffer.
+
+---
+
+## 6. Implementation & Build Verification (PORT45-NO-OVERDRAW-BUILD)
+
+The Option B overlay protection design is implemented behind the opt-in build flag `G3X_GUI_NOOVERDRAW=1` (which requires and layers upon `G3X_GUI_DBUF=1`).
+
+### Build Flags and Toolchain
+- **Build Invocation**: `python3 scripts/build_port45_no_overdraw.py` (or `make port45_no_overdraw`).
+- **Flags**: `G3X_GUI_FIX=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1`.
+- **Enforcement**: Build systems (`chdk-port/platform/g3x/Makefile`, `makefile.inc`, `sub/110c/Makefile`) strictly validate that `G3X_GUI_NOOVERDRAW=1` requires `G3X_GUI_DBUF=1`.
+- **Toolchain**: Pinned `toolchains/gcc-arm-none-eabi-5_4-2016q3`.
+
+### Artifacts & Hashes
+- **Output Directory**: `out/port45-no-overdraw/`
+- **DISKBOOT.BIN Size**: 126,929 bytes
+- **DISKBOOT.BIN SHA-256**: `acf8a062cac5034686971d5eb32a692de202c406b1b6a02f170ba6bd74f339ab`
+- **Manifest**: `out/port45-no-overdraw/port45_no_overdraw_manifest.json`
+
+### Memory & Symbol Verification
+- **_end Symbol**: `0x00369530` (link_bss_end).
+- **Delta vs PORT-42 Baseline (`0x003687b0`)**: +3,456 bytes (~3.375 KiB), well within the 64 KiB margin (65,536 bytes).
+- **Static Buffers Added**: 0 bytes (no static overlay or shadow buffers added).
+- **Largest Symbol in BSS/Data**: `font_data` (3,473 bytes); no symbol approaches 64 KiB.
+- **Boot Allocation**: 0 bytes allocated during boot. Shadow buffer is allocated lazily on heap upon ALT mode entry and freed on exit.
+
+### Runtime Behavior & Acceptance Criteria
+1. **ALT Gating**: Active only while CHDK ALT mode or CHDK menu is active (`!camera_info.state.gui_mode_none`). With ALT off, execution path equals PORT-44 (zero shadow restore writes).
+2. **Sentinel Protection**: 5-point perimeter sentinel monitoring ((0,0) and 4 menu corners: (10, 12), (889, 12), (10, 587), (889, 587)). Any stock UI overdraw intersecting the menu perimeter immediately triggers asynchronous shadow restore.
+3. **NULL Shadow Fallback**: If shadow allocation fails or hook/shadow is invalid, falls back to `forced = 1` -> `gui_redraw(1)` (PORT-44 full redraw) without memory faults or crashes.
+4. **Byte Identity**: Builds without `G3X_GUI_NOOVERDRAW=1` remain 100% byte-identical to existing baseline manifests (verified by 24 tests in `tests/test_port44_dbuf_heap.py`).
+
