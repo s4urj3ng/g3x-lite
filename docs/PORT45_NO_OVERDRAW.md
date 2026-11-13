@@ -18,7 +18,7 @@ The table below catalogs display refresh, overlay transfer, stock UI rendering, 
 | Mode 12 LCD opacity buffers (`opacity_buffer[0/1]`) | `chdk-port/platform/g7x/lib.c:291` | `0x5FC40000` / `0x5FB80000` | INFERRED (ROM read, 0xFC18347E..0xFC18381F) |
 | VRAM transfer manager structure base (`VTM_Data`) | `chdk-port/platform/sx710hs/sub/100a/stubs_min.S:26` | `0x0000D264` | INFERRED (chdk-port/platform/sx710hs/sub/100a/stubs_min.S:26) |
 | Active buffer toggle check (`check_gui_needs_redraw`) | `chdk-port/platform/g5x/lib.c:211-220` | `chdk-port/platform/g3x/lib.c:136-145` | HISTORICAL_CHDK |
-| Active buffer changed check (`check_bitmap_buffer_changed`) | `chdk-port/platform/g5x/lib.c:211-220` | `chdk-port/platform/g3x/lib.c:143-151` | HISTORICAL_CHDK |
+| Active buffer changed check (`check_bitmap_buffer_changed`) | `chdk-port/platform/g5x/lib.c:211-220` | `stage_chdk/platform/g3x/lib.c:290-300` (`full_build/g3x/lib.c:290-300`) | HISTORICAL_CHDK (PORT-42/45) |
 | Multi-point perimeter sentinels (`draw_set_guard` / `draw_test_guard`) | `chdk-port/platform/g5x/lib.c:211-220` & `g7x/lib.c:303-358` | `stage_chdk/core/gui_draw.c:145-188` | source (PORT-45) |
 | Fast runtime heap shadow restore (`g3x_dbuf_shadow_restore`) | N/A (PORT-44 G3X implementation) | `chdk-port/core/gui_draw.c:341-371` | source (PORT-44) |
 | Stock UI face / AF frame task (`task_FaceFrame`) | `chdk-port/platform/g5x/notes.txt:6-7` | `0xFC0BFDE3` | FINSIG |
