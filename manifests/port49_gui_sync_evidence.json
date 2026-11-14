@@ -8,7 +8,7 @@
   "rom_file": "firmware/dumps/GM1.10C/PRIMARY.BIN",
   "rom_base_address": "0xFC000000",
   "full_rom_scan": false,
-  "rom_bytes_read": 13044,
+  "rom_bytes_read": 14044,
   "addresses": [
     {
       "name": "transfer_src_overlay",
