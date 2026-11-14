@@ -53,10 +53,10 @@ Short hardware trial protocol for the opt-in `G3X_GUI_MENU=1` candidate with sta
 4. Pan the camera across scenes and trigger autofocus half-presses (`KEY_SHOOT_HALF`).
 5. **Record**:
    - Overlay flicker: `yes` / `no`.
-   - Counter line readings: `H` (installed/hits), `S` (shadow alloc), `R` (shadow blits), `F` (forced redraws), `L` (sentinel losses), `M` (free memory), and sync counter `Y`.
+   - Counter line readings: `H` (hook installed/hits), `S` (shadow allocation status/mode: `OK/<mode>` or `NULL`), `L` (sentinel losses), `R` (shadow restores), `F` (full redraws), `M` (suppress hit count), and sync counter `Y` (sync hits).
 
 ### Trial (B): PORT-50 Menu & Configuration Persistence
-1. Copy the PORT-50 candidate (`manifests/port50_gui_menu_manifest.json`, DISKBOOT `7fa09132...`, `131,321` bytes) to FAT32 SD card (card write-protect tab **UNLOCKED** so FAT32 config write succeeds).
+1. Copy the PORT-50 candidate (`manifests/port50_gui_menu_manifest.json`, DISKBOOT `7fa09132...`, `131,321` bytes) to FAT32 SD card. The SD card must be write-protect **LOCKED** for autoboot (`docs/PORT19_DISKBOOT_ENCODING.md:89-91`); CHDK clears the read-only bit after startup (`chdk-port/core/kbd_common.c:246`), so `CCHDK.CFG` writes still work. Keep using a spare or backed-up card.
 2. Power on with held `POWER` button (`~1 s`) to boot into live view.
 3. Press `WIFI` (`KEY_WIFI`) to enter `<ALT>` mode.
    - Verify bottom lines: `<ALT>`, counter line, and diagnostic line: `MENU:0000 CONF:-`.
