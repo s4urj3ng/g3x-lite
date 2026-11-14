@@ -1557,6 +1557,110 @@ def verify_shadow2_staged_sources(stage_dir: Path) -> None:
         )
 
 
+def apply_gui_sync_staging_patches(stage_dir: Path) -> None:
+    """Apply G3X_GUI_SYNC=1 compile flags, boot hook installation at 0x0000E26C, and target-buffer sync restore."""
+    shutil.copy2(CHDK_PORT / "platform/g3x/gui_diag.h", stage_dir / "platform/g3x/gui_diag.h")
+    shutil.copy2(
+        CHDK_PORT / "platform/g3x/sub/110c/gui_sync.h",
+        stage_dir / "platform/g3x/sub/110c/gui_sync.h",
+    )
+
+    for rel in ["platform/g3x/Makefile", "platform/g3x/sub/110c/Makefile"]:
+        mpath = stage_dir / rel
+        text = mpath.read_text(encoding="utf-8")
+        text = (
+            "ifeq ($(G3X_GUI_SYNC),1)\n"
+            "ifneq ($(G3X_GUI_DBUF),1)\n"
+            "$(error G3X_GUI_SYNC=1 requires G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+            "endif\n"
+            "ifneq ($(G3X_GUI_NOOVERDRAW),1)\n"
+            "$(error G3X_GUI_SYNC=1 requires G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+            "endif\n"
+            "ifneq ($(G3X_KBD_CHECK),1)\n"
+            "$(error G3X_GUI_SYNC=1 requires G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+            "endif\n"
+            "ifneq ($(G3X_GUI_DIAG),1)\n"
+            "$(error G3X_GUI_SYNC=1 requires G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+            "endif\n"
+            "ifneq ($(G3X_GUI_SHADOW2),1)\n"
+            "$(error G3X_GUI_SYNC=1 requires G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+            "endif\n"
+            "endif\n\n"
+        ) + text
+        anchor = "-DG3X_GUI_SHADOW2=1"
+        if text.count(anchor) != 1:
+            raise RuntimeError(f"PORT-49 compile flag anchor not found in {rel}")
+        text = text.replace(anchor, anchor + " -DG3X_GUI_SYNC=1", 1)
+        mpath.write_text(text, encoding="utf-8")
+
+    # 1. Patch platform/g3x/sub/110c/boot.c: install 0x0000E26C callback pointer after BSS zeroing
+    boot_c = stage_dir / "platform/g3x/sub/110c/boot.c"
+    boot_text = boot_c.read_text(encoding="utf-8")
+    boot_inc_anchor = '#include "led_breadcrumb.h"\n'
+    boot_inc_replacement = (
+        '#include "led_breadcrumb.h"\n'
+        '#if defined(G3X_GUI_SYNC) && (G3X_GUI_SYNC == 1)\n'
+        '#include "gui_sync.h"\n'
+        '#endif\n'
+    )
+    if boot_text.count(boot_inc_anchor) != 1:
+        raise RuntimeError("PORT-49 boot.c include anchor not found in staged platform/g3x/sub/110c/boot.c")
+    boot_text = boot_text.replace(boot_inc_anchor, boot_inc_replacement, 1)
+
+    boot_hook_anchor = '        "    bl      g3x_full_shortpress_post_bss_hook\\n"\n'
+    boot_hook_replacement = (
+        '        "    bl      g3x_full_shortpress_post_bss_hook\\n"\n'
+        '#if defined(G3X_GUI_SYNC) && (G3X_GUI_SYNC == 1)\n'
+        '        // PORT-49: Install synchronous display-flip callback pointer at 0x0000E26C\n'
+        '        // (ROM_VERIFIED: docs/PORT49_GUI_SYNC.md answer (c); manifests/port49_gui_sync_evidence.json)\n'
+        '        "    bl      g3x_gui_sync_install_hook\\n"\n'
+        '#endif\n'
+    )
+    if boot_text.count(boot_hook_anchor) != 1:
+        raise RuntimeError("PORT-49 boot.c post_bss_hook anchor not found in staged platform/g3x/sub/110c/boot.c")
+    boot_text = boot_text.replace(boot_hook_anchor, boot_hook_replacement, 1)
+    boot_c.write_text(boot_text, encoding="utf-8")
+
+    # 2. Patch core/gui_draw.c: add g3x_dbuf_shadow_sync_restore(target_idx) for single-buffer post-transfer blit
+    draw_c = stage_dir / "core/gui_draw.c"
+    draw_text = draw_c.read_text(encoding="utf-8")
+    sync_restore_anchor = (
+        "    draw_set_guard();\n"
+        "#if defined(G3X_GUI_DIAG) && (G3X_GUI_DIAG == 1)\n"
+        "    g3x_diag_record_shadow_restore();\n"
+        "#endif\n"
+        "    /* NOTE: No vid_bitmap_refresh() here! On G3X (DIGIC 6), vid_bitmap_refresh calls _transfer_src_overlay,\n"
+        "     * which wipes the overlay plane back to stock Canon UI (docs/PORT35_GUI_ADDRESSES.md:35).\n"
+        "     * The synchronous blit into both bitmap buffers and both opacity buffers stands on its own. */\n"
+        "    return 1;\n"
+        "}"
+    )
+    sync_restore_replacement = sync_restore_anchor + (
+        "\n\n"
+        "#if defined(G3X_GUI_SYNC) && (G3X_GUI_SYNC == 1)\n"
+        "int g3x_dbuf_shadow_sync_restore(unsigned int target_idx)\n"
+        "{\n"
+        "    if (!g3x_shadow_bitmap || !g3x_shadow_opacity || camera_info.state.gui_mode_none)\n"
+        "    {\n"
+        "        return 0;\n"
+        "    }\n"
+        "    int buf_w = camera_screen.buffer_width ? camera_screen.buffer_width : 928;\n"
+        "    if (!g3x_shadow2_blit_restore_target(g3x_shadow_bitmap, g3x_shadow_opacity, buf_w, target_idx))\n"
+        "    {\n"
+        "        return 0;\n"
+        "    }\n"
+        "    g3x_sync_set_guard_target(target_idx);\n"
+        "    g3x_diag_record_shadow_restore();\n"
+        "    return 1;\n"
+        "}\n"
+        "#endif"
+    )
+    if draw_text.count(sync_restore_anchor) != 1:
+        raise RuntimeError("PORT-49 shadow sync restore anchor not found in staged core/gui_draw.c")
+    draw_text = draw_text.replace(sync_restore_anchor, sync_restore_replacement, 1)
+    draw_c.write_text(draw_text, encoding="utf-8")
+
+
 def build_port43_dbuf(
     clean_stage: bool = True,
     keep_stage: bool = True,
@@ -1566,7 +1670,10 @@ def build_port43_dbuf(
     kbd_check: bool = False,
     gui_diag: bool = False,
     shadow2: bool = False,
+    gui_sync: bool = False,
 ) -> int:
+    if gui_sync:
+        shadow2 = True
     if shadow2:
         gui_diag = True
     if gui_diag:
@@ -1588,6 +1695,9 @@ def build_port43_dbuf(
 
     if out_dir is not None:
         effective_out_dir = Path(out_dir).resolve()
+    elif gui_sync:
+        suffix = "-full-hooks" if full_hooks else ""
+        effective_out_dir = REPO_ROOT / "out" / ("port49-gui-sync" + suffix)
     elif shadow2:
         suffix = "-full-hooks" if full_hooks else ""
         effective_out_dir = REPO_ROOT / "out" / ("port48-shadow-alloc" + suffix)
@@ -1679,6 +1789,10 @@ def build_port43_dbuf(
         print("G3X_GUI_SHADOW2=1: Applying ordered shadow fallback chain (exmem -> rect -> idx) and GetMemInfo diagnostic...")
         apply_shadow2_staging_patches(effective_stage_dir)
 
+    if gui_sync:
+        print("G3X_GUI_SYNC=1: Applying synchronous display-flip hook at 0x0000E26C and target-buffer shadow restore...")
+        apply_gui_sync_staging_patches(effective_stage_dir)
+
     # Clean platform objects in staging copy
     for subpath in ["platform/g3x", "platform/g3x/sub/110c", "loader/g3x"]:
         p = effective_stage_dir / subpath
@@ -1701,6 +1815,8 @@ def build_port43_dbuf(
                 clean_cmd.append("G3X_GUI_DIAG=1")
             if shadow2:
                 clean_cmd.append("G3X_GUI_SHADOW2=1")
+            if gui_sync:
+                clean_cmd.append("G3X_GUI_SYNC=1")
             if full_hooks:
                 clean_cmd.append("FULL_HOOKS=1")
             clean_cmd.append("clean")
@@ -1732,6 +1848,8 @@ def build_port43_dbuf(
         cmd.append("G3X_GUI_DIAG=1")
     if shadow2:
         cmd.append("G3X_GUI_SHADOW2=1")
+    if gui_sync:
+        cmd.append("G3X_GUI_SYNC=1")
     if full_hooks:
         cmd.append("FULL_HOOKS=1")
     cmd.extend(["SKIP_TOOLS=1", "SKIP_MODULES=1", "SKIP_CHDK=1", "fir"])
@@ -1754,6 +1872,8 @@ def build_port43_dbuf(
         env["G3X_GUI_DIAG"] = "1"
     if shadow2:
         env["G3X_GUI_SHADOW2"] = "1"
+    if gui_sync:
+        env["G3X_GUI_SYNC"] = "1"
     if full_hooks:
         env["FULL_HOOKS"] = "1"
 
@@ -1822,6 +1942,8 @@ def build_port43_dbuf(
         build_flags.append("G3X_GUI_DIAG=1")
     if shadow2:
         build_flags.append("G3X_GUI_SHADOW2=1")
+    if gui_sync:
+        build_flags.append("G3X_GUI_SYNC=1")
     if full_hooks:
         build_flags.insert(1, "FULL_HOOKS=1")
 
@@ -1832,6 +1954,8 @@ def build_port43_dbuf(
         manifest_name = "port47_gui_diag_manifest.json"
     if shadow2:
         manifest_name = "port48_shadow_alloc_manifest.json"
+    if gui_sync:
+        manifest_name = "port49_gui_sync_manifest.json"
     manifest_data: dict[str, object] = {
         "build": {
             "platform": "g3x",
@@ -1904,6 +2028,7 @@ def main() -> int:
     parser.add_argument("--kbd-check", action="store_true", default=os.environ.get("G3X_KBD_CHECK") == "1", help="Enable G3X_KBD_CHECK=1 ALT key diagnostic (also accepts environment flag)")
     parser.add_argument("--gui-diag", action="store_true", default=os.environ.get("G3X_GUI_DIAG") == "1", help="Enable G3X_GUI_DIAG=1 overdraw/restore counters, shadow-blit-only restore, and sibling suppression")
     parser.add_argument("--shadow2", action="store_true", default=os.environ.get("G3X_GUI_SHADOW2") == "1", help="Enable G3X_GUI_SHADOW2=1 ordered shadow allocation fallback chain (exmem -> rect -> idx) and GetMemInfo diagnostic")
+    parser.add_argument("--gui-sync", action="store_true", default=os.environ.get("G3X_GUI_SYNC") == "1", help="Enable G3X_GUI_SYNC=1 synchronous display-flip restore hook at 0x0000E26C")
     parser.add_argument("--no-clean", action="store_true", help="Do not clean staging before building")
     parser.add_argument("--discard-stage", action="store_true", help="Remove stage directory after build")
     parser.add_argument("--out-dir", type=str, default=None, help="Custom output directory")
@@ -1918,6 +2043,7 @@ def main() -> int:
         kbd_check=args.kbd_check,
         gui_diag=args.gui_diag,
         shadow2=args.shadow2,
+        gui_sync=args.gui_sync,
     )
 
 

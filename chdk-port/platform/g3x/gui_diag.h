@@ -22,6 +22,16 @@
 #ifndef G3X_GUI_DIAG_H
 #define G3X_GUI_DIAG_H
 
+#if defined(G3X_GUI_SYNC) && (G3X_GUI_SYNC == 1)
+#if !defined(G3X_GUI_DBUF) || (G3X_GUI_DBUF != 1) || \
+    !defined(G3X_GUI_NOOVERDRAW) || (G3X_GUI_NOOVERDRAW != 1) || \
+    !defined(G3X_KBD_CHECK) || (G3X_KBD_CHECK != 1) || \
+    !defined(G3X_GUI_DIAG) || (G3X_GUI_DIAG != 1) || \
+    !defined(G3X_GUI_SHADOW2) || (G3X_GUI_SHADOW2 != 1)
+#error G3X_GUI_SYNC=1 requires G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1
+#endif
+#endif
+
 #if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)
 #if !defined(G3X_GUI_DBUF) || (G3X_GUI_DBUF != 1) || \
     !defined(G3X_GUI_NOOVERDRAW) || (G3X_GUI_NOOVERDRAW != 1) || \
@@ -160,6 +170,16 @@ void g3x_diag_on_alt_leave(void);
 int g3x_diag_check_suppress(void);
 int g3x_diag_restore_overlay(int trigger);
 void gui_diag_draw(void);
+
+#if defined(G3X_GUI_SYNC) && (G3X_GUI_SYNC == 1)
+#if defined(G3X_GUI_DIAG_IMPLEMENTATION)
+#undef G3X_GUI_DIAG_IMPLEMENTATION
+#include "sub/110c/gui_sync.h"
+#define G3X_GUI_DIAG_IMPLEMENTATION 1
+#else
+#include "sub/110c/gui_sync.h"
+#endif
+#endif
 
 #if defined(G3X_GUI_DIAG_IMPLEMENTATION) && (G3X_GUI_DIAG_IMPLEMENTATION == 1)
 
@@ -640,6 +660,10 @@ void g3x_diag_record_full_redraw(void)
     g3x_diag_full_redraw_count++;
 }
 
+#if defined(G3X_GUI_SYNC) && (G3X_GUI_SYNC == 1)
+#include "sub/110c/gui_sync.h"
+#endif
+
 /* Requirement (a)/(b): Allocate the shadow on ALT entry only (nothing at boot).
  * Under G3X_GUI_SHADOW2=1, try ordered fallback chain:
  *   1. exmem_alloc_cached(0, 1670400, 0, 0) -> full-screen 928x600 shadow ("exmem")
@@ -774,6 +798,9 @@ void g3x_diag_on_alt_enter(void)
 #else
     g3x_dbuf_shadow_ensure_allocated();
 #endif
+#if defined(G3X_GUI_SYNC) && (G3X_GUI_SYNC == 1)
+    g3x_gui_sync_install_hook();
+#endif
     g3x_diag_suppress_engaged = 1;
     g3x_diag_last_bitmap_buffer = active_bitmap_buffer;
 }
@@ -849,6 +876,27 @@ int g3x_diag_restore_overlay(int trigger)
 void g3x_diag_format_line(char *line)
 {
     char shadow_tok[24];
+#if defined(G3X_GUI_SYNC) && (G3X_GUI_SYNC == 1)
+    if (g3x_dbuf_shadow_is_allocated() && g3x_shadow2_mode != G3X_SHADOW_MODE_NONE && g3x_shadow2_bytes > 0u)
+    {
+        sprintf(shadow_tok, "S:OK/%s",
+                g3x_shadow2_mode_tag(g3x_shadow2_mode));
+    }
+    else
+    {
+        sprintf(shadow_tok, "S:NULL");
+    }
+
+    sprintf(line, "H:%u/%04u %s L:%04u R:%04u F:%04u M:%04u Y:%04u",
+            g3x_diag_hook_installed ? 1u : 0u,
+            g3x_diag_clamp9999(g3x_diag_hook_hits),
+            shadow_tok,
+            g3x_diag_clamp9999(g3x_diag_sentinel_loss_count),
+            g3x_diag_clamp9999(g3x_diag_shadow_restore_count),
+            g3x_diag_clamp9999(g3x_diag_full_redraw_count),
+            g3x_diag_clamp9999(g3x_diag_suppress_hit_count),
+            g3x_diag_clamp9999(g3x_diag_get_sync_hits()));
+#else
     if (g3x_dbuf_shadow_is_allocated() && g3x_shadow2_mode != G3X_SHADOW_MODE_NONE && g3x_shadow2_bytes > 0u)
     {
         sprintf(shadow_tok, "S:OK/%u/%s",
@@ -881,6 +929,7 @@ void g3x_diag_format_line(char *line)
             g3x_diag_clamp9999(g3x_diag_sentinel_loss_count),
             g3x_diag_clamp9999(g3x_diag_shadow_restore_count),
             g3x_diag_clamp9999(g3x_diag_full_redraw_count));
+#endif
 }
 #endif
 
