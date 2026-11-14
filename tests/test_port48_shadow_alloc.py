@@ -53,6 +53,7 @@ struct {
         int gui_mode;
         int gui_mode_none;
         int gui_mode_alt;
+        int osd_title_line;
     } state;
 } camera_info;
 
@@ -60,7 +61,9 @@ struct {
     int width;
     int height;
     int buffer_width;
-} camera_screen = { 900, 600, 928 };
+    int disp_left;
+    int disp_width;
+} camera_screen = { 900, 600, 928, 0, 900 };
 
 int active_bitmap_buffer = 0;
 
@@ -204,10 +207,36 @@ int g3x_dbuf_shadow_restore(void)
     return 1;
 }
 
+int g3x_shadow2_handle_gui_redraw_sentinel(int *flag_gui_enforce_redraw);
+void g3x_shadow2_record_overlay_rect(int x0, int y0, int x1, int y1);
+void g3x_shadow2_write_pair(unsigned char *bm, unsigned char *op,
+                            int screen_x, int screen_y,
+                            unsigned int yuv, unsigned short co,
+                            unsigned char c0, unsigned char c1);
+
 void gui_redraw(int flag_gui_enforce_redraw)
 {
-    (void)flag_gui_enforce_redraw;
+    if (!draw_test_guard() && !camera_info.state.gui_mode_none)
+    {
+        if (g3x_shadow2_handle_gui_redraw_sentinel(&flag_gui_enforce_redraw))
+        {
+            return;
+        }
+    }
     gui_redraw_calls++;
+    if (camera_info.state.osd_title_line)
+    {
+        g3x_shadow2_record_overlay_rect(camera_screen.disp_left,
+                                        camera_screen.height - FONT_HEIGHT,
+                                        camera_screen.disp_left + camera_screen.disp_width - 1,
+                                        camera_screen.height - 1);
+        unsigned int pair_idx = (unsigned int)((590 * camera_screen.buffer_width + 20) >> 1);
+        ((unsigned int *)bitmap_buffer[0])[pair_idx] = 0xCAFEBABEu;
+        ((unsigned int *)bitmap_buffer[1])[pair_idx] = 0xCAFEBABEu;
+        ((unsigned short *)opacity_buffer[0])[pair_idx] = 0xFFFFu;
+        ((unsigned short *)opacity_buffer[1])[pair_idx] = 0xFFFFu;
+        g3x_shadow2_write_pair(host_shadow_bm, host_shadow_op, 20, 590, 0xCAFEBABEu, 0xFFFFu, 0x01, 0x01);
+    }
 }
 
 void g3x_dbuf_fast_fill_rect(coord x1, coord y1, coord x2, coord y2, color cl)
@@ -239,6 +268,7 @@ void harness_reset(void)
     camera_info.state.gui_mode = 0;
     camera_info.state.gui_mode_none = 1;
     camera_info.state.gui_mode_alt = 0;
+    camera_info.state.osd_title_line = 0;
     active_bitmap_buffer = 0;
 
     memset(host_bm0, 0, sizeof(host_bm0));
@@ -296,6 +326,8 @@ void harness_reset(void)
     g3x_shadow2_w = 0;
     g3x_shadow2_h = 0;
     g3x_shadow2_largest_free = -1;
+    g3x_shadow2_reset_overlay_bounds();
+    g3x_shadow2_in_fallback_redraw = 0;
 }
 
 void harness_set_alloc_mocks(int exmem_ok, int malloc_rect_ok, int umalloc_rect_ok,
@@ -325,6 +357,35 @@ void harness_set_alt_mode(int is_alt)
     camera_info.state.gui_mode = is_alt ? 1 : 0;
     camera_info.state.gui_mode_none = is_alt ? 0 : 1;
     camera_info.state.gui_mode_alt = is_alt ? 1 : 0;
+}
+
+void harness_set_osd_title_line(int enabled)
+{
+    camera_info.state.osd_title_line = enabled ? 1 : 0;
+}
+
+void harness_wipe_framebuffers(void)
+{
+    memset(host_bm0, 0, sizeof(host_bm0));
+    memset(host_bm1, 0, sizeof(host_bm1));
+    memset(host_op0, 0, sizeof(host_op0));
+    memset(host_op1, 0, sizeof(host_op1));
+}
+
+int harness_scheduler_tick(int buffer_changed, int state_changed)
+{
+    int suppress_hit = g3x_diag_check_suppress();
+    int chdk_overlay_active = !camera_info.state.gui_mode_none;
+    int restored_via_full_redraw = 0;
+    if (chdk_overlay_active)
+    {
+        restored_via_full_redraw = g3x_diag_restore_overlay(suppress_hit || buffer_changed);
+    }
+    if (!restored_via_full_redraw && state_changed)
+    {
+        gui_redraw(0);
+    }
+    return restored_via_full_redraw;
 }
 
 void harness_set_sentinel(int intact)
@@ -470,7 +531,9 @@ def sha256_file(path: Path) -> str:
 class TestPort48ShadowAlloc(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls._tmpdir = tempfile.TemporaryDirectory()
+        out_root = REPO_ROOT / "out"
+        out_root.mkdir(parents=True, exist_ok=True)
+        cls._tmpdir = tempfile.TemporaryDirectory(dir=out_root)
         tmp = Path(cls._tmpdir.name)
         c_file = tmp / "harness.c"
         so_file = tmp / "harness.so"
@@ -489,6 +552,7 @@ class TestPort48ShadowAlloc(unittest.TestCase):
                 "-o",
                 str(so_file),
             ],
+            env={**os.environ, "TMPDIR": str(tmp)},
             check=True,
         )
         cls.lib = ctypes.CDLL(str(so_file))
@@ -785,35 +849,160 @@ class TestPort48ShadowAlloc(unittest.TestCase):
             self.assertEqual(self.lib.harness_read_op_word(buf_idx, 888, 587), exp_op2)
 
     def test_region_scoped_restore_and_outside_fallback(self) -> None:
-        self.lib.harness_set_alt_mode(1)
+        out_uyvy = ctypes.c_uint(0)
+        out_op = ctypes.c_ushort(0)
+        self.lib.g3x_shadow2_expand_pair(0xFF, 0x01, ctypes.byref(out_uyvy), ctypes.byref(out_op))
+        exp_inside_uyvy = out_uyvy.value
+        exp_inside_op = out_op.value
 
-        # In rect mode ((10,12)..(889,587)), ALT/menu region restores from shadow; outside falls back to gui_redraw
-        self.lib.harness_set_alloc_mocks(0, 1, 0, 0, 0)
-        self.lib.g3x_diag_on_alt_enter()
-        self.assertEqual(self.lib.g3x_shadow2_covers_rect(10, 12, 889, 587), 1)
-        self.assertEqual(self.lib.g3x_shadow2_covers_rect(0, 0, 899, 599), 0)
-
-        rc_in = self.lib.g3x_diag_restore_overlay(1)
-        self.assertEqual(rc_in, 0)
-        self.assertEqual(self.lib.harness_get_restore_count(), 1)
-        self.assertEqual(self.lib.harness_get_full_count(), 0)
-        self.assertEqual(self.lib.harness_get_gui_redraw_calls(), 0)
-
-        rc_out = self.lib.g3x_shadow2_restore_rect(0, 0, 899, 599)
-        self.assertEqual(rc_out, 1)
-        self.assertEqual(self.lib.harness_get_restore_count(), 1)
-        self.assertEqual(self.lib.harness_get_full_count(), 1)
-        self.assertEqual(self.lib.harness_get_gui_redraw_calls(), 1)
-
-        # In exmem mode ((0,0)..(927,599)), full screen is covered by shadow
+        # 1. Full exmem shadow ((0,0)..(927,599)): even with ALT title at y=588..599,
+        # both scheduler and sentinel-loss restore paths do shadow restore only, F unchanged.
         self.lib.harness_reset()
         self.lib.harness_set_alt_mode(1)
         self.lib.harness_set_alloc_mocks(1, 0, 0, 0, 0)
         self.lib.g3x_diag_on_alt_enter()
-        self.assertEqual(self.lib.g3x_shadow2_covers_rect(0, 0, 927, 599), 1)
-        self.assertEqual(self.lib.g3x_shadow2_restore_rect(0, 0, 899, 599), 0)
+        self.lib.harness_set_osd_title_line(1)
+        self.lib.harness_write_shadow_pair(20, 100, exp_inside_uyvy, exp_inside_op, 0xFF, 0x01)
+        self.lib.harness_write_shadow_pair(20, 590, 0xCAFEBABE, 0xFFFF, 0x01, 0x01)
+        self.assertEqual(self.lib.g3x_shadow2_covers_active_overlay(), 1)
+
+        # (a) Scheduler restore path (harness_scheduler_tick -> g3x_diag_restore_overlay)
+        self.lib.harness_wipe_framebuffers()
+        self.lib.harness_set_sentinel(0)
+        rc_exmem_sched = self.lib.harness_scheduler_tick(0, 0)
+        self.assertEqual(rc_exmem_sched, 0)
+        self.assertEqual(self.lib.harness_get_loss_count(), 1)
         self.assertEqual(self.lib.harness_get_restore_count(), 1)
         self.assertEqual(self.lib.harness_get_full_count(), 0)
+        self.assertEqual(self.lib.harness_get_gui_redraw_calls(), 0)
+        for buf_idx in (0, 1):
+            self.assertEqual(self.lib.harness_read_bm_word(buf_idx, 20, 100), exp_inside_uyvy)
+            self.assertEqual(self.lib.harness_read_bm_word(buf_idx, 20, 590), 0xCAFEBABE)
+
+        # (b) Staged gui_redraw sentinel-loss restore path directly
+        self.lib.harness_wipe_framebuffers()
+        self.lib.harness_set_sentinel(0)
+        self.lib.gui_redraw(0)
+        self.assertEqual(self.lib.harness_get_loss_count(), 2)
+        self.assertEqual(self.lib.harness_get_restore_count(), 2)
+        self.assertEqual(self.lib.harness_get_full_count(), 0)
+        self.assertEqual(self.lib.harness_get_gui_redraw_calls(), 0)
+        for buf_idx in (0, 1):
+            self.assertEqual(self.lib.harness_read_bm_word(buf_idx, 20, 100), exp_inside_uyvy)
+            self.assertEqual(self.lib.harness_read_bm_word(buf_idx, 20, 590), 0xCAFEBABE)
+
+        # 2. rect and idx shadows with overlay content fully inside (10,12)..(889,587):
+        # restore only, F unchanged on both scheduler and sentinel-loss paths.
+        for mode_name, mocks in [("rect", (0, 1, 0, 0, 0)), ("idx", (0, 0, 0, 1, 0))]:
+            with self.subTest(case="inside_only", mode=mode_name):
+                self.lib.harness_reset()
+                self.lib.harness_set_alt_mode(1)
+                self.lib.harness_set_alloc_mocks(*mocks)
+                self.lib.g3x_diag_on_alt_enter()
+                self.lib.harness_set_osd_title_line(0)
+                self.lib.harness_write_shadow_pair(20, 100, exp_inside_uyvy, exp_inside_op, 0xFF, 0x01)
+                self.lib.harness_write_shadow_pair(100, 560, exp_inside_uyvy, exp_inside_op, 0xFF, 0x01)
+                self.assertEqual(self.lib.g3x_shadow2_covers_active_overlay(), 1)
+
+                # (a) Scheduler restore path
+                self.lib.harness_wipe_framebuffers()
+                self.lib.harness_set_sentinel(0)
+                rc_inside_sched = self.lib.harness_scheduler_tick(0, 0)
+                self.assertEqual(rc_inside_sched, 0)
+                self.assertEqual(self.lib.harness_get_loss_count(), 1)
+                self.assertEqual(self.lib.harness_get_restore_count(), 1)
+                self.assertEqual(self.lib.harness_get_full_count(), 0)
+                self.assertEqual(self.lib.harness_get_gui_redraw_calls(), 0)
+                for buf_idx in (0, 1):
+                    self.assertEqual(self.lib.harness_read_bm_word(buf_idx, 20, 100), exp_inside_uyvy)
+                    self.assertEqual(self.lib.harness_read_op_word(buf_idx, 20, 100), exp_inside_op)
+
+                # (b) Staged gui_redraw sentinel-loss restore path directly
+                self.lib.harness_wipe_framebuffers()
+                self.lib.harness_set_sentinel(0)
+                self.lib.gui_redraw(0)
+                self.assertEqual(self.lib.harness_get_loss_count(), 2)
+                self.assertEqual(self.lib.harness_get_restore_count(), 2)
+                self.assertEqual(self.lib.harness_get_full_count(), 0)
+                self.assertEqual(self.lib.harness_get_gui_redraw_calls(), 0)
+                for buf_idx in (0, 1):
+                    self.assertEqual(self.lib.harness_read_bm_word(buf_idx, 20, 100), exp_inside_uyvy)
+                    self.assertEqual(self.lib.harness_read_op_word(buf_idx, 20, 100), exp_inside_op)
+
+        # 3. rect and idx shadows with overlay content outside (ALT title at y=588..599):
+        # inside part is restored from shadow, outside part runs gui_redraw, and F increments only for it.
+        for mode_name, mocks in [("rect", (0, 1, 0, 0, 0)), ("idx", (0, 0, 0, 1, 0))]:
+            with self.subTest(case="outside_title", mode=mode_name):
+                self.lib.harness_reset()
+                self.lib.harness_set_alt_mode(1)
+                self.lib.harness_set_alloc_mocks(*mocks)
+                self.lib.g3x_diag_on_alt_enter()
+                self.lib.harness_set_osd_title_line(1)
+                self.lib.harness_write_shadow_pair(20, 100, exp_inside_uyvy, exp_inside_op, 0xFF, 0x01)
+                self.lib.harness_write_shadow_pair(20, 590, 0xCAFEBABE, 0xFFFF, 0x01, 0x01)
+                self.assertEqual(self.lib.g3x_shadow2_covers_active_overlay(), 0)
+
+                # (a) Scheduler restore path
+                self.lib.harness_wipe_framebuffers()
+                self.lib.harness_set_sentinel(0)
+                rc_outside_sched = self.lib.harness_scheduler_tick(0, 0)
+                self.assertEqual(rc_outside_sched, 1)
+                self.assertEqual(self.lib.harness_get_loss_count(), 1)
+                self.assertEqual(self.lib.harness_get_restore_count(), 1)
+                self.assertEqual(self.lib.harness_get_full_count(), 1)
+                self.assertEqual(self.lib.harness_get_gui_redraw_calls(), 1)
+                for buf_idx in (0, 1):
+                    # Inside pixel restored from shadow
+                    self.assertEqual(self.lib.harness_read_bm_word(buf_idx, 20, 100), exp_inside_uyvy)
+                    self.assertEqual(self.lib.harness_read_op_word(buf_idx, 20, 100), exp_inside_op)
+                    # Outside title pixel redrawn by gui_redraw
+                    self.assertEqual(self.lib.harness_read_bm_word(buf_idx, 20, 590), 0xCAFEBABE)
+
+                # Normal state_changed redraw with intact sentinel must NOT increment F
+                self.lib.harness_set_sentinel(1)
+                rc_state_change = self.lib.harness_scheduler_tick(0, 1)
+                self.assertEqual(rc_state_change, 0)
+                self.assertEqual(self.lib.harness_get_full_count(), 1)
+                self.assertEqual(self.lib.harness_get_gui_redraw_calls(), 2)
+
+                # (b) Staged gui_redraw sentinel-loss restore path directly
+                self.lib.harness_wipe_framebuffers()
+                self.lib.harness_set_sentinel(0)
+                self.lib.gui_redraw(0)
+                self.assertEqual(self.lib.harness_get_loss_count(), 2)
+                self.assertEqual(self.lib.harness_get_restore_count(), 2)
+                self.assertEqual(self.lib.harness_get_full_count(), 2)
+                self.assertEqual(self.lib.harness_get_gui_redraw_calls(), 3)
+                for buf_idx in (0, 1):
+                    self.assertEqual(self.lib.harness_read_bm_word(buf_idx, 20, 100), exp_inside_uyvy)
+                    self.assertEqual(self.lib.harness_read_bm_word(buf_idx, 20, 590), 0xCAFEBABE)
+
+        # 4. S:NULL (all allocators return NULL): full gui_redraw path is unchanged.
+        self.lib.harness_reset()
+        self.lib.harness_set_alt_mode(1)
+        self.lib.harness_set_alloc_mocks(0, 0, 0, 0, 0)
+        self.lib.g3x_diag_on_alt_enter()
+        self.assertEqual(self.lib.g3x_dbuf_shadow_is_allocated(), 0)
+        self.lib.harness_set_osd_title_line(1)
+
+        # (a) Scheduler restore path under S:NULL
+        self.lib.harness_wipe_framebuffers()
+        self.lib.harness_set_sentinel(0)
+        rc_null_sched = self.lib.harness_scheduler_tick(0, 0)
+        self.assertEqual(rc_null_sched, 1)
+        self.assertEqual(self.lib.harness_get_loss_count(), 1)
+        self.assertEqual(self.lib.harness_get_restore_count(), 0)
+        self.assertEqual(self.lib.harness_get_full_count(), 1)
+        self.assertEqual(self.lib.harness_get_gui_redraw_calls(), 1)
+
+        # (b) Staged gui_redraw sentinel-loss restore path under S:NULL
+        self.lib.harness_wipe_framebuffers()
+        self.lib.harness_set_sentinel(0)
+        self.lib.gui_redraw(0)
+        self.assertEqual(self.lib.harness_get_loss_count(), 2)
+        self.assertEqual(self.lib.harness_get_restore_count(), 0)
+        self.assertEqual(self.lib.harness_get_full_count(), 2)
+        self.assertEqual(self.lib.harness_get_gui_redraw_calls(), 2)
 
     def test_shadow2_staged_sources_have_no_active_legacy_shadow_pixel_calls(self) -> None:
         import sys
@@ -996,7 +1185,7 @@ class TestPort48ShadowAlloc(unittest.TestCase):
             self.assertIn(req_flag, flags)
 
         core_end = int(manifest["core_end"], 16)
-        self.assertEqual(manifest["core_end"], "0x00369ee0")
+        self.assertEqual(manifest["core_end"], "0x0036a240")
         self.assertLessEqual(core_end - PORT47_CORE_END, MAX_CORE_END_GROWTH)
 
         diskboot_entry = manifest["artifacts"]["DISKBOOT.BIN"]

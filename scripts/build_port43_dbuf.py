@@ -79,7 +79,13 @@ def _ensure_dbuf_seed_stage() -> Path:
         and (SEED_STAGE_DIR / "lib" / "core" / ".o2" / "libcore.a").is_file()
         and len(list((SEED_STAGE_DIR / "modules" / ".o2").glob("*.flt"))) == 34
     ):
+        for rel in ["core", "include", "platform/g3x", "loader/g3x"]:
+            dst = SEED_STAGE_DIR / rel
+            if dst.exists():
+                shutil.rmtree(dst)
+            shutil.copytree(CHDK_PORT / rel, dst, symlinks=True)
         _remove_prototype_files(SEED_STAGE_DIR)
+        _clean_platform_and_core_artifacts(SEED_STAGE_DIR)
         return SEED_STAGE_DIR
 
     if SEED_STAGE_DIR.exists():
@@ -115,12 +121,16 @@ def _ensure_dbuf_seed_stage() -> Path:
         "fir",
     ]
     env = os.environ.copy()
+    gcc_tmp = SEED_STAGE_DIR.parent / ".tmp_gcc"
+    gcc_tmp.mkdir(parents=True, exist_ok=True)
+    env["TMPDIR"] = str(gcc_tmp)
     wrapper_script = REPO_ROOT / "scripts" / "gcc_deterministic_wrapper.sh"
     if wrapper_script.is_file() and os.access(wrapper_script, os.X_OK):
         env["MAKEFLAGS"] = f"CC={wrapper_script}"
     env["G3X_GUI_FIX"] = "1"
     env["G3X_GUI_DBUF"] = "1"
     subprocess.run(cmd, cwd=str(SEED_STAGE_DIR), env=env, check=True, stdout=subprocess.DEVNULL)
+    shutil.rmtree(gcc_tmp, ignore_errors=True)
 
     for rel in ["core", "include", "platform/g3x", "loader/g3x"]:
         dst = SEED_STAGE_DIR / rel
@@ -1369,16 +1379,107 @@ def apply_shadow2_staging_patches(stage_dir: Path) -> None:
     draw_text = draw_text.replace(hl_anchor, hl_replacement, 1)
 
     draw_c.write_text(draw_text, encoding="utf-8")
+
+    # 3. Patch core/gui.c: record ALT title/status bounds (y = height - FONT_HEIGHT .. height - 1)
+    # and allow sentinel-loss branch in gui_redraw to restore inside region from shadow and fall back to
+    # gui_redraw (incrementing F only for that fallback) when overlay content extends outside the shadow.
+    gui_c = stage_dir / "core/gui.c"
+    gui_text = gui_c.read_text(encoding="utf-8")
+
+    title_anchor = (
+        "    if (camera_info.state.osd_title_line) \n"
+        "    {\n"
+        "        int w = camera_screen.disp_width;\n"
+    )
+    title_replacement = (
+        "    if (camera_info.state.osd_title_line) \n"
+        "    {\n"
+        "        int w = camera_screen.disp_width;\n"
+        "#if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)\n"
+        "        g3x_shadow2_record_overlay_rect(camera_screen.disp_left,\n"
+        "                                        camera_screen.height - FONT_HEIGHT,\n"
+        "                                        camera_screen.disp_left + w - 1,\n"
+        "                                        camera_screen.height - 1);\n"
+        "#endif\n"
+    )
+    if gui_text.count(title_anchor) != 1:
+        raise RuntimeError("PORT-48 osd_title_line anchor not found in staged core/gui.c")
+    gui_text = gui_text.replace(title_anchor, title_replacement, 1)
+
+    gui_sentinel_anchor = (
+        "#if defined(G3X_GUI_DIAG) && (G3X_GUI_DIAG == 1)\n"
+        "    if (!draw_test_guard() && (!camera_info.state.gui_mode_none || gui_splash))\n"
+        "    {\n"
+        "        g3x_diag_record_sentinel_loss();\n"
+        "        if (g3x_dbuf_shadow_is_allocated())\n"
+        "        {\n"
+        "            (void)g3x_dbuf_shadow_restore();\n"
+        "            return;\n"
+        "        }\n"
+        "        draw_set_guard();\n"
+        "        flag_gui_enforce_redraw = 1;\n"
+        "#ifdef CAM_TOUCHSCREEN_UI\n"
+        "        redraw_buttons = 1;\n"
+        "#endif\n"
+        "    }\n"
+        "#elif defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)\n"
+    )
+    gui_sentinel_replacement = (
+        "#if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)\n"
+        "    if (!draw_test_guard() && (!camera_info.state.gui_mode_none || gui_splash))\n"
+        "    {\n"
+        "        if (g3x_shadow2_handle_gui_redraw_sentinel(&flag_gui_enforce_redraw))\n"
+        "        {\n"
+        "            return;\n"
+        "        }\n"
+        "#ifdef CAM_TOUCHSCREEN_UI\n"
+        "        redraw_buttons = 1;\n"
+        "#endif\n"
+        "    }\n"
+        "#elif defined(G3X_GUI_DIAG) && (G3X_GUI_DIAG == 1)\n"
+        "    if (!draw_test_guard() && (!camera_info.state.gui_mode_none || gui_splash))\n"
+        "    {\n"
+        "        g3x_diag_record_sentinel_loss();\n"
+        "        if (g3x_dbuf_shadow_is_allocated())\n"
+        "        {\n"
+        "            (void)g3x_dbuf_shadow_restore();\n"
+        "            return;\n"
+        "        }\n"
+        "        draw_set_guard();\n"
+        "        flag_gui_enforce_redraw = 1;\n"
+        "#ifdef CAM_TOUCHSCREEN_UI\n"
+        "        redraw_buttons = 1;\n"
+        "#endif\n"
+        "    }\n"
+        "#elif defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)\n"
+    )
+    if gui_text.count(gui_sentinel_anchor) != 1:
+        raise RuntimeError("PORT-48 gui_redraw sentinel anchor not found in staged core/gui.c")
+    gui_text = gui_text.replace(gui_sentinel_anchor, gui_sentinel_replacement, 1)
+    gui_c.write_text(gui_text, encoding="utf-8")
+
     verify_shadow2_staged_sources(stage_dir)
 
 
 def verify_shadow2_staged_sources(stage_dir: Path) -> None:
-    """Verify that staged core/gui_draw.c has no active G3X_GUI_SHADOW2=1 calls to g3x_dbuf_shadow_draw_pixel
-    and that the legacy g3x_dbuf_shadow_draw_pixel body is guarded by G3X_SHADOW_MODE_RECT."""
+    """Verify that staged core/gui_draw.c has no active G3X_GUI_SHADOW2=1 calls to g3x_dbuf_shadow_draw_pixel,
+    that the legacy g3x_dbuf_shadow_draw_pixel body is guarded by G3X_SHADOW_MODE_RECT, and that staged
+    core/gui.c hooks the ALT title bounds and sentinel-loss partial-shadow restore path."""
     draw_c = stage_dir / "core" / "gui_draw.c"
     if not draw_c.is_file():
         raise RuntimeError(f"Missing staged file: {draw_c}")
     text = draw_c.read_text(encoding="utf-8")
+
+    gui_c = stage_dir / "core" / "gui.c"
+    if not gui_c.is_file():
+        raise RuntimeError(f"Missing staged file: {gui_c}")
+    gui_text = gui_c.read_text(encoding="utf-8")
+    if gui_text.count("g3x_shadow2_record_overlay_rect(") != 1:
+        raise RuntimeError("PORT-48 verification failed: staged core/gui.c is missing g3x_shadow2_record_overlay_rect")
+    if gui_text.count("g3x_shadow2_handle_gui_redraw_sentinel(&flag_gui_enforce_redraw)") != 1:
+        raise RuntimeError(
+            "PORT-48 verification failed: staged core/gui.c is missing g3x_shadow2_handle_gui_redraw_sentinel"
+        )
 
     guard_snippet = (
         "void g3x_dbuf_shadow_draw_pixel(unsigned int offset, unsigned int offs2, unsigned int y, unsigned int o, unsigned int u, unsigned int v, int is_odd)\n"
@@ -1637,6 +1738,9 @@ def build_port43_dbuf(
 
     print(f"Running build: {' '.join(cmd)}")
     env = os.environ.copy()
+    gcc_tmp = REPO_ROOT / "out" / ".tmp_gcc"
+    gcc_tmp.mkdir(parents=True, exist_ok=True)
+    env["TMPDIR"] = str(gcc_tmp)
     wrapper_script = REPO_ROOT / "scripts" / "gcc_deterministic_wrapper.sh"
     if "MAKEFLAGS" not in env and wrapper_script.is_file() and os.access(wrapper_script, os.X_OK):
         env["MAKEFLAGS"] = f"CC={wrapper_script}"
@@ -1654,6 +1758,7 @@ def build_port43_dbuf(
         env["FULL_HOOKS"] = "1"
 
     res = subprocess.run(cmd, cwd=str(effective_stage_dir), env=env)
+    shutil.rmtree(gcc_tmp, ignore_errors=True)
     if res.returncode != 0:
         print(f"ERROR: Build failed with exit code {res.returncode}", file=sys.stderr)
         return res.returncode

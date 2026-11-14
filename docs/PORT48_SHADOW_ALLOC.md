@@ -74,6 +74,14 @@ No ROM read of `firmware/dumps/GM1.10C/PRIMARY.BIN` was needed. Every GM1.10C sy
 - **Dropped `M:` field and `heap` tag**:
   - Compared with PORT-47 (`G3X_GUI_DIAG=1` without `G3X_GUI_SHADOW2=1`), the `M:<mode>` field is replaced by the `GetMemInfo` largest-free-block token (`<kb>K` or `'-'`) on the `G3X_GUI_SHADOW2=1` diagnostic line so that `H:`, `S:`, `<free>`, `L:`, `R:`, and `F:` all fit on the 55-character row.
   - In `enum g3x_shadow_mode` (`chdk-port/platform/g3x/gui_diag.h`), `G3X_SHADOW_MODE_HEAP = 2` (tag `"heap"`) is defined to preserve the four-tag specification `<exmem|heap|rect|idx>` and for host-test formatting coverage, while the runtime 3-step fallback chain assigns `G3X_SHADOW_MODE_EXMEM` (`"exmem"`, step 1), `G3X_SHADOW_MODE_RECT` (`"rect"`, step 2), or `G3X_SHADOW_MODE_IDX` (`"idx"`, step 3).
+- **Damaged/Overlay Region Restore & Outside Fallback — Option (b) Chosen**:
+  - **Chosen design**: **Option (b)** — dynamically compute the active damaged/overlay bounding box `(g3x_shadow2_ov_x0, g3x_shadow2_ov_y0, g3x_shadow2_ov_x1, g3x_shadow2_ov_y1)` in the scheduler and sentinel-loss restore paths (`chdk-port/platform/g3x/gui_diag.h`, staged `core/gui.c`), while keeping the reduced `rect` (`1,520,640` B) and `idx` (`506,880` B) shadow dimensions at `880 x 576` (`(10, 12)..(889, 587)`).
+  - **How the overlay region is tracked**: Every shadow writer (`g3x_shadow2_write_pixel`, `g3x_shadow2_write_pair`, `g3x_shadow2_fill_span`) and the staged `if (camera_info.state.osd_title_line)` block in `gui_chdk_draw()` (`chdk-port/core/gui.c:2687-2701`, drawing the `<ALT>` title/status bar at `y = camera_screen.height - FONT_HEIGHT = 568..599`) record their unclipped screen coordinates via `g3x_shadow2_record_overlay_rect()`. Bounds are reset on `<ALT>` entry/exit and `g3x_dbuf_shadow_reset()`.
+  - **Restore & fallback behavior**:
+    1. When `g3x_diag_restore_overlay()` (scheduler path in `core/main.c`) or `g3x_shadow2_handle_gui_redraw_sentinel()` (staged sentinel-loss branch in `core/gui.c` `gui_redraw()`) runs, it queries `g3x_shadow2_get_overlay_rect(&ov_x0, &ov_y0, &ov_x1, &ov_y1)`.
+    2. If the allocated shadow intersects the active overlay (`g3x_shadow2_intersects_rect`), the portion inside the shadow is restored first via `g3x_dbuf_shadow_restore()` (incrementing `R:`).
+    3. If the shadow covers the entire active overlay (`g3x_shadow2_covers_rect == 1` — always true for full-screen `exmem` `928 x 600` covering `(0, 0)..(927, 599)`, and true for `rect`/`idx` `(10, 12)..(889, 587)` whenever all active overlay content is inside `(10, 12)..(889, 587)` such as the CHDK menu), restore completes without calling `gui_redraw` and `F:` is unchanged.
+    4. If any part of the active overlay extends outside the shadow (`g3x_shadow2_covers_rect == 0` — e.g., the `<ALT>` title/status bar at `y = 588..599` under reduced `rect`/`idx` mode) or if the shadow is `S:NULL`, the staged sentinel-loss gate allows `gui_redraw(1)` to run for the outside/fallback redraw and increments `F:` once for that fallback (normal `state_changed` calls to `gui_redraw(0)` with an intact sentinel do not increment `F:`).
 
 ---
 
@@ -82,8 +90,8 @@ No ROM read of `firmware/dumps/GM1.10C/PRIMARY.BIN` was needed. Every GM1.10C sy
 - **Build command**: `python3 -B scripts/build_port43_dbuf.py --shadow2`
 - **Manifest**: `manifests/port48_shadow_alloc_manifest.json`
 - **Build flags**: `G3X_FULL_BUILD=1`, `G3X_DISABLE_CARD_WRITES=1`, `CAM_SUPPORT_BITMAP_RES_CHANGE=1`, `OPT_DISABLE_FILE_WRITES=1`, `G3X_GUI5=1`, `G3X_GUI_FIX=1`, `G3X_GUI_DBUF=1`, `G3X_GUI_NOOVERDRAW=1`, `G3X_KBD_CHECK=1`, `G3X_GUI_DIAG=1`, `G3X_GUI_SHADOW2=1`
-- **Candidate `DISKBOOT.BIN` SHA-256**: `8eac35346fdc1f472d6e8d58625ee068b716530410bc47dafdf52c45eb6347cb` (`129,361` bytes)
-- **Core `_end`**: `0x00369ee0` (compared with PORT-47 `0x003699b0`: delta `+0x530 = +1,328` bytes / `+1.30 KiB`, well within the `<= 8 KiB` budget; zero static large buffers added).
+- **Candidate `DISKBOOT.BIN` SHA-256**: `9ac53c2720f96e40b6ff95e64ed069139c80c170d521a0e4fc01dd9c03ad4db1` (`130,217` bytes)
+- **Core `_end`**: `0x0036a240` (compared with PORT-47 `0x003699b0`: delta `+0x890 = +2,192` bytes / `+2.14 KiB`, well within the `<= 8 KiB` budget; zero static large buffers added).
 
 ### SHA-256 Invariance of Default and Earlier Builds Without `G3X_GUI_SHADOW2=1`
 
@@ -97,17 +105,17 @@ No ROM read of `firmware/dumps/GM1.10C/PRIMARY.BIN` was needed. Every GM1.10C sy
 | PORT-46 (`G3X_KBD_CHECK=1`, `dbuf`) | `scripts/build_port43_dbuf.py --kbd-check` | `127,233` | `890bc9ddc9152e49a46a95947ca1852e89f0eae62fa128391e5dea1c5f3d43f0` | `890bc9ddc9152e49a46a95947ca1852e89f0eae62fa128391e5dea1c5f3d43f0` | Byte-identical |
 | PORT-46 (`G3X_KBD_CHECK=1`, `no-overdraw`) | `scripts/build_port43_dbuf.py --no-overdraw --kbd-check` | `127,449` | `7c91eaa622ff0ca44b8d60219da1418ca34dc4a837a6112c39b6bbd31e285798` | `7c91eaa622ff0ca44b8d60219da1418ca34dc4a837a6112c39b6bbd31e285798` | Byte-identical |
 | PORT-47 (`G3X_GUI_DIAG=1`) | `scripts/build_port43_dbuf.py --no-overdraw --kbd-check --gui-diag` | `128,057` | `9b6d9ad95b2512e487f9d7d6ae694ab9fddbaee731339570240f77bbcfc7e5f7` | `9b6d9ad95b2512e487f9d7d6ae694ab9fddbaee731339570240f77bbcfc7e5f7` | Byte-identical |
-| **PORT-48 (`G3X_GUI_SHADOW2=1`)** | `scripts/build_port43_dbuf.py --shadow2` | `129,361` | `8eac35346fdc1f472d6e8d58625ee068b716530410bc47dafdf52c45eb6347cb` | `8eac35346fdc1f472d6e8d58625ee068b716530410bc47dafdf52c45eb6347cb` | Reproducible |
+| **PORT-48 (`G3X_GUI_SHADOW2=1`)** | `scripts/build_port43_dbuf.py --shadow2` | `130,217` | `9ac53c2720f96e40b6ff95e64ed069139c80c170d521a0e4fc01dd9c03ad4db1` | `9ac53c2720f96e40b6ff95e64ed069139c80c170d521a0e4fc01dd9c03ad4db1` | Reproducible |
 
 ---
 
 ## 9. Owner Trial Plan (`PORT-48` / `G3X_GUI_SHADOW2=1`)
 
-- **Candidate `DISKBOOT.BIN` SHA-256**: `8eac35346fdc1f472d6e8d58625ee068b716530410bc47dafdf52c45eb6347cb` (`129,361` bytes, `manifests/port48_shadow_alloc_manifest.json`)
+- **Candidate `DISKBOOT.BIN` SHA-256**: `9ac53c2720f96e40b6ff95e64ed069139c80c170d521a0e4fc01dd9c03ad4db1` (`130,217` bytes, `manifests/port48_shadow_alloc_manifest.json`)
 - **Rollback `DISKBOOT.BIN` (PORT-47 `9b6d9ad9`) SHA-256**: `9b6d9ad95b2512e487f9d7d6ae694ab9fddbaee731339570240f77bbcfc7e5f7` (`128,057` bytes, `manifests/port47_gui_diag_manifest.json`)
 
 ### Trial Steps
-- [ ] **1. Stage SD card and verify hash**: Copy `DISKBOOT.BIN` (`8eac35346fdc1f472d6e8d58625ee068b716530410bc47dafdf52c45eb6347cb`) and `CHDK/` from `out/port48-shadow-alloc/` onto the locked bootable SD card.
+- [ ] **1. Stage SD card and verify hash**: Copy `DISKBOOT.BIN` (`9ac53c2720f96e40b6ff95e64ed069139c80c170d521a0e4fc01dd9c03ad4db1`) and `CHDK/` from `out/port48-shadow-alloc/` onto the locked bootable SD card.
 - [ ] **2. Boot — held press first, then short press**:
   - Test a **held press** of `PLAY` or `POWER` first and record whether the camera boots into CHDK (in PORT-47 `docs/PORT47_TRIAL.md:19-20`, held `PLAY` booted cleanly into Playback mode and transitioned via shutter half-press into Shooting mode).
   - Test a **short press** of `PLAY` or `POWER` and verify clean boot into live view / playback with nothing allocated at boot.
@@ -123,7 +131,10 @@ No ROM read of `firmware/dumps/GM1.10C/PRIMARY.BIN` was needed. Every GM1.10C sy
   - Check whether:
     - The `<ALT>` / menu overlay stays solid and readable without horizontal black bands or tearing;
     - `R:` (shadow restore count) climbs as buffer flips / sentinel restores occur; and
-    - **`F:` (full-redraw count) stops climbing** (remains `0000` / constant while the shadow is `S:OK/...`).
+    - **`F:` (full-redraw count) stops climbing**:
+      - Under `S:OK/1670400/exmem` (`928 x 600` full-screen shadow), `F:` remains `0000` / constant across both `<ALT>` and Menu modes.
+      - Under reduced `S:OK/1520640/rect` or `S:OK/506880/idx` (`880 x 576`, `y = 12..587`), `F:` stops climbing inside the CHDK Menu (`MENU`, where all overlay content is inside `(10, 12)..(889, 587)`), whereas on the bare `<ALT>` screen when the bottom `<ALT>` title/status line is drawn at `y = 568..599` (`y = 588..599` outside `y1 = 587`), the inside `(10, 12)..(889, 587)` region is restored from the shadow (`R:` climbs) and the outside strip triggers `gui_redraw` (`F:` climbs).
+      - Under `S:NULL`, `R:` stays `0000` and `F:` climbs on every restore.
 
 ### Recovery & Rollback
 - **Recovery**: If the display freezes or the camera becomes unresponsive at any point, power off or perform a **battery pull**, wait 5 seconds, and reinsert the battery.

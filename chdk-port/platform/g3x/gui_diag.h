@@ -109,8 +109,17 @@ extern int g3x_shadow2_y0;
 extern int g3x_shadow2_w;
 extern int g3x_shadow2_h;
 extern int g3x_shadow2_largest_free;
+extern int g3x_shadow2_ov_valid;
+extern int g3x_shadow2_ov_x0;
+extern int g3x_shadow2_ov_y0;
+extern int g3x_shadow2_ov_x1;
+extern int g3x_shadow2_ov_y1;
+extern int g3x_shadow2_in_fallback_redraw;
 
 const char *g3x_shadow2_mode_tag(int mode);
+void g3x_shadow2_reset_overlay_bounds(void);
+void g3x_shadow2_record_overlay_rect(int x0, int y0, int x1, int y1);
+void g3x_shadow2_get_overlay_rect(int *out_x0, int *out_y0, int *out_x1, int *out_y1);
 void g3x_shadow2_reset_buffer(unsigned char *bm, unsigned char *op);
 void g3x_shadow2_expand_pair(unsigned char c0, unsigned char c1,
                              unsigned int *out_uyvy, unsigned short *out_op);
@@ -128,8 +137,11 @@ void g3x_shadow2_fill_span(unsigned char *bm, unsigned char *op,
                            unsigned int uyvy_word, unsigned char op_byte,
                            unsigned char cl);
 int g3x_shadow2_blit_restore(unsigned char *bm, unsigned char *op, int buf_w);
+int g3x_shadow2_intersects_rect(int x0, int y0, int x1, int y1);
 int g3x_shadow2_covers_rect(int x0, int y0, int x1, int y1);
+int g3x_shadow2_covers_active_overlay(void);
 int g3x_shadow2_restore_rect(int x0, int y0, int x1, int y1);
+int g3x_shadow2_handle_gui_redraw_sentinel(int *flag_gui_enforce_redraw);
 int g3x_shadow2_query_largest_free(void);
 void g3x_diag_format_line(char *line);
 #endif
@@ -176,6 +188,7 @@ extern void *exmem_alloc_cached(unsigned int pool_id, unsigned int size, int unk
 extern char *bitmap_buffer[];
 extern volatile char *opacity_buffer[];
 extern void g3x_dbuf_fast_fill_rect(coord x1, coord y1, coord x2, coord y2, color cl);
+extern void draw_set_guard(void);
 
 int g3x_shadow2_mode = G3X_SHADOW_MODE_NONE;
 unsigned int g3x_shadow2_bytes = 0u;
@@ -184,6 +197,12 @@ int g3x_shadow2_y0 = 0;
 int g3x_shadow2_w = 0;
 int g3x_shadow2_h = 0;
 int g3x_shadow2_largest_free = -1;
+int g3x_shadow2_ov_valid = 0;
+int g3x_shadow2_ov_x0 = G3X_MENU_X0;
+int g3x_shadow2_ov_y0 = G3X_MENU_Y0;
+int g3x_shadow2_ov_x1 = G3X_MENU_X1;
+int g3x_shadow2_ov_y1 = G3X_MENU_Y1;
+int g3x_shadow2_in_fallback_redraw = 0;
 
 const char *g3x_shadow2_mode_tag(int mode)
 {
@@ -202,6 +221,73 @@ const char *g3x_shadow2_mode_tag(int mode)
     }
 }
 
+void g3x_shadow2_reset_overlay_bounds(void)
+{
+    g3x_shadow2_ov_valid = 0;
+    g3x_shadow2_ov_x0 = G3X_MENU_X0;
+    g3x_shadow2_ov_y0 = G3X_MENU_Y0;
+    g3x_shadow2_ov_x1 = G3X_MENU_X1;
+    g3x_shadow2_ov_y1 = G3X_MENU_Y1;
+}
+
+void g3x_shadow2_record_overlay_rect(int x0, int y0, int x1, int y1)
+{
+    if (x0 > x1) { int t = x0; x0 = x1; x1 = t; }
+    if (y0 > y1) { int t = y0; y0 = y1; y1 = t; }
+    if (x1 < 0 || y1 < 0 || x0 >= G3X_SHADOW_FULL_WIDTH || y0 >= G3X_SHADOW_FULL_HEIGHT)
+        return;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 >= G3X_SHADOW_FULL_WIDTH) x1 = G3X_SHADOW_FULL_WIDTH - 1;
+    if (y1 >= G3X_SHADOW_FULL_HEIGHT) y1 = G3X_SHADOW_FULL_HEIGHT - 1;
+    if (!g3x_shadow2_ov_valid)
+    {
+        g3x_shadow2_ov_x0 = x0;
+        g3x_shadow2_ov_y0 = y0;
+        g3x_shadow2_ov_x1 = x1;
+        g3x_shadow2_ov_y1 = y1;
+        g3x_shadow2_ov_valid = 1;
+    }
+    else
+    {
+        if (x0 < g3x_shadow2_ov_x0) g3x_shadow2_ov_x0 = x0;
+        if (y0 < g3x_shadow2_ov_y0) g3x_shadow2_ov_y0 = y0;
+        if (x1 > g3x_shadow2_ov_x1) g3x_shadow2_ov_x1 = x1;
+        if (y1 > g3x_shadow2_ov_y1) g3x_shadow2_ov_y1 = y1;
+    }
+}
+
+void g3x_shadow2_get_overlay_rect(int *out_x0, int *out_y0, int *out_x1, int *out_y1)
+{
+    int x0 = g3x_shadow2_ov_valid ? g3x_shadow2_ov_x0 : G3X_MENU_X0;
+    int y0 = g3x_shadow2_ov_valid ? g3x_shadow2_ov_y0 : G3X_MENU_Y0;
+    int x1 = g3x_shadow2_ov_valid ? g3x_shadow2_ov_x1 : G3X_MENU_X1;
+    int y1 = g3x_shadow2_ov_valid ? g3x_shadow2_ov_y1 : G3X_MENU_Y1;
+
+    if (camera_info.state.osd_title_line)
+    {
+        int scr_h = camera_screen.height ? camera_screen.height : G3X_SHADOW_FULL_HEIGHT;
+        int disp_w = camera_screen.disp_width ? camera_screen.disp_width : G3X_SHADOW_FULL_WIDTH;
+        int tx0 = camera_screen.disp_left;
+        int ty0 = scr_h - FONT_HEIGHT;
+        int tx1 = tx0 + disp_w - 1;
+        int ty1 = scr_h - 1;
+        if (tx0 < 0) tx0 = 0;
+        if (ty0 < 0) ty0 = 0;
+        if (tx1 >= G3X_SHADOW_FULL_WIDTH) tx1 = G3X_SHADOW_FULL_WIDTH - 1;
+        if (ty1 >= G3X_SHADOW_FULL_HEIGHT) ty1 = G3X_SHADOW_FULL_HEIGHT - 1;
+        if (tx0 < x0) x0 = tx0;
+        if (ty0 < y0) y0 = ty0;
+        if (tx1 > x1) x1 = tx1;
+        if (ty1 > y1) y1 = ty1;
+    }
+
+    if (out_x0) *out_x0 = x0;
+    if (out_y0) *out_y0 = y0;
+    if (out_x1) *out_x1 = x1;
+    if (out_y1) *out_y1 = y1;
+}
+
 int g3x_shadow2_query_largest_free(void)
 {
     cam_meminfo meminfo;
@@ -214,6 +300,7 @@ int g3x_shadow2_query_largest_free(void)
 void g3x_shadow2_reset_buffer(unsigned char *bm, unsigned char *op)
 {
     (void)op;
+    g3x_shadow2_reset_overlay_bounds();
     if (bm != 0 && g3x_shadow2_bytes > 0u)
     {
         memset(bm, 0, g3x_shadow2_bytes);
@@ -257,6 +344,8 @@ void g3x_shadow2_write_pixel(unsigned char *bm, unsigned char *op,
                              unsigned char u_val, unsigned char v_val,
                              int is_odd, unsigned char cl)
 {
+    g3x_shadow2_record_overlay_rect(screen_x, screen_y, screen_x, screen_y);
+
     if (!bm || !op || g3x_shadow2_mode == G3X_SHADOW_MODE_NONE)
         return;
 
@@ -297,6 +386,8 @@ void g3x_shadow2_write_pair(unsigned char *bm, unsigned char *op,
                             unsigned int yuv, unsigned short co,
                             unsigned char c0, unsigned char c1)
 {
+    g3x_shadow2_record_overlay_rect(screen_x, screen_y, screen_x + 1, screen_y);
+
     if (!bm || !op || g3x_shadow2_mode == G3X_SHADOW_MODE_NONE)
         return;
 
@@ -329,6 +420,8 @@ void g3x_shadow2_fill_span(unsigned char *bm, unsigned char *op,
                            unsigned int uyvy_word, unsigned char op_byte,
                            unsigned char cl)
 {
+    g3x_shadow2_record_overlay_rect(screen_x_start, screen_y, screen_x_end, screen_y);
+
     if (!bm || !op || g3x_shadow2_mode == G3X_SHADOW_MODE_NONE)
         return;
 
@@ -422,6 +515,21 @@ int g3x_shadow2_blit_restore(unsigned char *bm, unsigned char *op, int buf_w)
     return 1;
 }
 
+int g3x_shadow2_intersects_rect(int x0, int y0, int x1, int y1)
+{
+    if (!g3x_dbuf_shadow_is_allocated() || g3x_shadow2_mode == G3X_SHADOW_MODE_NONE ||
+        g3x_shadow2_w <= 0 || g3x_shadow2_h <= 0)
+    {
+        return 0;
+    }
+    if (x0 > x1) { int t = x0; x0 = x1; x1 = t; }
+    if (y0 > y1) { int t = y0; y0 = y1; y1 = t; }
+    int sh_x1 = g3x_shadow2_x0 + g3x_shadow2_w - 1;
+    int sh_y1 = g3x_shadow2_y0 + g3x_shadow2_h - 1;
+    return (x1 >= g3x_shadow2_x0 && x0 <= sh_x1 &&
+            y1 >= g3x_shadow2_y0 && y0 <= sh_y1) ? 1 : 0;
+}
+
 int g3x_shadow2_covers_rect(int x0, int y0, int x1, int y1)
 {
     if (!g3x_dbuf_shadow_is_allocated() || g3x_shadow2_mode == G3X_SHADOW_MODE_NONE ||
@@ -437,16 +545,67 @@ int g3x_shadow2_covers_rect(int x0, int y0, int x1, int y1)
             x1 <= sh_x1 && y1 <= sh_y1) ? 1 : 0;
 }
 
+int g3x_shadow2_covers_active_overlay(void)
+{
+    int ov_x0 = G3X_MENU_X0;
+    int ov_y0 = G3X_MENU_Y0;
+    int ov_x1 = G3X_MENU_X1;
+    int ov_y1 = G3X_MENU_Y1;
+    g3x_shadow2_get_overlay_rect(&ov_x0, &ov_y0, &ov_x1, &ov_y1);
+    return g3x_shadow2_covers_rect(ov_x0, ov_y0, ov_x1, ov_y1);
+}
+
 int g3x_shadow2_restore_rect(int x0, int y0, int x1, int y1)
 {
-    if (g3x_shadow2_covers_rect(x0, y0, x1, y1))
+    if (g3x_shadow2_intersects_rect(x0, y0, x1, y1))
     {
         (void)g3x_dbuf_shadow_restore();
+    }
+    if (g3x_shadow2_covers_rect(x0, y0, x1, y1))
+    {
         return 0;
     }
+    draw_set_guard();
     g3x_diag_record_full_redraw();
+    g3x_shadow2_in_fallback_redraw = 1;
     gui_redraw(1);
+    g3x_shadow2_in_fallback_redraw = 0;
     return 1;
+}
+
+int g3x_shadow2_handle_gui_redraw_sentinel(int *flag_gui_enforce_redraw)
+{
+    if (g3x_shadow2_in_fallback_redraw)
+    {
+        if (flag_gui_enforce_redraw)
+        {
+            *flag_gui_enforce_redraw = 1;
+        }
+        return 0;
+    }
+
+    int ov_x0 = G3X_MENU_X0;
+    int ov_y0 = G3X_MENU_Y0;
+    int ov_x1 = G3X_MENU_X1;
+    int ov_y1 = G3X_MENU_Y1;
+    g3x_shadow2_get_overlay_rect(&ov_x0, &ov_y0, &ov_x1, &ov_y1);
+
+    g3x_diag_record_sentinel_loss();
+    if (g3x_shadow2_intersects_rect(ov_x0, ov_y0, ov_x1, ov_y1))
+    {
+        (void)g3x_dbuf_shadow_restore();
+    }
+    if (g3x_shadow2_covers_rect(ov_x0, ov_y0, ov_x1, ov_y1))
+    {
+        return 1;
+    }
+    g3x_diag_record_full_redraw();
+    draw_set_guard();
+    if (flag_gui_enforce_redraw)
+    {
+        *flag_gui_enforce_redraw = 1;
+    }
+    return 0;
 }
 #endif /* G3X_GUI_SHADOW2 == 1 */
 
@@ -605,6 +764,7 @@ void g3x_diag_shadow_ensure_allocated(unsigned char **bm_ptr,
 void g3x_diag_on_alt_enter(void)
 {
 #if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)
+    g3x_shadow2_reset_overlay_bounds();
     int was_allocated = g3x_dbuf_shadow_is_allocated();
     g3x_dbuf_shadow_ensure_allocated();
     if (was_allocated)
@@ -621,6 +781,9 @@ void g3x_diag_on_alt_enter(void)
 /* Release suppression mechanism cleanly on ALT exit. */
 void g3x_diag_on_alt_leave(void)
 {
+#if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)
+    g3x_shadow2_reset_overlay_bounds();
+#endif
     g3x_diag_suppress_engaged = 0;
     g3x_diag_last_bitmap_buffer = -1;
 }
@@ -661,7 +824,12 @@ int g3x_diag_restore_overlay(int trigger)
     g3x_diag_record_hook_hit();
 
 #if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)
-    return g3x_shadow2_restore_rect(G3X_MENU_X0, G3X_MENU_Y0, G3X_MENU_X1, G3X_MENU_Y1);
+    int ov_x0 = G3X_MENU_X0;
+    int ov_y0 = G3X_MENU_Y0;
+    int ov_x1 = G3X_MENU_X1;
+    int ov_y1 = G3X_MENU_Y1;
+    g3x_shadow2_get_overlay_rect(&ov_x0, &ov_y0, &ov_x1, &ov_y1);
+    return g3x_shadow2_restore_rect(ov_x0, ov_y0, ov_x1, ov_y1);
 #else
     if (g3x_dbuf_shadow_is_allocated())
     {

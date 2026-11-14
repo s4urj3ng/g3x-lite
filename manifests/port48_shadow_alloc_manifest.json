@@ -21,8 +21,8 @@
   "artifacts": {
     "DISKBOOT.BIN": {
       "path": "DISKBOOT.BIN",
-      "size": 129361,
-      "sha256": "8eac35346fdc1f472d6e8d58625ee068b716530410bc47dafdf52c45eb6347cb"
+      "size": 130217,
+      "sha256": "9ac53c2720f96e40b6ff95e64ed069139c80c170d521a0e4fc01dd9c03ad4db1"
     },
     "modules_count": 34,
     "modules": {
@@ -1134,9 +1134,9 @@
         "sha256": "3ffbe9b6390041f1ed9da96b6b0d43e1c43fb2ca2cb31d92d8970174d985a2f3"
       }
     },
-    "core_end": "0x00369ee0",
-    "_end": "0x00369ee0"
+    "core_end": "0x0036a240",
+    "_end": "0x0036a240"
   },
-  "core_end": "0x00369ee0",
-  "_end": "0x00369ee0"
+  "core_end": "0x0036a240",
+  "_end": "0x0036a240"
 }
