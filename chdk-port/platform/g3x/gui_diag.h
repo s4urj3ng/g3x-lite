@@ -45,11 +45,13 @@
 #define G3X_CONF_SAVE_NONE 0
 #define G3X_CONF_SAVE_OK   1
 #define G3X_CONF_SAVE_ERR  2
+#define G3X_CONF_SAVE_OFF  3
 
 extern unsigned int g3x_menu_open_count;
 extern int g3x_conf_save_status;
 void g3x_menu_record_open(void);
 void g3x_conf_record_save_result(int ok);
+void g3x_conf_record_save_skipped(void);
 #endif
 
 #if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)
@@ -228,9 +230,21 @@ void g3x_menu_record_open(void)
     g3x_menu_open_count++;
 }
 
+void g3x_conf_record_save_skipped(void)
+{
+    g3x_conf_save_status = G3X_CONF_SAVE_OFF;
+}
+
 void g3x_conf_record_save_result(int ok)
 {
-    g3x_conf_save_status = ok ? G3X_CONF_SAVE_OK : G3X_CONF_SAVE_ERR;
+    if (ok == G3X_CONF_SAVE_OFF || ok == 3 || ok == -1)
+    {
+        g3x_conf_save_status = G3X_CONF_SAVE_OFF;
+    }
+    else
+    {
+        g3x_conf_save_status = ok ? G3X_CONF_SAVE_OK : G3X_CONF_SAVE_ERR;
+    }
 }
 #endif
 
@@ -978,9 +992,10 @@ void gui_diag_draw(void)
 
 #if defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)
     char menu_line[32];
-    const char *save_str = (g3x_conf_save_status == G3X_CONF_SAVE_OK) ? "OK" :
+    const char *save_str = (g3x_conf_save_status == G3X_CONF_SAVE_OFF) ? "OFF" :
+                           (g3x_conf_save_status == G3X_CONF_SAVE_OK)  ? "OK" :
                            (g3x_conf_save_status == G3X_CONF_SAVE_ERR) ? "ERR" : "-";
-    sprintf(menu_line, "MENU:%04u CONF:%s",
+    sprintf(menu_line, "MENU:%04u SAVE:%s",
             g3x_diag_clamp9999(g3x_menu_open_count),
             save_str);
     int y_menu = camera_screen.height - 3 * FONT_HEIGHT;

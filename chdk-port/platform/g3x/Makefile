@@ -18,6 +18,12 @@ ifneq ($(G3X_GUI_SHADOW2),1)
 $(error G3X_GUI_MENU=1 requires G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)
 endif
 CFLAGS += -DG3X_GUI_MENU=1
+ifeq ($(findstring -DG3X_DISABLE_CARD_WRITES=1,$(CFLAGS)),)
+CFLAGS += -DG3X_DISABLE_CARD_WRITES=1
+endif
+ifeq ($(findstring -DOPT_DISABLE_FILE_WRITES=1,$(CFLAGS)),)
+CFLAGS += -DOPT_DISABLE_FILE_WRITES=1
+endif
 endif
 
 ifeq ($(G3X_GUI_SYNC),1)
@@ -85,6 +91,18 @@ include ../makefile_platform.inc
 
 ifeq ($(G3X_KBD_CHECK),1)
 CFLAGS += -DG3X_KBD_CHECK=1
+endif
+
+ifeq ($(G3X_DISABLE_CARD_WRITES),1)
+ifeq ($(findstring -DG3X_DISABLE_CARD_WRITES=1,$(CFLAGS)),)
+CFLAGS += -DG3X_DISABLE_CARD_WRITES=1
+endif
+endif
+
+ifeq ($(OPT_DISABLE_FILE_WRITES),1)
+ifeq ($(findstring -DOPT_DISABLE_FILE_WRITES=1,$(CFLAGS)),)
+CFLAGS += -DOPT_DISABLE_FILE_WRITES=1
+endif
 endif
 
 

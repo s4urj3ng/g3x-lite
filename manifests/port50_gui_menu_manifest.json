@@ -19,14 +19,14 @@
     ],
     "toolchain": "gcc-arm-none-eabi-5_4-2016q3",
     "deterministic_wrapper": "scripts/gcc_deterministic_wrapper.sh",
-    "card_writes": "enabled",
-    "card_writes_note": "G3X_GUI_MENU=1 overrides G3X_DISABLE_CARD_WRITES=1 and OPT_DISABLE_FILE_WRITES=1 (no C code reads them; all linker wrappers are removed and real file I/O is enabled)"
+    "card_writes": "disabled",
+    "card_writes_note": "Config save disabled under G3X_DISABLE_CARD_WRITES=1 OPT_DISABLE_FILE_WRITES=1 (SAVE:OFF); physical SD card remains write-protected (LOCK)"
   },
   "artifacts": {
     "DISKBOOT.BIN": {
       "path": "DISKBOOT.BIN",
-      "size": 131321,
-      "sha256": "7fa091329c0d3d43e531004bcd135ab4f452e2a574aad4949888445720d6fca8"
+      "size": 131129,
+      "sha256": "074a7f575c2baf7216612df635883c8467153ed488c4c7401ad186c3816a7ad7"
     },
     "modules_count": 34,
     "modules": {
@@ -1138,13 +1138,13 @@
         "sha256": "3ffbe9b6390041f1ed9da96b6b0d43e1c43fb2ca2cb31d92d8970174d985a2f3"
       }
     },
-    "core_end": "0x0036a6b0",
-    "_end": "0x0036a6b0"
+    "core_end": "0x0036a5f0",
+    "_end": "0x0036a5f0"
   },
-  "core_end": "0x0036a6b0",
-  "_end": "0x0036a6b0",
-  "card_writes": "enabled",
-  "card_writes_note": "G3X_GUI_MENU=1 overrides G3X_DISABLE_CARD_WRITES=1 and OPT_DISABLE_FILE_WRITES=1 (no C code reads them; all linker wrappers are removed and real file I/O is enabled)",
+  "core_end": "0x0036a5f0",
+  "_end": "0x0036a5f0",
+  "card_writes": "disabled",
+  "card_writes_note": "Config save disabled under G3X_DISABLE_CARD_WRITES=1 OPT_DISABLE_FILE_WRITES=1 (SAVE:OFF); physical SD card remains write-protected (LOCK)",
   "removed_wrappers": [
     "write",
     "fwrite",

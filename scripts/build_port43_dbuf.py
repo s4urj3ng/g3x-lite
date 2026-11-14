@@ -129,6 +129,8 @@ def _ensure_dbuf_seed_stage() -> Path:
         env["MAKEFLAGS"] = f"CC={wrapper_script}"
     env["G3X_GUI_FIX"] = "1"
     env["G3X_GUI_DBUF"] = "1"
+    env["G3X_DISABLE_CARD_WRITES"] = "1"
+    env["OPT_DISABLE_FILE_WRITES"] = "1"
     subprocess.run(cmd, cwd=str(SEED_STAGE_DIR), env=env, check=True, stdout=subprocess.DEVNULL)
     shutil.rmtree(gcc_tmp, ignore_errors=True)
 
@@ -1817,38 +1819,33 @@ def apply_gui_menu_staging_patches(stage_dir: Path) -> None:
     gui_text = gui_text.replace(gui_anchor, gui_replacement, 1)
     gui_c.write_text(gui_text, encoding="utf-8")
 
-    # 5. In core/conf.c: record conf save status (OK / ERR)
+    # 5. In core/conf.c: ensure config_save write-disable guard is active under G3X_GUI_MENU=1
     conf_c = stage_dir / "core/conf.c"
     conf_text = conf_c.read_text(encoding="utf-8")
-    conf_anchor = (
-        "        write(fd, buf, p-buf);\n"
-        "        close(fd);\n"
-        "    }\n"
-        "    ufree(buf);"
-    )
-    conf_replacement = (
-        "#if defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)\n"
-        "        int written = write(fd, buf, p-buf);\n"
-        "        close(fd);\n"
-        "        extern void g3x_conf_record_save_result(int ok);\n"
-        "        g3x_conf_record_save_result(written == (p - buf));\n"
-        "    }\n"
-        "    else\n"
-        "    {\n"
-        "        extern void g3x_conf_record_save_result(int ok);\n"
-        "        g3x_conf_record_save_result(0);\n"
-        "    }\n"
-        "#else\n"
-        "        write(fd, buf, p-buf);\n"
-        "        close(fd);\n"
-        "    }\n"
-        "#endif\n"
-        "    ufree(buf);"
-    )
-    if conf_text.count(conf_anchor) != 1:
-        raise RuntimeError("PORT-50 conf.c write anchor not found in staged core/conf.c")
-    conf_text = conf_text.replace(conf_anchor, conf_replacement, 1)
-    conf_c.write_text(conf_text, encoding="utf-8")
+    if "g3x_conf_record_save_result" not in conf_text:
+        guard_anchor = "void config_save(ConfInfo *ci, const char *filename, int config_base)\n{\n"
+        guard_code = (
+            "void config_save(ConfInfo *ci, const char *filename, int config_base)\n"
+            "{\n"
+            "#if defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1) && \\\n"
+            "    ((defined(G3X_DISABLE_CARD_WRITES) && (G3X_DISABLE_CARD_WRITES == 1)) || \\\n"
+            "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1)))\n"
+            "    (void)ci;\n"
+            "    (void)filename;\n"
+            "    (void)config_base;\n"
+            "    extern void g3x_conf_record_save_result(int ok);\n"
+            "    g3x_conf_record_save_result(3 /* G3X_CONF_SAVE_OFF */);\n"
+            "    return;\n"
+            "#else\n"
+        )
+        if conf_text.count(guard_anchor) != 1:
+            raise RuntimeError("PORT-50 config_save start anchor not found in staged core/conf.c")
+        conf_text = conf_text.replace(guard_anchor, guard_code, 1)
+        end_anchor = "\n#if defined(OPT_FORCE_LUA_CALL_NATIVE)\n    conf.script_allow_lua_native_calls = 1;\n#endif\n}"
+        if conf_text.count(end_anchor) != 1:
+            raise RuntimeError("PORT-50 config_save end anchor not found in staged core/conf.c")
+        conf_text = conf_text.replace(end_anchor, end_anchor[:-1] + "#endif\n}", 1)
+        conf_c.write_text(conf_text, encoding="utf-8")
 
 
 def build_port43_dbuf(
@@ -2004,6 +2001,8 @@ def build_port43_dbuf(
                 "PLATFORM=g3x",
                 "PLATFORMSUB=110c",
                 "G3X_FULL_BUILD=1",
+                "G3X_DISABLE_CARD_WRITES=1",
+                "OPT_DISABLE_FILE_WRITES=1",
                 "G3X_GUI_FIX=1",
                 "G3X_GUI_DBUF=1",
             ]
@@ -2037,6 +2036,8 @@ def build_port43_dbuf(
         "PLATFORM=g3x",
         "PLATFORMSUB=110c",
         "G3X_FULL_BUILD=1",
+        "G3X_DISABLE_CARD_WRITES=1",
+        "OPT_DISABLE_FILE_WRITES=1",
         f"CROSS_COMPILE={CROSS_COMPILE}",
         "OPT_CAPSTONE_TOOLS=0",
         "G3X_GUI_FIX=1",
@@ -2068,6 +2069,8 @@ def build_port43_dbuf(
         env["MAKEFLAGS"] = f"CC={wrapper_script}"
     env["G3X_GUI_FIX"] = "1"
     env["G3X_GUI_DBUF"] = "1"
+    env["G3X_DISABLE_CARD_WRITES"] = "1"
+    env["OPT_DISABLE_FILE_WRITES"] = "1"
     if no_overdraw:
         env["G3X_GUI_NOOVERDRAW"] = "1"
     if kbd_check:
@@ -2212,17 +2215,17 @@ def build_port43_dbuf(
         artifacts_dict["_end"] = core_end_hex
 
     if gui_menu:
-        manifest_data["card_writes"] = "enabled"
+        manifest_data["card_writes"] = "disabled"
         manifest_data["card_writes_note"] = (
-            "G3X_GUI_MENU=1 overrides G3X_DISABLE_CARD_WRITES=1 and OPT_DISABLE_FILE_WRITES=1 "
-            "(no C code reads them; all linker wrappers are removed and real file I/O is enabled)"
+            "Config save disabled under G3X_DISABLE_CARD_WRITES=1 OPT_DISABLE_FILE_WRITES=1 "
+            "(SAVE:OFF); physical SD card remains write-protected (LOCK)"
         )
         build_dict = manifest_data["build"]
         assert isinstance(build_dict, dict)
-        build_dict["card_writes"] = "enabled"
+        build_dict["card_writes"] = "disabled"
         build_dict["card_writes_note"] = (
-            "G3X_GUI_MENU=1 overrides G3X_DISABLE_CARD_WRITES=1 and OPT_DISABLE_FILE_WRITES=1 "
-            "(no C code reads them; all linker wrappers are removed and real file I/O is enabled)"
+            "Config save disabled under G3X_DISABLE_CARD_WRITES=1 OPT_DISABLE_FILE_WRITES=1 "
+            "(SAVE:OFF); physical SD card remains write-protected (LOCK)"
         )
         manifest_data["removed_wrappers"] = [
             "write",

@@ -36,6 +36,12 @@ endif
 ifeq ($(findstring -DG3X_GUI_MENU=1,$(CFLAGS)),)
 CFLAGS += -DG3X_GUI_MENU=1
 endif
+ifeq ($(findstring -DG3X_DISABLE_CARD_WRITES=1,$(CFLAGS)),)
+CFLAGS += -DG3X_DISABLE_CARD_WRITES=1
+endif
+ifeq ($(findstring -DOPT_DISABLE_FILE_WRITES=1,$(CFLAGS)),)
+CFLAGS += -DOPT_DISABLE_FILE_WRITES=1
+endif
 endif
 
 ifeq ($(G3X_GUI_SYNC),1)
