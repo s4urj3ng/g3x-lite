@@ -1,0 +1,190 @@
+{
+  "manifest_version": "1.0.0",
+  "task": "PORT45-OVERDRAW-RESEARCH",
+  "firmware_revision": "GM1.10C",
+  "addresses": [
+    {
+      "name": "transfer_src_overlay",
+      "address": "0xFC380635",
+      "type": "function",
+      "label": "FINSIG",
+      "citation": "reference/finsig_gm110c/stubs_entry.S:352; reference/finsig_gm110c/funcs_by_name.csv:2571; chdk-port/platform/g7x/lib.c:13",
+      "description": "DryOS function triggering hardware overlay VRAM transfer for buffer index (0 or 1)"
+    },
+    {
+      "name": "transfer_src_overlay_helper",
+      "address": "0xFC38113F",
+      "type": "function",
+      "label": "FINSIG",
+      "citation": "reference/finsig_gm110c/funcs_by_name.csv:2572; chdk-port/tools/finsig_thumb2.c:4707-4710",
+      "description": "VTM routine calling transfer_src_overlay and BmpDDev_SetBitmapVRAMAddress commit"
+    },
+    {
+      "name": "GraphicSystemCoreFinish_helper",
+      "address": "0xFC143493",
+      "type": "function",
+      "label": "FINSIG",
+      "citation": "reference/finsig_gm110c/funcs_by_name.csv:935; chdk-port/tools/finsig_thumb2.c:4710",
+      "description": "Graphic system routine calling transfer_src_overlay on stock UI updates"
+    },
+    {
+      "name": "GraphicSystemCoreFinish",
+      "address": "0xFC20C5BF",
+      "type": "function",
+      "label": "FINSIG",
+      "citation": "reference/finsig_gm110c/funcs_by_name.csv:934; chdk-port/tools/finsig_thumb2.c:4714",
+      "description": "Graphic system finish message sender"
+    },
+    {
+      "name": "ScreenLock",
+      "address": "0xFC3810F1",
+      "type": "function",
+      "label": "FINSIG",
+      "citation": "reference/finsig_gm110c/stubs_entry.S:268; chdk-port/platform/g7x/sub/100d/stubs_entry.S:245",
+      "description": "Firmware screen lock setting transfer inhibit flag in VramTransferManager.c"
+    },
+    {
+      "name": "ScreenUnlock",
+      "address": "0xFC381127",
+      "type": "function",
+      "label": "FINSIG",
+      "citation": "reference/finsig_gm110c/stubs_entry.S:269; chdk-port/platform/g7x/sub/100d/stubs_entry.S:246",
+      "description": "Firmware screen unlock releasing transfer inhibit flag in VramTransferManager.c"
+    },
+    {
+      "name": "BmpDDev_SetBitmapVRAMAddress",
+      "address": "0xFC183690",
+      "type": "function",
+      "label": "INFERRED (ROM read, 0xFC18347E..0xFC18381F)",
+      "citation": "ROM 0xFC18347E..0xFC18381F; chdk-port/platform/g7x/lib.c:261-280",
+      "description": "Display device hardware plane buffer address commit function in ROM (sub_fc18347e entry 0xFC183690); called via direct BL from 0xFC38117E"
+    },
+    {
+      "name": "active_bitmap_buffer",
+      "address": "0x0000D2A4",
+      "type": "variable",
+      "label": "FINSIG",
+      "citation": "reference/finsig_gm110c/stubs_entry.S:186; chdk-port/platform/g7x/lib.c:5; chdk-port/platform/g5x/lib.c:6",
+      "description": "Index of active display bitmap buffer (0 or 1)"
+    },
+    {
+      "name": "bitmap_buffer",
+      "address": "0x0000D2A8",
+      "type": "variable",
+      "label": "FINSIG",
+      "citation": "reference/finsig_gm110c/stubs_entry.S:188; chdk-port/platform/g7x/lib.c:261-280; chdk-port/platform/g5x/lib.c:7",
+      "description": "Pointers to double-buffered display bitmap framebuffers in DRAM (0x5FE80000 / 0x5FD00000)"
+    },
+    {
+      "name": "opacity_buffer[0]",
+      "address": "0x5FC40000",
+      "type": "variable",
+      "label": "INFERRED (ROM read, 0xFC18347E..0xFC18381F)",
+      "citation": "ROM 0xFC18347E..0xFC18381F; chdk-port/platform/g7x/lib.c:291; docs/PORT35_GUI_ADDRESSES.md:38",
+      "description": "Mode 12 LCD opacity plane buffer 0 in DRAM"
+    },
+    {
+      "name": "opacity_buffer[1]",
+      "address": "0x5FB80000",
+      "type": "variable",
+      "label": "INFERRED (ROM read, 0xFC18347E..0xFC18381F)",
+      "citation": "ROM 0xFC18347E..0xFC18381F; chdk-port/platform/g7x/lib.c:291; docs/PORT35_GUI_ADDRESSES.md:39",
+      "description": "Mode 12 LCD opacity plane buffer 1 in DRAM"
+    },
+    {
+      "name": "VTM_Data",
+      "address": "0x0000D264",
+      "type": "variable",
+      "label": "INFERRED (chdk-port/platform/sx710hs/sub/100a/stubs_min.S:26)",
+      "citation": "chdk-port/platform/sx710hs/sub/100a/stubs_min.S:26; ROM 0xFC381420..0xFC38143F",
+      "description": "Base address of VramTransferManager state structure in RAM (0x0000D2B8 - 0x54)"
+    },
+    {
+      "name": "check_gui_needs_redraw",
+      "address": "chdk-port/platform/g3x/lib.c:136-145",
+      "type": "function",
+      "label": "HISTORICAL_CHDK",
+      "citation": "chdk-port/platform/g5x/lib.c:211-220; chdk-port/platform/g3x/lib.c:136-145",
+      "description": "CHDK RAM function checking active_bitmap_buffer toggles"
+    },
+    {
+      "name": "g3x_dbuf_shadow_restore",
+      "source_path": "chdk-port/core/gui_draw.c:341-371",
+      "type": "function",
+      "label": "source (PORT-44)",
+      "citation": "chdk-port/core/gui_draw.c:341-371; docs/PORT44_DBUF_HEAP.md:95-96",
+      "description": "Fast row-by-row shadow buffer blit into both bitmap and opacity buffers"
+    },
+    {
+      "name": "task_FaceFrame",
+      "address": "0xFC0BFDE3",
+      "type": "function",
+      "label": "FINSIG",
+      "citation": "reference/finsig_gm110c/funcs_by_name.csv:2411; chdk-port/platform/g5x/notes.txt:6-7",
+      "description": "Canon background task drawing AF/face detection tracking frames into overlay buffer"
+    },
+    {
+      "name": "task_LcdConTask",
+      "address": "0xFC1828F5",
+      "type": "function",
+      "label": "FINSIG",
+      "citation": "reference/finsig_gm110c/funcs_by_name.csv:997; chdk-port/platform/g7x/sub/100c/funcs_by_name.csv:899",
+      "description": "Canon LCD control and display status task"
+    },
+    {
+      "name": "task_PhySw",
+      "address": "0xFC1283AD",
+      "type": "function",
+      "label": "FINSIG",
+      "citation": "reference/finsig_gm110c/stubs_entry.S:340; reference/finsig_gm110c/funcs_by_name.csv:2470",
+      "description": "Stock physical switch / keyboard polling task Thumb entry (helper at 0xFC1283D2)"
+    },
+    {
+      "name": "mykbd_task",
+      "address": "chdk-port/platform/g3x/kbd.c:48-62",
+      "type": "function",
+      "label": "HISTORICAL_CHDK",
+      "citation": "chdk-port/platform/g7x/kbd.c:56-65; chdk-port/platform/g5x/kbd.c:48-57",
+      "description": "CHDK keyboard task running at 100 Hz (10 ms sleep cycle)"
+    },
+    {
+      "name": "hook_CreateTask",
+      "address": "0xBFE14A3C",
+      "type": "variable",
+      "label": "FINSIG",
+      "citation": "reference/finsig_gm110c/stubs_entry.S:203; chdk-port/platform/g7x/sub/100d/boot.c:63-71",
+      "description": "CreateTask RAM hook address for task replacement"
+    }
+  ],
+  "rom_ranges_read": [
+    {
+      "start": "0xFC18347E",
+      "end": "0xFC18381F",
+      "length": 930,
+      "sha256": "5b04719fde94ae9a967beb93e1f64836fd417de35d0cc613536c3c79b07fcadf",
+      "reason_finsig_insufficient": "FINSIG stub missing: BmpDDev_SetBitmapVRAMAddress (0xFC183690) and opacity_buffer pointers (0x5FC40000 / 0x5FB80000) are absent from stubs_entry.S and funcs_by_name.csv; required to verify hardware plane commit."
+    },
+    {
+      "start": "0xFC380634",
+      "end": "0xFC38073F",
+      "length": 268,
+      "sha256": "336d235df668ca1d9e05c010545ccf417c3b57a572326fb6dd35506c45d533ab",
+      "reason_finsig_insufficient": "FINSIG stub uncertain: transfer_src_overlay exists at 0xFC380635 in FINSIG, but its internal transfer mechanism, DMA completion, and VTM dirty bitmask clearing behavior are not provided by FINSIG."
+    },
+    {
+      "start": "0xFC3810F0",
+      "end": "0xFC38119B",
+      "length": 172,
+      "sha256": "188ac7d596935c5b3a6d4c04f91a15e9202676d70ef6712ef7d49e18f90dfcc0",
+      "reason_finsig_insufficient": "FINSIG stub uncertain: ScreenLock (0xFC3810F1) and ScreenUnlock (0xFC381127) exist in FINSIG, but whether transfer_src_overlay_helper calls BmpDDev directly or through an indirect RAM function pointer was absent from FINSIG."
+    },
+    {
+      "start": "0xFC381420",
+      "end": "0xFC38143F",
+      "length": 32,
+      "sha256": "6818cfe66adb29abc97612cf7139d102bd144d5bef456aa1d32b480a688fb556",
+      "reason_finsig_insufficient": "FINSIG stub missing: VTM_Data structure base address (0x0000D264) is absent from stubs_entry.S and funcs_by_name.csv; required to verify literal pool pointer (0x0000D2B8) offset."
+    }
+  ],
+  "notes": "Bounded ROM ranges recorded with zero full-ROM scans; validated via tools/port11c_evidence_validator.py."
+}
