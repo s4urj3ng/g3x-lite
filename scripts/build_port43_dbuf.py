@@ -31,6 +31,7 @@ CROSS_COMPILE = str(TOOLCHAIN_BIN / "arm-none-eabi-")
 
 OUT_DIR = REPO_ROOT / "out" / "port43-dbuf"
 STAGE_DIR = OUT_DIR / "stage_chdk"
+SEED_STAGE_DIR = REPO_ROOT / "out" / ".port43_seed_stage"
 
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 from build_port41_full import (  # type: ignore
@@ -40,6 +41,96 @@ from build_port41_full import (  # type: ignore
     overlay_tree,
     sha256_file,
 )
+
+
+def _clean_platform_and_core_artifacts(stage_dir: Path) -> None:
+    """Clean stale objects/archives/binaries in core, platform, loader, and bin while preserving prebuilt tools/lib/modules/CHDK."""
+    subprocess.run(["chmod", "-R", "u+w", str(stage_dir)], check=True)
+    for sub in ["core", "platform", "loader", "bin"]:
+        target = stage_dir / sub
+        if not target.is_dir():
+            continue
+        for o2 in target.glob("**/.o2"):
+            if o2.is_dir():
+                shutil.rmtree(o2, ignore_errors=True)
+        for ext in ("*.o", "*.a", "*.d", "*.flt", "*.dump", "*.elf", "*.bin"):
+            for f in target.glob(f"**/{ext}"):
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+
+
+def _remove_prototype_files(stage_dir: Path) -> None:
+    """Remove boot_prototype.c and stubs_prototype.S from a staged CHDK tree."""
+    for proto_name in ["boot_prototype.c", "stubs_prototype.S"]:
+        proto_file = stage_dir / "platform" / "g3x" / "sub" / "110c" / proto_name
+        if proto_file.exists():
+            proto_file.unlink()
+
+
+def _ensure_dbuf_seed_stage() -> Path:
+    """Build or return a cached staging seed with prebuilt tools/, lib/, modules/, and CHDK/."""
+    sentinel = SEED_STAGE_DIR / ".seed_ready"
+    if (
+        sentinel.is_file()
+        and (SEED_STAGE_DIR / "tools" / "dancingbits").is_file()
+        and (SEED_STAGE_DIR / "lib" / "core" / ".o2" / "libcore.a").is_file()
+        and len(list((SEED_STAGE_DIR / "modules" / ".o2").glob("*.flt"))) == 34
+    ):
+        _remove_prototype_files(SEED_STAGE_DIR)
+        return SEED_STAGE_DIR
+
+    if SEED_STAGE_DIR.exists():
+        shutil.rmtree(SEED_STAGE_DIR)
+    SEED_STAGE_DIR.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(CHDK_PORT, SEED_STAGE_DIR, symlinks=True)
+    clean_staging_artifacts(SEED_STAGE_DIR)
+
+    platform_target = SEED_STAGE_DIR / "platform" / "g3x"
+    overlay_tree(FULL_BUILD_SRC, platform_target, ignore={"loader"})
+    loader_src = FULL_BUILD_SRC / "loader"
+    if loader_src.is_dir():
+        overlay_tree(loader_src, SEED_STAGE_DIR / "loader" / "g3x")
+    dbuf_menu = CHDK_PORT / "platform" / "g3x" / "gui_menu.c"
+    if dbuf_menu.is_file():
+        shutil.copy2(dbuf_menu, platform_target / "gui_menu.c")
+    _remove_prototype_files(SEED_STAGE_DIR)
+
+    apply_gui_fix_staging_patches(SEED_STAGE_DIR, legacy_dbuf_snapshot=False)
+    apply_dbuf_staging_patches(SEED_STAGE_DIR)
+
+    cmd = [
+        "make",
+        "-C",
+        str(SEED_STAGE_DIR),
+        "PLATFORM=g3x",
+        "PLATFORMSUB=110c",
+        "G3X_FULL_BUILD=1",
+        f"CROSS_COMPILE={CROSS_COMPILE}",
+        "OPT_CAPSTONE_TOOLS=0",
+        "G3X_GUI_FIX=1",
+        "G3X_GUI_DBUF=1",
+        "fir",
+    ]
+    env = os.environ.copy()
+    wrapper_script = REPO_ROOT / "scripts" / "gcc_deterministic_wrapper.sh"
+    if wrapper_script.is_file() and os.access(wrapper_script, os.X_OK):
+        env["MAKEFLAGS"] = f"CC={wrapper_script}"
+    env["G3X_GUI_FIX"] = "1"
+    env["G3X_GUI_DBUF"] = "1"
+    subprocess.run(cmd, cwd=str(SEED_STAGE_DIR), env=env, check=True, stdout=subprocess.DEVNULL)
+
+    for rel in ["core", "include", "platform/g3x", "loader/g3x"]:
+        dst = SEED_STAGE_DIR / rel
+        if dst.exists():
+            shutil.rmtree(dst)
+        shutil.copytree(CHDK_PORT / rel, dst, symlinks=True)
+    _remove_prototype_files(SEED_STAGE_DIR)
+    _clean_platform_and_core_artifacts(SEED_STAGE_DIR)
+
+    sentinel.write_text("ok\n", encoding="utf-8")
+    return SEED_STAGE_DIR
 
 
 def apply_dbuf_staging_patches(stage_dir: Path) -> None:
@@ -382,6 +473,489 @@ def apply_kbd_check_staging_patches(stage_dir: Path) -> None:
     main.write_text(text, encoding="utf-8")
 
 
+def apply_gui_diag_staging_patches(stage_dir: Path) -> None:
+    """Apply G3X_GUI_DIAG=1 compile flags, shadow retry, blit-only restore, sibling suppression, and ALT counter line."""
+    for rel in ["platform/g3x/Makefile", "platform/g3x/sub/110c/Makefile"]:
+        mpath = stage_dir / rel
+        text = mpath.read_text(encoding="utf-8")
+        text = (
+            "ifeq ($(G3X_GUI_DIAG),1)\n"
+            "ifneq ($(G3X_GUI_DBUF),1)\n"
+            "$(error G3X_GUI_DIAG=1 requires G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1)\n"
+            "endif\n"
+            "ifneq ($(G3X_GUI_NOOVERDRAW),1)\n"
+            "$(error G3X_GUI_DIAG=1 requires G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1)\n"
+            "endif\n"
+            "ifneq ($(G3X_KBD_CHECK),1)\n"
+            "$(error G3X_GUI_DIAG=1 requires G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1)\n"
+            "endif\n"
+            "endif\n\n"
+        ) + text
+        anchor = "CFLAGS += -DG3X_FULL_BUILD=1"
+        if text.count(anchor) != 1:
+            raise RuntimeError(f"PORT-47 compile flag anchor not found in {rel}")
+        text = text.replace(anchor, anchor + " -DG3X_GUI_DIAG=1", 1)
+        mpath.write_text(text, encoding="utf-8")
+
+    # 1. Patch platform/g3x/lib.c: adapt G5X check_gui_needs_redraw() (chdk-port/platform/g5x/lib.c:206)
+    lib_c = stage_dir / "platform/g3x/lib.c"
+    lib_text = lib_c.read_text(encoding="utf-8")
+    lib_anchor = (
+        "int check_gui_needs_redraw(void)\n"
+        "{\n"
+        "    // draw_test_guard sentinel check is executed directly in main loop redraw condition\n"
+        "    extern int draw_test_guard(void);\n"
+        "    (void)draw_test_guard;\n"
+        "    return 0;\n"
+        "}"
+    )
+    lib_replacement = (
+        "#if defined(G3X_GUI_DIAG) && (G3X_GUI_DIAG == 1)\n"
+        '#include "gui_diag.h"\n'
+        "int check_gui_needs_redraw(void)\n"
+        "{\n"
+        "    return g3x_diag_check_suppress();\n"
+        "}\n"
+        "#else\n"
+        "int check_gui_needs_redraw(void)\n"
+        "{\n"
+        "    // draw_test_guard sentinel check is executed directly in main loop redraw condition\n"
+        "    extern int draw_test_guard(void);\n"
+        "    (void)draw_test_guard;\n"
+        "    return 0;\n"
+        "}\n"
+        "#endif"
+    )
+    if lib_text.count(lib_anchor) != 1:
+        raise RuntimeError("PORT-47 check_gui_needs_redraw anchor not found in staged platform/g3x/lib.c")
+    lib_c.write_text(lib_text.replace(lib_anchor, lib_replacement, 1), encoding="utf-8")
+
+    # 2. Patch core/gui_draw.c: reliable shadow allocation retry on ALT entry and blit-only shadow restore
+    draw_c = stage_dir / "core/gui_draw.c"
+    draw_text = draw_c.read_text(encoding="utf-8")
+    alloc_anchor = (
+        "void g3x_dbuf_shadow_ensure_allocated(void)\n"
+        "{\n"
+        "    if (g3x_shadow_alloc_attempted)\n"
+        "        return;\n"
+        "    g3x_shadow_alloc_attempted = 1;\n"
+        "\n"
+        "    void *buf = malloc(G3X_SHADOW_TOTAL_SIZE);\n"
+        "    if (!buf)\n"
+        "    {\n"
+        "        buf = umalloc(G3X_SHADOW_TOTAL_SIZE);\n"
+        "    }\n"
+        "    if (buf)\n"
+        "    {\n"
+        "        g3x_shadow_bitmap = (unsigned char *)buf;\n"
+        "        g3x_shadow_opacity = (unsigned char *)buf + G3X_SHADOW_BM_SIZE;\n"
+        "        memset(buf, 0, G3X_SHADOW_TOTAL_SIZE);\n"
+        "    }\n"
+        "    else\n"
+        "    {\n"
+        "        g3x_shadow_bitmap = 0;\n"
+        "        g3x_shadow_opacity = 0;\n"
+        "        g3x_shadow_valid = 0;\n"
+        "    }\n"
+        "}\n"
+        "\n"
+        "void g3x_dbuf_shadow_reset(void)\n"
+        "{\n"
+        "    g3x_shadow_valid = 0;"
+    )
+    alloc_replacement = (
+        '#include "../platform/g3x/gui_diag.h"\n\n'
+        "void g3x_dbuf_shadow_ensure_allocated(void)\n"
+        "{\n"
+        "#if defined(G3X_GUI_DIAG) && (G3X_GUI_DIAG == 1)\n"
+        "    g3x_diag_shadow_ensure_allocated(&g3x_shadow_bitmap, &g3x_shadow_opacity,\n"
+        "                                     &g3x_shadow_valid, &g3x_shadow_alloc_attempted);\n"
+        "#else\n"
+        "    if (g3x_shadow_alloc_attempted)\n"
+        "        return;\n"
+        "    g3x_shadow_alloc_attempted = 1;\n"
+        "\n"
+        "    void *buf = malloc(G3X_SHADOW_TOTAL_SIZE);\n"
+        "    if (!buf)\n"
+        "    {\n"
+        "        buf = umalloc(G3X_SHADOW_TOTAL_SIZE);\n"
+        "    }\n"
+        "    if (buf)\n"
+        "    {\n"
+        "        g3x_shadow_bitmap = (unsigned char *)buf;\n"
+        "        g3x_shadow_opacity = (unsigned char *)buf + G3X_SHADOW_BM_SIZE;\n"
+        "        memset(buf, 0, G3X_SHADOW_TOTAL_SIZE);\n"
+        "    }\n"
+        "    else\n"
+        "    {\n"
+        "        g3x_shadow_bitmap = 0;\n"
+        "        g3x_shadow_opacity = 0;\n"
+        "        g3x_shadow_valid = 0;\n"
+        "    }\n"
+        "#endif\n"
+        "}\n"
+        "\n"
+        "void g3x_dbuf_shadow_reset(void)\n"
+        "{\n"
+        "#if defined(G3X_GUI_DIAG) && (G3X_GUI_DIAG == 1)\n"
+        "    g3x_shadow_valid = g3x_dbuf_shadow_is_allocated();\n"
+        "#else\n"
+        "    g3x_shadow_valid = 0;\n"
+        "#endif"
+    )
+    if draw_text.count(alloc_anchor) != 1:
+        raise RuntimeError("PORT-47 shadow alloc anchor not found in staged core/gui_draw.c")
+    draw_text = draw_text.replace(alloc_anchor, alloc_replacement, 1)
+
+    restore_anchor = (
+        "int g3x_dbuf_shadow_restore(void)\n"
+        "{\n"
+        "    /* Restore only when shadow is valid, buffer allocated, AND CHDK overlay layer is active (not in defaultGuiHandler/live view) */\n"
+        "    if (!g3x_shadow_valid || !g3x_shadow_bitmap || !g3x_shadow_opacity || camera_info.state.gui_mode_none)\n"
+        "    {\n"
+        "        return 0;\n"
+        "    }\n"
+        "    int buf_w = camera_screen.buffer_width ? camera_screen.buffer_width : 928;\n"
+        "\n"
+        "    for (int ry = 0; ry < G3X_SHADOW_HEIGHT; ++ry)\n"
+        "    {\n"
+        "        int screen_y = G3X_MENU_Y0 + ry;\n"
+        "        unsigned int offset_op = (unsigned int)(screen_y * buf_w + G3X_MENU_X0);\n"
+        "        unsigned int offset_bm = offset_op * 2;\n"
+        "\n"
+        "        unsigned char *src_op = g3x_shadow_opacity + ry * G3X_SHADOW_WIDTH;\n"
+        "        unsigned char *src_bm = g3x_shadow_bitmap + (ry * G3X_SHADOW_WIDTH) * 2;\n"
+        "\n"
+        "        memcpy((void*)&opacity_buffer[0][offset_op], src_op, G3X_SHADOW_WIDTH);\n"
+        "        memcpy((void*)&opacity_buffer[1][offset_op], src_op, G3X_SHADOW_WIDTH);\n"
+        "\n"
+        "        memcpy((void*)&bitmap_buffer[0][offset_bm], src_bm, G3X_SHADOW_WIDTH * 2);\n"
+        "        memcpy((void*)&bitmap_buffer[1][offset_bm], src_bm, G3X_SHADOW_WIDTH * 2);\n"
+        "    }\n"
+        "\n"
+        "    draw_set_guard();\n"
+        "    /* NOTE: No vid_bitmap_refresh() here! On G3X (DIGIC 6), vid_bitmap_refresh calls _transfer_src_overlay,\n"
+        "     * which wipes the overlay plane back to stock Canon UI (docs/PORT35_GUI_ADDRESSES.md:35).\n"
+        "     * The synchronous blit into both bitmap buffers and both opacity buffers stands on its own. */\n"
+        "    return 1;\n"
+        "}"
+    )
+    restore_replacement = (
+        "int g3x_dbuf_shadow_restore(void)\n"
+        "{\n"
+        "#if defined(G3X_GUI_DIAG) && (G3X_GUI_DIAG == 1)\n"
+        "    if (!g3x_shadow_bitmap || !g3x_shadow_opacity || camera_info.state.gui_mode_none)\n"
+        "    {\n"
+        "        return 0;\n"
+        "    }\n"
+        "#else\n"
+        "    /* Restore only when shadow is valid, buffer allocated, AND CHDK overlay layer is active (not in defaultGuiHandler/live view) */\n"
+        "    if (!g3x_shadow_valid || !g3x_shadow_bitmap || !g3x_shadow_opacity || camera_info.state.gui_mode_none)\n"
+        "    {\n"
+        "        return 0;\n"
+        "    }\n"
+        "#endif\n"
+        "    int buf_w = camera_screen.buffer_width ? camera_screen.buffer_width : 928;\n"
+        "\n"
+        "    for (int ry = 0; ry < G3X_SHADOW_HEIGHT; ++ry)\n"
+        "    {\n"
+        "        int screen_y = G3X_MENU_Y0 + ry;\n"
+        "        unsigned int offset_op = (unsigned int)(screen_y * buf_w + G3X_MENU_X0);\n"
+        "        unsigned int offset_bm = offset_op * 2;\n"
+        "\n"
+        "        unsigned char *src_op = g3x_shadow_opacity + ry * G3X_SHADOW_WIDTH;\n"
+        "        unsigned char *src_bm = g3x_shadow_bitmap + (ry * G3X_SHADOW_WIDTH) * 2;\n"
+        "\n"
+        "        memcpy((void*)&opacity_buffer[0][offset_op], src_op, G3X_SHADOW_WIDTH);\n"
+        "        memcpy((void*)&opacity_buffer[1][offset_op], src_op, G3X_SHADOW_WIDTH);\n"
+        "\n"
+        "        memcpy((void*)&bitmap_buffer[0][offset_bm], src_bm, G3X_SHADOW_WIDTH * 2);\n"
+        "        memcpy((void*)&bitmap_buffer[1][offset_bm], src_bm, G3X_SHADOW_WIDTH * 2);\n"
+        "    }\n"
+        "\n"
+        "    draw_set_guard();\n"
+        "#if defined(G3X_GUI_DIAG) && (G3X_GUI_DIAG == 1)\n"
+        "    g3x_diag_record_shadow_restore();\n"
+        "#endif\n"
+        "    /* NOTE: No vid_bitmap_refresh() here! On G3X (DIGIC 6), vid_bitmap_refresh calls _transfer_src_overlay,\n"
+        "     * which wipes the overlay plane back to stock Canon UI (docs/PORT35_GUI_ADDRESSES.md:35).\n"
+        "     * The synchronous blit into both bitmap buffers and both opacity buffers stands on its own. */\n"
+        "    return 1;\n"
+        "}"
+    )
+    if draw_text.count(restore_anchor) != 1:
+        raise RuntimeError("PORT-47 shadow restore anchor not found in staged core/gui_draw.c")
+    draw_text = draw_text.replace(restore_anchor, restore_replacement, 1)
+    draw_c.write_text(draw_text, encoding="utf-8")
+
+    # 3. Patch core/gui.c: include gui_diag.h, draw counter line, engage/release suppression on ALT enter/leave,
+    # and enforce shadow-blit-only restore when shadow is non-NULL
+    gui_c = stage_dir / "core/gui.c"
+    gui_text = gui_c.read_text(encoding="utf-8")
+
+    include_anchor = '#include "../platform/g3x/kbd_check.h"\n\nvoid gui_chdk_draw(int force_redraw)\n'
+    include_replacement = (
+        '#include "../platform/g3x/kbd_check.h"\n'
+        '#define G3X_GUI_DIAG_IMPLEMENTATION 1\n'
+        '#include "../platform/g3x/gui_diag.h"\n\n'
+        'void gui_chdk_draw(int force_redraw)\n'
+    )
+    if gui_text.count(include_anchor) != 1:
+        raise RuntimeError("PORT-47 gui_chdk_draw include anchor not found in staged core/gui.c")
+    gui_text = gui_text.replace(include_anchor, include_replacement, 1)
+
+    draw_call_anchor = (
+        "#if defined(G3X_KBD_CHECK) && (G3X_KBD_CHECK == 1)\n"
+        "    gui_kbd_check_draw();\n"
+        "#endif\n"
+    )
+    draw_call_replacement = draw_call_anchor + (
+        "#if defined(G3X_GUI_DIAG) && (G3X_GUI_DIAG == 1)\n"
+        "    gui_diag_draw();\n"
+        "#endif\n"
+    )
+    if gui_text.count(draw_call_anchor) != 1:
+        raise RuntimeError("PORT-47 gui_kbd_check_draw call anchor not found in staged core/gui.c")
+    gui_text = gui_text.replace(draw_call_anchor, draw_call_replacement, 1)
+
+    set_mode_alloc_anchor = (
+        "#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)\n"
+        "    if (mode && mode->mode != GUI_MODE_NONE)\n"
+        "    {\n"
+        "        extern void g3x_dbuf_shadow_ensure_allocated(void);\n"
+        "        g3x_dbuf_shadow_ensure_allocated();\n"
+        "    }\n"
+        "    /* Invalidation: GUI handler/layer changed - reset shadow until new layer completes full draw */\n"
+        "    g3x_dbuf_shadow_reset();\n"
+        "#endif"
+    )
+    set_mode_alloc_replacement = (
+        "#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)\n"
+        "#if !defined(G3X_GUI_DIAG) || (G3X_GUI_DIAG != 1)\n"
+        "    if (mode && mode->mode != GUI_MODE_NONE)\n"
+        "    {\n"
+        "        extern void g3x_dbuf_shadow_ensure_allocated(void);\n"
+        "        g3x_dbuf_shadow_ensure_allocated();\n"
+        "    }\n"
+        "#endif\n"
+        "    /* Invalidation: GUI handler/layer changed - reset shadow until new layer completes full draw */\n"
+        "    g3x_dbuf_shadow_reset();\n"
+        "#endif"
+    )
+    if gui_text.count(set_mode_alloc_anchor) != 1:
+        raise RuntimeError("PORT-47 gui_set_mode alloc anchor not found in staged core/gui.c")
+    gui_text = gui_text.replace(set_mode_alloc_anchor, set_mode_alloc_replacement, 1)
+
+    gui_redraw_anchor = (
+        "#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)\n"
+        "    /* Restore on sentinel loss ONLY when shadow is valid AND a CHDK overlay layer is active */\n"
+        "    if (!draw_test_guard() && (!camera_info.state.gui_mode_none || gui_splash) && g3x_shadow_valid)\n"
+        "    {\n"
+        "        extern int g3x_dbuf_restore_if_sentinel_lost(void);\n"
+        "        if (g3x_dbuf_restore_if_sentinel_lost())\n"
+        "        {\n"
+        "            return;\n"
+        "        }\n"
+        "        draw_set_guard();\n"
+        "        flag_gui_enforce_redraw = 1;\n"
+        "#ifdef CAM_TOUCHSCREEN_UI\n"
+        "        redraw_buttons = 1;\n"
+        "#endif\n"
+        "    }\n"
+        "    else if (!draw_test_guard() && (!camera_info.state.gui_mode_none || gui_splash))\n"
+        "    {\n"
+        "        draw_set_guard();\n"
+        "        flag_gui_enforce_redraw = 1;\n"
+        "#ifdef CAM_TOUCHSCREEN_UI\n"
+        "        redraw_buttons = 1;\n"
+        "#endif\n"
+        "    }\n"
+        "#else"
+    )
+    gui_redraw_replacement = (
+        "#if defined(G3X_GUI_DIAG) && (G3X_GUI_DIAG == 1)\n"
+        "    if (!draw_test_guard() && (!camera_info.state.gui_mode_none || gui_splash))\n"
+        "    {\n"
+        "        g3x_diag_record_sentinel_loss();\n"
+        "        if (g3x_dbuf_shadow_is_allocated())\n"
+        "        {\n"
+        "            (void)g3x_dbuf_shadow_restore();\n"
+        "            return;\n"
+        "        }\n"
+        "        draw_set_guard();\n"
+        "        flag_gui_enforce_redraw = 1;\n"
+        "#ifdef CAM_TOUCHSCREEN_UI\n"
+        "        redraw_buttons = 1;\n"
+        "#endif\n"
+        "    }\n"
+        "#elif defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)\n"
+        "    /* Restore on sentinel loss ONLY when shadow is valid AND a CHDK overlay layer is active */\n"
+        "    if (!draw_test_guard() && (!camera_info.state.gui_mode_none || gui_splash) && g3x_shadow_valid)\n"
+        "    {\n"
+        "        extern int g3x_dbuf_restore_if_sentinel_lost(void);\n"
+        "        if (g3x_dbuf_restore_if_sentinel_lost())\n"
+        "        {\n"
+        "            return;\n"
+        "        }\n"
+        "        draw_set_guard();\n"
+        "        flag_gui_enforce_redraw = 1;\n"
+        "#ifdef CAM_TOUCHSCREEN_UI\n"
+        "        redraw_buttons = 1;\n"
+        "#endif\n"
+        "    }\n"
+        "    else if (!draw_test_guard() && (!camera_info.state.gui_mode_none || gui_splash))\n"
+        "    {\n"
+        "        draw_set_guard();\n"
+        "        flag_gui_enforce_redraw = 1;\n"
+        "#ifdef CAM_TOUCHSCREEN_UI\n"
+        "        redraw_buttons = 1;\n"
+        "#endif\n"
+        "    }\n"
+        "#else"
+    )
+    if gui_text.count(gui_redraw_anchor) != 1:
+        raise RuntimeError("PORT-47 gui_redraw guard anchor not found in staged core/gui.c")
+    gui_text = gui_text.replace(gui_redraw_anchor, gui_redraw_replacement, 1)
+
+    alt_enter_anchor = (
+        "#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)\n"
+        "        /* PORT-44: Lazy runtime allocation on first ALT entry */\n"
+        "        extern void g3x_dbuf_shadow_ensure_allocated(void);\n"
+        "        g3x_dbuf_shadow_ensure_allocated();\n"
+        "        /* Invalidation: ALT enter - reset shadow */\n"
+        "        g3x_dbuf_shadow_reset();\n"
+        "#endif"
+    )
+    alt_enter_replacement = (
+        "#if defined(G3X_GUI_DIAG) && (G3X_GUI_DIAG == 1)\n"
+        "        g3x_diag_on_alt_enter();\n"
+        "        g3x_dbuf_shadow_reset();\n"
+        "#elif defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)\n"
+        "        /* PORT-44: Lazy runtime allocation on first ALT entry */\n"
+        "        extern void g3x_dbuf_shadow_ensure_allocated(void);\n"
+        "        g3x_dbuf_shadow_ensure_allocated();\n"
+        "        /* Invalidation: ALT enter - reset shadow */\n"
+        "        g3x_dbuf_shadow_reset();\n"
+        "#endif"
+    )
+    if gui_text.count(alt_enter_anchor) != 1:
+        raise RuntimeError("PORT-47 ALT_MODE_ENTER anchor not found in staged core/gui.c")
+    gui_text = gui_text.replace(alt_enter_anchor, alt_enter_replacement, 1)
+
+    alt_leave_anchor = (
+        "#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)\n"
+        "        /* Invalidation: ALT exit - reset shadow so live view never restores stale overlay */\n"
+        "        g3x_dbuf_shadow_reset();\n"
+        "#endif"
+    )
+    alt_leave_replacement = (
+        "#if defined(G3X_GUI_DIAG) && (G3X_GUI_DIAG == 1)\n"
+        "        g3x_diag_on_alt_leave();\n"
+        "#endif\n"
+        "#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)\n"
+        "        /* Invalidation: ALT exit - reset shadow so live view never restores stale overlay */\n"
+        "        g3x_dbuf_shadow_reset();\n"
+        "#endif"
+    )
+    if gui_text.count(alt_leave_anchor) != 1:
+        raise RuntimeError("PORT-47 ALT_MODE_LEAVE anchor not found in staged core/gui.c")
+    gui_text = gui_text.replace(alt_leave_anchor, alt_leave_replacement, 1)
+    gui_c.write_text(gui_text, encoding="utf-8")
+
+    # 4. Patch core/main.c: shadow-blit-only restore while shadow exists, full redraw only when shadow is NULL,
+    # and draw both kbd_check and gui_diag lines in ALT mode
+    main_c = stage_dir / "core/main.c"
+    main_text = main_c.read_text(encoding="utf-8")
+    main_anchor = (
+        "            /* PORT-45 NOOVERDRAW GUI scheduler:\n"
+        "             * Double-buffered overlay with asynchronous heap shadow restore on buffer flip or sentinel loss.\n"
+        "             * Active only while CHDK ALT mode or menu is active.\n"
+        "             * Fallback to PORT-44 if shadow is NULL or unavailable. */\n"
+        "            extern int g3x_dbuf_shadow_restore(void);\n"
+        "            extern int g3x_shadow_valid;\n"
+        "            extern int g3x_dbuf_shadow_is_allocated(void);\n"
+        "\n"
+        "            gui_maintenance_tick();\n"
+        "            int buffer_changed = check_bitmap_buffer_changed();\n"
+        "            int forced = check_gui_needs_redraw();\n"
+        "            int chdk_overlay_active = !camera_info.state.gui_mode_none;\n"
+        "            if (chdk_overlay_active)\n"
+        "            {\n"
+        "                if (g3x_shadow_valid && g3x_dbuf_shadow_is_allocated())\n"
+        "                {\n"
+        "                    if (buffer_changed || !draw_test_guard())\n"
+        "                    {\n"
+        "                        if (!g3x_dbuf_shadow_restore())\n"
+        "                        {\n"
+        "                            forced = 1;\n"
+        "                        }\n"
+        "                    }\n"
+        "                }\n"
+        "                else\n"
+        "                {\n"
+        "                    /* Fallback to PORT-44: ignore buffer flips, only sentinel loss triggers redraw */\n"
+        "                    if (!draw_test_guard())\n"
+        "                    {\n"
+        "                        forced = 1;\n"
+        "                    }\n"
+        "                }\n"
+        "            }\n"
+        "            int state_changed = gui_check_state_changed();\n"
+        "            int need_redraw = forced || state_changed;\n"
+        "            if (need_redraw)\n"
+        "                gui_redraw(forced);\n"
+        "            else if (gui_is_osd_mode())\n"
+        "                gui_draw_osd_tick();\n"
+        "#if defined(G3X_KBD_CHECK) && (G3X_KBD_CHECK == 1)\n"
+        "            else if (camera_info.state.gui_mode_alt)\n"
+        "            {\n"
+        "                extern void gui_kbd_check_draw(void);\n"
+        "                gui_kbd_check_draw();\n"
+        "            }\n"
+        "#endif\n"
+        "            else if (gui_is_module_mode())\n"
+        "                gui_draw_module_tick();"
+    )
+    main_replacement = (
+        "            /* PORT-47 GUI_DIAG scheduler:\n"
+        "             * While shadow exists (non-NULL), restore ONLY by single fast blit (g3x_dbuf_shadow_restore)\n"
+        "             * and never fall back to banded gui_redraw.\n"
+        "             * Full redraw (gui_redraw) is reachable from restore ONLY when shadow is NULL. */\n"
+        "            extern int g3x_diag_restore_overlay(int trigger);\n"
+        "            extern void gui_diag_draw(void);\n"
+        "            extern void gui_kbd_check_draw(void);\n"
+        "\n"
+        "            gui_maintenance_tick();\n"
+        "            int buffer_changed = check_bitmap_buffer_changed();\n"
+        "            int suppress_hit = check_gui_needs_redraw();\n"
+        "            int chdk_overlay_active = !camera_info.state.gui_mode_none;\n"
+        "            int restored_via_full_redraw = 0;\n"
+        "            if (chdk_overlay_active)\n"
+        "            {\n"
+        "                restored_via_full_redraw = g3x_diag_restore_overlay(suppress_hit || buffer_changed);\n"
+        "            }\n"
+        "            int state_changed = gui_check_state_changed();\n"
+        "            if (!restored_via_full_redraw && state_changed)\n"
+        "                gui_redraw(0);\n"
+        "            else if (gui_is_osd_mode())\n"
+        "                gui_draw_osd_tick();\n"
+        "#if defined(G3X_KBD_CHECK) && (G3X_KBD_CHECK == 1)\n"
+        "            else if (camera_info.state.gui_mode_alt)\n"
+        "            {\n"
+        "                gui_kbd_check_draw();\n"
+        "#if defined(G3X_GUI_DIAG) && (G3X_GUI_DIAG == 1)\n"
+        "                gui_diag_draw();\n"
+        "#endif\n"
+        "            }\n"
+        "#endif\n"
+        "            else if (gui_is_module_mode())\n"
+        "                gui_draw_module_tick();"
+    )
+    if main_text.count(main_anchor) != 1:
+        raise RuntimeError("PORT-47 NOOVERDRAW scheduler anchor not found in staged core/main.c")
+    main_c.write_text(main_text.replace(main_anchor, main_replacement, 1), encoding="utf-8")
+
+
 def build_port43_dbuf(
     clean_stage: bool = True,
     keep_stage: bool = True,
@@ -389,7 +963,12 @@ def build_port43_dbuf(
     no_overdraw: bool = False,
     out_dir: Path | str | None = None,
     kbd_check: bool = False,
+    gui_diag: bool = False,
 ) -> int:
+    if gui_diag:
+        no_overdraw = True
+        kbd_check = True
+
     gcc_path = TOOLCHAIN_BIN / "arm-none-eabi-gcc"
     if not gcc_path.is_file() or not os.access(gcc_path, os.X_OK):
         print(f"ERROR: Pinned toolchain compiler not found: {gcc_path}", file=sys.stderr)
@@ -405,6 +984,9 @@ def build_port43_dbuf(
 
     if out_dir is not None:
         effective_out_dir = Path(out_dir).resolve()
+    elif gui_diag:
+        suffix = "-full-hooks" if full_hooks else ""
+        effective_out_dir = REPO_ROOT / "out" / ("port47-gui-diag" + suffix)
     elif kbd_check:
         suffix = "-no-overdraw" if no_overdraw else ""
         if full_hooks:
@@ -427,10 +1009,11 @@ def build_port43_dbuf(
         shutil.rmtree(effective_stage_dir)
 
     if not effective_stage_dir.exists():
+        seed_dir = _ensure_dbuf_seed_stage()
         print(f"Staging CHDK tree to {effective_stage_dir}...")
-        shutil.copytree(CHDK_PORT, effective_stage_dir, symlinks=True)
+        shutil.copytree(seed_dir, effective_stage_dir, symlinks=True)
 
-    clean_staging_artifacts(effective_stage_dir)
+    _clean_platform_and_core_artifacts(effective_stage_dir)
 
     # 1. Overlay full_build/g3x onto stage_chdk/platform/g3x/ (excluding loader)
     platform_target = effective_stage_dir / "platform" / "g3x"
@@ -481,6 +1064,10 @@ def build_port43_dbuf(
         print("G3X_KBD_CHECK=1: Applying ALT key-check draw hooks...")
         apply_kbd_check_staging_patches(effective_stage_dir)
 
+    if gui_diag:
+        print("G3X_GUI_DIAG=1: Applying overdraw/restore counters, shadow-blit-only restore, and sibling suppression...")
+        apply_gui_diag_staging_patches(effective_stage_dir)
+
     # Clean platform objects in staging copy
     for subpath in ["platform/g3x", "platform/g3x/sub/110c", "loader/g3x"]:
         p = effective_stage_dir / subpath
@@ -499,6 +1086,8 @@ def build_port43_dbuf(
                 clean_cmd.append("G3X_GUI_NOOVERDRAW=1")
             if kbd_check:
                 clean_cmd.append("G3X_KBD_CHECK=1")
+            if gui_diag:
+                clean_cmd.append("G3X_GUI_DIAG=1")
             if full_hooks:
                 clean_cmd.append("FULL_HOOKS=1")
             clean_cmd.append("clean")
@@ -526,9 +1115,11 @@ def build_port43_dbuf(
         cmd.append("G3X_GUI_NOOVERDRAW=1")
     if kbd_check:
         cmd.append("G3X_KBD_CHECK=1")
+    if gui_diag:
+        cmd.append("G3X_GUI_DIAG=1")
     if full_hooks:
         cmd.append("FULL_HOOKS=1")
-    cmd.append("fir")
+    cmd.extend(["SKIP_TOOLS=1", "SKIP_MODULES=1", "SKIP_CHDK=1", "fir"])
 
     print(f"Running build: {' '.join(cmd)}")
     env = os.environ.copy()
@@ -541,6 +1132,8 @@ def build_port43_dbuf(
         env["G3X_GUI_NOOVERDRAW"] = "1"
     if kbd_check:
         env["G3X_KBD_CHECK"] = "1"
+    if gui_diag:
+        env["G3X_GUI_DIAG"] = "1"
     if full_hooks:
         env["FULL_HOOKS"] = "1"
 
@@ -604,13 +1197,17 @@ def build_port43_dbuf(
         build_flags.append("G3X_GUI_NOOVERDRAW=1")
     if kbd_check:
         build_flags.append("G3X_KBD_CHECK=1")
+    if gui_diag:
+        build_flags.append("G3X_GUI_DIAG=1")
     if full_hooks:
         build_flags.insert(1, "FULL_HOOKS=1")
 
     manifest_name = "port45_no_overdraw_manifest.json" if no_overdraw else "port43_dbuf_manifest.json"
     if kbd_check:
         manifest_name = "port46_kbd_check_manifest.json"
-    manifest_data = {
+    if gui_diag:
+        manifest_name = "port47_gui_diag_manifest.json"
+    manifest_data: dict[str, object] = {
         "build": {
             "platform": "g3x",
             "platform_sub": "110c",
@@ -636,15 +1233,35 @@ def build_port43_dbuf(
             "chdk_files": chdk_files_map,
         },
     }
+    if gui_diag:
+        nm_bin = TOOLCHAIN_BIN / "arm-none-eabi-nm"
+        main_elf = effective_stage_dir / "platform" / "g3x" / "sub" / "110c" / "main.elf"
+        nm_out = subprocess.check_output([str(nm_bin), str(main_elf)], text=True)
+        core_end_hex = None
+        for line in nm_out.splitlines():
+            parts = line.split()
+            if len(parts) == 3 and parts[2] == "_end":
+                core_end_hex = f"0x{int(parts[0], 16):08x}"
+                break
+        if core_end_hex is None:
+            raise RuntimeError("Could not find _end symbol in staged main.elf")
+        manifest_data["core_end"] = core_end_hex
+        manifest_data["_end"] = core_end_hex
+        artifacts_dict = manifest_data["artifacts"]
+        assert isinstance(artifacts_dict, dict)
+        artifacts_dict["core_end"] = core_end_hex
+        artifacts_dict["_end"] = core_end_hex
 
     manifest_path = effective_out_dir / manifest_name
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest_data, f, indent=2)
+        f.write("\n")
     print(f"[OK] Manifest written to {manifest_path}")
 
     # Convenience aliases
     with open(effective_out_dir / "manifest.json", "w", encoding="utf-8") as f:
         json.dump(manifest_data, f, indent=2)
+        f.write("\n")
 
     if not keep_stage and effective_stage_dir.exists():
         shutil.rmtree(effective_stage_dir)
@@ -660,6 +1277,7 @@ def main() -> int:
     parser.add_argument("--full-hooks", action="store_true", help="Enable FULL_HOOKS=1")
     parser.add_argument("--no-overdraw", action="store_true", help="Enable G3X_GUI_NOOVERDRAW=1 opt-in overlay protection")
     parser.add_argument("--kbd-check", action="store_true", default=os.environ.get("G3X_KBD_CHECK") == "1", help="Enable G3X_KBD_CHECK=1 ALT key diagnostic (also accepts environment flag)")
+    parser.add_argument("--gui-diag", action="store_true", default=os.environ.get("G3X_GUI_DIAG") == "1", help="Enable G3X_GUI_DIAG=1 overdraw/restore counters, shadow-blit-only restore, and sibling suppression")
     parser.add_argument("--no-clean", action="store_true", help="Do not clean staging before building")
     parser.add_argument("--discard-stage", action="store_true", help="Remove stage directory after build")
     parser.add_argument("--out-dir", type=str, default=None, help="Custom output directory")
@@ -672,6 +1290,7 @@ def main() -> int:
         no_overdraw=args.no_overdraw,
         out_dir=args.out_dir,
         kbd_check=args.kbd_check,
+        gui_diag=args.gui_diag,
     )
 
 
