@@ -956,6 +956,390 @@ def apply_gui_diag_staging_patches(stage_dir: Path) -> None:
     main_c.write_text(main_text.replace(main_anchor, main_replacement, 1), encoding="utf-8")
 
 
+def apply_shadow2_staging_patches(stage_dir: Path) -> None:
+    """Apply G3X_GUI_SHADOW2=1 compile flags, exmem_alloc_cached adapter, and multi-mode shadow draw/restore hooks."""
+    for rel in ["platform/g3x/Makefile", "platform/g3x/sub/110c/Makefile"]:
+        mpath = stage_dir / rel
+        text = mpath.read_text(encoding="utf-8")
+        text = (
+            "ifeq ($(G3X_GUI_SHADOW2),1)\n"
+            "ifneq ($(G3X_GUI_DBUF),1)\n"
+            "$(error G3X_GUI_SHADOW2=1 requires G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1)\n"
+            "endif\n"
+            "ifneq ($(G3X_GUI_NOOVERDRAW),1)\n"
+            "$(error G3X_GUI_SHADOW2=1 requires G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1)\n"
+            "endif\n"
+            "ifneq ($(G3X_KBD_CHECK),1)\n"
+            "$(error G3X_GUI_SHADOW2=1 requires G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1)\n"
+            "endif\n"
+            "ifneq ($(G3X_GUI_DIAG),1)\n"
+            "$(error G3X_GUI_SHADOW2=1 requires G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1)\n"
+            "endif\n"
+            "endif\n\n"
+        ) + text
+        anchor = "CFLAGS += -DG3X_FULL_BUILD=1"
+        if text.count(anchor) != 1:
+            raise RuntimeError(f"PORT-48 compile flag anchor not found in {rel}")
+        text = text.replace(anchor, anchor + " -DG3X_GUI_SHADOW2=1", 1)
+        mpath.write_text(text, encoding="utf-8")
+
+    # 1. Patch platform/g3x/lib.c: add exmem_alloc_cached adapter calling _exmem_alloc (0xFC092537, FINSIG)
+    lib_c = stage_dir / "platform/g3x/lib.c"
+    lib_text = lib_c.read_text(encoding="utf-8")
+    lib_anchor = (
+        "#if defined(G3X_GUI_DIAG) && (G3X_GUI_DIAG == 1)\n"
+        '#include "gui_diag.h"\n'
+    )
+    lib_replacement = (
+        "#if defined(G3X_GUI_DIAG) && (G3X_GUI_DIAG == 1)\n"
+        '#include "gui_diag.h"\n'
+        "#if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)\n"
+        "/* Adapted from chdk-port/platform/generic/wrappers.c:1003 and chdk-port/core/memmgmt.c:181-182:\n"
+        " * _exmem_alloc = 0xFC092537 (FINSIG, reference/finsig_gm110c/stubs_entry.S:302) */\n"
+        "extern void *_exmem_alloc(unsigned int pool_id, unsigned int size, int unk, int unk2);\n"
+        "void *exmem_alloc_cached(unsigned int pool_id, unsigned int size, int unk, int unk2)\n"
+        "{\n"
+        "    return _exmem_alloc(pool_id, size, unk, unk2);\n"
+        "}\n"
+        "#endif\n"
+    )
+    if lib_text.count(lib_anchor) != 1:
+        raise RuntimeError("PORT-48 gui_diag.h anchor not found in staged platform/g3x/lib.c")
+    lib_c.write_text(lib_text.replace(lib_anchor, lib_replacement, 1), encoding="utf-8")
+
+    # 2. Patch core/gui_draw.c: route shadow reset, pixel/rect/simple writes, and restore through G3X_GUI_SHADOW2 helpers
+    draw_c = stage_dir / "core/gui_draw.c"
+    draw_text = draw_c.read_text(encoding="utf-8")
+
+    reset_anchor = (
+        "void g3x_dbuf_shadow_reset(void)\n"
+        "{\n"
+        "#if defined(G3X_GUI_DIAG) && (G3X_GUI_DIAG == 1)\n"
+        "    g3x_shadow_valid = g3x_dbuf_shadow_is_allocated();\n"
+        "#else\n"
+        "    g3x_shadow_valid = 0;\n"
+        "#endif\n"
+        "    if (g3x_shadow_bitmap && g3x_shadow_opacity)\n"
+        "    {\n"
+        "        memset(g3x_shadow_bitmap, 0, G3X_SHADOW_BM_SIZE);\n"
+        "        memset(g3x_shadow_opacity, 0, G3X_SHADOW_OP_SIZE);\n"
+        "    }\n"
+        "}"
+    )
+    reset_replacement = (
+        "void g3x_dbuf_shadow_reset(void)\n"
+        "{\n"
+        "#if defined(G3X_GUI_DIAG) && (G3X_GUI_DIAG == 1)\n"
+        "    g3x_shadow_valid = g3x_dbuf_shadow_is_allocated();\n"
+        "#else\n"
+        "    g3x_shadow_valid = 0;\n"
+        "#endif\n"
+        "#if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)\n"
+        "    g3x_shadow2_reset_buffer(g3x_shadow_bitmap, g3x_shadow_opacity);\n"
+        "#else\n"
+        "    if (g3x_shadow_bitmap && g3x_shadow_opacity)\n"
+        "    {\n"
+        "        memset(g3x_shadow_bitmap, 0, G3X_SHADOW_BM_SIZE);\n"
+        "        memset(g3x_shadow_opacity, 0, G3X_SHADOW_OP_SIZE);\n"
+        "    }\n"
+        "#endif\n"
+        "}"
+    )
+    if draw_text.count(reset_anchor) != 1:
+        raise RuntimeError("PORT-48 shadow reset anchor not found in staged core/gui_draw.c")
+    draw_text = draw_text.replace(reset_anchor, reset_replacement, 1)
+
+    pixel_helper_anchor = "void g3x_dbuf_shadow_draw_pixel(unsigned int offset, unsigned int offs2, unsigned int y, unsigned int o, unsigned int u, unsigned int v, int is_odd)\n"
+    pixel_helper_replacement = (
+        "#if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)\n"
+        "static void g3x_dbuf_shadow2_draw_pixel(unsigned int offset, unsigned int y, unsigned int o, unsigned int u, unsigned int v, int is_odd, unsigned char cl)\n"
+        "{\n"
+        "    int buf_w = camera_screen.buffer_width ? camera_screen.buffer_width : 928;\n"
+        "    int screen_y = (int)(offset / buf_w);\n"
+        "    int screen_x = (int)(offset % buf_w);\n"
+        "    g3x_shadow2_write_pixel(g3x_shadow_bitmap, g3x_shadow_opacity,\n"
+        "                            screen_x, screen_y,\n"
+        "                            (unsigned char)y, (unsigned char)o,\n"
+        "                            (unsigned char)u, (unsigned char)v,\n"
+        "                            is_odd, cl);\n"
+        "}\n"
+        "#endif\n\n"
+        + pixel_helper_anchor
+    )
+    if draw_text.count(pixel_helper_anchor) != 1:
+        raise RuntimeError("PORT-48 shadow_draw_pixel anchor not found in staged core/gui_draw.c")
+    draw_text = draw_text.replace(pixel_helper_anchor, pixel_helper_replacement, 1)
+
+    fill_lead_anchor = (
+        "            if (g3x_shadow_opacity && g3x_shadow_bitmap &&\n"
+        "                cur_x >= G3X_MENU_X0 && cur_x <= G3X_MENU_X1 &&\n"
+        "                y >= G3X_MENU_Y0 && y <= G3X_MENU_Y1)\n"
+        "            {\n"
+        "                int rx = cur_x - G3X_MENU_X0;\n"
+        "                int ry = y - G3X_MENU_Y0;\n"
+        "                unsigned int sh_offset = (unsigned int)(ry * G3X_SHADOW_WIDTH + rx);\n"
+        "                unsigned int sh_offs2 = (sh_offset >> 1) << 2;\n"
+        "                if (sh_offset < G3X_SHADOW_OP_SIZE)\n"
+        "                {\n"
+        "                    g3x_shadow_opacity[sh_offset] = op_byte;\n"
+        "                    g3x_shadow_bitmap[sh_offs2 + 3] = (unsigned char)y_luma;\n"
+        "                }\n"
+        "            }"
+    )
+    fill_lead_replacement = (
+        "#if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)\n"
+        "            g3x_shadow2_write_pixel(g3x_shadow_bitmap, g3x_shadow_opacity,\n"
+        "                                    cur_x, y, (unsigned char)y_luma, op_byte,\n"
+        "                                    (unsigned char)u_val, (unsigned char)v_val,\n"
+        "                                    1, (unsigned char)cl);\n"
+        "#else\n"
+        + fill_lead_anchor + "\n"
+        "#endif"
+    )
+    if draw_text.count(fill_lead_anchor) != 1:
+        raise RuntimeError("PORT-48 fast_fill leading pixel anchor not found in staged core/gui_draw.c")
+    draw_text = draw_text.replace(fill_lead_anchor, fill_lead_replacement, 1)
+
+    fill_span_anchor = (
+        "            if (g3x_shadow_opacity && g3x_shadow_bitmap &&\n"
+        "                y >= G3X_MENU_Y0 && y <= G3X_MENU_Y1)\n"
+        "            {\n"
+        "                int sh_x_start = cur_x > G3X_MENU_X0 ? cur_x : G3X_MENU_X0;\n"
+        "                int sh_x_end = (cur_x + n_pixels - 1) < G3X_MENU_X1 ? (cur_x + n_pixels - 1) : G3X_MENU_X1;\n"
+        "                if (sh_x_start <= sh_x_end)\n"
+        "                {\n"
+        "                    int ry = y - G3X_MENU_Y0;\n"
+        "                    int rx_start = sh_x_start - G3X_MENU_X0;\n"
+        "                    int sh_pixels = sh_x_end - sh_x_start + 1;\n"
+        "                    unsigned int sh_op_off = (unsigned int)(ry * G3X_SHADOW_WIDTH + rx_start);\n"
+        "                    unsigned int sh_bm_off = sh_op_off * 2;\n"
+        "\n"
+        "                    if ((sh_op_off + sh_pixels) <= G3X_SHADOW_OP_SIZE)\n"
+        "                    {\n"
+        "                        memset(&g3x_shadow_opacity[sh_op_off], op_byte, sh_pixels);\n"
+        "                        int sh_pairs = sh_pixels / 2;\n"
+        "                        unsigned int *sp = (unsigned int *)(&g3x_shadow_bitmap[sh_bm_off]);\n"
+        "                        for (int sw = 0; sw < sh_pairs; ++sw)\n"
+        "                        {\n"
+        "                            sp[sw] = uyvy_word;\n"
+        "                        }\n"
+        "                    }\n"
+        "                }\n"
+        "            }"
+    )
+    fill_span_replacement = (
+        "#if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)\n"
+        "            g3x_shadow2_fill_span(g3x_shadow_bitmap, g3x_shadow_opacity,\n"
+        "                                  cur_x, cur_x + n_pixels - 1, y,\n"
+        "                                  uyvy_word, op_byte, (unsigned char)cl);\n"
+        "#else\n"
+        + fill_span_anchor + "\n"
+        "#endif"
+    )
+    if draw_text.count(fill_span_anchor) != 1:
+        raise RuntimeError("PORT-48 fast_fill span anchor not found in staged core/gui_draw.c")
+    draw_text = draw_text.replace(fill_span_anchor, fill_span_replacement, 1)
+
+    fill_trail_anchor = (
+        "            if (g3x_shadow_opacity && g3x_shadow_bitmap &&\n"
+        "                cur_x >= G3X_MENU_X0 && cur_x <= G3X_MENU_X1 &&\n"
+        "                y >= G3X_MENU_Y0 && y <= G3X_MENU_Y1)\n"
+        "            {\n"
+        "                int rx = cur_x - G3X_MENU_X0;\n"
+        "                int ry = y - G3X_MENU_Y0;\n"
+        "                unsigned int sh_offset = (unsigned int)(ry * G3X_SHADOW_WIDTH + rx);\n"
+        "                unsigned int sh_offs2 = (sh_offset >> 1) << 2;\n"
+        "                if (sh_offset < G3X_SHADOW_OP_SIZE)\n"
+        "                {\n"
+        "                    g3x_shadow_opacity[sh_offset] = op_byte;\n"
+        "                    g3x_shadow_bitmap[sh_offs2 + 0] = (unsigned char)u_val;\n"
+        "                    g3x_shadow_bitmap[sh_offs2 + 1] = (unsigned char)y_luma;\n"
+        "                    g3x_shadow_bitmap[sh_offs2 + 2] = (unsigned char)v_val;\n"
+        "                }\n"
+        "            }"
+    )
+    fill_trail_replacement = (
+        "#if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)\n"
+        "            g3x_shadow2_write_pixel(g3x_shadow_bitmap, g3x_shadow_opacity,\n"
+        "                                    cur_x, y, (unsigned char)y_luma, op_byte,\n"
+        "                                    (unsigned char)u_val, (unsigned char)v_val,\n"
+        "                                    0, (unsigned char)cl);\n"
+        "#else\n"
+        + fill_trail_anchor + "\n"
+        "#endif"
+    )
+    if draw_text.count(fill_trail_anchor) != 1:
+        raise RuntimeError("PORT-48 fast_fill trailing pixel anchor not found in staged core/gui_draw.c")
+    draw_text = draw_text.replace(fill_trail_anchor, fill_trail_replacement, 1)
+
+    restore2_anchor = (
+        "    int buf_w = camera_screen.buffer_width ? camera_screen.buffer_width : 928;\n"
+        "\n"
+        "    for (int ry = 0; ry < G3X_SHADOW_HEIGHT; ++ry)\n"
+        "    {\n"
+        "        int screen_y = G3X_MENU_Y0 + ry;\n"
+        "        unsigned int offset_op = (unsigned int)(screen_y * buf_w + G3X_MENU_X0);\n"
+        "        unsigned int offset_bm = offset_op * 2;\n"
+        "\n"
+        "        unsigned char *src_op = g3x_shadow_opacity + ry * G3X_SHADOW_WIDTH;\n"
+        "        unsigned char *src_bm = g3x_shadow_bitmap + (ry * G3X_SHADOW_WIDTH) * 2;\n"
+        "\n"
+        "        memcpy((void*)&opacity_buffer[0][offset_op], src_op, G3X_SHADOW_WIDTH);\n"
+        "        memcpy((void*)&opacity_buffer[1][offset_op], src_op, G3X_SHADOW_WIDTH);\n"
+        "\n"
+        "        memcpy((void*)&bitmap_buffer[0][offset_bm], src_bm, G3X_SHADOW_WIDTH * 2);\n"
+        "        memcpy((void*)&bitmap_buffer[1][offset_bm], src_bm, G3X_SHADOW_WIDTH * 2);\n"
+        "    }\n"
+    )
+    restore2_replacement = (
+        "    int buf_w = camera_screen.buffer_width ? camera_screen.buffer_width : 928;\n"
+        "#if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)\n"
+        "    if (!g3x_shadow2_blit_restore(g3x_shadow_bitmap, g3x_shadow_opacity, buf_w))\n"
+        "    {\n"
+        "        return 0;\n"
+        "    }\n"
+        "#else\n"
+        "    for (int ry = 0; ry < G3X_SHADOW_HEIGHT; ++ry)\n"
+        "    {\n"
+        "        int screen_y = G3X_MENU_Y0 + ry;\n"
+        "        unsigned int offset_op = (unsigned int)(screen_y * buf_w + G3X_MENU_X0);\n"
+        "        unsigned int offset_bm = offset_op * 2;\n"
+        "\n"
+        "        unsigned char *src_op = g3x_shadow_opacity + ry * G3X_SHADOW_WIDTH;\n"
+        "        unsigned char *src_bm = g3x_shadow_bitmap + (ry * G3X_SHADOW_WIDTH) * 2;\n"
+        "\n"
+        "        memcpy((void*)&opacity_buffer[0][offset_op], src_op, G3X_SHADOW_WIDTH);\n"
+        "        memcpy((void*)&opacity_buffer[1][offset_op], src_op, G3X_SHADOW_WIDTH);\n"
+        "\n"
+        "        memcpy((void*)&bitmap_buffer[0][offset_bm], src_bm, G3X_SHADOW_WIDTH * 2);\n"
+        "        memcpy((void*)&bitmap_buffer[1][offset_bm], src_bm, G3X_SHADOW_WIDTH * 2);\n"
+        "    }\n"
+        "#endif\n"
+    )
+    if draw_text.count(restore2_anchor) != 1:
+        raise RuntimeError("PORT-48 shadow restore loop anchor not found in staged core/gui_draw.c")
+    draw_text = draw_text.replace(restore2_anchor, restore2_replacement, 1)
+
+    std_px_anchor = "    g3x_dbuf_shadow_draw_pixel(offset, offs2, y, o, u, v, is_odd);\n"
+    std_px_replacement = (
+        "#if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)\n"
+        "    g3x_dbuf_shadow2_draw_pixel(offset, y, o, u, v, is_odd, (unsigned char)cl);\n"
+        "#else\n"
+        "    g3x_dbuf_shadow_draw_pixel(offset, offs2, y, o, u, v, is_odd);\n"
+        "#endif\n"
+    )
+    if draw_text.count(std_px_anchor) != 1:
+        raise RuntimeError("PORT-48 draw_pixel_std shadow anchor not found in staged core/gui_draw.c")
+    draw_text = draw_text.replace(std_px_anchor, std_px_replacement, 1)
+
+    simple_start_anchor = (
+        "static unsigned char yuvclr[8]; // order of bytes: background u,y,v,opacity; foreground u,y,v,opacity\n"
+        "\n"
+        "// sets up decoded colors and buffer addresses for the following drawing operation\n"
+        "static void draw_pixel_simple_start(twoColors tc)\n"
+        "{\n"
+        "    color cl;\n"
+    )
+    simple_start_replacement = (
+        "static unsigned char yuvclr[8]; // order of bytes: background u,y,v,opacity; foreground u,y,v,opacity\n"
+        "#if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)\n"
+        "static unsigned char simple_clr[2];\n"
+        "#endif\n"
+        "\n"
+        "// sets up decoded colors and buffer addresses for the following drawing operation\n"
+        "static void draw_pixel_simple_start(twoColors tc)\n"
+        "{\n"
+        "    color cl;\n"
+        "#if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)\n"
+        "    simple_clr[0] = (unsigned char)BG_COLOR(tc);\n"
+        "    simple_clr[1] = (unsigned char)FG_COLOR(tc);\n"
+        "#endif\n"
+    )
+    if draw_text.count(simple_start_anchor) != 1:
+        raise RuntimeError("PORT-48 draw_pixel_simple_start anchor not found in staged core/gui_draw.c")
+    draw_text = draw_text.replace(simple_start_anchor, simple_start_replacement, 1)
+
+    for odd_val in ["1", "0"]:
+        s1_anchor = f"            g3x_dbuf_shadow_draw_pixel(offset, offs2, y_luma, op, u_val, v_val, {odd_val});\n"
+        s1_repl = (
+            "#if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)\n"
+            f"            g3x_dbuf_shadow2_draw_pixel(offset, y_luma, op, u_val, v_val, {odd_val}, simple_clr[px & 1]);\n"
+            "#else\n"
+            f"            g3x_dbuf_shadow_draw_pixel(offset, offs2, y_luma, op, u_val, v_val, {odd_val});\n"
+            "#endif\n"
+        )
+        draw_text = draw_text.replace(s1_anchor, s1_repl)
+
+    s2_anchor = (
+        "        // Shadow copy update (16-bit opacity word, 32-bit UYVY bitmap word)\n"
+        "        if (!conf.rotate_osd && g3x_shadow_opacity && g3x_shadow_bitmap)\n"
+        "        {\n"
+        "            if (x >= G3X_MENU_X0 && (x + 1) <= G3X_MENU_X1 &&\n"
+        "                cur_y >= G3X_MENU_Y0 && cur_y <= G3X_MENU_Y1)\n"
+        "            {\n"
+        "                int rx = x - G3X_MENU_X0;\n"
+        "                int ry = cur_y - G3X_MENU_Y0;\n"
+        "                unsigned int sh_pair = (unsigned int)((ry * G3X_SHADOW_WIDTH + rx) >> 1);\n"
+        "                if (sh_pair < (G3X_SHADOW_OP_SIZE / 2))\n"
+        "                {\n"
+        "                    ((unsigned short *)g3x_shadow_opacity)[sh_pair] = co;\n"
+        "                    ((unsigned int *)g3x_shadow_bitmap)[sh_pair] = yuv;\n"
+        "                }\n"
+        "            }\n"
+        "        }"
+    )
+    s2_replacement = (
+        "#if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)\n"
+        "        if (!conf.rotate_osd)\n"
+        "        {\n"
+        "            g3x_shadow2_write_pair(g3x_shadow_bitmap, g3x_shadow_opacity,\n"
+        "                                   x, cur_y, yuv, co,\n"
+        "                                   simple_clr[(px >> 1) & 1], simple_clr[px & 1]);\n"
+        "        }\n"
+        "#else\n"
+        + s2_anchor + "\n"
+        "#endif"
+    )
+    if draw_text.count(s2_anchor) != 1:
+        raise RuntimeError("PORT-48 draw_2pixels_simple shadow anchor not found in staged core/gui_draw.c")
+    draw_text = draw_text.replace(s2_anchor, s2_replacement, 1)
+
+    hl_anchor = (
+        "        if (!conf.rotate_osd && g3x_shadow_opacity && g3x_shadow_bitmap)\n"
+        "        {\n"
+        "            if (cur_x >= G3X_MENU_X0 && (cur_x + 1) <= G3X_MENU_X1 &&\n"
+        "                y >= G3X_MENU_Y0 && y <= G3X_MENU_Y1)\n"
+        "            {\n"
+        "                int rx = cur_x - G3X_MENU_X0;\n"
+        "                int ry = y - G3X_MENU_Y0;\n"
+        "                unsigned int sh_pair = (unsigned int)((ry * G3X_SHADOW_WIDTH + rx) >> 1);\n"
+        "                if (sh_pair < (G3X_SHADOW_OP_SIZE / 2))\n"
+        "                {\n"
+        "                    ((unsigned short *)g3x_shadow_opacity)[sh_pair] = co;\n"
+        "                    ((unsigned int *)g3x_shadow_bitmap)[sh_pair] = yuv;\n"
+        "                }\n"
+        "            }\n"
+        "        }"
+    )
+    hl_replacement = (
+        "#if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)\n"
+        "        if (!conf.rotate_osd)\n"
+        "        {\n"
+        "            g3x_shadow2_write_pair(g3x_shadow_bitmap, g3x_shadow_opacity,\n"
+        "                                   cur_x, y, yuv, co,\n"
+        "                                   simple_clr[px & 1], simple_clr[px & 1]);\n"
+        "        }\n"
+        "#else\n"
+        + hl_anchor + "\n"
+        "#endif"
+    )
+    if draw_text.count(hl_anchor) != 1:
+        raise RuntimeError("PORT-48 draw_hline_simple shadow anchor not found in staged core/gui_draw.c")
+    draw_text = draw_text.replace(hl_anchor, hl_replacement, 1)
+
+    draw_c.write_text(draw_text, encoding="utf-8")
+
+
 def build_port43_dbuf(
     clean_stage: bool = True,
     keep_stage: bool = True,
@@ -964,7 +1348,10 @@ def build_port43_dbuf(
     out_dir: Path | str | None = None,
     kbd_check: bool = False,
     gui_diag: bool = False,
+    shadow2: bool = False,
 ) -> int:
+    if shadow2:
+        gui_diag = True
     if gui_diag:
         no_overdraw = True
         kbd_check = True
@@ -984,6 +1371,9 @@ def build_port43_dbuf(
 
     if out_dir is not None:
         effective_out_dir = Path(out_dir).resolve()
+    elif shadow2:
+        suffix = "-full-hooks" if full_hooks else ""
+        effective_out_dir = REPO_ROOT / "out" / ("port48-shadow-alloc" + suffix)
     elif gui_diag:
         suffix = "-full-hooks" if full_hooks else ""
         effective_out_dir = REPO_ROOT / "out" / ("port47-gui-diag" + suffix)
@@ -1068,6 +1458,10 @@ def build_port43_dbuf(
         print("G3X_GUI_DIAG=1: Applying overdraw/restore counters, shadow-blit-only restore, and sibling suppression...")
         apply_gui_diag_staging_patches(effective_stage_dir)
 
+    if shadow2:
+        print("G3X_GUI_SHADOW2=1: Applying ordered shadow fallback chain (exmem -> rect -> idx) and GetMemInfo diagnostic...")
+        apply_shadow2_staging_patches(effective_stage_dir)
+
     # Clean platform objects in staging copy
     for subpath in ["platform/g3x", "platform/g3x/sub/110c", "loader/g3x"]:
         p = effective_stage_dir / subpath
@@ -1088,6 +1482,8 @@ def build_port43_dbuf(
                 clean_cmd.append("G3X_KBD_CHECK=1")
             if gui_diag:
                 clean_cmd.append("G3X_GUI_DIAG=1")
+            if shadow2:
+                clean_cmd.append("G3X_GUI_SHADOW2=1")
             if full_hooks:
                 clean_cmd.append("FULL_HOOKS=1")
             clean_cmd.append("clean")
@@ -1117,6 +1513,8 @@ def build_port43_dbuf(
         cmd.append("G3X_KBD_CHECK=1")
     if gui_diag:
         cmd.append("G3X_GUI_DIAG=1")
+    if shadow2:
+        cmd.append("G3X_GUI_SHADOW2=1")
     if full_hooks:
         cmd.append("FULL_HOOKS=1")
     cmd.extend(["SKIP_TOOLS=1", "SKIP_MODULES=1", "SKIP_CHDK=1", "fir"])
@@ -1134,6 +1532,8 @@ def build_port43_dbuf(
         env["G3X_KBD_CHECK"] = "1"
     if gui_diag:
         env["G3X_GUI_DIAG"] = "1"
+    if shadow2:
+        env["G3X_GUI_SHADOW2"] = "1"
     if full_hooks:
         env["FULL_HOOKS"] = "1"
 
@@ -1199,6 +1599,8 @@ def build_port43_dbuf(
         build_flags.append("G3X_KBD_CHECK=1")
     if gui_diag:
         build_flags.append("G3X_GUI_DIAG=1")
+    if shadow2:
+        build_flags.append("G3X_GUI_SHADOW2=1")
     if full_hooks:
         build_flags.insert(1, "FULL_HOOKS=1")
 
@@ -1207,6 +1609,8 @@ def build_port43_dbuf(
         manifest_name = "port46_kbd_check_manifest.json"
     if gui_diag:
         manifest_name = "port47_gui_diag_manifest.json"
+    if shadow2:
+        manifest_name = "port48_shadow_alloc_manifest.json"
     manifest_data: dict[str, object] = {
         "build": {
             "platform": "g3x",
@@ -1278,6 +1682,7 @@ def main() -> int:
     parser.add_argument("--no-overdraw", action="store_true", help="Enable G3X_GUI_NOOVERDRAW=1 opt-in overlay protection")
     parser.add_argument("--kbd-check", action="store_true", default=os.environ.get("G3X_KBD_CHECK") == "1", help="Enable G3X_KBD_CHECK=1 ALT key diagnostic (also accepts environment flag)")
     parser.add_argument("--gui-diag", action="store_true", default=os.environ.get("G3X_GUI_DIAG") == "1", help="Enable G3X_GUI_DIAG=1 overdraw/restore counters, shadow-blit-only restore, and sibling suppression")
+    parser.add_argument("--shadow2", action="store_true", default=os.environ.get("G3X_GUI_SHADOW2") == "1", help="Enable G3X_GUI_SHADOW2=1 ordered shadow allocation fallback chain (exmem -> rect -> idx) and GetMemInfo diagnostic")
     parser.add_argument("--no-clean", action="store_true", help="Do not clean staging before building")
     parser.add_argument("--discard-stage", action="store_true", help="Remove stage directory after build")
     parser.add_argument("--out-dir", type=str, default=None, help="Custom output directory")
@@ -1291,6 +1696,7 @@ def main() -> int:
         out_dir=args.out_dir,
         kbd_check=args.kbd_check,
         gui_diag=args.gui_diag,
+        shadow2=args.shadow2,
     )
 
 
