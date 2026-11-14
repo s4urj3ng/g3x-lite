@@ -197,6 +197,24 @@ int g3x_gui_sync_pre_frame_check(unsigned int *sp_entry, unsigned int r9_val)
  * untouched so the 20 ms poll loop remains an accurate fallback for both buffers. */
 void g3x_sync_set_guard_target(unsigned int target_idx)
 {
+#if defined(G3X_GUI_RESTORE2) && (G3X_GUI_RESTORE2 == 1)
+    (void)target_idx;
+    /* Under G3X_GUI_RESTORE2=1, restore sentinel guards on BOTH opacity buffers */
+    for (unsigned int idx = 0; idx < 2; ++idx)
+    {
+        if (!opacity_buffer[idx])
+            continue;
+        opacity_buffer[idx][0] = 0x42;
+        if (!camera_info.state.gui_mode_none && g3x_dbuf_shadow_is_allocated())
+        {
+            int buf_w = camera_screen.buffer_width ? camera_screen.buffer_width : G3X_SHADOW_FULL_WIDTH;
+            opacity_buffer[idx][10 * buf_w + 8] = 0x42;
+            opacity_buffer[idx][10 * buf_w + 891] = 0x42;
+            opacity_buffer[idx][589 * buf_w + 8] = 0x42;
+            opacity_buffer[idx][589 * buf_w + 891] = 0x42;
+        }
+    }
+#else
     unsigned int idx = target_idx & 1u;
     if (!opacity_buffer[idx])
         return;
@@ -209,9 +227,12 @@ void g3x_sync_set_guard_target(unsigned int target_idx)
         opacity_buffer[idx][589 * buf_w + 8] = 0x42;
         opacity_buffer[idx][589 * buf_w + 891] = 0x42;
     }
+#endif
 }
 
-/* Bounded fast shadow blit into ONLY the buffer about to be shown (target_idx & 1).
+/* Bounded fast shadow blit. Under G3X_GUI_RESTORE2=1, restores the dirty rect into
+ * BOTH bitmap and opacity buffers (active and inactive, indices 0 and 1).
+ * Under legacy G3X_GUI_SYNC=1, restores into target_idx & 1 only.
  * No allocation, no blocking calls, no new tasks. Supports all 3 PORT-48 shadow
  * tiers (exmem 928x600, rect 880x576, idx 880x576 palette index). */
 int g3x_shadow2_blit_restore_target(unsigned char *bm, unsigned char *op,
@@ -226,13 +247,31 @@ int g3x_shadow2_blit_restore_target(unsigned char *bm, unsigned char *op,
         return 0;
     }
 
-    unsigned int idx = target_idx & 1u;
-    if (!bitmap_buffer[idx] || !opacity_buffer[idx])
+#if defined(G3X_GUI_RESTORE2) && (G3X_GUI_RESTORE2 == 1)
+    (void)target_idx;
+    /* PORT-51b: Both-buffer sync restore.
+     * Restores the dirty rect into BOTH bitmap buffers (active and inactive,
+     * indices 0 and 1) so that a flip never lands on a buffer without the overlay.
+     *
+     * Buffer selection citation:
+     * - Active buffer: active_bitmap_buffer & 1
+     *   * reference/finsig_gm110c/stubs_entry.S:186: DEF(active_bitmap_buffer, 0x0000d2a4)
+     *   * Sibling g7x: chdk-port/platform/g7x/lib.c:279-281:
+     *       vid_get_bitmap_active_buffer() { return bitmap_buffer[active_bitmap_buffer&1]; }
+     *   * Sibling sx60hs: chdk-port/platform/sx60hs/lib.c:265-267:
+     *       vid_get_bitmap_active_buffer() { return bitmap_buffer[active_bitmap_buffer&1]; }
+     *   * Sibling g5x: chdk-port/platform/g5x/lib.c:21-25:
+     *       vid_get_bitmap_fb() { return bitmap_buffer[active_bitmap_buffer]; }
+     *   * G3X platform: chdk-port/platform/g3x/lib.c:20-23:
+     *       vid_get_bitmap_fb() { return bitmap_buffer[active_bitmap_buffer]; }
+     * - Inactive buffer: (active_bitmap_buffer & 1) ^ 1
+     * - Both buffers: bitmap_buffer[0] and bitmap_buffer[1], opacity_buffer[0] and opacity_buffer[1]
+     */
+    if (!bitmap_buffer[0] || !bitmap_buffer[1] || !opacity_buffer[0] || !opacity_buffer[1])
     {
         return 0;
     }
 
-#if defined(G3X_GUI_RESTORE2) && (G3X_GUI_RESTORE2 == 1)
     /* Timer source citation:
      * reference/finsig_gm110c/stubs_entry.S:239: NHSTUB(GetSystemTime, 0xfc60243d)
      * chdk-port/platform/generic/wrappers.c:345-354: long get_tick_count() calls _GetSystemTime(&t)
@@ -299,16 +338,20 @@ int g3x_shadow2_blit_restore_target(unsigned char *bm, unsigned char *op,
             int rx = al_x0 - sh_x0;
             unsigned int dst_pair_base = (unsigned int)((screen_y * buf_w + al_x0) >> 1);
             const unsigned char *src_idx = bm + (ry * g3x_shadow2_w + rx);
-            unsigned short *dst_op = (unsigned short *)(opacity_buffer[idx]) + dst_pair_base;
-            unsigned int *dst_bm = (unsigned int *)(bitmap_buffer[idx]) + dst_pair_base;
+            unsigned short *dst_op0 = (unsigned short *)(opacity_buffer[0]) + dst_pair_base;
+            unsigned short *dst_op1 = (unsigned short *)(opacity_buffer[1]) + dst_pair_base;
+            unsigned int *dst_bm0 = (unsigned int *)(bitmap_buffer[0]) + dst_pair_base;
+            unsigned int *dst_bm1 = (unsigned int *)(bitmap_buffer[1]) + dst_pair_base;
             int pairs = copy_cols >> 1;
             for (int p = 0; p < pairs; ++p)
             {
                 unsigned int uyvy = 0u;
                 unsigned short op16 = 0u;
                 g3x_shadow2_expand_pair(src_idx[p * 2], src_idx[p * 2 + 1], &uyvy, &op16);
-                dst_op[p] = op16;
-                dst_bm[p] = uyvy;
+                dst_op0[p] = op16;
+                dst_op1[p] = op16;
+                dst_bm0[p] = uyvy;
+                dst_bm1[p] = uyvy;
             }
         }
     }
@@ -324,8 +367,11 @@ int g3x_shadow2_blit_restore_target(unsigned char *bm, unsigned char *op,
             unsigned char *src_op = op + ry * g3x_shadow2_w + rx;
             unsigned char *src_bm = bm + (ry * g3x_shadow2_w + rx) * 2;
 
-            memcpy((void *)&opacity_buffer[idx][offset_op], src_op, (unsigned int)copy_cols);
-            memcpy((void *)&bitmap_buffer[idx][offset_bm], src_bm, (unsigned int)(copy_cols * 2));
+            memcpy((void *)&opacity_buffer[0][offset_op], src_op, (unsigned int)copy_cols);
+            memcpy((void *)&opacity_buffer[1][offset_op], src_op, (unsigned int)copy_cols);
+
+            memcpy((void *)&bitmap_buffer[0][offset_bm], src_bm, (unsigned int)(copy_cols * 2));
+            memcpy((void *)&bitmap_buffer[1][offset_bm], src_bm, (unsigned int)(copy_cols * 2));
         }
     }
 
@@ -334,6 +380,11 @@ int g3x_shadow2_blit_restore_target(unsigned char *bm, unsigned char *op,
     g3x_diag_record_blit_duration(duration_ms);
     return 1;
 #else
+    unsigned int idx = target_idx & 1u;
+    if (!bitmap_buffer[idx] || !opacity_buffer[idx])
+    {
+        return 0;
+    }
     if (g3x_shadow2_mode == G3X_SHADOW_MODE_IDX)
     {
         for (int ry = 0; ry < g3x_shadow2_h; ++ry)

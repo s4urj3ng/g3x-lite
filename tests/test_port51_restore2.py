@@ -33,8 +33,8 @@ BASE_PORT50_CANDIDATE_SIZE = 130745
 BASE_PORT50_DEFAULT_SHA256 = "24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9"
 BASE_PORT50_DEFAULT_SIZE = 124097
 
-BASE_PORT51_RESTORE2_SHA256 = "84aa8e3e8ae2ea9a4e9af184baed08e8149451358b7dc2a5081467ee34428ea2"
-BASE_PORT51_RESTORE2_SIZE = 131857
+BASE_PORT51_RESTORE2_SHA256 = "4fad35b503be9f0a0ed799cf4cd62721db61e8dc6fa0ba348a507e52937d622a"
+BASE_PORT51_RESTORE2_SIZE = 131929
 
 
 def sha256_file(path: Path) -> str:
@@ -394,23 +394,31 @@ int main(void)
     assert(g3x_restore2_dirty_x1 == 120 && g3x_restore2_dirty_y1 == 120);
 
     /* 3. Rect-only restore test */
-    /* Fill destination buffer 1 with 0x00, place marker outside dirty rect at (300, 300) */
+    /* Fill destination buffers 0 and 1 with 0x00, place markers outside dirty rect at (300, 300) */
+    memset(bm0, 0, sizeof(bm0));
+    memset(op0, 0, sizeof(op0));
     memset(bm1, 0, sizeof(bm1));
     memset(op1, 0, sizeof(op1));
     unsigned int outside_off = 300u * 928u + 300u;
+    op0[outside_off] = 0xAA;
+    bm0[outside_off * 2] = 0xBB;
     op1[outside_off] = 0xAA;
     bm1[outside_off * 2] = 0xBB;
 
-    /* Perform blit restore for target buffer 1 */
+    /* Perform blit restore (restores both buffers 0 and 1 under RESTORE2) */
     int res = g3x_shadow2_blit_restore_target(sh_bm, sh_op, 928, 1u);
     assert(res == 1);
 
-    /* Verify inside dirty rect: copied from shadow */
+    /* Verify inside dirty rect: copied from shadow for BOTH buffers */
     unsigned int inside_off = 100u * 928u + 100u;
+    assert(op0[inside_off] == 0x22);
+    assert(bm0[inside_off * 2] == 0x11);
     assert(op1[inside_off] == 0x22);
     assert(bm1[inside_off * 2] == 0x11);
 
-    /* Verify outside dirty rect: untouched */
+    /* Verify outside dirty rect: untouched on both buffers */
+    assert(op0[outside_off] == 0xAA);
+    assert(bm0[outside_off * 2] == 0xBB);
     assert(op1[outside_off] == 0xAA);
     assert(bm1[outside_off * 2] == 0xBB);
 
