@@ -1,0 +1,695 @@
+{
+  "manifest_version": "1.0.0",
+  "manifest_id": "port49_gui_sync_evidence",
+  "milestone": "PORT-49",
+  "task": "PORT49-SYNC-RESEARCH",
+  "date": "2026-11-14",
+  "firmware_revision": "GM1.10C",
+  "rom_file": "firmware/dumps/GM1.10C/PRIMARY.BIN",
+  "rom_base_address": "0xFC000000",
+  "full_rom_scan": false,
+  "rom_bytes_read": 13044,
+  "addresses": [
+    {
+      "name": "transfer_src_overlay",
+      "address": "0xFC380635",
+      "type": "function",
+      "label": "FINSIG",
+      "citation": "reference/finsig_gm110c/stubs_entry.S:352; reference/finsig_gm110c/funcs_by_name.csv:2571; chdk-port/platform/g7x/lib.c:13; chdk-port/platform/g5x/lib.c:13-17",
+      "description": "VramTransferManager.c overlay transfer routine; calls GraphicSystemCoreFinish_helper (0xFC143493 at 0xFC380670) and MakeOsdVram (0xFC183A13 at 0xFC3806F2) to compose Canon RGBA source window (0x41D81000) into bitmap_buffer[idx] and opacity_buffer[idx]."
+    },
+    {
+      "name": "GraphicSystemCoreFinish_helper",
+      "address": "0xFC143493",
+      "type": "function",
+      "label": "FINSIG",
+      "citation": "reference/finsig_gm110c/funcs_by_name.csv:935; reference/finsig_gm110c/funcs_by_address.csv:1058; chdk-port/platform/g7x/sub/100c/funcs_by_name.csv:817",
+      "description": "Calls GraphicSystemCoreFinish (0xFC20C5BF) and then reads RAM callback pointer *(0x0000E26C) at 0xFC14349A and invokes it via blx r0 at 0xFC1434A0 if non-zero."
+    },
+    {
+      "name": "GraphicSystemCoreFinish_callback_ptr",
+      "address": "0x0000E26C",
+      "type": "variable",
+      "label": "ROM_VERIFIED",
+      "citation": "ROM 0xFC143480..0xFC14353F (literal pool at 0xFC1434A8); ROM initializer 0xFCE972B4..0xFCE972D3 (offset 0xFCE972C4 == 0x00000000)",
+      "description": "RAM function pointer read by GraphicSystemCoreFinish_helper (0xFC143493 at 0xFC14349A) and setter sub_fc143480 (0xFC143481). Chosen RAM function-pointer hook point."
+    },
+    {
+      "name": "GraphicSystemCoreFinish",
+      "address": "0xFC20C5BF",
+      "type": "function",
+      "label": "FINSIG",
+      "citation": "reference/finsig_gm110c/funcs_by_name.csv:934; reference/finsig_gm110c/funcs_by_address.csv:1503; chdk-port/platform/g7x/sub/100c/funcs_by_name.csv:816",
+      "description": "Sends synchronous Zico GraphicSystemCoreFinish message via mzrm_createmsg (0xFC332539) and mzrm_sendmsg (0xFC33262D)."
+    },
+    {
+      "name": "MakeOsdVram",
+      "address": "0xFC183A13",
+      "type": "function",
+      "label": "ROM_VERIFIED",
+      "citation": "ROM 0xFC183820..0xFC183BFF; called by transfer_src_overlay at 0xFC3806F2",
+      "description": "MakeOsdVram.c wrapper calling sub_fc183824 (0xFC183825) -> sub_fc20c6d0 (0xFC20C6D1) -> mzrm_sendmsg (0xFC33262D) to synchronously DMA-compose source RGBA window (0x41D81000) into target bitmap_buffer[idx] and opacity_buffer[idx]."
+    },
+    {
+      "name": "VTM_FlipAndCommit",
+      "address": "0xFC38090B",
+      "type": "function",
+      "label": "ROM_VERIFIED",
+      "citation": "ROM 0xFC380740..0xFC3810EF (entry 0xFC38090A, write at 0xFC38091E); chdk-port/platform/g5x/lib.c:12-17",
+      "description": "Runtime writer of active_bitmap_buffer (0x0000D2A4): executes str r0, [r5, #64] at 0xFC38091E (where r5 = 0x0000D264) and commits the buffer via BmpDDev_SetBitmapVRAMAddress (0xFC183690 at 0xFC38092E/0xFC38093E)."
+    },
+    {
+      "name": "VTM_SelectNextBuffer",
+      "address": "0xFC380985",
+      "type": "function",
+      "label": "ROM_VERIFIED",
+      "citation": "ROM 0xFC380740..0xFC3810EF (entry 0xFC380984, rsb at 0xFC38099A); chdk-port/platform/g5x/lib.c:13",
+      "description": "Computes next_bitmap_buffer = 1 - active_bitmap_buffer (rsb r0, r0, #1 at 0xFC38099A) and stores it at 0x0000D2A0 ([r5, #60] at 0xFC38099E) and in display descriptor [r4, #4] (0xFC3809A4)."
+    },
+    {
+      "name": "VTMUnLock_flush",
+      "address": "0xFC3809AF",
+      "type": "function",
+      "label": "ROM_VERIFIED",
+      "citation": "ROM 0xFC380740..0xFC3810EF (entry 0xFC3809AE); chdk-port/platform/g5x/lib.c:12,18",
+      "description": "Core VramTransferManager flush sequence: redraws dirty windows via *(0x0000D28C), calls GraphicSystemCoreFinish_helper (0xFC143493 at 0xFC3809DA), selects inactive buffer via 0xFC380985 (at 0xFC380A12), overwrites inactive buffer via 0xFC3806FD -> transfer_src_overlay (at 0xFC380A16), and flips active_bitmap_buffer + commits display via 0xFC38090B (at 0xFC380A1C)."
+    },
+    {
+      "name": "VTMLock",
+      "address": "0xFC3810A9",
+      "type": "function",
+      "label": "ROM_VERIFIED",
+      "citation": "ROM 0xFC380740..0xFC3810EF (wrapper 0xFC3810A8 -> 0xFC380865); chdk-port/platform/g5x/lib.c:12; chdk-port/platform/g5x/sub/100c/stubs_entry_2.S:39",
+      "description": "Acquires VTM semaphore and increments VTM lock nesting counter at 0x0000D294."
+    },
+    {
+      "name": "VTMUnLock",
+      "address": "0xFC3810BD",
+      "type": "function",
+      "label": "ROM_VERIFIED",
+      "citation": "ROM 0xFC380740..0xFC3810EF (wrapper 0xFC3810BC -> 0xFC380A79 -> 0xFC3809AF); chdk-port/platform/g5x/lib.c:18; chdk-port/platform/g5x/sub/100c/stubs_entry_2.S:40",
+      "description": "Decrements VTM lock nesting counter at 0x0000D294 and triggers VTMUnLock_flush (0xFC3809AF) when lock count reaches zero."
+    },
+    {
+      "name": "ScreenLock",
+      "address": "0xFC3810F1",
+      "type": "function",
+      "label": "FINSIG",
+      "citation": "reference/finsig_gm110c/stubs_entry.S:268; reference/finsig_gm110c/funcs_by_name.csv:1866; chdk-port/platform/g7x/sub/100c/stubs_entry.S:245",
+      "description": "Acquires VTM mutex and delegates to VTMLock_inner (0xFC380865)."
+    },
+    {
+      "name": "ScreenUnlock",
+      "address": "0xFC381127",
+      "type": "function",
+      "label": "FINSIG",
+      "citation": "reference/finsig_gm110c/stubs_entry.S:269; reference/finsig_gm110c/funcs_by_name.csv:1868; chdk-port/platform/g7x/sub/100c/stubs_entry.S:246",
+      "description": "Acquires VTM mutex and delegates to VTMUnLock_inner (0xFC380A79 -> 0xFC3809AF)."
+    },
+    {
+      "name": "transfer_src_overlay_helper",
+      "address": "0xFC38113F",
+      "type": "function",
+      "label": "FINSIG",
+      "citation": "reference/finsig_gm110c/funcs_by_name.csv:2572; reference/finsig_gm110c/funcs_by_address.csv:2257",
+      "description": "Emergency/direct VTM transfer helper calling transfer_src_overlay (0xFC380635 at 0xFC381174) and BmpDDev_SetBitmapVRAMAddress (0xFC183690 at 0xFC38117E)."
+    },
+    {
+      "name": "BmpDDev_SetBitmapVRAMAddress",
+      "address": "0xFC183691",
+      "type": "function",
+      "label": "ROM_VERIFIED",
+      "citation": "ROM 0xFC18347E..0xFC18381F (even address 0xFC183690, Thumb entry 0xFC183691); called from 0xFC38092E, 0xFC38093E, 0xFC38117E",
+      "description": "Commits bitmap_buffer[idx] and opacity_buffer[idx] to display controller via DispCon_SetBitmapPlane (0xFC14255C), DispCon_SetOpacityPlane (0xFC14268C), and DispCon_LatchRegisters (0xFC1424AC)."
+    },
+    {
+      "name": "active_bitmap_buffer",
+      "address": "0x0000D2A4",
+      "type": "variable",
+      "label": "FINSIG",
+      "citation": "reference/finsig_gm110c/stubs_entry.S:186; chdk-port/platform/g7x/lib.c:5,263,279; chdk-port/platform/g5x/lib.c:6,21,206",
+      "description": "Active bitmap buffer index (0 or 1); initialized at 0xFC380AF0 and updated on flip at 0xFC38091E."
+    },
+    {
+      "name": "bitmap_buffer",
+      "address": "0x0000D2A8",
+      "type": "variable",
+      "label": "FINSIG",
+      "citation": "reference/finsig_gm110c/stubs_entry.S:188; chdk-port/platform/g7x/lib.c:264,280; chdk-port/platform/g5x/lib.c:7,22-25",
+      "description": "Two-element RAM pointer array (0x0000D2A8, 0x0000D2AC) holding bitmap_buffer[0] = 0x5FE80000 and bitmap_buffer[1] = 0x5FD00000."
+    },
+    {
+      "name": "bitmap_buffer[0]",
+      "address": "0x5FE80000",
+      "type": "variable",
+      "label": "ROM_VERIFIED",
+      "citation": "ROM 0xFC18347E..0xFC18381F (literal pool at 0xFC1837FC, loaded at 0xFC183652); stored into 0x0000D2A8 at 0xFC380AFC",
+      "description": "DRAM YUV422 (UYVY) bitmap framebuffer 0."
+    },
+    {
+      "name": "bitmap_buffer[1]",
+      "address": "0x5FD00000",
+      "type": "variable",
+      "label": "ROM_VERIFIED",
+      "citation": "ROM 0xFC18347E..0xFC18381F (literal pool at 0xFC183818, loaded at 0xFC18365A); stored into 0x0000D2AC at 0xFC380B02",
+      "description": "DRAM YUV422 (UYVY) bitmap framebuffer 1."
+    },
+    {
+      "name": "opacity_buffer[0..1]",
+      "address": "0x5FC40000 / 0x5FB80000",
+      "type": "variable",
+      "label": "ROM_VERIFIED",
+      "citation": "ROM 0xFC18347E..0xFC18381F (literal pool at 0xFC183800 and 0xFC183804, loaded at 0xFC183656..0xFC18365E); chdk-port/platform/g7x/lib.c:291; chdk-port/platform/g5x/lib.c:27",
+      "description": "DRAM 8-bpp alpha/opacity buffers 0 and 1."
+    },
+    {
+      "name": "hook_CreateTask",
+      "address": "0xBFE14A3C",
+      "type": "variable",
+      "label": "FINSIG",
+      "citation": "reference/finsig_gm110c/stubs_entry.S:203; chdk-port/platform/g3x/sub/110c/boot.c:66-76,132-135; chdk-port/platform/g7x/sub/100c/boot.c:66-71",
+      "description": "DryOS CreateTask RAM hook in BTCM used to intercept task creation at boot."
+    }
+  ],
+  "rom_ranges_read": [
+    {
+      "start": "0xFC142280",
+      "end": "0xFC1423FF",
+      "length": 384,
+      "sha256": "8aba5ab81fcdd10e2dcb9f9c06b8a348b5ad77a4dbb222ff25238567b221b05c",
+      "reason_finsig_insufficient": "FINSIG stub missing: DispCon VSync ISR dispatcher (0xFC1422F4..0xFC14231A) and plane setup functions absent from FINSIG."
+    },
+    {
+      "start": "0xFC142400",
+      "end": "0xFC142DBF",
+      "length": 2496,
+      "sha256": "f49b8639d08112015afffe61b4e0d0e98d87d9283aa833ceaab6e97ad56c3757",
+      "reason_finsig_insufficient": "FINSIG stub missing: DispCon_SetBitmapPlane (0xFC14255C), DispCon_SetOpacityPlane (0xFC14268C), and DispCon_LatchRegisters (0xFC1424AC) called by BmpDDev_SetBitmapVRAMAddress are absent from FINSIG."
+    },
+    {
+      "start": "0xFC142DC0",
+      "end": "0xFC1433FF",
+      "length": 1600,
+      "sha256": "75c9a2b4dc909398efeec6194a3db5180086da58e49057f163a6dec735015b14",
+      "reason_finsig_insufficient": "FINSIG stub missing: DispCon plane state helper (0xFC1433E2) called by BmpDDev_SetBitmapVRAMAddress is absent from FINSIG."
+    },
+    {
+      "start": "0xFC143400",
+      "end": "0xFC14347F",
+      "length": 128,
+      "sha256": "46a70c28dc19d7902f3f84bab01a51685c3f4edf2a7fbbca6eb74405d8d64577",
+      "reason_finsig_insufficient": "FINSIG stub missing: literal pool and function boundary immediately preceding GraphicSystemCoreFinish_helper setter (0xFC143481)."
+    },
+    {
+      "start": "0xFC143480",
+      "end": "0xFC14353F",
+      "length": 192,
+      "sha256": "e572b8ec7042b7eeb6fa9d214668a814da7af3a49f63733f8bf78259bd88ed5e",
+      "reason_finsig_insufficient": "FINSIG stub uncertain: GraphicSystemCoreFinish_helper (0xFC143493) is in funcs_by_name.csv, but its internal RAM function-pointer call through *(0x0000E26C) (literal pool 0xFC1434A8) is not in FINSIG."
+    },
+    {
+      "start": "0xFC143540",
+      "end": "0xFC1438FF",
+      "length": 960,
+      "sha256": "a35adc9bef4fff292800e8a0b47d5e49cfc2cfb0ee76bc0f3e98c2492c4a677a",
+      "reason_finsig_insufficient": "FINSIG stub missing: adjacent graphic system helpers after GraphicSystemCoreFinish_helper checked for any additional callback pointers."
+    },
+    {
+      "start": "0xFC183440",
+      "end": "0xFC18347D",
+      "length": 62,
+      "sha256": "f68188e8b78648d676154698ca477b83d54e61a02570a013bfd4f0020256f2a1",
+      "reason_finsig_insufficient": "FINSIG stub missing: BmpDDev.c VSync ISR callback trampoline (0xFC18346B) and default no-op callback (0xFC18344D) preceding 0xFC18347E."
+    },
+    {
+      "start": "0xFC18347E",
+      "end": "0xFC18381F",
+      "length": 930,
+      "sha256": "5b04719fde94ae9a967beb93e1f64836fd417de35d0cc613536c3c79b07fcadf",
+      "reason_finsig_insufficient": "FINSIG stub missing: BmpDDev_SetBitmapVRAMAddress (0xFC183690), bitmap_buffer[0..1] literals (0x5FE80000 at 0xFC1837FC, 0x5FD00000 at 0xFC183818), and opacity_buffer[0..1] literals (0x5FC40000 at 0xFC183800, 0x5FB80000 at 0xFC183804) are absent from FINSIG."
+    },
+    {
+      "start": "0xFC183820",
+      "end": "0xFC183BFF",
+      "length": 992,
+      "sha256": "6c41850ee721d27902ad03edac092a0e3514ce1b88b9cfa9bdedfa020dfeb745",
+      "reason_finsig_insufficient": "FINSIG stub missing: MakeOsdVram (0xFC183A13) and MakeOsdVram_transfer (0xFC183825) called by transfer_src_overlay (0xFC3806F2) to overwrite the inactive buffer are absent from FINSIG."
+    },
+    {
+      "start": "0xFC20C580",
+      "end": "0xFC20C5AF",
+      "length": 48,
+      "sha256": "01d7574504a05b901e44a9a17143cabf93e2bb7ce9a82840d34127b5bbaa553d",
+      "reason_finsig_insufficient": "FINSIG stub missing: helper immediately preceding GraphicSystemCoreFinish (0xFC20C5BF)."
+    },
+    {
+      "start": "0xFC20C5B0",
+      "end": "0xFC20C63F",
+      "length": 144,
+      "sha256": "1bd799677d6d4f0540acd9c491403f50fc90be50eb52dfafdcecc71ea5153225",
+      "reason_finsig_insufficient": "FINSIG stub uncertain: GraphicSystemCoreFinish (0xFC20C5BF) is in funcs_by_name.csv, but its Zico message creation/send behavior is not in FINSIG."
+    },
+    {
+      "start": "0xFC20C640",
+      "end": "0xFC20C79F",
+      "length": 352,
+      "sha256": "f6e52559754a0be6b1074cff80e933de063037ba4026b89af59e10c8d24c92cd",
+      "reason_finsig_insufficient": "FINSIG stub missing: Zico MakeOsdVram message sender (0xFC20C6D0) called by MakeOsdVram_transfer (0xFC183882) is absent from FINSIG."
+    },
+    {
+      "start": "0xFC20E4B0",
+      "end": "0xFC20E6FF",
+      "length": 592,
+      "sha256": "f4626b67109e462284b57a58e3f41d19c7faf6c1dfd4bfac9bc47e24db2cf86e",
+      "reason_finsig_insufficient": "FINSIG stub missing: MakeOsdVram Zico descriptor builders (0xFC20E4BC, 0xFC20E5C0, 0xFC20E6B2) called by MakeOsdVram_transfer are absent from FINSIG."
+    },
+    {
+      "start": "0xFC332538",
+      "end": "0xFC33269F",
+      "length": 360,
+      "sha256": "673b6fdf282290781716ca5a5c32145a025590e45e16e505025537753d0f3a00",
+      "reason_finsig_insufficient": "FINSIG stub uncertain: mzrm_createmsg (0xFC332539) and mzrm_sendmsg (0xFC33262D) are in funcs_by_name.csv, but whether mzrm_sendmsg waits synchronously for DMA completion was not in FINSIG."
+    },
+    {
+      "start": "0xFC3326A0",
+      "end": "0xFC332733",
+      "length": 148,
+      "sha256": "8143e6693f4dd0284192c4b2416de7a1f4ab43901fa366a031b0ae7800a34a29",
+      "reason_finsig_insufficient": "FINSIG stub uncertain: second half of mzrm_sendmsg (0xFC3326A0..0xFC332733) proving synchronous completion wait before returning to MakeOsdVram."
+    },
+    {
+      "start": "0xFC33D100",
+      "end": "0xFC33D34F",
+      "length": 592,
+      "sha256": "6a279cd7644e7b0e1be262c997ea99f94c66617e6fa8ea1ba37a76399a809622",
+      "reason_finsig_insufficient": "FINSIG stub missing: window/palette manager helpers (0xFC33D12C, 0xFC33D2B4, 0xFC33D2BE, 0xFC33D2DC, 0xFC33D2F0) called by transfer_src_overlay."
+    },
+    {
+      "start": "0xFC380500",
+      "end": "0xFC380633",
+      "length": 308,
+      "sha256": "c569f38bc6401560b8bde595e6afb433ec9e49fbd9a1ea61c43a6982a7f18e78",
+      "reason_finsig_insufficient": "FINSIG stub missing: VramTransferManager.c dirty-window redraw loop (0xFC38056A, 0xFC380596), VTM mutex helpers (0xFC3805C6, 0xFC3805D6), and window lookup (0xFC380602) preceding transfer_src_overlay."
+    },
+    {
+      "start": "0xFC380634",
+      "end": "0xFC38073F",
+      "length": 268,
+      "sha256": "336d235df668ca1d9e05c010545ccf417c3b57a572326fb6dd35506c45d533ab",
+      "reason_finsig_insufficient": "FINSIG stub uncertain: transfer_src_overlay (0xFC380635) internal calls to GraphicSystemCoreFinish_helper (0xFC380670) and MakeOsdVram (0xFC3806F2), plus dirty-rect wrapper sub_fc3806fc (0xFC3806FD), are absent from FINSIG."
+    },
+    {
+      "start": "0xFC380740",
+      "end": "0xFC3810EF",
+      "length": 2480,
+      "sha256": "eb3c1a57c0e2a64c8a940368e0ec52ce8731f4b620a40b938a148c70e02484ba",
+      "reason_finsig_insufficient": "FINSIG stub missing: active_bitmap_buffer writer (sub_fc38090a at 0xFC38090B, str r0, [r5, #64] at 0xFC38091E), inactive-buffer selector (sub_fc380984 at 0xFC380985), VTMUnLock_flush (sub_fc3809ae at 0xFC3809AF), VTMLock (0xFC3810A9), VTMUnLock (0xFC3810BD), and VTM_Init (0xFC380A95) are absent from FINSIG."
+    },
+    {
+      "start": "0xFC3810F0",
+      "end": "0xFC38119B",
+      "length": 172,
+      "sha256": "188ac7d596935c5b3a6d4c04f91a15e9202676d70ef6712ef7d49e18f90dfcc0",
+      "reason_finsig_insufficient": "FINSIG stub uncertain: ScreenLock (0xFC3810F1), ScreenUnlock (0xFC381127), and transfer_src_overlay_helper (0xFC38113F) internal targets are not in FINSIG."
+    },
+    {
+      "start": "0xFC38119C",
+      "end": "0xFC38141F",
+      "length": 644,
+      "sha256": "2446088ef29fd7a8e572b32d3ed68d88d927c3ba0a36b599947b5355583ff7e0",
+      "reason_finsig_insufficient": "FINSIG stub missing: remaining functions and literal pools of VramTransferManager.c between transfer_src_overlay_helper and 0xFC381420."
+    },
+    {
+      "start": "0xFC381420",
+      "end": "0xFC38143F",
+      "length": 32,
+      "sha256": "6818cfe66adb29abc97612cf7139d102bd144d5bef456aa1d32b480a688fb556",
+      "reason_finsig_insufficient": "FINSIG stub missing: literal pool of VramTransferManager.c containing 0x0000D2B8 (proving VTM_Data base = 0x0000D264)."
+    },
+    {
+      "start": "0xFCE962BC",
+      "end": "0xFCE9633B",
+      "length": 128,
+      "sha256": "8b012996b4a836d63184df99d49e760d5bf362764eea7ca3d6f38f11c22f6bb3",
+      "reason_finsig_insufficient": "FINSIG stub missing: ROM data initializer image for RAM 0x0000D264..0x0000D2E3 (VTM_Data initial values)."
+    },
+    {
+      "start": "0xFCE972B4",
+      "end": "0xFCE972D3",
+      "length": 32,
+      "sha256": "eb0ba2f9bab233c48ea17582b9d50fd355286869038206c29fcfa2cf5d08538d",
+      "reason_finsig_insufficient": "FINSIG stub missing: ROM data initializer image for RAM 0x0000E25C..0x0000E27B confirming *(0x0000E26C) initial value is 0x00000000."
+    }
+  ],
+  "authorization_scopes": [
+    {
+      "scope_id": "SCOPE-PORT49-GUI-SYNC",
+      "firmware_revision": "GM1.10C",
+      "approved_ranges": [
+        {
+          "start_address": "0xFC142280",
+          "end_address": "0xFC1438FF",
+          "label": "DispCon and GraphicSystemCoreFinish_helper region"
+        },
+        {
+          "start_address": "0xFC183440",
+          "end_address": "0xFC183BFF",
+          "label": "BmpDDev.c and MakeOsdVram.c region"
+        },
+        {
+          "start_address": "0xFC20C580",
+          "end_address": "0xFC20C79F",
+          "label": "GraphicSystemCoreFinish and MakeOsdVram Zico message senders"
+        },
+        {
+          "start_address": "0xFC20E4B0",
+          "end_address": "0xFC20E6FF",
+          "label": "MakeOsdVram descriptor builders"
+        },
+        {
+          "start_address": "0xFC332538",
+          "end_address": "0xFC332733",
+          "label": "mzrm_createmsg and mzrm_sendmsg synchronous wait"
+        },
+        {
+          "start_address": "0xFC33D100",
+          "end_address": "0xFC33D34F",
+          "label": "Window and palette getters called by transfer_src_overlay"
+        },
+        {
+          "start_address": "0xFC380500",
+          "end_address": "0xFC38143F",
+          "label": "VramTransferManager.c region"
+        },
+        {
+          "start_address": "0xFCE962BC",
+          "end_address": "0xFCE9633B",
+          "label": "ROM initializer for VTM_Data (0x0000D264..0x0000D2E3)"
+        },
+        {
+          "start_address": "0xFCE972B4",
+          "end_address": "0xFCE972D3",
+          "label": "ROM initializer for GraphicSystemCoreFinish callback pointer (0x0000E26C)"
+        }
+      ],
+      "max_bytes_total": 16384,
+      "allowed_classifications": [
+        "STATIC_VERIFIED",
+        "INFERRED",
+        "UNKNOWN"
+      ],
+      "description": "Bounded ROM reads around VramTransferManager.c, BmpDDev.c, MakeOsdVram.c, and GraphicSystemCoreFinish_helper where FINSIG stubs are missing or uncertain."
+    }
+  ],
+  "evidence_entries": [
+    {
+      "evidence_id": "EVID-PORT49-01",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC142280",
+      "end_address": "0xFC1423FF",
+      "expected_byte_count": 384,
+      "sha256": "8aba5ab81fcdd10e2dcb9f9c06b8a348b5ad77a4dbb222ff25238567b221b05c",
+      "provenance_source": "ROM_VERIFIED:firmware/dumps/GM1.10C/PRIMARY.BIN@0xFC142280..0xFC1423FF",
+      "authorization_scope_id": "SCOPE-PORT49-GUI-SYNC",
+      "classification": "STATIC_VERIFIED",
+      "notes": "DispCon VSync ISR dispatcher (0xFC1422F4..0xFC14231A) and plane setup functions."
+    },
+    {
+      "evidence_id": "EVID-PORT49-02",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC142400",
+      "end_address": "0xFC142DBF",
+      "expected_byte_count": 2496,
+      "sha256": "f49b8639d08112015afffe61b4e0d0e98d87d9283aa833ceaab6e97ad56c3757",
+      "provenance_source": "ROM_VERIFIED:firmware/dumps/GM1.10C/PRIMARY.BIN@0xFC142400..0xFC142DBF",
+      "authorization_scope_id": "SCOPE-PORT49-GUI-SYNC",
+      "classification": "STATIC_VERIFIED",
+      "notes": "DispCon_SetBitmapPlane (0xFC14255C), DispCon_SetOpacityPlane (0xFC14268C), and DispCon_LatchRegisters (0xFC1424AC)."
+    },
+    {
+      "evidence_id": "EVID-PORT49-03",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC142DC0",
+      "end_address": "0xFC1433FF",
+      "expected_byte_count": 1600,
+      "sha256": "75c9a2b4dc909398efeec6194a3db5180086da58e49057f163a6dec735015b14",
+      "provenance_source": "ROM_VERIFIED:firmware/dumps/GM1.10C/PRIMARY.BIN@0xFC142DC0..0xFC1433FF",
+      "authorization_scope_id": "SCOPE-PORT49-GUI-SYNC",
+      "classification": "STATIC_VERIFIED",
+      "notes": "DispCon plane state helper (0xFC1433E2) called by BmpDDev_SetBitmapVRAMAddress."
+    },
+    {
+      "evidence_id": "EVID-PORT49-04",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC143400",
+      "end_address": "0xFC14347F",
+      "expected_byte_count": 128,
+      "sha256": "46a70c28dc19d7902f3f84bab01a51685c3f4edf2a7fbbca6eb74405d8d64577",
+      "provenance_source": "ROM_VERIFIED:firmware/dumps/GM1.10C/PRIMARY.BIN@0xFC143400..0xFC14347F",
+      "authorization_scope_id": "SCOPE-PORT49-GUI-SYNC",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Literal pool and function boundary preceding 0xFC143480."
+    },
+    {
+      "evidence_id": "EVID-PORT49-05",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC143480",
+      "end_address": "0xFC14353F",
+      "expected_byte_count": 192,
+      "sha256": "e572b8ec7042b7eeb6fa9d214668a814da7af3a49f63733f8bf78259bd88ed5e",
+      "provenance_source": "ROM_VERIFIED:firmware/dumps/GM1.10C/PRIMARY.BIN@0xFC143480..0xFC14353F",
+      "authorization_scope_id": "SCOPE-PORT49-GUI-SYNC",
+      "classification": "STATIC_VERIFIED",
+      "notes": "GraphicSystemCoreFinish_helper (0xFC143493), setter sub_fc143480 (0xFC143481), and literal pool pointer 0x0000E26C (at 0xFC1434A8)."
+    },
+    {
+      "evidence_id": "EVID-PORT49-06",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC143540",
+      "end_address": "0xFC1438FF",
+      "expected_byte_count": 960,
+      "sha256": "a35adc9bef4fff292800e8a0b47d5e49cfc2cfb0ee76bc0f3e98c2492c4a677a",
+      "provenance_source": "ROM_VERIFIED:firmware/dumps/GM1.10C/PRIMARY.BIN@0xFC143540..0xFC1438FF",
+      "authorization_scope_id": "SCOPE-PORT49-GUI-SYNC",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Adjacent graphic system helpers following GraphicSystemCoreFinish_helper."
+    },
+    {
+      "evidence_id": "EVID-PORT49-07",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC183440",
+      "end_address": "0xFC18347D",
+      "expected_byte_count": 62,
+      "sha256": "f68188e8b78648d676154698ca477b83d54e61a02570a013bfd4f0020256f2a1",
+      "provenance_source": "ROM_VERIFIED:firmware/dumps/GM1.10C/PRIMARY.BIN@0xFC183440..0xFC18347D",
+      "authorization_scope_id": "SCOPE-PORT49-GUI-SYNC",
+      "classification": "STATIC_VERIFIED",
+      "notes": "BmpDDev.c VSync ISR callback trampoline (0xFC18346B) and default callback (0xFC18344D)."
+    },
+    {
+      "evidence_id": "EVID-PORT49-08",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC18347E",
+      "end_address": "0xFC18381F",
+      "expected_byte_count": 930,
+      "sha256": "5b04719fde94ae9a967beb93e1f64836fd417de35d0cc613536c3c79b07fcadf",
+      "provenance_source": "ROM_VERIFIED:firmware/dumps/GM1.10C/PRIMARY.BIN@0xFC18347E..0xFC18381F",
+      "authorization_scope_id": "SCOPE-PORT49-GUI-SYNC",
+      "classification": "STATIC_VERIFIED",
+      "notes": "BmpDDev_SetBitmapVRAMAddress (0xFC183690) and DRAM addresses of bitmap_buffer[0..1] (0x5FE80000, 0x5FD00000) and opacity_buffer[0..1] (0x5FC40000, 0x5FB80000)."
+    },
+    {
+      "evidence_id": "EVID-PORT49-09",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC183820",
+      "end_address": "0xFC183BFF",
+      "expected_byte_count": 992,
+      "sha256": "6c41850ee721d27902ad03edac092a0e3514ce1b88b9cfa9bdedfa020dfeb745",
+      "provenance_source": "ROM_VERIFIED:firmware/dumps/GM1.10C/PRIMARY.BIN@0xFC183820..0xFC183BFF",
+      "authorization_scope_id": "SCOPE-PORT49-GUI-SYNC",
+      "classification": "STATIC_VERIFIED",
+      "notes": "MakeOsdVram (0xFC183A13) and MakeOsdVram_transfer (0xFC183825) called by transfer_src_overlay."
+    },
+    {
+      "evidence_id": "EVID-PORT49-10",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC20C580",
+      "end_address": "0xFC20C5AF",
+      "expected_byte_count": 48,
+      "sha256": "01d7574504a05b901e44a9a17143cabf93e2bb7ce9a82840d34127b5bbaa553d",
+      "provenance_source": "ROM_VERIFIED:firmware/dumps/GM1.10C/PRIMARY.BIN@0xFC20C580..0xFC20C5AF",
+      "authorization_scope_id": "SCOPE-PORT49-GUI-SYNC",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Helper preceding GraphicSystemCoreFinish."
+    },
+    {
+      "evidence_id": "EVID-PORT49-11",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC20C5B0",
+      "end_address": "0xFC20C63F",
+      "expected_byte_count": 144,
+      "sha256": "1bd799677d6d4f0540acd9c491403f50fc90be50eb52dfafdcecc71ea5153225",
+      "provenance_source": "ROM_VERIFIED:firmware/dumps/GM1.10C/PRIMARY.BIN@0xFC20C5B0..0xFC20C63F",
+      "authorization_scope_id": "SCOPE-PORT49-GUI-SYNC",
+      "classification": "STATIC_VERIFIED",
+      "notes": "GraphicSystemCoreFinish (0xFC20C5BF) implementation."
+    },
+    {
+      "evidence_id": "EVID-PORT49-12",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC20C640",
+      "end_address": "0xFC20C79F",
+      "expected_byte_count": 352,
+      "sha256": "f6e52559754a0be6b1074cff80e933de063037ba4026b89af59e10c8d24c92cd",
+      "provenance_source": "ROM_VERIFIED:firmware/dumps/GM1.10C/PRIMARY.BIN@0xFC20C640..0xFC20C79F",
+      "authorization_scope_id": "SCOPE-PORT49-GUI-SYNC",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Zico MakeOsdVram message sender sub_fc20c6d0 (0xFC20C6D0)."
+    },
+    {
+      "evidence_id": "EVID-PORT49-13",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC20E4B0",
+      "end_address": "0xFC20E6FF",
+      "expected_byte_count": 592,
+      "sha256": "f4626b67109e462284b57a58e3f41d19c7faf6c1dfd4bfac9bc47e24db2cf86e",
+      "provenance_source": "ROM_VERIFIED:firmware/dumps/GM1.10C/PRIMARY.BIN@0xFC20E4B0..0xFC20E6FF",
+      "authorization_scope_id": "SCOPE-PORT49-GUI-SYNC",
+      "classification": "STATIC_VERIFIED",
+      "notes": "MakeOsdVram descriptor builders (0xFC20E4BC, 0xFC20E5C0, 0xFC20E6B2)."
+    },
+    {
+      "evidence_id": "EVID-PORT49-14",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC332538",
+      "end_address": "0xFC33269F",
+      "expected_byte_count": 360,
+      "sha256": "673b6fdf282290781716ca5a5c32145a025590e45e16e505025537753d0f3a00",
+      "provenance_source": "ROM_VERIFIED:firmware/dumps/GM1.10C/PRIMARY.BIN@0xFC332538..0xFC33269F",
+      "authorization_scope_id": "SCOPE-PORT49-GUI-SYNC",
+      "classification": "STATIC_VERIFIED",
+      "notes": "mzrm_createmsg (0xFC332539) and mzrm_sendmsg (0xFC33262D) entry."
+    },
+    {
+      "evidence_id": "EVID-PORT49-15",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC3326A0",
+      "end_address": "0xFC332733",
+      "expected_byte_count": 148,
+      "sha256": "8143e6693f4dd0284192c4b2416de7a1f4ab43901fa366a031b0ae7800a34a29",
+      "provenance_source": "ROM_VERIFIED:firmware/dumps/GM1.10C/PRIMARY.BIN@0xFC3326A0..0xFC332733",
+      "authorization_scope_id": "SCOPE-PORT49-GUI-SYNC",
+      "classification": "STATIC_VERIFIED",
+      "notes": "mzrm_sendmsg synchronous completion wait."
+    },
+    {
+      "evidence_id": "EVID-PORT49-16",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC33D100",
+      "end_address": "0xFC33D34F",
+      "expected_byte_count": 592,
+      "sha256": "6a279cd7644e7b0e1be262c997ea99f94c66617e6fa8ea1ba37a76399a809622",
+      "provenance_source": "ROM_VERIFIED:firmware/dumps/GM1.10C/PRIMARY.BIN@0xFC33D100..0xFC33D34F",
+      "authorization_scope_id": "SCOPE-PORT49-GUI-SYNC",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Window/palette manager getters called by transfer_src_overlay."
+    },
+    {
+      "evidence_id": "EVID-PORT49-17",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC380500",
+      "end_address": "0xFC380633",
+      "expected_byte_count": 308,
+      "sha256": "c569f38bc6401560b8bde595e6afb433ec9e49fbd9a1ea61c43a6982a7f18e78",
+      "provenance_source": "ROM_VERIFIED:firmware/dumps/GM1.10C/PRIMARY.BIN@0xFC380500..0xFC380633",
+      "authorization_scope_id": "SCOPE-PORT49-GUI-SYNC",
+      "classification": "STATIC_VERIFIED",
+      "notes": "VramTransferManager.c dirty-window redraw loop and mutex helpers."
+    },
+    {
+      "evidence_id": "EVID-PORT49-18",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC380634",
+      "end_address": "0xFC38073F",
+      "expected_byte_count": 268,
+      "sha256": "336d235df668ca1d9e05c010545ccf417c3b57a572326fb6dd35506c45d533ab",
+      "provenance_source": "ROM_VERIFIED:firmware/dumps/GM1.10C/PRIMARY.BIN@0xFC380634..0xFC38073F",
+      "authorization_scope_id": "SCOPE-PORT49-GUI-SYNC",
+      "classification": "STATIC_VERIFIED",
+      "notes": "transfer_src_overlay (0xFC380635) and dirty-rect transfer wrapper (0xFC3806FD)."
+    },
+    {
+      "evidence_id": "EVID-PORT49-19",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC380740",
+      "end_address": "0xFC3810EF",
+      "expected_byte_count": 2480,
+      "sha256": "eb3c1a57c0e2a64c8a940368e0ec52ce8731f4b620a40b938a148c70e02484ba",
+      "provenance_source": "ROM_VERIFIED:firmware/dumps/GM1.10C/PRIMARY.BIN@0xFC380740..0xFC3810EF",
+      "authorization_scope_id": "SCOPE-PORT49-GUI-SYNC",
+      "classification": "STATIC_VERIFIED",
+      "notes": "active_bitmap_buffer writer (0xFC38090B, write at 0xFC38091E), inactive-buffer selector (0xFC380985), VTMUnLock_flush (0xFC3809AF), VTMLock (0xFC3810A9), VTMUnLock (0xFC3810BD), and VTM_Init (0xFC380A95)."
+    },
+    {
+      "evidence_id": "EVID-PORT49-20",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC3810F0",
+      "end_address": "0xFC38119B",
+      "expected_byte_count": 172,
+      "sha256": "188ac7d596935c5b3a6d4c04f91a15e9202676d70ef6712ef7d49e18f90dfcc0",
+      "provenance_source": "ROM_VERIFIED:firmware/dumps/GM1.10C/PRIMARY.BIN@0xFC3810F0..0xFC38119B",
+      "authorization_scope_id": "SCOPE-PORT49-GUI-SYNC",
+      "classification": "STATIC_VERIFIED",
+      "notes": "ScreenLock (0xFC3810F1), ScreenUnlock (0xFC381127), and transfer_src_overlay_helper (0xFC38113F)."
+    },
+    {
+      "evidence_id": "EVID-PORT49-21",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC38119C",
+      "end_address": "0xFC38141F",
+      "expected_byte_count": 644,
+      "sha256": "2446088ef29fd7a8e572b32d3ed68d88d927c3ba0a36b599947b5355583ff7e0",
+      "provenance_source": "ROM_VERIFIED:firmware/dumps/GM1.10C/PRIMARY.BIN@0xFC38119C..0xFC38141F",
+      "authorization_scope_id": "SCOPE-PORT49-GUI-SYNC",
+      "classification": "STATIC_VERIFIED",
+      "notes": "Tail functions of VramTransferManager.c."
+    },
+    {
+      "evidence_id": "EVID-PORT49-22",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC381420",
+      "end_address": "0xFC38143F",
+      "expected_byte_count": 32,
+      "sha256": "6818cfe66adb29abc97612cf7139d102bd144d5bef456aa1d32b480a688fb556",
+      "provenance_source": "ROM_VERIFIED:firmware/dumps/GM1.10C/PRIMARY.BIN@0xFC381420..0xFC38143F",
+      "authorization_scope_id": "SCOPE-PORT49-GUI-SYNC",
+      "classification": "STATIC_VERIFIED",
+      "notes": "VramTransferManager.c literal pool containing 0x0000D2B8 (proving VTM_Data base = 0x0000D264)."
+    },
+    {
+      "evidence_id": "EVID-PORT49-23",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFCE962BC",
+      "end_address": "0xFCE9633B",
+      "expected_byte_count": 128,
+      "sha256": "8b012996b4a836d63184df99d49e760d5bf362764eea7ca3d6f38f11c22f6bb3",
+      "provenance_source": "ROM_VERIFIED:firmware/dumps/GM1.10C/PRIMARY.BIN@0xFCE962BC..0xFCE9633B",
+      "authorization_scope_id": "SCOPE-PORT49-GUI-SYNC",
+      "classification": "STATIC_VERIFIED",
+      "notes": "ROM initializer image for VTM_Data RAM 0x0000D264..0x0000D2E3."
+    },
+    {
+      "evidence_id": "EVID-PORT49-24",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFCE972B4",
+      "end_address": "0xFCE972D3",
+      "expected_byte_count": 32,
+      "sha256": "eb0ba2f9bab233c48ea17582b9d50fd355286869038206c29fcfa2cf5d08538d",
+      "provenance_source": "ROM_VERIFIED:firmware/dumps/GM1.10C/PRIMARY.BIN@0xFCE972B4..0xFCE972D3",
+      "authorization_scope_id": "SCOPE-PORT49-GUI-SYNC",
+      "classification": "STATIC_VERIFIED",
+      "notes": "ROM initializer image for RAM 0x0000E25C..0x0000E27B confirming *(0x0000E26C) initial value is 0x00000000."
+    }
+  ],
+  "notes": "All 24 bounded ROM ranges recorded with start, end, length, and SHA-256; zero full-ROM scans performed."
+}
