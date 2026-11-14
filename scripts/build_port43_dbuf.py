@@ -1661,6 +1661,196 @@ def apply_gui_sync_staging_patches(stage_dir: Path) -> None:
     draw_c.write_text(draw_text, encoding="utf-8")
 
 
+def apply_gui_menu_staging_patches(stage_dir: Path) -> None:
+    """Apply G3X_GUI_MENU=1 compile flags, unwrap conf_save and file writes, and hook menu-open and conf-save diags."""
+    shutil.copy2(CHDK_PORT / "platform/g3x/gui_diag.h", stage_dir / "platform/g3x/gui_diag.h")
+    shutil.copy2(
+        CHDK_PORT / "platform/g3x/sub/110c/gui_sync.h",
+        stage_dir / "platform/g3x/sub/110c/gui_sync.h",
+    )
+
+    # 1. Update makefiles with prerequisite checks and -DG3X_GUI_MENU=1
+    for rel in ["platform/g3x/Makefile", "platform/g3x/sub/110c/Makefile"]:
+        mpath = stage_dir / rel
+        text = mpath.read_text(encoding="utf-8")
+        prereq = (
+            "ifeq ($(G3X_GUI_MENU),1)\n"
+            "ifneq ($(G3X_GUI_SYNC),1)\n"
+            "$(error G3X_GUI_MENU=1 requires G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+            "endif\n"
+            "ifneq ($(G3X_GUI_DBUF),1)\n"
+            "$(error G3X_GUI_MENU=1 requires G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+            "endif\n"
+            "ifneq ($(G3X_GUI_NOOVERDRAW),1)\n"
+            "$(error G3X_GUI_MENU=1 requires G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+            "endif\n"
+            "ifneq ($(G3X_KBD_CHECK),1)\n"
+            "$(error G3X_GUI_MENU=1 requires G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+            "endif\n"
+            "ifneq ($(G3X_GUI_DIAG),1)\n"
+            "$(error G3X_GUI_MENU=1 requires G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+            "endif\n"
+            "ifneq ($(G3X_GUI_SHADOW2),1)\n"
+            "$(error G3X_GUI_MENU=1 requires G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+            "endif\n"
+            "endif\n\n"
+        )
+        text = prereq + text
+        anchor = "-DG3X_GUI_SYNC=1"
+        if text.count(anchor) != 1:
+            raise RuntimeError(f"PORT-50 compile flag anchor not found in {rel}")
+        text = text.replace(anchor, anchor + " -DG3X_GUI_MENU=1", 1)
+        mpath.write_text(text, encoding="utf-8")
+
+    # 2. In platform/g3x/sub/110c/Makefile: unwrap LDOPTS under G3X_GUI_MENU=1
+    sub_makefile = stage_dir / "platform/g3x/sub/110c/Makefile"
+    sub_text = sub_makefile.read_text(encoding="utf-8")
+    wrap_anchor = (
+        "LDOPTS = -nostdlib -Wl,--allow-shlib-undefined -Wl,-EL,-T,$(tools)/link-boot.ld \\\n"
+        "         -Wl,-N,-Ttext,$(MEMISOSTART) \\\n"
+        "         -Wl,--wrap=conf_save -Wl,--wrap=save_params_values -Wl,--wrap=save_int_value_file \\\n"
+        "         -Wl,--wrap=write -Wl,--wrap=fwrite -Wl,--wrap=open -Wl,--wrap=fopen -Wl,--wrap=creat \\\n"
+        "         -Wl,--wrap=mkdir -Wl,--wrap=MakeDirectory_Fut -Wl,--wrap=_MakeDirectory_Fut \\\n"
+        "         -Wl,--wrap=remove -Wl,--wrap=DeleteFile_Fut -Wl,--wrap=_DeleteFile_Fut \\\n"
+        "         -Wl,--wrap=DeleteDirectory_Fut -Wl,--wrap=_DeleteDirectory_Fut \\\n"
+        "         -Wl,--wrap=rename -Wl,--wrap=RenameFile_Fut -Wl,--wrap=_RenameFile_Fut\n"
+    )
+    wrap_replacement = (
+        "ifeq ($(G3X_GUI_MENU),1)\n"
+        "LDOPTS = -nostdlib -Wl,--allow-shlib-undefined -Wl,-EL,-T,$(tools)/link-boot.ld \\\n"
+        "         -Wl,-N,-Ttext,$(MEMISOSTART)\n"
+        "else\n"
+        + wrap_anchor +
+        "endif\n"
+    )
+    if sub_text.count(wrap_anchor) != 1:
+        raise RuntimeError("PORT-50 LDOPTS wrap anchor not found in staged sub/110c/Makefile")
+    sub_text = sub_text.replace(wrap_anchor, wrap_replacement, 1)
+    sub_makefile.write_text(sub_text, encoding="utf-8")
+
+    # 3. In platform/g3x/lib.c: guard compile-time card write disable wrappers
+    lib_c = stage_dir / "platform/g3x/lib.c"
+    lib_text = lib_c.read_text(encoding="utf-8")
+    lib_wrap_anchor = (
+        "void __wrap_conf_save(void) { }\n"
+        "void __wrap_save_params_values(int enforce) { (void)enforce; }\n"
+        "void __wrap_save_int_value_file(const char *fn, int v) { (void)fn; (void)v; }\n"
+        "int __wrap_write(int fd, const void *buf, int n) { (void)fd; (void)buf; return n; }\n"
+        "int __wrap_fwrite(const void *ptr, int size, int n, void *stream) { (void)ptr; (void)size; (void)stream; return n; }\n"
+        "\n"
+        "// Real DryOS symbols resolved via linker --wrap\n"
+        "extern int __real_open(const char *name, int flags, int mode);\n"
+        "extern void *__real_fopen(const char *filename, const char *mode);\n"
+        "\n"
+        "int __wrap_creat(const char *pathname, int mode)\n"
+        "{\n"
+        "    (void)pathname;\n"
+        "    (void)mode;\n"
+        "    return -1;\n"
+        "}\n"
+        "\n"
+        "int __wrap_open(const char *name, int flags, int mode)\n"
+        "{\n"
+        "    // Block write/create/append/truncate access:\n"
+        "    // O_WRONLY(1), O_RDWR(2), O_APPEND(8), O_CREAT(0x100 or 0x200), O_TRUNC(0x200 or 0x400)\n"
+        "    if ((flags & 3) != 0 || (flags & (0x08 | 0x0100 | 0x0200 | 0x0400 | 0x0800))) {\n"
+        "        return -1;\n"
+        "    }\n"
+        "    return __real_open(name, flags, mode);\n"
+        "}\n"
+        "\n"
+        "void *__wrap_fopen(const char *filename, const char *mode)\n"
+        "{\n"
+        "    if (!mode) return 0;\n"
+        "    // Pass read-only modes (\"r\", \"rb\") through to __real_fopen; reject write, append, create, truncate ('w', 'a', '+')\n"
+        "    const char *p;\n"
+        "    for (p = mode; *p; ++p) {\n"
+        "        if (*p == 'w' || *p == 'a' || *p == '+') {\n"
+        "            return 0;\n"
+        "        }\n"
+        "    }\n"
+        "    return __real_fopen(filename, mode);\n"
+        "}\n"
+        "\n"
+        "// Wrappers blocking filesystem mutation (mkdir, remove/DeleteFile, rename)\n"
+        "long __wrap_mkdir(const char *dirname) { (void)dirname; return 0; }\n"
+        "long __wrap_MakeDirectory_Fut(const char *dirname, int unk) { (void)dirname; (void)unk; return 0; }\n"
+        "long __wrap__MakeDirectory_Fut(const char *dirname, int unk) { (void)dirname; (void)unk; return 0; }\n"
+        "\n"
+        "int __wrap_remove(const char *name) { (void)name; return 0; }\n"
+        "int __wrap_DeleteFile_Fut(const char *name) { (void)name; return 0; }\n"
+        "int __wrap__DeleteFile_Fut(const char *name) { (void)name; return 0; }\n"
+        "int __wrap_DeleteDirectory_Fut(const char *name) { (void)name; return 0; }\n"
+        "int __wrap__DeleteDirectory_Fut(const char *name) { (void)name; return 0; }\n"
+        "\n"
+        "int __wrap_rename(const char *oldname, const char *newname) { (void)oldname; (void)newname; return 0; }\n"
+        "int __wrap_RenameFile_Fut(const char *oldname, const char *newname) { (void)oldname; (void)newname; return 0; }\n"
+        "int __wrap__RenameFile_Fut(const char *oldname, const char *newname) { (void)oldname; (void)newname; return 0; }"
+    )
+    lib_wrap_replacement = (
+        "#if !defined(G3X_GUI_MENU) || (G3X_GUI_MENU != 1)\n"
+        + lib_wrap_anchor + "\n"
+        "#endif"
+    )
+    if lib_text.count(lib_wrap_anchor) != 1:
+        raise RuntimeError("PORT-50 lib.c wrap anchor not found in staged platform/g3x/lib.c")
+    lib_text = lib_text.replace(lib_wrap_anchor, lib_wrap_replacement, 1)
+    lib_c.write_text(lib_text, encoding="utf-8")
+
+    # 4. In core/gui.c: record menu open event when transitioning to menuGuiHandler
+    gui_c = stage_dir / "core/gui.c"
+    gui_text = gui_c.read_text(encoding="utf-8")
+    gui_anchor = "    gui_handler *old_mode = gui_mode;\n    gui_mode = mode;\n"
+    gui_replacement = (
+        "    gui_handler *old_mode = gui_mode;\n"
+        "    gui_mode = mode;\n"
+        "#if defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)\n"
+        "    if (mode == &menuGuiHandler && old_mode != &menuGuiHandler)\n"
+        "    {\n"
+        "        extern void g3x_menu_record_open(void);\n"
+        "        g3x_menu_record_open();\n"
+        "    }\n"
+        "#endif\n"
+    )
+    if gui_text.count(gui_anchor) != 1:
+        raise RuntimeError("PORT-50 gui.c old_mode anchor not found in staged core/gui.c")
+    gui_text = gui_text.replace(gui_anchor, gui_replacement, 1)
+    gui_c.write_text(gui_text, encoding="utf-8")
+
+    # 5. In core/conf.c: record conf save status (OK / ERR)
+    conf_c = stage_dir / "core/conf.c"
+    conf_text = conf_c.read_text(encoding="utf-8")
+    conf_anchor = (
+        "        write(fd, buf, p-buf);\n"
+        "        close(fd);\n"
+        "    }\n"
+        "    ufree(buf);"
+    )
+    conf_replacement = (
+        "#if defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)\n"
+        "        int written = write(fd, buf, p-buf);\n"
+        "        close(fd);\n"
+        "        extern void g3x_conf_record_save_result(int ok);\n"
+        "        g3x_conf_record_save_result(written == (p - buf));\n"
+        "    }\n"
+        "    else\n"
+        "    {\n"
+        "        extern void g3x_conf_record_save_result(int ok);\n"
+        "        g3x_conf_record_save_result(0);\n"
+        "    }\n"
+        "#else\n"
+        "        write(fd, buf, p-buf);\n"
+        "        close(fd);\n"
+        "    }\n"
+        "#endif\n"
+        "    ufree(buf);"
+    )
+    if conf_text.count(conf_anchor) != 1:
+        raise RuntimeError("PORT-50 conf.c write anchor not found in staged core/conf.c")
+    conf_text = conf_text.replace(conf_anchor, conf_replacement, 1)
+    conf_c.write_text(conf_text, encoding="utf-8")
+
+
 def build_port43_dbuf(
     clean_stage: bool = True,
     keep_stage: bool = True,
@@ -1671,7 +1861,10 @@ def build_port43_dbuf(
     gui_diag: bool = False,
     shadow2: bool = False,
     gui_sync: bool = False,
+    gui_menu: bool = False,
 ) -> int:
+    if gui_menu:
+        gui_sync = True
     if gui_sync:
         shadow2 = True
     if shadow2:
@@ -1695,6 +1888,9 @@ def build_port43_dbuf(
 
     if out_dir is not None:
         effective_out_dir = Path(out_dir).resolve()
+    elif gui_menu:
+        suffix = "-full-hooks" if full_hooks else ""
+        effective_out_dir = REPO_ROOT / "out" / ("port50-gui-menu" + suffix)
     elif gui_sync:
         suffix = "-full-hooks" if full_hooks else ""
         effective_out_dir = REPO_ROOT / "out" / ("port49-gui-sync" + suffix)
@@ -1793,6 +1989,10 @@ def build_port43_dbuf(
         print("G3X_GUI_SYNC=1: Applying synchronous display-flip hook at 0x0000E26C and target-buffer shadow restore...")
         apply_gui_sync_staging_patches(effective_stage_dir)
 
+    if gui_menu:
+        print("G3X_GUI_MENU=1: Applying standard CHDK menu hooks and unwrapping file I/O stubs...")
+        apply_gui_menu_staging_patches(effective_stage_dir)
+
     # Clean platform objects in staging copy
     for subpath in ["platform/g3x", "platform/g3x/sub/110c", "loader/g3x"]:
         p = effective_stage_dir / subpath
@@ -1817,6 +2017,8 @@ def build_port43_dbuf(
                 clean_cmd.append("G3X_GUI_SHADOW2=1")
             if gui_sync:
                 clean_cmd.append("G3X_GUI_SYNC=1")
+            if gui_menu:
+                clean_cmd.append("G3X_GUI_MENU=1")
             if full_hooks:
                 clean_cmd.append("FULL_HOOKS=1")
             clean_cmd.append("clean")
@@ -1850,6 +2052,8 @@ def build_port43_dbuf(
         cmd.append("G3X_GUI_SHADOW2=1")
     if gui_sync:
         cmd.append("G3X_GUI_SYNC=1")
+    if gui_menu:
+        cmd.append("G3X_GUI_MENU=1")
     if full_hooks:
         cmd.append("FULL_HOOKS=1")
     cmd.extend(["SKIP_TOOLS=1", "SKIP_MODULES=1", "SKIP_CHDK=1", "fir"])
@@ -1874,6 +2078,8 @@ def build_port43_dbuf(
         env["G3X_GUI_SHADOW2"] = "1"
     if gui_sync:
         env["G3X_GUI_SYNC"] = "1"
+    if gui_menu:
+        env["G3X_GUI_MENU"] = "1"
     if full_hooks:
         env["FULL_HOOKS"] = "1"
 
@@ -1944,6 +2150,8 @@ def build_port43_dbuf(
         build_flags.append("G3X_GUI_SHADOW2=1")
     if gui_sync:
         build_flags.append("G3X_GUI_SYNC=1")
+    if gui_menu:
+        build_flags.append("G3X_GUI_MENU=1")
     if full_hooks:
         build_flags.insert(1, "FULL_HOOKS=1")
 
@@ -1956,6 +2164,8 @@ def build_port43_dbuf(
         manifest_name = "port48_shadow_alloc_manifest.json"
     if gui_sync:
         manifest_name = "port49_gui_sync_manifest.json"
+    if gui_menu:
+        manifest_name = "port50_gui_menu_manifest.json"
     manifest_data: dict[str, object] = {
         "build": {
             "platform": "g3x",
@@ -2001,6 +2211,34 @@ def build_port43_dbuf(
         artifacts_dict["core_end"] = core_end_hex
         artifacts_dict["_end"] = core_end_hex
 
+    if gui_menu:
+        manifest_data["card_writes"] = "enabled"
+        manifest_data["card_writes_note"] = (
+            "G3X_GUI_MENU=1 overrides G3X_DISABLE_CARD_WRITES=1 and OPT_DISABLE_FILE_WRITES=1 "
+            "(no C code reads them; all linker wrappers are removed and real file I/O is enabled)"
+        )
+        build_dict = manifest_data["build"]
+        assert isinstance(build_dict, dict)
+        build_dict["card_writes"] = "enabled"
+        build_dict["card_writes_note"] = (
+            "G3X_GUI_MENU=1 overrides G3X_DISABLE_CARD_WRITES=1 and OPT_DISABLE_FILE_WRITES=1 "
+            "(no C code reads them; all linker wrappers are removed and real file I/O is enabled)"
+        )
+        manifest_data["removed_wrappers"] = [
+            "write",
+            "fwrite",
+            "open",
+            "fopen",
+            "creat",
+            "mkdir",
+            "MakeDirectory_Fut",
+            "remove",
+            "DeleteFile_Fut",
+            "DeleteDirectory_Fut",
+            "rename",
+            "RenameFile_Fut",
+        ]
+
     manifest_path = effective_out_dir / manifest_name
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest_data, f, indent=2)
@@ -2029,6 +2267,7 @@ def main() -> int:
     parser.add_argument("--gui-diag", action="store_true", default=os.environ.get("G3X_GUI_DIAG") == "1", help="Enable G3X_GUI_DIAG=1 overdraw/restore counters, shadow-blit-only restore, and sibling suppression")
     parser.add_argument("--shadow2", action="store_true", default=os.environ.get("G3X_GUI_SHADOW2") == "1", help="Enable G3X_GUI_SHADOW2=1 ordered shadow allocation fallback chain (exmem -> rect -> idx) and GetMemInfo diagnostic")
     parser.add_argument("--gui-sync", action="store_true", default=os.environ.get("G3X_GUI_SYNC") == "1", help="Enable G3X_GUI_SYNC=1 synchronous display-flip restore hook at 0x0000E26C")
+    parser.add_argument("--gui-menu", action="store_true", default=os.environ.get("G3X_GUI_MENU") == "1", help="Enable G3X_GUI_MENU=1 standard CHDK menu and FINSIG file I/O stubs")
     parser.add_argument("--no-clean", action="store_true", help="Do not clean staging before building")
     parser.add_argument("--discard-stage", action="store_true", help="Remove stage directory after build")
     parser.add_argument("--out-dir", type=str, default=None, help="Custom output directory")
@@ -2044,6 +2283,7 @@ def main() -> int:
         gui_diag=args.gui_diag,
         shadow2=args.shadow2,
         gui_sync=args.gui_sync,
+        gui_menu=args.gui_menu,
     )
 
 

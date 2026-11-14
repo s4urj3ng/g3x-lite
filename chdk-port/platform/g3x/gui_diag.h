@@ -32,6 +32,26 @@
 #endif
 #endif
 
+#if defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)
+#if !defined(G3X_GUI_SYNC) || (G3X_GUI_SYNC != 1) || \
+    !defined(G3X_GUI_DBUF) || (G3X_GUI_DBUF != 1) || \
+    !defined(G3X_GUI_NOOVERDRAW) || (G3X_GUI_NOOVERDRAW != 1) || \
+    !defined(G3X_KBD_CHECK) || (G3X_KBD_CHECK != 1) || \
+    !defined(G3X_GUI_DIAG) || (G3X_GUI_DIAG != 1) || \
+    !defined(G3X_GUI_SHADOW2) || (G3X_GUI_SHADOW2 != 1)
+#error G3X_GUI_MENU=1 requires G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1
+#endif
+
+#define G3X_CONF_SAVE_NONE 0
+#define G3X_CONF_SAVE_OK   1
+#define G3X_CONF_SAVE_ERR  2
+
+extern unsigned int g3x_menu_open_count;
+extern int g3x_conf_save_status;
+void g3x_menu_record_open(void);
+void g3x_conf_record_save_result(int ok);
+#endif
+
 #if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)
 #if !defined(G3X_GUI_DBUF) || (G3X_GUI_DBUF != 1) || \
     !defined(G3X_GUI_NOOVERDRAW) || (G3X_GUI_NOOVERDRAW != 1) || \
@@ -198,6 +218,21 @@ unsigned int g3x_diag_full_redraw_count = 0u;
 unsigned int g3x_diag_suppress_hit_count = 0u;
 int g3x_diag_suppress_engaged = 0;
 int g3x_diag_last_bitmap_buffer = -1;
+
+#if defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)
+unsigned int g3x_menu_open_count = 0;
+int g3x_conf_save_status = G3X_CONF_SAVE_NONE;
+
+void g3x_menu_record_open(void)
+{
+    g3x_menu_open_count++;
+}
+
+void g3x_conf_record_save_result(int ok)
+{
+    g3x_conf_save_status = ok ? G3X_CONF_SAVE_OK : G3X_CONF_SAVE_ERR;
+}
+#endif
 
 #if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)
 #ifndef MEMINFO_H
@@ -940,6 +975,21 @@ void gui_diag_draw(void)
 {
     if (!camera_info.state.gui_mode_alt)
         return;
+
+#if defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)
+    char menu_line[32];
+    const char *save_str = (g3x_conf_save_status == G3X_CONF_SAVE_OK) ? "OK" :
+                           (g3x_conf_save_status == G3X_CONF_SAVE_ERR) ? "ERR" : "-";
+    sprintf(menu_line, "MENU:%04u CONF:%s",
+            g3x_diag_clamp9999(g3x_menu_open_count),
+            save_str);
+    int y_menu = camera_screen.height - 3 * FONT_HEIGHT;
+    int mlen = (int)strlen(menu_line);
+    g3x_dbuf_fast_fill_rect(G3X_MENU_X0, y_menu, G3X_MENU_X1, y_menu + FONT_HEIGHT - 1, COLOR_BLACK);
+    draw_string((camera_screen.width - mlen * FONT_WIDTH) / 2,
+                y_menu,
+                menu_line, MAKE_COLOR(COLOR_BLACK, COLOR_WHITE));
+#endif
 
 #if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)
     char line[64];
