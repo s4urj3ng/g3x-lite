@@ -204,7 +204,7 @@ def apply_full_hooks_staging_patches(stage_dir: Path) -> None:
     sub_make.write_text(sub_make_text, encoding="utf-8")
 
 
-def apply_gui_fix_staging_patches(stage_dir: Path) -> None:
+def apply_gui_fix_staging_patches(stage_dir: Path, *, legacy_dbuf_snapshot: bool = True) -> None:
     """PORT-42: Apply G3X_GUI_FIX=1 staging patches for flicker, UYVY colours and 2x font.
 
     Citations:
@@ -212,7 +212,7 @@ def apply_gui_fix_staging_patches(stage_dir: Path) -> None:
     - Palette & UYVY colours: scripts/build_candidate_gui3.py:1223-1249; reference/finsig_gm110c/stubs_entry.S:195,196
     - 2x Integer font & 880x576 opaque layout: scripts/build_candidate_gui3.py:840-909, 984-1221; docs/PORT40_GUI_LAYOUT.md:14-28
     """
-    if Path(sys.argv[0]).name == "build_port43_dbuf.py":
+    if legacy_dbuf_snapshot and Path(sys.argv[0]).name == "build_port43_dbuf.py":
         port43_src = REPO_ROOT / "tools" / "port43_staging"
         if port43_src.is_dir():
             for rel in [
