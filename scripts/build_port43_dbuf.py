@@ -61,6 +61,14 @@ def _clean_platform_and_core_artifacts(stage_dir: Path) -> None:
                     pass
 
 
+def _remove_prototype_files(stage_dir: Path) -> None:
+    """Remove boot_prototype.c and stubs_prototype.S from a staged CHDK tree."""
+    for proto_name in ["boot_prototype.c", "stubs_prototype.S"]:
+        proto_file = stage_dir / "platform" / "g3x" / "sub" / "110c" / proto_name
+        if proto_file.exists():
+            proto_file.unlink()
+
+
 def _ensure_dbuf_seed_stage() -> Path:
     """Build or return a cached staging seed with prebuilt tools/, lib/, modules/, and CHDK/."""
     sentinel = SEED_STAGE_DIR / ".seed_ready"
@@ -70,6 +78,7 @@ def _ensure_dbuf_seed_stage() -> Path:
         and (SEED_STAGE_DIR / "lib" / "core" / ".o2" / "libcore.a").is_file()
         and len(list((SEED_STAGE_DIR / "modules" / ".o2").glob("*.flt"))) == 34
     ):
+        _remove_prototype_files(SEED_STAGE_DIR)
         return SEED_STAGE_DIR
 
     if SEED_STAGE_DIR.exists():
@@ -86,10 +95,7 @@ def _ensure_dbuf_seed_stage() -> Path:
     dbuf_menu = CHDK_PORT / "platform" / "g3x" / "gui_menu.c"
     if dbuf_menu.is_file():
         shutil.copy2(dbuf_menu, platform_target / "gui_menu.c")
-    for proto_name in ["boot_prototype.c", "stubs_prototype.S"]:
-        proto_file = platform_target / "sub" / "110c" / proto_name
-        if proto_file.exists():
-            proto_file.unlink()
+    _remove_prototype_files(SEED_STAGE_DIR)
 
     apply_gui_fix_staging_patches(SEED_STAGE_DIR, legacy_dbuf_snapshot=False)
     apply_dbuf_staging_patches(SEED_STAGE_DIR)
@@ -120,6 +126,7 @@ def _ensure_dbuf_seed_stage() -> Path:
         if dst.exists():
             shutil.rmtree(dst)
         shutil.copytree(CHDK_PORT / rel, dst, symlinks=True)
+    _remove_prototype_files(SEED_STAGE_DIR)
     _clean_platform_and_core_artifacts(SEED_STAGE_DIR)
 
     sentinel.write_text("ok\n", encoding="utf-8")

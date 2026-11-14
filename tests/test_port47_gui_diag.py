@@ -544,6 +544,11 @@ class TestPort47CandidateBuildAndManifest(unittest.TestCase):
         ]:
             self.assertRegex(symbols, rf" T {sym}\b")
 
+        # Ensure staging/seed directories never retain prototype files that break shorthand uniqueness tests
+        out_root = ROOT / "out"
+        for proto_name in ("boot_prototype.c", "stubs_prototype.S"):
+            self.assertEqual(list(out_root.rglob(proto_name)), [])
+
 
 if __name__ == "__main__":
     unittest.main()
