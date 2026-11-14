@@ -37,6 +37,18 @@
 #ifndef G3X_GUI_SYNC_H
 #define G3X_GUI_SYNC_H
 
+#if defined(G3X_GUI_RESTORE2) && (G3X_GUI_RESTORE2 == 1)
+#if !defined(G3X_GUI_MENU) || (G3X_GUI_MENU != 1) || \
+    !defined(G3X_GUI_SYNC) || (G3X_GUI_SYNC != 1) || \
+    !defined(G3X_GUI_DBUF) || (G3X_GUI_DBUF != 1) || \
+    !defined(G3X_GUI_NOOVERDRAW) || (G3X_GUI_NOOVERDRAW != 1) || \
+    !defined(G3X_KBD_CHECK) || (G3X_KBD_CHECK != 1) || \
+    !defined(G3X_GUI_DIAG) || (G3X_GUI_DIAG != 1) || \
+    !defined(G3X_GUI_SHADOW2) || (G3X_GUI_SHADOW2 != 1)
+#error G3X_GUI_RESTORE2=1 requires G3X_GUI_MENU=1 G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1
+#endif
+#endif
+
 #if defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)
 #if !defined(G3X_GUI_SYNC) || (G3X_GUI_SYNC != 1) || \
     !defined(G3X_GUI_DBUF) || (G3X_GUI_DBUF != 1) || \
@@ -220,6 +232,108 @@ int g3x_shadow2_blit_restore_target(unsigned char *bm, unsigned char *op,
         return 0;
     }
 
+#if defined(G3X_GUI_RESTORE2) && (G3X_GUI_RESTORE2 == 1)
+    /* Timer source citation:
+     * reference/finsig_gm110c/stubs_entry.S:239: NHSTUB(GetSystemTime, 0xfc60243d)
+     * chdk-port/platform/generic/wrappers.c:345-354: long get_tick_count() calls _GetSystemTime(&t)
+     * Sibling ports reference:
+     * chdk-port/platform/g7x/sub/100d/stubs_entry.S:217: NHSTUB(GetSystemTime, 0xfc3d88a9)
+     * chdk-port/platform/g5x/sub/100c/stubs_entry.S:225: NHSTUB(GetSystemTime, 0xfc662f91)
+     * chdk-port/platform/sx60hs/sub/100c/stubs_entry.S:221: NHSTUB(GetSystemTime, 0xfc3a46ad)
+     * DryOS GetSystemTime provides 1 ms resolution (millisecond resolution).
+     * Microsecond hardware timer register is not exposed or stubbed in GM1.10C or sibling
+     * ports (g7x, g5x, sx60hs). Therefore, blit duration measurement is in milliseconds (ms),
+     * as explicitly indicated on the diagnostic line ("B:%u/%ums") and in this comment.
+     */
+    long t_start = get_tick_count();
+
+    if (!g3x_restore2_dirty_valid)
+    {
+        long t_end = get_tick_count();
+        unsigned int duration_ms = (t_end >= t_start) ? (unsigned int)(t_end - t_start) : 0u;
+        g3x_diag_record_blit_duration(duration_ms);
+        return 1;
+    }
+
+    int dx0 = g3x_restore2_dirty_x0;
+    int dy0 = g3x_restore2_dirty_y0;
+    int dx1 = g3x_restore2_dirty_x1;
+    int dy1 = g3x_restore2_dirty_y1;
+
+    int sh_x0 = g3x_shadow2_x0;
+    int sh_y0 = g3x_shadow2_y0;
+    int sh_x1 = sh_x0 + g3x_shadow2_w - 1;
+    int sh_y1 = sh_y0 + g3x_shadow2_h - 1;
+
+    if (dx0 < sh_x0) dx0 = sh_x0;
+    if (dy0 < sh_y0) dy0 = sh_y0;
+    if (dx1 > sh_x1) dx1 = sh_x1;
+    if (dy1 > sh_y1) dy1 = sh_y1;
+
+    if (dx0 > dx1 || dy0 > dy1)
+    {
+        long t_end = get_tick_count();
+        unsigned int duration_ms = (t_end >= t_start) ? (unsigned int)(t_end - t_start) : 0u;
+        g3x_diag_record_blit_duration(duration_ms);
+        return 1;
+    }
+
+    int al_x0 = dx0 & ~1;
+    int al_x1 = dx1 | 1;
+    if (al_x0 < sh_x0) al_x0 = sh_x0;
+    if (al_x1 > sh_x1) al_x1 = sh_x1;
+    int copy_cols = al_x1 - al_x0 + 1;
+    if (copy_cols <= 0)
+    {
+        long t_end = get_tick_count();
+        unsigned int duration_ms = (t_end >= t_start) ? (unsigned int)(t_end - t_start) : 0u;
+        g3x_diag_record_blit_duration(duration_ms);
+        return 1;
+    }
+
+    if (g3x_shadow2_mode == G3X_SHADOW_MODE_IDX)
+    {
+        for (int screen_y = dy0; screen_y <= dy1; ++screen_y)
+        {
+            int ry = screen_y - sh_y0;
+            int rx = al_x0 - sh_x0;
+            unsigned int dst_pair_base = (unsigned int)((screen_y * buf_w + al_x0) >> 1);
+            const unsigned char *src_idx = bm + (ry * g3x_shadow2_w + rx);
+            unsigned short *dst_op = (unsigned short *)(opacity_buffer[idx]) + dst_pair_base;
+            unsigned int *dst_bm = (unsigned int *)(bitmap_buffer[idx]) + dst_pair_base;
+            int pairs = copy_cols >> 1;
+            for (int p = 0; p < pairs; ++p)
+            {
+                unsigned int uyvy = 0u;
+                unsigned short op16 = 0u;
+                g3x_shadow2_expand_pair(src_idx[p * 2], src_idx[p * 2 + 1], &uyvy, &op16);
+                dst_op[p] = op16;
+                dst_bm[p] = uyvy;
+            }
+        }
+    }
+    else
+    {
+        for (int screen_y = dy0; screen_y <= dy1; ++screen_y)
+        {
+            int ry = screen_y - sh_y0;
+            int rx = al_x0 - sh_x0;
+            unsigned int offset_op = (unsigned int)(screen_y * buf_w + al_x0);
+            unsigned int offset_bm = offset_op * 2u;
+
+            unsigned char *src_op = op + ry * g3x_shadow2_w + rx;
+            unsigned char *src_bm = bm + (ry * g3x_shadow2_w + rx) * 2;
+
+            memcpy((void *)&opacity_buffer[idx][offset_op], src_op, (unsigned int)copy_cols);
+            memcpy((void *)&bitmap_buffer[idx][offset_bm], src_bm, (unsigned int)(copy_cols * 2));
+        }
+    }
+
+    long t_end = get_tick_count();
+    unsigned int duration_ms = (t_end >= t_start) ? (unsigned int)(t_end - t_start) : 0u;
+    g3x_diag_record_blit_duration(duration_ms);
+    return 1;
+#else
     if (g3x_shadow2_mode == G3X_SHADOW_MODE_IDX)
     {
         for (int ry = 0; ry < g3x_shadow2_h; ++ry)
@@ -266,6 +380,7 @@ int g3x_shadow2_blit_restore_target(unsigned char *bm, unsigned char *op,
         memcpy((void *)&bitmap_buffer[idx][offset_bm], src_bm, (unsigned int)(g3x_shadow2_w * 2));
     }
     return 1;
+#endif
 }
 
 /* INFERRED post-transfer handler (docs/PORT49_GUI_SYNC.md answer (c);

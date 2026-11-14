@@ -1917,6 +1917,95 @@ def apply_gui_menu_staging_patches(stage_dir: Path) -> None:
         subprocess.run([str(ar_bin), "d", str(liblang_a), "fileutil.o"], check=True)
 
 
+def apply_gui_restore2_staging_patches(stage_dir: Path) -> None:
+    """Apply G3X_GUI_RESTORE2=1 compile flags, rect-only shadow blit, and duration timing / path counters."""
+    shutil.copy2(CHDK_PORT / "platform/g3x/gui_diag.h", stage_dir / "platform/g3x/gui_diag.h")
+    shutil.copy2(
+        CHDK_PORT / "platform/g3x/sub/110c/gui_sync.h",
+        stage_dir / "platform/g3x/sub/110c/gui_sync.h",
+    )
+
+    # 1. Update makefiles with prerequisite checks and -DG3X_GUI_RESTORE2=1
+    for rel in ["platform/g3x/Makefile", "platform/g3x/sub/110c/Makefile"]:
+        mpath = stage_dir / rel
+        text = mpath.read_text(encoding="utf-8")
+        prereq = (
+            "ifeq ($(G3X_GUI_RESTORE2),1)\n"
+            "ifneq ($(G3X_GUI_MENU),1)\n"
+            "$(error G3X_GUI_RESTORE2=1 requires G3X_GUI_MENU=1 G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+            "endif\n"
+            "ifneq ($(G3X_GUI_SYNC),1)\n"
+            "$(error G3X_GUI_RESTORE2=1 requires G3X_GUI_MENU=1 G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+            "endif\n"
+            "ifneq ($(G3X_GUI_DBUF),1)\n"
+            "$(error G3X_GUI_RESTORE2=1 requires G3X_GUI_MENU=1 G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+            "endif\n"
+            "ifneq ($(G3X_GUI_NOOVERDRAW),1)\n"
+            "$(error G3X_GUI_RESTORE2=1 requires G3X_GUI_MENU=1 G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+            "endif\n"
+            "ifneq ($(G3X_KBD_CHECK),1)\n"
+            "$(error G3X_GUI_RESTORE2=1 requires G3X_GUI_MENU=1 G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+            "endif\n"
+            "ifneq ($(G3X_GUI_DIAG),1)\n"
+            "$(error G3X_GUI_RESTORE2=1 requires G3X_GUI_MENU=1 G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+            "endif\n"
+            "ifneq ($(G3X_GUI_SHADOW2),1)\n"
+            "$(error G3X_GUI_RESTORE2=1 requires G3X_GUI_MENU=1 G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+            "endif\n"
+            "endif\n\n"
+        )
+        text = prereq + text
+        anchor = "-DG3X_GUI_MENU=1"
+        if text.count(anchor) != 1:
+            raise RuntimeError(f"PORT-51 compile flag anchor not found in {rel}")
+        text = text.replace(anchor, anchor + " -DG3X_GUI_RESTORE2=1", 1)
+        mpath.write_text(text, encoding="utf-8")
+
+    # 2. In core/gui_draw.c: route shadow restores to record sync vs poll counts
+    draw_c = stage_dir / "core/gui_draw.c"
+    draw_text = draw_c.read_text(encoding="utf-8")
+
+    # Sync restore path
+    sync_anchor = (
+        "    g3x_sync_set_guard_target(target_idx);\n"
+        "    g3x_diag_record_shadow_restore();\n"
+        "    return 1;"
+    )
+    sync_replacement = (
+        "    g3x_sync_set_guard_target(target_idx);\n"
+        "#if defined(G3X_GUI_RESTORE2) && (G3X_GUI_RESTORE2 == 1)\n"
+        "    g3x_diag_record_shadow_restore_sync();\n"
+        "#else\n"
+        "    g3x_diag_record_shadow_restore();\n"
+        "#endif\n"
+        "    return 1;"
+    )
+    if draw_text.count(sync_anchor) != 1:
+        raise RuntimeError("PORT-51 sync restore record anchor not found in staged core/gui_draw.c")
+    draw_text = draw_text.replace(sync_anchor, sync_replacement, 1)
+
+    # Poll restore path
+    poll_anchor = (
+        "    draw_set_guard();\n"
+        "#if defined(G3X_GUI_DIAG) && (G3X_GUI_DIAG == 1)\n"
+        "    g3x_diag_record_shadow_restore();\n"
+        "#endif"
+    )
+    poll_replacement = (
+        "    draw_set_guard();\n"
+        "#if defined(G3X_GUI_RESTORE2) && (G3X_GUI_RESTORE2 == 1)\n"
+        "    g3x_diag_record_shadow_restore_poll();\n"
+        "#elif defined(G3X_GUI_DIAG) && (G3X_GUI_DIAG == 1)\n"
+        "    g3x_diag_record_shadow_restore();\n"
+        "#endif"
+    )
+    if draw_text.count(poll_anchor) != 1:
+        raise RuntimeError("PORT-51 poll restore record anchor not found in staged core/gui_draw.c")
+    draw_text = draw_text.replace(poll_anchor, poll_replacement, 1)
+
+    draw_c.write_text(draw_text, encoding="utf-8")
+
+
 def build_port43_dbuf(
     clean_stage: bool = True,
     keep_stage: bool = True,
@@ -1928,7 +2017,10 @@ def build_port43_dbuf(
     shadow2: bool = False,
     gui_sync: bool = False,
     gui_menu: bool = False,
+    gui_restore2: bool = False,
 ) -> int:
+    if gui_restore2:
+        gui_menu = True
     if gui_menu:
         gui_sync = True
     if gui_sync:
@@ -1954,6 +2046,9 @@ def build_port43_dbuf(
 
     if out_dir is not None:
         effective_out_dir = Path(out_dir).resolve()
+    elif gui_restore2:
+        suffix = "-full-hooks" if full_hooks else ""
+        effective_out_dir = REPO_ROOT / "out" / ("port51-restore2-core" + suffix)
     elif gui_menu:
         suffix = "-full-hooks" if full_hooks else ""
         effective_out_dir = REPO_ROOT / "out" / ("port50-gui-menu" + suffix)
@@ -2059,6 +2154,10 @@ def build_port43_dbuf(
         print("G3X_GUI_MENU=1: Applying standard CHDK menu hooks and unwrapping file I/O stubs...")
         apply_gui_menu_staging_patches(effective_stage_dir)
 
+    if gui_restore2:
+        print("G3X_GUI_RESTORE2=1: Applying rect-only shadow blit, duration timing, and restore path counters...")
+        apply_gui_restore2_staging_patches(effective_stage_dir)
+
     # Clean platform objects in staging copy
     for subpath in ["platform/g3x", "platform/g3x/sub/110c", "loader/g3x"]:
         p = effective_stage_dir / subpath
@@ -2087,6 +2186,8 @@ def build_port43_dbuf(
                 clean_cmd.append("G3X_GUI_SYNC=1")
             if gui_menu:
                 clean_cmd.append("G3X_GUI_MENU=1")
+            if gui_restore2:
+                clean_cmd.append("G3X_GUI_RESTORE2=1")
             if full_hooks:
                 clean_cmd.append("FULL_HOOKS=1")
             clean_cmd.append("clean")
@@ -2124,6 +2225,8 @@ def build_port43_dbuf(
         cmd.append("G3X_GUI_SYNC=1")
     if gui_menu:
         cmd.append("G3X_GUI_MENU=1")
+    if gui_restore2:
+        cmd.append("G3X_GUI_RESTORE2=1")
     if full_hooks:
         cmd.append("FULL_HOOKS=1")
     cmd.extend(["SKIP_TOOLS=1", "SKIP_MODULES=1", "SKIP_CHDK=1", "fir"])
@@ -2152,6 +2255,8 @@ def build_port43_dbuf(
         env["G3X_GUI_SYNC"] = "1"
     if gui_menu:
         env["G3X_GUI_MENU"] = "1"
+    if gui_restore2:
+        env["G3X_GUI_RESTORE2"] = "1"
     if full_hooks:
         env["FULL_HOOKS"] = "1"
 
@@ -2224,6 +2329,8 @@ def build_port43_dbuf(
         build_flags.append("G3X_GUI_SYNC=1")
     if gui_menu:
         build_flags.append("G3X_GUI_MENU=1")
+    if gui_restore2:
+        build_flags.append("G3X_GUI_RESTORE2=1")
     if full_hooks:
         build_flags.insert(1, "FULL_HOOKS=1")
 
@@ -2238,6 +2345,8 @@ def build_port43_dbuf(
         manifest_name = "port49_gui_sync_manifest.json"
     if gui_menu:
         manifest_name = "port50_gui_menu_manifest.json"
+    if gui_restore2:
+        manifest_name = "port51_restore2_core_manifest.json"
     manifest_data: dict[str, object] = {
         "build": {
             "platform": "g3x",
@@ -2331,6 +2440,7 @@ def main() -> int:
     parser.add_argument("--shadow2", action="store_true", default=os.environ.get("G3X_GUI_SHADOW2") == "1", help="Enable G3X_GUI_SHADOW2=1 ordered shadow allocation fallback chain (exmem -> rect -> idx) and GetMemInfo diagnostic")
     parser.add_argument("--gui-sync", action="store_true", default=os.environ.get("G3X_GUI_SYNC") == "1", help="Enable G3X_GUI_SYNC=1 synchronous display-flip restore hook at 0x0000E26C")
     parser.add_argument("--gui-menu", action="store_true", default=os.environ.get("G3X_GUI_MENU") == "1", help="Enable G3X_GUI_MENU=1 standard CHDK menu and FINSIG file I/O stubs")
+    parser.add_argument("--gui-restore2", action="store_true", default=os.environ.get("G3X_GUI_RESTORE2") == "1", help="Enable G3X_GUI_RESTORE2=1 rect-only blit, blit duration timing, and restore path breakdown")
     parser.add_argument("--no-clean", action="store_true", help="Do not clean staging before building")
     parser.add_argument("--discard-stage", action="store_true", help="Remove stage directory after build")
     parser.add_argument("--out-dir", type=str, default=None, help="Custom output directory")
@@ -2347,6 +2457,7 @@ def main() -> int:
         shadow2=args.shadow2,
         gui_sync=args.gui_sync,
         gui_menu=args.gui_menu,
+        gui_restore2=args.gui_restore2,
     )
 
 
