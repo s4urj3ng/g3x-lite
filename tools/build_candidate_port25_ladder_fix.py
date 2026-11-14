@@ -47,6 +47,7 @@ from build_candidate_port2a import (  # noqa: E402
     NM,
     EXPECTED_BOOT_WITNESS_ADDR,
     build_candidate_loader as build_default_loader,
+    build_fallback_libplatform_a,
     encode_candidate_diskboot,
     generate_candidate_inspector,
     generate_manifest,
@@ -1441,7 +1442,9 @@ def build_candidate_core_ladder_fix(
     run_cmd([AR, "cr", lib_proto_a] + obj_files, cwd=str(CHDK_PORT))
 
     # 4. Link candidate_main.elf
-    libplatform_a = str(CHDK_PORT / "platform" / "g3x" / "libplatform.a")
+    libplatform_a = str(build_fallback_libplatform_a(
+        os.path.join(candidate_dir, "libplatform_private.a")
+    ))
     if osd2:
         libplatform_cand_a = os.path.join(candidate_dir, "libplatform_candidate.a")
         shutil.copyfile(libplatform_a, libplatform_cand_a)
