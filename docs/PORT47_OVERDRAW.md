@@ -24,3 +24,13 @@ Current G3X / PORT-43–45 failure paths (source conditions VERIFIED; runtime ca
 - **VERIFIED:** restore returns 0 for invalid/NULL shadow or GUI_NONE (`chdk-port/core/gui_draw.c:341`); menu completion marks valid only if allocated (`chdk-port/core/gui_menu.c:1328`).
 - **VERIFIED:** invalid shadow or failed restore forces `gui_redraw` (`chdk-port/core/gui.c:2992`, `chdk-port/core/gui.c:3005`; staged fallback `scripts/build_port43_dbuf.py:298`); enforced menu redraw becomes a full repaint (`chdk-port/core/gui_menu.c:1092`). **INFERRED:** repeated fallback can expose banded drawing.
 - **VERIFIED:** successful restore copies bitmap and opacity to both buffers, then returns without `vid_bitmap_refresh` (`chdk-port/core/gui_draw.c:350`); it does not prevent subsequent Canon writes. No wrong native hook target is established by these sources.
+
+## Adapted addresses (`G3X_GUI_DIAG=1`)
+
+| Symbol / Mechanism | GM1.10C Address | Source (`FINSIG`/`ROM`/`INFERRED`) | Sibling `path:line` |
+|---|---|---|---|
+| `active_bitmap_buffer` (active overlay buffer index read by `check_gui_needs_redraw` / `g3x_diag_check_suppress` while ALT is engaged; released on ALT exit) | `0x0000D2A4` | `FINSIG` (`reference/finsig_gm110c/stubs_entry.S:186`) | `chdk-port/platform/g5x/lib.c:206`, `chdk-port/platform/g5x/platform_camera.h:85`; caller `chdk-port/core/main.c:316` |
+| `bitmap_buffer` (2-entry UYVY bitmap buffer pointer table restored by `g3x_dbuf_shadow_restore`) | `0x0000D2A8` | `FINSIG` (`reference/finsig_gm110c/stubs_entry.S:188`) | `chdk-port/platform/g7x/lib.c:289`, `chdk-port/platform/g5x/lib.c:27` |
+| `AllocateUncacheableMemory` (`umalloc` fallback for 1,520,640 B shadow buffer on ALT entry) | `0xFC144471` | `FINSIG` (`reference/finsig_gm110c/stubs_entry.S:197`) | `chdk-port/platform/g5x/sub/100c/stubs_entry.S:191` |
+| `opacity_buffer[0]`, `opacity_buffer[1]` (DRAM opacity planes restored by `g3x_dbuf_shadow_restore`) | `0x5FC40000`, `0x5FB80000` | `ROM` (`0xFC33D1CC`, `reference/finsig_gm110c/funcs_by_address.csv:2235`) | `chdk-port/platform/g7x/lib.c:291`, `chdk-port/platform/g5x/lib.c:27` |
+

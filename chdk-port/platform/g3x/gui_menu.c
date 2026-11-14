@@ -250,9 +250,11 @@ CMenu* get_curr_menu()
 //-------------------------------------------------------------------
 void gui_menu_init(CMenu *menu_ptr) {
 #if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+#if !defined(G3X_GUI_DIAG) || (G3X_GUI_DIAG != 1)
     /* PORT-44: Lazy runtime allocation on first menu entry */
     extern void g3x_dbuf_shadow_ensure_allocated(void);
     g3x_dbuf_shadow_ensure_allocated();
+#endif
     /* Invalidation: menu initialized / layer changed - reset shadow and row cache */
     extern void g3x_dbuf_shadow_reset(void);
     g3x_dbuf_shadow_reset();
