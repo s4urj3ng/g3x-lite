@@ -377,6 +377,7 @@ int main(void)
 }
 '''
         OUT.mkdir(parents=True, exist_ok=True)
+        OUT.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=OUT) as td:
             cfile = Path(td) / "test_diag.c"
             exe = Path(td) / "test_diag"
@@ -395,6 +396,7 @@ int main(void)
                     "-o",
                     str(exe),
                 ],
+                env={**os.environ, "TMPDIR": str(td)},
                 capture_output=True,
                 text=True,
             )
