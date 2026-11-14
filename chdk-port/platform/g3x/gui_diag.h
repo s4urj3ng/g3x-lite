@@ -91,6 +91,9 @@ void g3x_restore2_get_dirty_rect(int *out_x0, int *out_y0, int *out_x1, int *out
 void g3x_diag_record_shadow_restore_sync(void);
 void g3x_diag_record_shadow_restore_poll(void);
 void g3x_diag_record_blit_duration(unsigned int duration_ms);
+
+void g3x_diag_format_line2(char *line);
+void g3x_diag_format_menu_line(char *line);
 #endif
 
 #if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)
@@ -961,6 +964,32 @@ static unsigned int g3x_diag_clamp9999(unsigned int val)
     return (val > 9999u) ? 9999u : val;
 }
 
+#if defined(G3X_GUI_RESTORE2) && (G3X_GUI_RESTORE2 == 1)
+static unsigned int g3x_diag_clamp999(unsigned int val)
+{
+    return (val > 999u) ? 999u : val;
+}
+
+void g3x_diag_format_line2(char *line)
+{
+    const char *save_str = (g3x_conf_save_status == G3X_CONF_SAVE_OFF) ? "OFF" :
+                           (g3x_conf_save_status == G3X_CONF_SAVE_OK)  ? "OK" :
+                           (g3x_conf_save_status == G3X_CONF_SAVE_ERR) ? "ERR" : "-";
+    sprintf(line, "MENU:%04u SAVE:%s Rs:%04u Rp:%04u B:%u/%ums",
+            g3x_diag_clamp9999(g3x_menu_open_count),
+            save_str,
+            g3x_diag_clamp9999(g3x_diag_sync_restore_count),
+            g3x_diag_clamp9999(g3x_diag_poll_restore_count),
+            g3x_diag_clamp999(g3x_diag_blit_last_ms),
+            g3x_diag_clamp999(g3x_diag_blit_max_ms));
+}
+
+void g3x_diag_format_menu_line(char *line)
+{
+    g3x_diag_format_line2(line);
+}
+#endif
+
 void g3x_diag_set_hook_installed(int installed)
 {
     g3x_diag_hook_installed = installed ? 1u : 0u;
@@ -1203,31 +1232,7 @@ int g3x_diag_restore_overlay(int trigger)
 void g3x_diag_format_line(char *line)
 {
     char shadow_tok[24];
-#if defined(G3X_GUI_RESTORE2) && (G3X_GUI_RESTORE2 == 1)
-    if (g3x_dbuf_shadow_is_allocated() && g3x_shadow2_mode != G3X_SHADOW_MODE_NONE && g3x_shadow2_bytes > 0u)
-    {
-        sprintf(shadow_tok, "S:%s",
-                g3x_shadow2_mode_tag(g3x_shadow2_mode));
-    }
-    else
-    {
-        sprintf(shadow_tok, "S:NULL");
-    }
-
-    sprintf(line, "H:%u/%u %s L:%u R:%u Rs:%u Rp:%u F:%u M:%u Y:%u B:%u/%ums",
-            g3x_diag_hook_installed ? 1u : 0u,
-            g3x_diag_clamp9999(g3x_diag_hook_hits),
-            shadow_tok,
-            g3x_diag_clamp9999(g3x_diag_sentinel_loss_count),
-            g3x_diag_clamp9999(g3x_diag_shadow_restore_count),
-            g3x_diag_clamp9999(g3x_diag_sync_restore_count),
-            g3x_diag_clamp9999(g3x_diag_poll_restore_count),
-            g3x_diag_clamp9999(g3x_diag_full_redraw_count),
-            g3x_diag_clamp9999(g3x_diag_suppress_hit_count),
-            g3x_diag_clamp9999(g3x_diag_get_sync_hits()),
-            g3x_diag_clamp9999(g3x_diag_blit_last_ms),
-            g3x_diag_clamp9999(g3x_diag_blit_max_ms));
-#elif defined(G3X_GUI_SYNC) && (G3X_GUI_SYNC == 1)
+#if defined(G3X_GUI_SYNC) && (G3X_GUI_SYNC == 1)
     if (g3x_dbuf_shadow_is_allocated() && g3x_shadow2_mode != G3X_SHADOW_MODE_NONE && g3x_shadow2_bytes > 0u)
     {
         sprintf(shadow_tok, "S:OK/%s",
@@ -1293,6 +1298,21 @@ void gui_diag_draw(void)
         return;
 
 #if defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)
+#if defined(G3X_GUI_RESTORE2) && (G3X_GUI_RESTORE2 == 1)
+    char menu_line[64];
+    g3x_diag_format_line2(menu_line);
+    int y_menu = camera_screen.height - 3 * FONT_HEIGHT;
+    int mlen = (int)strlen(menu_line);
+    if (mlen > G3X_DIAG_LINE_MAX_CHARS)
+    {
+        menu_line[G3X_DIAG_LINE_MAX_CHARS] = '\0';
+        mlen = G3X_DIAG_LINE_MAX_CHARS;
+    }
+    g3x_dbuf_fast_fill_rect(G3X_MENU_X0, y_menu, G3X_MENU_X1, y_menu + FONT_HEIGHT - 1, COLOR_BLACK);
+    draw_string((camera_screen.width - mlen * FONT_WIDTH) / 2,
+                y_menu,
+                menu_line, MAKE_COLOR(COLOR_BLACK, COLOR_WHITE));
+#else
     char menu_line[32];
     const char *save_str = (g3x_conf_save_status == G3X_CONF_SAVE_OFF) ? "OFF" :
                            (g3x_conf_save_status == G3X_CONF_SAVE_OK)  ? "OK" :
@@ -1307,18 +1327,23 @@ void gui_diag_draw(void)
                 y_menu,
                 menu_line, MAKE_COLOR(COLOR_BLACK, COLOR_WHITE));
 #endif
+#endif
 
 #if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)
-#if defined(G3X_GUI_RESTORE2) && (G3X_GUI_RESTORE2 == 1)
-    char line[80];
-#else
     char line[64];
-#endif
     g3x_diag_format_line(line);
     int y = camera_screen.height - 2 * FONT_HEIGHT;
     int len = (int)strlen(line);
+#if defined(G3X_GUI_RESTORE2) && (G3X_GUI_RESTORE2 == 1)
+    if (len > G3X_DIAG_LINE_MAX_CHARS)
+    {
+        line[G3X_DIAG_LINE_MAX_CHARS] = '\0';
+        len = G3X_DIAG_LINE_MAX_CHARS;
+    }
+#else
     if (len > G3X_DIAG_LINE_MAX_CHARS)
         len = G3X_DIAG_LINE_MAX_CHARS;
+#endif
     g3x_dbuf_fast_fill_rect(G3X_MENU_X0, y, G3X_MENU_X1, y + FONT_HEIGHT - 1, COLOR_BLACK);
     draw_string((camera_screen.width - len * FONT_WIDTH) / 2,
                 y,

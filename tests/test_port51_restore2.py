@@ -24,11 +24,17 @@ MANIFEST_P51 = ROOT / "out/port51-restore2-core/port51_restore2_core_manifest.js
 TOOLCHAIN_BIN = ROOT / "toolchains/gcc-arm-none-eabi-5_4-2016q3/bin"
 NM = TOOLCHAIN_BIN / "arm-none-eabi-nm"
 
+BASE_CANONICAL_DISKBOOT_SHA256 = "3b2a0d5fe786933bb218f99de7acd5bb53276459f88e7cbeb2fa0e8085494d72"
+BASE_CANONICAL_DISKBOOT_SIZE = 116073
+
 BASE_PORT50_CANDIDATE_SHA256 = "c5cd59f05c026e540681039a8184bcedb5718030d4d108db8e6e7c5cefcf4480"
 BASE_PORT50_CANDIDATE_SIZE = 130745
 
-BASE_PORT51_RESTORE2_SHA256 = "53536c2a6812a32d406ebf7be1028d78be5894bd1aed54a34b41d284a13d674e"
-BASE_PORT51_RESTORE2_SIZE = 131753
+BASE_PORT50_DEFAULT_SHA256 = "24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9"
+BASE_PORT50_DEFAULT_SIZE = 124097
+
+BASE_PORT51_RESTORE2_SHA256 = "84aa8e3e8ae2ea9a4e9af184baed08e8149451358b7dc2a5081467ee34428ea2"
+BASE_PORT51_RESTORE2_SIZE = 131857
 
 
 def sha256_file(path: Path) -> str:
@@ -432,25 +438,106 @@ int main(void)
     gui_diag_draw();
 
     assert(strlen(last_diag_line) <= G3X_DIAG_LINE_MAX_CHARS);
+    assert(strlen(last_menu_line) <= G3X_DIAG_LINE_MAX_CHARS);
     assert(last_draw_x >= 10 && (last_draw_x + (int)strlen(last_diag_line) * FONT_WIDTH) <= 890);
 
-    /* Verify all counters are present on line */
+    /* Verify all counters are present across the two lines */
     assert(strstr(last_diag_line, "H:") != NULL);
-    assert(strstr(last_diag_line, "S:rect") != NULL);
+    assert(strstr(last_diag_line, "S:OK/rect") != NULL);
     assert(strstr(last_diag_line, "L:") != NULL);
-    assert(strstr(last_diag_line, "R:2") != NULL);
-    assert(strstr(last_diag_line, "Rs:1") != NULL);
-    assert(strstr(last_diag_line, "Rp:1") != NULL);
+    assert(strstr(last_diag_line, "R:0002") != NULL);
     assert(strstr(last_diag_line, "F:") != NULL);
     assert(strstr(last_diag_line, "M:") != NULL);
     assert(strstr(last_diag_line, "Y:") != NULL);
-    assert(strstr(last_diag_line, "B:") != NULL);
-    assert(strstr(last_diag_line, "ms") != NULL);
 
-    /* Verify SAVE:OFF line */
+    assert(strstr(last_menu_line, "MENU:") != NULL);
     assert(strstr(last_menu_line, "SAVE:OFF") != NULL);
+    assert(strstr(last_menu_line, "Rs:0001") != NULL);
+    assert(strstr(last_menu_line, "Rp:0001") != NULL);
+    assert(strstr(last_menu_line, "B:") != NULL);
+    assert(strstr(last_menu_line, "ms") != NULL);
 
-    printf("BLIT_RESTORE_OK: %s\n", last_diag_line);
+    /* 7. Zero, Typical, and Saturated formatted line tests */
+    /* Canary test helper: 64-byte buffer with guard bytes before and after */
+    char buf1_canary[66];
+    char buf2_canary[66];
+    buf1_canary[0] = (char)0x5A; buf1_canary[65] = (char)0xA5;
+    buf2_canary[0] = (char)0x5A; buf2_canary[65] = (char)0xA5;
+    char *b1 = &buf1_canary[1];
+    char *b2 = &buf2_canary[1];
+
+    /* 7a. Zero values */
+    g3x_diag_hook_hits = 0;
+    g3x_diag_sentinel_loss_count = 0;
+    g3x_diag_shadow_restore_count = 0;
+    g3x_diag_sync_restore_count = 0;
+    g3x_diag_poll_restore_count = 0;
+    g3x_diag_full_redraw_count = 0;
+    g3x_diag_suppress_hit_count = 0;
+    g3x_diag_blit_last_ms = 0;
+    g3x_diag_blit_max_ms = 0;
+    g3x_menu_open_count = 0;
+    g3x_conf_record_save_result(3 /* SAVE_OFF */);
+
+    g3x_diag_format_line(b1);
+    g3x_diag_format_line2(b2);
+
+    assert(buf1_canary[0] == (char)0x5A && buf1_canary[65] == (char)0xA5);
+    assert(buf2_canary[0] == (char)0x5A && buf2_canary[65] == (char)0xA5);
+    assert(strlen(b1) <= G3X_DIAG_LINE_MAX_CHARS);
+    assert(strlen(b2) <= G3X_DIAG_LINE_MAX_CHARS);
+    assert(strstr(b1, "H:") != NULL && strstr(b1, "S:OK/rect") != NULL && strstr(b1, "L:0000") != NULL);
+    assert(strstr(b1, "R:0000") != NULL && strstr(b1, "F:0000") != NULL && strstr(b1, "M:0000") != NULL && strstr(b1, "Y:0000") != NULL);
+    assert(strstr(b2, "MENU:0000") != NULL && strstr(b2, "SAVE:OFF") != NULL);
+    assert(strstr(b2, "Rs:0000") != NULL && strstr(b2, "Rp:0000") != NULL && strstr(b2, "B:0/0ms") != NULL);
+
+    /* 7b. Typical values (~1000) */
+    g3x_diag_hook_hits = 1000;
+    g3x_diag_sentinel_loss_count = 20;
+    g3x_diag_shadow_restore_count = 1000;
+    g3x_diag_sync_restore_count = 950;
+    g3x_diag_poll_restore_count = 50;
+    g3x_diag_full_redraw_count = 5;
+    g3x_diag_suppress_hit_count = 10;
+    g3x_diag_blit_last_ms = 12;
+    g3x_diag_blit_max_ms = 28;
+    g3x_menu_open_count = 10;
+
+    g3x_diag_format_line(b1);
+    g3x_diag_format_line2(b2);
+
+    assert(buf1_canary[0] == (char)0x5A && buf1_canary[65] == (char)0xA5);
+    assert(buf2_canary[0] == (char)0x5A && buf2_canary[65] == (char)0xA5);
+    assert(strlen(b1) <= G3X_DIAG_LINE_MAX_CHARS);
+    assert(strlen(b2) <= G3X_DIAG_LINE_MAX_CHARS);
+    assert(strstr(b1, "H:1/1000") != NULL && strstr(b1, "L:0020") != NULL && strstr(b1, "R:1000") != NULL);
+    assert(strstr(b2, "MENU:0010") != NULL && strstr(b2, "SAVE:OFF") != NULL);
+    assert(strstr(b2, "Rs:0950") != NULL && strstr(b2, "Rp:0050") != NULL && strstr(b2, "B:12/28ms") != NULL);
+
+    /* 7c. Maximum saturated values */
+    g3x_diag_hook_hits = 99999;
+    g3x_diag_sentinel_loss_count = 99999;
+    g3x_diag_shadow_restore_count = 99999;
+    g3x_diag_sync_restore_count = 99999;
+    g3x_diag_poll_restore_count = 99999;
+    g3x_diag_full_redraw_count = 99999;
+    g3x_diag_suppress_hit_count = 99999;
+    g3x_diag_blit_last_ms = 99999;
+    g3x_diag_blit_max_ms = 99999;
+    g3x_menu_open_count = 99999;
+
+    g3x_diag_format_line(b1);
+    g3x_diag_format_line2(b2);
+
+    assert(buf1_canary[0] == (char)0x5A && buf1_canary[65] == (char)0xA5);
+    assert(buf2_canary[0] == (char)0x5A && buf2_canary[65] == (char)0xA5);
+    assert(strlen(b1) <= G3X_DIAG_LINE_MAX_CHARS);
+    assert(strlen(b2) <= G3X_DIAG_LINE_MAX_CHARS);
+    assert(strstr(b1, "H:1/9999") != NULL && strstr(b1, "L:9999") != NULL && strstr(b1, "R:9999") != NULL);
+    assert(strstr(b2, "MENU:9999") != NULL && strstr(b2, "SAVE:OFF") != NULL);
+    assert(strstr(b2, "Rs:9999") != NULL && strstr(b2, "Rp:9999") != NULL && strstr(b2, "B:999/999ms") != NULL);
+
+    printf("BLIT_RESTORE_OK: %s | %s\n", b1, b2);
     return 0;
 }
 """
@@ -470,19 +557,94 @@ int main(void)
         res = subprocess.run([str(self.bin_path)], capture_output=True, text=True)
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertIn("BLIT_RESTORE_OK", res.stdout)
-        self.assertIn("Rs:1", res.stdout)
-        self.assertIn("Rp:1", res.stdout)
-        self.assertIn("ms", res.stdout)
+        self.assertIn("Rs:", res.stdout)
+        self.assertIn("Rp:", res.stdout)
+        self.assertIn("B:", res.stdout)
+        self.assertIn("SAVE:OFF", res.stdout)
 
 
 class TestPort51BuildAndArtifacts(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        OUT_TEST = ROOT / "out/port51-test"
+        OUT_TEST.mkdir(parents=True, exist_ok=True)
+        cls.build_default = OUT_TEST / "build-default"
+        cls.build_p51 = ROOT / "out/port51-restore2-core"
+
+        env = os.environ.copy()
+        for k in [
+            "G3X_GUI_FIX",
+            "G3X_GUI_DBUF",
+            "G3X_GUI_NOOVERDRAW",
+            "G3X_KBD_CHECK",
+            "G3X_GUI_DIAG",
+            "G3X_GUI_SHADOW2",
+            "G3X_GUI_SYNC",
+            "G3X_GUI_MENU",
+            "G3X_GUI_RESTORE2",
+        ]:
+            env.pop(k, None)
+
+        # 1. Build default build (standard PORT-41 full build with RESTORE2 off)
+        subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(ROOT / "tools/build_port41_full.py"),
+                "--clean-stage",
+                "--out-dir",
+                str(cls.build_default),
+            ],
+            cwd=ROOT,
+            env=env,
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+
+        # 2. Build full RESTORE2 candidate with pinned toolchain
+        subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(ROOT / "scripts/build_port43_dbuf.py"),
+                "--full-hooks",
+                "--no-overdraw",
+                "--kbd-check",
+                "--gui-diag",
+                "--shadow2",
+                "--gui-sync",
+                "--gui-menu",
+                "--gui-restore2",
+                "--out-dir",
+                str(cls.build_p51),
+            ],
+            cwd=ROOT,
+            env=env,
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+
     def test_default_build_is_byte_identical_to_port50_default(self):
-        self.assertTrue(MANIFEST_P50.is_file(), f"Missing {MANIFEST_P50}")
-        p50_data = json.loads(MANIFEST_P50.read_text(encoding="utf-8"))
-        p50_sha = p50_data["artifacts"]["DISKBOOT.BIN"]["sha256"]
-        p50_size = p50_data["artifacts"]["DISKBOOT.BIN"]["size"]
-        self.assertEqual(p50_sha, BASE_PORT50_CANDIDATE_SHA256)
-        self.assertEqual(p50_size, BASE_PORT50_CANDIDATE_SIZE)
+        default_diskboot = self.build_default / "DISKBOOT.BIN"
+        self.assertTrue(default_diskboot.is_file(), f"Missing default build DISKBOOT.BIN at {default_diskboot}")
+        default_size = default_diskboot.stat().st_size
+        default_sha = sha256_file(default_diskboot)
+
+        # Assert build produced exactly the PORT-50 default baseline hash and size
+        self.assertEqual(default_sha, BASE_PORT50_DEFAULT_SHA256)
+        self.assertEqual(default_size, BASE_PORT50_DEFAULT_SIZE)
+
+        # In-tree canonical DISKBOOT.BIN is also untouched and byte-identical
+        canonical_diskboot = ROOT / "chdk-port/bin/DISKBOOT.BIN"
+        self.assertEqual(canonical_diskboot.stat().st_size, BASE_CANONICAL_DISKBOOT_SIZE)
+        self.assertEqual(sha256_file(canonical_diskboot), BASE_CANONICAL_DISKBOOT_SHA256)
+
+        # Also verify against PORT-41 / PORT-50 default manifest if available
+        p50_default_manifest = ROOT / "out/port50-test/build-default/manifest.json"
+        if p50_default_manifest.is_file():
+            p50_data = json.loads(p50_default_manifest.read_text(encoding="utf-8"))
+            self.assertEqual(default_sha, p50_data["artifacts"]["DISKBOOT.BIN"]["sha256"])
+            self.assertEqual(default_size, p50_data["artifacts"]["DISKBOOT.BIN"]["size"])
 
     def test_full_restore2_candidate_build_and_manifest(self):
         self.assertTrue(MANIFEST_P51.is_file(), f"Missing {MANIFEST_P51}")
@@ -508,7 +670,7 @@ class TestPort51BuildAndArtifacts(unittest.TestCase):
         self.assertEqual(diskboot_info["sha256"], BASE_PORT51_RESTORE2_SHA256)
         self.assertEqual(diskboot_info["size"], BASE_PORT51_RESTORE2_SIZE)
 
-        diskboot_bin = ROOT / "out/port51-restore2-core/DISKBOOT.BIN"
+        diskboot_bin = self.build_p51 / "DISKBOOT.BIN"
         self.assertTrue(diskboot_bin.is_file())
         self.assertEqual(sha256_file(diskboot_bin), BASE_PORT51_RESTORE2_SHA256)
         self.assertEqual(diskboot_bin.stat().st_size, BASE_PORT51_RESTORE2_SIZE)
