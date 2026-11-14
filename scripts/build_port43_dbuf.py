@@ -1664,7 +1664,7 @@ def apply_gui_sync_staging_patches(stage_dir: Path) -> None:
 
 
 def apply_gui_menu_staging_patches(stage_dir: Path) -> None:
-    """Apply G3X_GUI_MENU=1 compile flags, unwrap conf_save and file writes, and hook menu-open and conf-save diags."""
+    """Apply G3X_GUI_MENU=1 compile flags, unwrap conf_save/param save, retain blocking write wrappers, and gate conf/script save paths."""
     shutil.copy2(CHDK_PORT / "platform/g3x/gui_diag.h", stage_dir / "platform/g3x/gui_diag.h")
     shutil.copy2(
         CHDK_PORT / "platform/g3x/sub/110c/gui_sync.h",
@@ -1704,7 +1704,11 @@ def apply_gui_menu_staging_patches(stage_dir: Path) -> None:
         text = text.replace(anchor, anchor + " -DG3X_GUI_MENU=1", 1)
         mpath.write_text(text, encoding="utf-8")
 
-    # 2. In platform/g3x/sub/110c/Makefile: unwrap LDOPTS under G3X_GUI_MENU=1
+    # 2. In platform/g3x/sub/110c/Makefile:
+    # Under G3X_GUI_MENU=1:
+    # - Unwrap conf_save, save_params_values, save_int_value_file (gated in source)
+    # - DEFENSE IN DEPTH: RETAIN all blocking write wrappers (write, fwrite, open, fopen, creat, mkdir, remove, rename)
+    # - Include gui_script.thm.o and fileutil.thm.o in CORE_OBJS so camera-flags versions are linked into libplatformsub.a
     sub_makefile = stage_dir / "platform/g3x/sub/110c/Makefile"
     sub_text = sub_makefile.read_text(encoding="utf-8")
     wrap_anchor = (
@@ -1719,8 +1723,14 @@ def apply_gui_menu_staging_patches(stage_dir: Path) -> None:
     )
     wrap_replacement = (
         "ifeq ($(G3X_GUI_MENU),1)\n"
+        "CORE_OBJS += gui_script.thm.o fileutil.thm.o\n"
         "LDOPTS = -nostdlib -Wl,--allow-shlib-undefined -Wl,-EL,-T,$(tools)/link-boot.ld \\\n"
-        "         -Wl,-N,-Ttext,$(MEMISOSTART)\n"
+        "         -Wl,-N,-Ttext,$(MEMISOSTART) \\\n"
+        "         -Wl,--wrap=write -Wl,--wrap=fwrite -Wl,--wrap=open -Wl,--wrap=fopen -Wl,--wrap=creat \\\n"
+        "         -Wl,--wrap=mkdir -Wl,--wrap=MakeDirectory_Fut -Wl,--wrap=_MakeDirectory_Fut \\\n"
+        "         -Wl,--wrap=remove -Wl,--wrap=DeleteFile_Fut -Wl,--wrap=_DeleteFile_Fut \\\n"
+        "         -Wl,--wrap=DeleteDirectory_Fut -Wl,--wrap=_DeleteDirectory_Fut \\\n"
+        "         -Wl,--wrap=rename -Wl,--wrap=RenameFile_Fut -Wl,--wrap=_RenameFile_Fut\n"
         "else\n"
         + wrap_anchor +
         "endif\n"
@@ -1728,66 +1738,27 @@ def apply_gui_menu_staging_patches(stage_dir: Path) -> None:
     if sub_text.count(wrap_anchor) != 1:
         raise RuntimeError("PORT-50 LDOPTS wrap anchor not found in staged sub/110c/Makefile")
     sub_text = sub_text.replace(wrap_anchor, wrap_replacement, 1)
+
+    rules_code = (
+        "\nfileutil.thm.o: $(topdir)lib/lang/fileutil.c\n"
+        "\t@echo $< \\-\\> $@\n"
+        "\t$(CC) $(CFLAGS) -mthumb -nostdinc -c -o $@ $<\n"
+        "\ngui_script.thm.o: $(core)/gui_script.c\n"
+        "\t@echo $< \\-\\> $@\n"
+        "\t$(CC) $(CFLAGS) -mthumb -nostdinc -c -o $@ $<\n"
+    )
+    sub_text += rules_code
     sub_makefile.write_text(sub_text, encoding="utf-8")
 
-    # 3. In platform/g3x/lib.c: guard compile-time card write disable wrappers
+    # 3. In platform/g3x/lib.c: only omit __wrap_conf_save, __wrap_save_params_values, __wrap_save_int_value_file under G3X_GUI_MENU=1.
+    # Keep ALL write-side blocking wrappers (__wrap_write, __wrap_fwrite, __wrap_creat, __wrap_open, __wrap_fopen,
+    # __wrap_mkdir, __wrap_remove, __wrap_rename, etc.) fully active!
     lib_c = stage_dir / "platform/g3x/lib.c"
     lib_text = lib_c.read_text(encoding="utf-8")
     lib_wrap_anchor = (
         "void __wrap_conf_save(void) { }\n"
         "void __wrap_save_params_values(int enforce) { (void)enforce; }\n"
-        "void __wrap_save_int_value_file(const char *fn, int v) { (void)fn; (void)v; }\n"
-        "int __wrap_write(int fd, const void *buf, int n) { (void)fd; (void)buf; return n; }\n"
-        "int __wrap_fwrite(const void *ptr, int size, int n, void *stream) { (void)ptr; (void)size; (void)stream; return n; }\n"
-        "\n"
-        "// Real DryOS symbols resolved via linker --wrap\n"
-        "extern int __real_open(const char *name, int flags, int mode);\n"
-        "extern void *__real_fopen(const char *filename, const char *mode);\n"
-        "\n"
-        "int __wrap_creat(const char *pathname, int mode)\n"
-        "{\n"
-        "    (void)pathname;\n"
-        "    (void)mode;\n"
-        "    return -1;\n"
-        "}\n"
-        "\n"
-        "int __wrap_open(const char *name, int flags, int mode)\n"
-        "{\n"
-        "    // Block write/create/append/truncate access:\n"
-        "    // O_WRONLY(1), O_RDWR(2), O_APPEND(8), O_CREAT(0x100 or 0x200), O_TRUNC(0x200 or 0x400)\n"
-        "    if ((flags & 3) != 0 || (flags & (0x08 | 0x0100 | 0x0200 | 0x0400 | 0x0800))) {\n"
-        "        return -1;\n"
-        "    }\n"
-        "    return __real_open(name, flags, mode);\n"
-        "}\n"
-        "\n"
-        "void *__wrap_fopen(const char *filename, const char *mode)\n"
-        "{\n"
-        "    if (!mode) return 0;\n"
-        "    // Pass read-only modes (\"r\", \"rb\") through to __real_fopen; reject write, append, create, truncate ('w', 'a', '+')\n"
-        "    const char *p;\n"
-        "    for (p = mode; *p; ++p) {\n"
-        "        if (*p == 'w' || *p == 'a' || *p == '+') {\n"
-        "            return 0;\n"
-        "        }\n"
-        "    }\n"
-        "    return __real_fopen(filename, mode);\n"
-        "}\n"
-        "\n"
-        "// Wrappers blocking filesystem mutation (mkdir, remove/DeleteFile, rename)\n"
-        "long __wrap_mkdir(const char *dirname) { (void)dirname; return 0; }\n"
-        "long __wrap_MakeDirectory_Fut(const char *dirname, int unk) { (void)dirname; (void)unk; return 0; }\n"
-        "long __wrap__MakeDirectory_Fut(const char *dirname, int unk) { (void)dirname; (void)unk; return 0; }\n"
-        "\n"
-        "int __wrap_remove(const char *name) { (void)name; return 0; }\n"
-        "int __wrap_DeleteFile_Fut(const char *name) { (void)name; return 0; }\n"
-        "int __wrap__DeleteFile_Fut(const char *name) { (void)name; return 0; }\n"
-        "int __wrap_DeleteDirectory_Fut(const char *name) { (void)name; return 0; }\n"
-        "int __wrap__DeleteDirectory_Fut(const char *name) { (void)name; return 0; }\n"
-        "\n"
-        "int __wrap_rename(const char *oldname, const char *newname) { (void)oldname; (void)newname; return 0; }\n"
-        "int __wrap_RenameFile_Fut(const char *oldname, const char *newname) { (void)oldname; (void)newname; return 0; }\n"
-        "int __wrap__RenameFile_Fut(const char *oldname, const char *newname) { (void)oldname; (void)newname; return 0; }"
+        "void __wrap_save_int_value_file(const char *fn, int v) { (void)fn; (void)v; }"
     )
     lib_wrap_replacement = (
         "#if !defined(G3X_GUI_MENU) || (G3X_GUI_MENU != 1)\n"
@@ -1819,10 +1790,11 @@ def apply_gui_menu_staging_patches(stage_dir: Path) -> None:
     gui_text = gui_text.replace(gui_anchor, gui_replacement, 1)
     gui_c.write_text(gui_text, encoding="utf-8")
 
-    # 5. In core/conf.c: ensure config_save write-disable guard is active under G3X_GUI_MENU=1
+    # 5. In core/conf.c: gate BOTH conf_save and config_save under G3X_GUI_MENU=1 and write-disable flags
     conf_c = stage_dir / "core/conf.c"
     conf_text = conf_c.read_text(encoding="utf-8")
     if "g3x_conf_record_save_result" not in conf_text:
+        # 5a. config_save guard
         guard_anchor = "void config_save(ConfInfo *ci, const char *filename, int config_base)\n{\n"
         guard_code = (
             "void config_save(ConfInfo *ci, const char *filename, int config_base)\n"
@@ -1845,7 +1817,104 @@ def apply_gui_menu_staging_patches(stage_dir: Path) -> None:
         if conf_text.count(end_anchor) != 1:
             raise RuntimeError("PORT-50 config_save end anchor not found in staged core/conf.c")
         conf_text = conf_text.replace(end_anchor, end_anchor[:-1] + "#endif\n}", 1)
+
+        # 5b. conf_save guard (skips config_save AND save_params_values, records SAVE:OFF)
+        conf_save_anchor = "void conf_save()\n{\n"
+        conf_save_code = (
+            "void conf_save()\n"
+            "{\n"
+            "#if defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1) && \\\n"
+            "    ((defined(G3X_DISABLE_CARD_WRITES) && (G3X_DISABLE_CARD_WRITES == 1)) || \\\n"
+            "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1)))\n"
+            "    extern void g3x_conf_record_save_result(int ok);\n"
+            "    g3x_conf_record_save_result(3 /* G3X_CONF_SAVE_OFF */);\n"
+            "    return;\n"
+            "#else\n"
+        )
+        if conf_text.count(conf_save_anchor) != 1:
+            raise RuntimeError("PORT-50 conf_save start anchor not found in staged core/conf.c")
+        conf_text = conf_text.replace(conf_save_anchor, conf_save_code, 1)
+        conf_save_end_anchor = "    // Save current script parameters if they have changed.\n    save_params_values(0);\n}"
+        if conf_text.count(conf_save_end_anchor) != 1:
+            raise RuntimeError("PORT-50 conf_save end anchor not found in staged core/conf.c")
+        conf_text = conf_text.replace(conf_save_end_anchor, conf_save_end_anchor[:-1] + "#endif\n}", 1)
         conf_c.write_text(conf_text, encoding="utf-8")
+
+    # 6. In core/gui_script.c: gate save_params_values and do_save_param_file write sinks
+    gui_script_c = stage_dir / "core/gui_script.c"
+    gui_script_text = gui_script_c.read_text(encoding="utf-8")
+    # 6a. do_save_param_file guard
+    do_save_anchor = "static void do_save_param_file()\n{\n"
+    do_save_code = (
+        "static void do_save_param_file()\n"
+        "{\n"
+        "#if defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1) && \\\n"
+        "    ((defined(G3X_DISABLE_CARD_WRITES) && (G3X_DISABLE_CARD_WRITES == 1)) || \\\n"
+        "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1)))\n"
+        "    return;\n"
+        "#else\n"
+    )
+    if gui_script_text.count(do_save_anchor) == 1:
+        gui_script_text = gui_script_text.replace(do_save_anchor, do_save_code, 1)
+        do_save_end = "        close(fd);\n    }\n}"
+        if gui_script_text.count(do_save_end) == 1:
+            gui_script_text = gui_script_text.replace(do_save_end, do_save_end[:-1] + "#endif\n}", 1)
+        else:
+            raise RuntimeError("PORT-50 do_save_param_file end anchor not found in staged core/gui_script.c")
+    # 6b. save_params_values guard
+    save_params_anchor = "void save_params_values( int enforce )\n{\n"
+    save_params_code = (
+        "void save_params_values( int enforce )\n"
+        "{\n"
+        "#if defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1) && \\\n"
+        "    ((defined(G3X_DISABLE_CARD_WRITES) && (G3X_DISABLE_CARD_WRITES == 1)) || \\\n"
+        "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1)))\n"
+        "    (void)enforce;\n"
+        "    return;\n"
+        "#else\n"
+    )
+    if gui_script_text.count(save_params_anchor) == 1:
+        gui_script_text = gui_script_text.replace(save_params_anchor, save_params_code, 1)
+        save_params_end = "            // Write parameters file\n            do_save_param_file();\n        }\n    }\n}"
+        if gui_script_text.count(save_params_end) == 1:
+            gui_script_text = gui_script_text.replace(save_params_end, save_params_end[:-1] + "#endif\n}", 1)
+        else:
+            raise RuntimeError("PORT-50 save_params_values end anchor not found in staged core/gui_script.c")
+    gui_script_c.write_text(gui_script_text, encoding="utf-8")
+
+    # 7. In lib/lang/fileutil.c: gate save_int_value_file write sink
+    fileutil_c = stage_dir / "lib/lang/fileutil.c"
+    fileutil_text = fileutil_c.read_text(encoding="utf-8")
+    save_int_anchor = "void save_int_value_file( const char* filename, int value )\n{\n"
+    save_int_code = (
+        "void save_int_value_file( const char* filename, int value )\n"
+        "{\n"
+        "#if defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1) && \\\n"
+        "    ((defined(G3X_DISABLE_CARD_WRITES) && (G3X_DISABLE_CARD_WRITES == 1)) || \\\n"
+        "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1)))\n"
+        "    (void)filename;\n"
+        "    (void)value;\n"
+        "    return;\n"
+        "#else\n"
+    )
+    if fileutil_text.count(save_int_anchor) == 1:
+        fileutil_text = fileutil_text.replace(save_int_anchor, save_int_code, 1)
+        save_int_end = "\t\twrite(fd, buf, strlen(buf)+1);\n\t\tclose(fd);\n\t} \n\tufree(buf);\n}"
+        if fileutil_text.count(save_int_end) == 1:
+            fileutil_text = fileutil_text.replace(save_int_end, save_int_end[:-1] + "#endif\n}", 1)
+        else:
+            raise RuntimeError("PORT-50 save_int_value_file end anchor not found in staged lib/lang/fileutil.c")
+        fileutil_c.write_text(fileutil_text, encoding="utf-8")
+
+    # 8. Remove prebuilt gui_script.o and fileutil.o from prebuilt archives in staging copy
+    # so libplatformsub.a provides the camera-built patched versions exclusively
+    ar_bin = TOOLCHAIN_BIN / "arm-none-eabi-ar"
+    libcore_a = stage_dir / "lib/core/.o2/libcore.a"
+    if libcore_a.is_file():
+        subprocess.run([str(ar_bin), "d", str(libcore_a), "gui_script.o"], check=True)
+    liblang_a = stage_dir / "lib/lang/.o2/liblang.a"
+    if liblang_a.is_file():
+        subprocess.run([str(ar_bin), "d", str(liblang_a), "fileutil.o"], check=True)
 
 
 def build_port43_dbuf(
@@ -2218,28 +2287,19 @@ def build_port43_dbuf(
         manifest_data["card_writes"] = "disabled"
         manifest_data["card_writes_note"] = (
             "Config save disabled under G3X_DISABLE_CARD_WRITES=1 OPT_DISABLE_FILE_WRITES=1 "
-            "(SAVE:OFF); physical SD card remains write-protected (LOCK)"
+            "(SAVE:OFF); blocking write wrappers (write, fwrite, open, fopen, creat, mkdir, remove, rename) remain active in link; physical SD card remains write-protected (LOCK)"
         )
         build_dict = manifest_data["build"]
         assert isinstance(build_dict, dict)
         build_dict["card_writes"] = "disabled"
         build_dict["card_writes_note"] = (
             "Config save disabled under G3X_DISABLE_CARD_WRITES=1 OPT_DISABLE_FILE_WRITES=1 "
-            "(SAVE:OFF); physical SD card remains write-protected (LOCK)"
+            "(SAVE:OFF); blocking write wrappers (write, fwrite, open, fopen, creat, mkdir, remove, rename) remain active in link; physical SD card remains write-protected (LOCK)"
         )
         manifest_data["removed_wrappers"] = [
-            "write",
-            "fwrite",
-            "open",
-            "fopen",
-            "creat",
-            "mkdir",
-            "MakeDirectory_Fut",
-            "remove",
-            "DeleteFile_Fut",
-            "DeleteDirectory_Fut",
-            "rename",
-            "RenameFile_Fut",
+            "conf_save",
+            "save_params_values",
+            "save_int_value_file",
         ]
 
     manifest_path = effective_out_dir / manifest_name

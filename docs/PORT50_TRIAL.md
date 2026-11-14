@@ -31,8 +31,8 @@ Short hardware trial protocol for the opt-in `G3X_GUI_MENU=1` candidate with in-
   ```
 - **Source of truth**: The source of truth for the `gui.c`, `conf.c`, `lib.c`, and `Makefile` changes is `scripts/build_port43_dbuf.py --gui-menu`.
 - **Manifest**: `manifests/port50_gui_menu_manifest.json`
-- **DISKBOOT.BIN SHA-256**: `074a7f575c2baf7216612df635883c8467153ed488c4c7401ad186c3816a7ad7` (`131,129` bytes)
-- **Core `_end`**: `0x0036a5f0`
+- **DISKBOOT.BIN SHA-256**: `c5cd59f05c026e540681039a8184bcedb5718030d4d108db8e6e7c5cefcf4480` (`130,745` bytes)
+- **Core `_end`**: `0x0036a470`
 - **Flags**: `G3X_FULL_BUILD=1 G3X_DISABLE_CARD_WRITES=1 CAM_SUPPORT_BITMAP_RES_CHANGE=1 OPT_DISABLE_FILE_WRITES=1 G3X_GUI5=1 G3X_GUI_FIX=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1 G3X_GUI_SYNC=1 G3X_GUI_MENU=1`
 
 ## 3. Card Writes Policy
