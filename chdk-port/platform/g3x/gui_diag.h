@@ -54,6 +54,48 @@ void g3x_conf_record_save_result(int ok);
 void g3x_conf_record_save_skipped(void);
 #endif
 
+#if defined(G3X_GUI_RESTORE2) && (G3X_GUI_RESTORE2 == 1)
+#if !defined(G3X_GUI_MENU) || (G3X_GUI_MENU != 1) || \
+    !defined(G3X_GUI_SYNC) || (G3X_GUI_SYNC != 1) || \
+    !defined(G3X_GUI_DBUF) || (G3X_GUI_DBUF != 1) || \
+    !defined(G3X_GUI_NOOVERDRAW) || (G3X_GUI_NOOVERDRAW != 1) || \
+    !defined(G3X_KBD_CHECK) || (G3X_KBD_CHECK != 1) || \
+    !defined(G3X_GUI_DIAG) || (G3X_GUI_DIAG != 1) || \
+    !defined(G3X_GUI_SHADOW2) || (G3X_GUI_SHADOW2 != 1)
+#error G3X_GUI_RESTORE2=1 requires G3X_GUI_MENU=1 G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1
+#endif
+
+extern int g3x_restore2_dirty_x0;
+extern int g3x_restore2_dirty_y0;
+extern int g3x_restore2_dirty_x1;
+extern int g3x_restore2_dirty_y1;
+extern int g3x_restore2_dirty_valid;
+
+extern unsigned int g3x_diag_sync_restore_count;
+extern unsigned int g3x_diag_poll_restore_count;
+extern unsigned int g3x_diag_blit_last_ms;
+extern unsigned int g3x_diag_blit_max_ms;
+
+extern long get_tick_count(void);
+
+int g3x_rect_clip(int *x0, int *y0, int *x1, int *y1,
+                  int clip_x0, int clip_y0, int clip_x1, int clip_y1);
+int g3x_rect_union(int *cur_x0, int *cur_y0, int *cur_x1, int *cur_y1, int *cur_valid,
+                   int new_x0, int new_y0, int new_x1, int new_y1,
+                   int clip_x0, int clip_y0, int clip_x1, int clip_y1);
+void g3x_restore2_reset_dirty_rect(void);
+void g3x_restore2_set_dirty_full(void);
+int g3x_restore2_record_rect(int x0, int y0, int x1, int y1);
+void g3x_restore2_get_dirty_rect(int *out_x0, int *out_y0, int *out_x1, int *out_y1, int *out_valid);
+
+void g3x_diag_record_shadow_restore_sync(void);
+void g3x_diag_record_shadow_restore_poll(void);
+void g3x_diag_record_blit_duration(unsigned int duration_ms);
+
+void g3x_diag_format_line2(char *line);
+void g3x_diag_format_menu_line(char *line);
+#endif
+
 #if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)
 #if !defined(G3X_GUI_DBUF) || (G3X_GUI_DBUF != 1) || \
     !defined(G3X_GUI_NOOVERDRAW) || (G3X_GUI_NOOVERDRAW != 1) || \
@@ -273,6 +315,129 @@ int g3x_shadow2_ov_x1 = G3X_MENU_X1;
 int g3x_shadow2_ov_y1 = G3X_MENU_Y1;
 int g3x_shadow2_in_fallback_redraw = 0;
 
+#if defined(G3X_GUI_RESTORE2) && (G3X_GUI_RESTORE2 == 1)
+int g3x_restore2_dirty_x0 = G3X_MENU_X0;
+int g3x_restore2_dirty_y0 = G3X_MENU_Y0;
+int g3x_restore2_dirty_x1 = G3X_MENU_X1;
+int g3x_restore2_dirty_y1 = G3X_MENU_Y1;
+int g3x_restore2_dirty_valid = 0;
+
+unsigned int g3x_diag_sync_restore_count = 0u;
+unsigned int g3x_diag_poll_restore_count = 0u;
+unsigned int g3x_diag_blit_last_ms = 0u;
+unsigned int g3x_diag_blit_max_ms = 0u;
+
+int g3x_rect_clip(int *x0, int *y0, int *x1, int *y1,
+                  int clip_x0, int clip_y0, int clip_x1, int clip_y1)
+{
+    if (!x0 || !y0 || !x1 || !y1)
+        return 0;
+    if (*x0 > *x1) { int t = *x0; *x0 = *x1; *x1 = t; }
+    if (*y0 > *y1) { int t = *y0; *y0 = *y1; *y1 = t; }
+    if (clip_x0 > clip_x1) { int t = clip_x0; clip_x0 = clip_x1; clip_x1 = t; }
+    if (clip_y0 > clip_y1) { int t = clip_y0; clip_y0 = clip_y1; clip_y1 = t; }
+
+    if (*x1 < clip_x0 || *x0 > clip_x1 || *y1 < clip_y0 || *y0 > clip_y1)
+        return 0;
+
+    if (*x0 < clip_x0) *x0 = clip_x0;
+    if (*y0 < clip_y0) *y0 = clip_y0;
+    if (*x1 > clip_x1) *x1 = clip_x1;
+    if (*y1 > clip_y1) *y1 = clip_y1;
+
+    return 1;
+}
+
+int g3x_rect_union(int *cur_x0, int *cur_y0, int *cur_x1, int *cur_y1, int *cur_valid,
+                   int new_x0, int new_y0, int new_x1, int new_y1,
+                   int clip_x0, int clip_y0, int clip_x1, int clip_y1)
+{
+    if (!cur_x0 || !cur_y0 || !cur_x1 || !cur_y1 || !cur_valid)
+        return 0;
+
+    int nx0 = new_x0, ny0 = new_y0, nx1 = new_x1, ny1 = new_y1;
+    if (!g3x_rect_clip(&nx0, &ny0, &nx1, &ny1, clip_x0, clip_y0, clip_x1, clip_y1))
+        return 0;
+
+    if (!*cur_valid)
+    {
+        *cur_x0 = nx0;
+        *cur_y0 = ny0;
+        *cur_x1 = nx1;
+        *cur_y1 = ny1;
+        *cur_valid = 1;
+    }
+    else
+    {
+        if (nx0 < *cur_x0) *cur_x0 = nx0;
+        if (ny0 < *cur_y0) *cur_y0 = ny0;
+        if (nx1 > *cur_x1) *cur_x1 = nx1;
+        if (ny1 > *cur_y1) *cur_y1 = ny1;
+    }
+    return 1;
+}
+
+void g3x_restore2_reset_dirty_rect(void)
+{
+    g3x_restore2_dirty_valid = 0;
+    g3x_restore2_dirty_x0 = G3X_MENU_X0;
+    g3x_restore2_dirty_y0 = G3X_MENU_Y0;
+    g3x_restore2_dirty_x1 = G3X_MENU_X1;
+    g3x_restore2_dirty_y1 = G3X_MENU_Y1;
+}
+
+void g3x_restore2_set_dirty_full(void)
+{
+    g3x_restore2_dirty_valid = 1;
+    g3x_restore2_dirty_x0 = G3X_MENU_X0;
+    g3x_restore2_dirty_y0 = G3X_MENU_Y0;
+    g3x_restore2_dirty_x1 = G3X_MENU_X1;
+    g3x_restore2_dirty_y1 = G3X_MENU_Y1;
+}
+
+int g3x_restore2_record_rect(int x0, int y0, int x1, int y1)
+{
+    return g3x_rect_union(&g3x_restore2_dirty_x0,
+                          &g3x_restore2_dirty_y0,
+                          &g3x_restore2_dirty_x1,
+                          &g3x_restore2_dirty_y1,
+                          &g3x_restore2_dirty_valid,
+                          x0, y0, x1, y1,
+                          G3X_MENU_X0, G3X_MENU_Y0,
+                          G3X_MENU_X1, G3X_MENU_Y1);
+}
+
+void g3x_restore2_get_dirty_rect(int *out_x0, int *out_y0, int *out_x1, int *out_y1, int *out_valid)
+{
+    if (out_x0) *out_x0 = g3x_restore2_dirty_x0;
+    if (out_y0) *out_y0 = g3x_restore2_dirty_y0;
+    if (out_x1) *out_x1 = g3x_restore2_dirty_x1;
+    if (out_y1) *out_y1 = g3x_restore2_dirty_y1;
+    if (out_valid) *out_valid = g3x_restore2_dirty_valid;
+}
+
+void g3x_diag_record_shadow_restore_sync(void)
+{
+    g3x_diag_sync_restore_count++;
+    g3x_diag_shadow_restore_count++;
+}
+
+void g3x_diag_record_shadow_restore_poll(void)
+{
+    g3x_diag_poll_restore_count++;
+    g3x_diag_shadow_restore_count++;
+}
+
+void g3x_diag_record_blit_duration(unsigned int duration_ms)
+{
+    g3x_diag_blit_last_ms = duration_ms;
+    if (duration_ms > g3x_diag_blit_max_ms)
+    {
+        g3x_diag_blit_max_ms = duration_ms;
+    }
+}
+#endif
+
 const char *g3x_shadow2_mode_tag(int mode)
 {
     switch (mode)
@@ -292,6 +457,9 @@ const char *g3x_shadow2_mode_tag(int mode)
 
 void g3x_shadow2_reset_overlay_bounds(void)
 {
+#if defined(G3X_GUI_RESTORE2) && (G3X_GUI_RESTORE2 == 1)
+    g3x_restore2_reset_dirty_rect();
+#endif
     g3x_shadow2_ov_valid = 0;
     g3x_shadow2_ov_x0 = G3X_MENU_X0;
     g3x_shadow2_ov_y0 = G3X_MENU_Y0;
@@ -301,6 +469,9 @@ void g3x_shadow2_reset_overlay_bounds(void)
 
 void g3x_shadow2_record_overlay_rect(int x0, int y0, int x1, int y1)
 {
+#if defined(G3X_GUI_RESTORE2) && (G3X_GUI_RESTORE2 == 1)
+    g3x_restore2_record_rect(x0, y0, x1, y1);
+#endif
     if (x0 > x1) { int t = x0; x0 = x1; x1 = t; }
     if (y0 > y1) { int t = y0; y0 = y1; y1 = t; }
     if (x1 < 0 || y1 < 0 || x0 >= G3X_SHADOW_FULL_WIDTH || y0 >= G3X_SHADOW_FULL_HEIGHT)
@@ -540,6 +711,115 @@ int g3x_shadow2_blit_restore(unsigned char *bm, unsigned char *op, int buf_w)
         return 0;
     }
 
+#if defined(G3X_GUI_RESTORE2) && (G3X_GUI_RESTORE2 == 1)
+    /* Timer source citation:
+     * reference/finsig_gm110c/stubs_entry.S:239: NHSTUB(GetSystemTime, 0xfc60243d)
+     * chdk-port/platform/generic/wrappers.c:345-354: long get_tick_count() calls _GetSystemTime(&t)
+     * Sibling ports reference:
+     * chdk-port/platform/g7x/sub/100d/stubs_entry.S:217: NHSTUB(GetSystemTime, 0xfc3d88a9)
+     * chdk-port/platform/g5x/sub/100c/stubs_entry.S:225: NHSTUB(GetSystemTime, 0xfc662f91)
+     * chdk-port/platform/sx60hs/sub/100c/stubs_entry.S:221: NHSTUB(GetSystemTime, 0xfc3a46ad)
+     * DryOS GetSystemTime provides 1 ms resolution (millisecond resolution).
+     * Microsecond hardware timer register is not exposed or stubbed in GM1.10C or sibling
+     * ports (g7x, g5x, sx60hs). Therefore, blit duration measurement is in milliseconds (ms),
+     * as explicitly indicated on the diagnostic line ("B:%u/%ums") and in this comment.
+     */
+    long t_start = get_tick_count();
+
+    if (!g3x_restore2_dirty_valid)
+    {
+        long t_end = get_tick_count();
+        unsigned int duration_ms = (t_end >= t_start) ? (unsigned int)(t_end - t_start) : 0u;
+        g3x_diag_record_blit_duration(duration_ms);
+        return 1;
+    }
+
+    int dx0 = g3x_restore2_dirty_x0;
+    int dy0 = g3x_restore2_dirty_y0;
+    int dx1 = g3x_restore2_dirty_x1;
+    int dy1 = g3x_restore2_dirty_y1;
+
+    int sh_x0 = g3x_shadow2_x0;
+    int sh_y0 = g3x_shadow2_y0;
+    int sh_x1 = sh_x0 + g3x_shadow2_w - 1;
+    int sh_y1 = sh_y0 + g3x_shadow2_h - 1;
+
+    if (dx0 < sh_x0) dx0 = sh_x0;
+    if (dy0 < sh_y0) dy0 = sh_y0;
+    if (dx1 > sh_x1) dx1 = sh_x1;
+    if (dy1 > sh_y1) dy1 = sh_y1;
+
+    if (dx0 > dx1 || dy0 > dy1)
+    {
+        long t_end = get_tick_count();
+        unsigned int duration_ms = (t_end >= t_start) ? (unsigned int)(t_end - t_start) : 0u;
+        g3x_diag_record_blit_duration(duration_ms);
+        return 1;
+    }
+
+    int al_x0 = dx0 & ~1;
+    int al_x1 = dx1 | 1;
+    if (al_x0 < sh_x0) al_x0 = sh_x0;
+    if (al_x1 > sh_x1) al_x1 = sh_x1;
+    int copy_cols = al_x1 - al_x0 + 1;
+    if (copy_cols <= 0)
+    {
+        long t_end = get_tick_count();
+        unsigned int duration_ms = (t_end >= t_start) ? (unsigned int)(t_end - t_start) : 0u;
+        g3x_diag_record_blit_duration(duration_ms);
+        return 1;
+    }
+
+    if (g3x_shadow2_mode == G3X_SHADOW_MODE_IDX)
+    {
+        for (int screen_y = dy0; screen_y <= dy1; ++screen_y)
+        {
+            int ry = screen_y - sh_y0;
+            int rx = al_x0 - sh_x0;
+            unsigned int dst_pair_base = (unsigned int)((screen_y * buf_w + al_x0) >> 1);
+            const unsigned char *src_idx = bm + (ry * g3x_shadow2_w + rx);
+            unsigned short *dst_op0 = (unsigned short *)(opacity_buffer[0]) + dst_pair_base;
+            unsigned short *dst_op1 = (unsigned short *)(opacity_buffer[1]) + dst_pair_base;
+            unsigned int *dst_bm0 = (unsigned int *)(bitmap_buffer[0]) + dst_pair_base;
+            unsigned int *dst_bm1 = (unsigned int *)(bitmap_buffer[1]) + dst_pair_base;
+            int pairs = copy_cols >> 1;
+            for (int p = 0; p < pairs; ++p)
+            {
+                unsigned int uyvy = 0u;
+                unsigned short op16 = 0u;
+                g3x_shadow2_expand_pair(src_idx[p * 2], src_idx[p * 2 + 1], &uyvy, &op16);
+                dst_op0[p] = op16;
+                dst_op1[p] = op16;
+                dst_bm0[p] = uyvy;
+                dst_bm1[p] = uyvy;
+            }
+        }
+    }
+    else
+    {
+        for (int screen_y = dy0; screen_y <= dy1; ++screen_y)
+        {
+            int ry = screen_y - sh_y0;
+            int rx = al_x0 - sh_x0;
+            unsigned int offset_op = (unsigned int)(screen_y * buf_w + al_x0);
+            unsigned int offset_bm = offset_op * 2u;
+
+            unsigned char *src_op = op + ry * g3x_shadow2_w + rx;
+            unsigned char *src_bm = bm + (ry * g3x_shadow2_w + rx) * 2;
+
+            memcpy((void *)&opacity_buffer[0][offset_op], src_op, (unsigned int)copy_cols);
+            memcpy((void *)&opacity_buffer[1][offset_op], src_op, (unsigned int)copy_cols);
+
+            memcpy((void *)&bitmap_buffer[0][offset_bm], src_bm, (unsigned int)(copy_cols * 2));
+            memcpy((void *)&bitmap_buffer[1][offset_bm], src_bm, (unsigned int)(copy_cols * 2));
+        }
+    }
+
+    long t_end = get_tick_count();
+    unsigned int duration_ms = (t_end >= t_start) ? (unsigned int)(t_end - t_start) : 0u;
+    g3x_diag_record_blit_duration(duration_ms);
+    return 1;
+#else
     if (g3x_shadow2_mode == G3X_SHADOW_MODE_IDX)
     {
         for (int ry = 0; ry < g3x_shadow2_h; ++ry)
@@ -582,6 +862,7 @@ int g3x_shadow2_blit_restore(unsigned char *bm, unsigned char *op, int buf_w)
         memcpy((void *)&bitmap_buffer[1][offset_bm], src_bm, g3x_shadow2_w * 2);
     }
     return 1;
+#endif
 }
 
 int g3x_shadow2_intersects_rect(int x0, int y0, int x1, int y1)
@@ -682,6 +963,32 @@ static unsigned int g3x_diag_clamp9999(unsigned int val)
 {
     return (val > 9999u) ? 9999u : val;
 }
+
+#if defined(G3X_GUI_RESTORE2) && (G3X_GUI_RESTORE2 == 1)
+static unsigned int g3x_diag_clamp999(unsigned int val)
+{
+    return (val > 999u) ? 999u : val;
+}
+
+void g3x_diag_format_line2(char *line)
+{
+    const char *save_str = (g3x_conf_save_status == G3X_CONF_SAVE_OFF) ? "OFF" :
+                           (g3x_conf_save_status == G3X_CONF_SAVE_OK)  ? "OK" :
+                           (g3x_conf_save_status == G3X_CONF_SAVE_ERR) ? "ERR" : "-";
+    sprintf(line, "MENU:%04u SAVE:%s Rs:%04u Rp:%04u B:%u/%ums",
+            g3x_diag_clamp9999(g3x_menu_open_count),
+            save_str,
+            g3x_diag_clamp9999(g3x_diag_sync_restore_count),
+            g3x_diag_clamp9999(g3x_diag_poll_restore_count),
+            g3x_diag_clamp999(g3x_diag_blit_last_ms),
+            g3x_diag_clamp999(g3x_diag_blit_max_ms));
+}
+
+void g3x_diag_format_menu_line(char *line)
+{
+    g3x_diag_format_line2(line);
+}
+#endif
 
 void g3x_diag_set_hook_installed(int installed)
 {
@@ -991,6 +1298,21 @@ void gui_diag_draw(void)
         return;
 
 #if defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)
+#if defined(G3X_GUI_RESTORE2) && (G3X_GUI_RESTORE2 == 1)
+    char menu_line[64];
+    g3x_diag_format_line2(menu_line);
+    int y_menu = camera_screen.height - 3 * FONT_HEIGHT;
+    int mlen = (int)strlen(menu_line);
+    if (mlen > G3X_DIAG_LINE_MAX_CHARS)
+    {
+        menu_line[G3X_DIAG_LINE_MAX_CHARS] = '\0';
+        mlen = G3X_DIAG_LINE_MAX_CHARS;
+    }
+    g3x_dbuf_fast_fill_rect(G3X_MENU_X0, y_menu, G3X_MENU_X1, y_menu + FONT_HEIGHT - 1, COLOR_BLACK);
+    draw_string((camera_screen.width - mlen * FONT_WIDTH) / 2,
+                y_menu,
+                menu_line, MAKE_COLOR(COLOR_BLACK, COLOR_WHITE));
+#else
     char menu_line[32];
     const char *save_str = (g3x_conf_save_status == G3X_CONF_SAVE_OFF) ? "OFF" :
                            (g3x_conf_save_status == G3X_CONF_SAVE_OK)  ? "OK" :
@@ -1005,14 +1327,23 @@ void gui_diag_draw(void)
                 y_menu,
                 menu_line, MAKE_COLOR(COLOR_BLACK, COLOR_WHITE));
 #endif
+#endif
 
 #if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)
     char line[64];
     g3x_diag_format_line(line);
     int y = camera_screen.height - 2 * FONT_HEIGHT;
     int len = (int)strlen(line);
+#if defined(G3X_GUI_RESTORE2) && (G3X_GUI_RESTORE2 == 1)
+    if (len > G3X_DIAG_LINE_MAX_CHARS)
+    {
+        line[G3X_DIAG_LINE_MAX_CHARS] = '\0';
+        len = G3X_DIAG_LINE_MAX_CHARS;
+    }
+#else
     if (len > G3X_DIAG_LINE_MAX_CHARS)
         len = G3X_DIAG_LINE_MAX_CHARS;
+#endif
     g3x_dbuf_fast_fill_rect(G3X_MENU_X0, y, G3X_MENU_X1, y + FONT_HEIGHT - 1, COLOR_BLACK);
     draw_string((camera_screen.width - len * FONT_WIDTH) / 2,
                 y,
