@@ -40,8 +40,8 @@ BASE_PORT41_DEFAULT_SIZE = 124097
 BASE_PORT49_DEFAULT_SHA256 = BASE_PORT41_DEFAULT_SHA256
 BASE_PORT49_DEFAULT_SIZE = BASE_PORT41_DEFAULT_SIZE
 BASE_PORT49_CANDIDATE_SHA256 = "e31e97a1b4e700aaff36e1da80ffff8e335fd162d29be2e6b3400afe8aa5a2a1"
-BASE_PORT50_CANDIDATE_SHA256 = "7fa091329c0d3d43e531004bcd135ab4f452e2a574aad4949888445720d6fca8"
-BASE_PORT50_CANDIDATE_SIZE = 131321
+BASE_PORT50_CANDIDATE_SHA256 = "c5cd59f05c026e540681039a8184bcedb5718030d4d108db8e6e7c5cefcf4480"
+BASE_PORT50_CANDIDATE_SIZE = 130745
 
 
 def sha256_file(path: Path) -> str:
@@ -292,23 +292,16 @@ class TestPort50BuildAndArtifacts(unittest.TestCase):
             "G3X_GUI_MENU=1",
         ]
         self.assertEqual(pinned["build"]["flags"], expected_flags)
+        self.assertIn("G3X_DISABLE_CARD_WRITES=1", pinned["build"]["flags"])
+        self.assertIn("OPT_DISABLE_FILE_WRITES=1", pinned["build"]["flags"])
         self.assertEqual(pinned["core_end"], pinned["artifacts"]["core_end"])
         self.assertRegex(pinned["core_end"], r"^0x003[0-9a-f]{5}$")
-        self.assertEqual(pinned["card_writes"], "enabled")
-        self.assertIn("G3X_GUI_MENU=1 overrides G3X_DISABLE_CARD_WRITES=1", pinned["card_writes_note"])
+        self.assertEqual(pinned["card_writes"], "disabled")
+        self.assertIn("Config save disabled under G3X_DISABLE_CARD_WRITES=1 OPT_DISABLE_FILE_WRITES=1", pinned["card_writes_note"])
         expected_removed_wrappers = [
-            "write",
-            "fwrite",
-            "open",
-            "fopen",
-            "creat",
-            "mkdir",
-            "MakeDirectory_Fut",
-            "remove",
-            "DeleteFile_Fut",
-            "DeleteDirectory_Fut",
-            "rename",
-            "RenameFile_Fut",
+            "conf_save",
+            "save_params_values",
+            "save_int_value_file",
         ]
         self.assertEqual(pinned["removed_wrappers"], expected_removed_wrappers)
 
@@ -329,14 +322,35 @@ class TestPort50BuildAndArtifacts(unittest.TestCase):
         # Check symbols using nm
         nm_out = subprocess.check_output([str(NM), str(main_elf)], text=True)
 
-        # 1. No __wrap_ symbols anywhere in the binary
-        wrap_symbols = [line for line in nm_out.splitlines() if "__wrap_" in line]
-        self.assertEqual(wrap_symbols, [], f"Unexpected __wrap_ symbols in PORT-50 ELF: {wrap_symbols}")
+        # 1. Defense-in-depth: blocking write wrappers are present in the PORT-50 link
+        expected_wrappers = [
+            "__wrap_write",
+            "__wrap_fwrite",
+            "__wrap_open",
+            "__wrap_fopen",
+            "__wrap_creat",
+            "__wrap_mkdir",
+            "__wrap_MakeDirectory_Fut",
+            "__wrap_remove",
+            "__wrap_DeleteFile_Fut",
+            "__wrap_DeleteDirectory_Fut",
+            "__wrap_rename",
+            "__wrap_RenameFile_Fut",
+        ]
+        for w in expected_wrappers:
+            self.assertIn(w, nm_out, f"Missing blocking wrapper {w} in PORT-50 ELF")
 
-        # 2. conf_save is present as real text function
+        # 2. Only conf_save, save_params_values, and save_int_value_file have their wrappers removed
+        for unwrapped in ("conf_save", "save_params_values", "save_int_value_file"):
+            self.assertNotIn(f"__wrap_{unwrapped}", nm_out, f"{unwrapped} should not be wrapped")
+
+        # 3. conf_save, config_save, save_params_values, and save_int_value_file are present as real text functions
         self.assertRegex(nm_out, r"[0-9a-f]{8}\s+T\s+conf_save")
+        self.assertRegex(nm_out, r"[0-9a-f]{8}\s+T\s+config_save")
+        self.assertRegex(nm_out, r"[0-9a-f]{8}\s+T\s+save_params_values")
+        self.assertRegex(nm_out, r"[0-9a-f]{8}\s+T\s+save_int_value_file")
 
-        # 3. Diagnostic hooks exist
+        # 4. Diagnostic hooks exist
         self.assertRegex(nm_out, r"[0-9a-f]{8}\s+T\s+g3x_menu_record_open")
         self.assertRegex(nm_out, r"[0-9a-f]{8}\s+T\s+g3x_conf_record_save_result")
         self.assertRegex(nm_out, r"[0-9a-f]{8}\s+B\s+g3x_menu_open_count")
@@ -345,21 +359,50 @@ class TestPort50BuildAndArtifacts(unittest.TestCase):
         # Check disassembly using objdump
         dump_out = subprocess.check_output([str(OBJDUMP), "-d", str(main_elf)], text=True)
 
-        # 4. config_save calls write, close, and g3x_conf_record_save_result
-        self.assertRegex(dump_out, r"<config_save>:[\s\S]*?bl\s+[0-9a-f]+\s+<write>")
-        self.assertRegex(dump_out, r"<config_save>:[\s\S]*?bl\s+[0-9a-f]+\s+<close>")
-        self.assertRegex(dump_out, r"<config_save>:[\s\S]*?bl\s+[0-9a-f]+\s+<g3x_conf_record_save_result>")
+        def get_func_body(func_name: str) -> str:
+            m = re.search(rf"<{func_name}>:([\s\S]*?)(?:\n[0-9a-f]{{8}}\s+<|$)", dump_out)
+            self.assertIsNotNone(m, f"Could not find <{func_name}> in objdump")
+            return m.group(1)
 
-        # 5. write calls _Write stub (0xFC37B471)
-        self.assertRegex(dump_out, r"<write>:[\s\S]*?bl\s+[0-9a-f]+\s+<_Write>")
+        forbidden_calls = [
+            "<write>",
+            "<open>",
+            "<close>",
+            "<_Write>",
+            "<_Open>",
+            "<_Close>",
+            "<fwrite>",
+            "<__wrap_write>",
+            "<__wrap_open>",
+            "<__wrap_fwrite>",
+        ]
+
+        # 5. conf_save() skips save_params_values/config_save, calls g3x_conf_record_save_result,
+        #    and does NOT call write, open, close, or any file I/O stub
+        conf_save_body = get_func_body("conf_save")
+        self.assertIn("<g3x_conf_record_save_result>", conf_save_body)
+        for call in forbidden_calls + ["<save_params_values>", "<config_save>"]:
+            self.assertNotIn(call, conf_save_body)
+
+        # 6. config_save() also gated off: calls g3x_conf_record_save_result, no write stubs
+        config_save_body = get_func_body("config_save")
+        self.assertIn("<g3x_conf_record_save_result>", config_save_body)
+        for call in forbidden_calls:
+            self.assertNotIn(call, config_save_body)
+
+        # 7. save_params_values() returns early and contains no calls to write/open stubs
+        save_params_body = get_func_body("save_params_values")
+        for call in forbidden_calls:
+            self.assertNotIn(call, save_params_body)
+
+        # 8. save_int_value_file() returns early and contains no calls to write/open stubs
+        save_int_body = get_func_body("save_int_value_file")
+        for call in forbidden_calls:
+            self.assertNotIn(call, save_int_body)
+
+        # 9. Low-level firmware stubs are correctly linked
         self.assertRegex(dump_out, r"<_Write>:[\s\S]*?\.word\s+0xfc37b471")
-
-        # 6. open calls _Open stub (0xFC37B3B5)
-        self.assertRegex(dump_out, r"<open>:[\s\S]*?bl\s+[0-9a-f]+\s+<_Open>")
         self.assertRegex(dump_out, r"<_Open>:[\s\S]*?\.word\s+0xfc37b3b5")
-
-        # 7. close calls _Close stub (0xFC37B439)
-        self.assertRegex(dump_out, r"<close>:[\s\S]*?bl\s+[0-9a-f]+\s+<_Close>")
         self.assertRegex(dump_out, r"<_Close>:[\s\S]*?\.word\s+0xfc37b439")
 
     def test_default_build_is_byte_identical_to_port49_default(self):
@@ -383,6 +426,53 @@ class TestPort50BuildAndArtifacts(unittest.TestCase):
     def test_default_build_is_byte_identical_to_port41_default(self):
         self.test_default_build_is_byte_identical_to_port49_default()
 
+    def test_port50_diag_format_produces_save_off(self):
+        diag_text = DIAG_HEADER.read_text(encoding="utf-8")
+        self.assertIn('"MENU:%04u SAVE:%s"', diag_text)
+        self.assertIn("G3X_CONF_SAVE_OFF", diag_text)
+        self.assertIn('"OFF"', diag_text)
+
+        c_code = """
+#include <stdio.h>
+#include <string.h>
+
+#define G3X_CONF_SAVE_NONE 0
+#define G3X_CONF_SAVE_OK   1
+#define G3X_CONF_SAVE_ERR  2
+#define G3X_CONF_SAVE_OFF  3
+
+static unsigned int g3x_diag_clamp9999(unsigned int val) {
+    return val > 9999u ? 9999u : val;
+}
+
+int main(void) {
+    char menu_line[32];
+    int g3x_conf_save_status = G3X_CONF_SAVE_OFF;
+    unsigned int g3x_menu_open_count = 3;
+
+    const char *save_str = (g3x_conf_save_status == G3X_CONF_SAVE_OFF) ? "OFF" :
+                           (g3x_conf_save_status == G3X_CONF_SAVE_OK)  ? "OK" :
+                           (g3x_conf_save_status == G3X_CONF_SAVE_ERR) ? "ERR" : "-";
+    sprintf(menu_line, "MENU:%04u SAVE:%s",
+            g3x_diag_clamp9999(g3x_menu_open_count),
+            save_str);
+
+    if (strcmp(menu_line, "MENU:0003 SAVE:OFF") != 0) {
+        return 1;
+    }
+    return 0;
+}
+"""
+        res = subprocess.run(
+            ["cc", "-x", "c", "-", "-o", "/tmp/test_diag_save_off"],
+            input=c_code,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        res_run = subprocess.run(["/tmp/test_diag_save_off"], capture_output=True)
+        self.assertEqual(res_run.returncode, 0)
+
     def test_trial_plan_document_structure(self):
         self.assertTrue(DOC_TRIAL.is_file(), f"Missing {DOC_TRIAL}")
         text = DOC_TRIAL.read_text(encoding="utf-8")
@@ -393,25 +483,23 @@ class TestPort50BuildAndArtifacts(unittest.TestCase):
         self.assertIn("Trial (B): PORT-50 Menu", text)
         self.assertIn("Battery-pull recovery", text)
         self.assertIn("Rollback to PORT-49", text)
-        self.assertIn("7fa091329c0d3d43e531004bcd135ab4f452e2a574aad4949888445720d6fca8", text)
+        self.assertIn(BASE_PORT50_CANDIDATE_SHA256, text)
 
-        # Feedback Item 1: Card writes row or section, writes ARE enabled, wrappers listed, files named, card recommendation
+        # Card writes row or section: writes are disabled, card stays LOCKED, persistence deferred
         self.assertIn("Card Writes", text)
-        self.assertIn("are enabled", text.lower())
-        for w in [
-            "write", "fwrite", "open", "fopen", "creat", "mkdir",
-            "MakeDirectory_Fut", "remove", "DeleteFile_Fut",
-            "DeleteDirectory_Fut", "rename", "RenameFile_Fut",
-        ]:
-            self.assertIn(f"`{w}`", text)
-        self.assertIn("A/CHDK/", text)
-        self.assertIn("spare", text.lower())
+        self.assertIn("disabled", text.lower())
+        self.assertIn("LOCKED", text)
+        self.assertIn("deferred", text.lower())
+        self.assertIn("SAVE:OFF", text)
 
-        # Feedback Item 2: Trial (B) fallback
-        self.assertIn("Fallback", text)
-        self.assertIn("explicit save option", text)
+        # Trial (B) in-session only
+        self.assertIn("in-session", text.lower())
+        self.assertIn("toggle", text.lower())
+        self.assertIn("re-open", text.lower())
+        self.assertNotIn("verify that the changed setting persisted across reboot", text)
+        self.assertNotIn("clears the read-only bit", text)
 
-        # Feedback Item 4: Optional hints
+        # Hints
         self.assertIn("scripts/build_port43_dbuf.py --gui-menu", text)
         self.assertIn("does not use zoom", text.lower())
         self.assertIn("height - 3 * FONT_HEIGHT", text)
