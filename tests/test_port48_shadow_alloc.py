@@ -24,11 +24,11 @@ PORT47_CORE_END = 0x003699B0
 MAX_CORE_END_GROWTH = 8 * 1024
 
 EXPECTED_EARLIER_HASHES = {
-    "port41": "06ce357ab59e3fc3c7aa58f3fd9cfbaaae3de3b13bb7dc71e09efacdc1b87d65",
-    "port42": "0fb3ad38d1c8be7fb5df6f3d85b357900d88b17b7234766c9e594bc7bc8e5da0",
-    "port44": "c86f6a64053a79928bf6c43e52f1caedfd45f2c2a753ef73dd392fd1fb17c090",
-    "port45": "f22a406055317ce03ebaa7840207c92a49bf9811d8a328fa0676c14a4b3d4a2b",
-    "port46": "02bc19468b44e0632afdf91e6e60c367c6550a8da4d734b19655b306c6e0425f",
+    "port43": "8d5509e597a598e8bb023adae46d4caa2c7ee1e2b763e4ff292f0aef21f9b140",
+    "port44": "2017b13c3330cd30edf9a8923d58a2fb12f6a4d1f77c9f51923bc60f79247382",
+    "port45": "2be1877e495a0d2aee07851eee6e0294eb2d62ba9db2707b929fa2cf7927a684",
+    "port46_dbuf": "890bc9ddc9152e49a46a95947ca1852e89f0eae62fa128391e5dea1c5f3d43f0",
+    "port46": "7c91eaa622ff0ca44b8d60219da1418ca34dc4a837a6112c39b6bbd31e285798",
     "port47": "9b6d9ad95b2512e487f9d7d6ae694ab9fddbaee731339570240f77bbcfc7e5f7",
 }
 
@@ -77,9 +77,10 @@ static unsigned char *host_shadow_op = NULL;
 static int host_shadow_valid = 0;
 static int host_shadow_attempted = 0;
 
-static unsigned char host_pool_exmem[928 * 600 * 3];
-static unsigned char host_pool_rect[880 * 576 * 3];
-static unsigned char host_pool_idx[880 * 576 * 1];
+#define REDZONE_BYTES 4096
+static unsigned char host_pool_exmem[(928 * 600 * 3) + REDZONE_BYTES];
+static unsigned char host_pool_rect[(880 * 576 * 3) + REDZONE_BYTES];
+static unsigned char host_pool_idx[(880 * 576 * 1) + REDZONE_BYTES];
 
 static int mock_exmem_succeed = 0;
 static int mock_malloc_rect_succeed = 0;
@@ -90,6 +91,7 @@ static int mock_umalloc_idx_succeed = 0;
 static int exmem_calls = 0;
 static int malloc_calls = 0;
 static int umalloc_calls = 0;
+static int getmeminfo_calls = 0;
 static unsigned int last_exmem_pool = 999u;
 static unsigned int last_exmem_size = 0u;
 static long last_malloc_size = 0;
@@ -157,6 +159,7 @@ typedef struct {
 
 void GetMemInfo(cam_meminfo *camera_meminfo)
 {
+    getmeminfo_calls++;
     memset(camera_meminfo, 0, sizeof(*camera_meminfo));
     camera_meminfo->free_block_max_size = mock_free_block_max_size;
 }
@@ -257,10 +260,15 @@ void harness_reset(void)
     exmem_calls = 0;
     malloc_calls = 0;
     umalloc_calls = 0;
+    getmeminfo_calls = 0;
     last_exmem_pool = 999u;
     last_exmem_size = 0u;
     last_malloc_size = 0;
     last_umalloc_size = 0;
+
+    memset(host_pool_exmem, 0xA5, sizeof(host_pool_exmem));
+    memset(host_pool_rect, 0xA5, sizeof(host_pool_rect));
+    memset(host_pool_idx, 0xA5, sizeof(host_pool_idx));
 
     mock_free_block_max_size = 614400;
     mock_sentinel_intact = 1;
@@ -333,6 +341,7 @@ int harness_get_shadow_h(void) { return g3x_shadow2_h; }
 int harness_get_exmem_calls(void) { return exmem_calls; }
 int harness_get_malloc_calls(void) { return malloc_calls; }
 int harness_get_umalloc_calls(void) { return umalloc_calls; }
+int harness_get_getmeminfo_calls(void) { return getmeminfo_calls; }
 unsigned int harness_get_last_exmem_pool(void) { return last_exmem_pool; }
 unsigned int harness_get_last_exmem_size(void) { return last_exmem_size; }
 int harness_get_gui_redraw_calls(void) { return gui_redraw_calls; }
@@ -365,6 +374,73 @@ void harness_write_shadow_pair(int x, int y, unsigned int yuv, unsigned short co
                                unsigned char c0, unsigned char c1)
 {
     g3x_shadow2_write_pair(host_shadow_bm, host_shadow_op, x, y, yuv, co, c0, c1);
+}
+
+void harness_write_shadow_pixel(int x, int y, unsigned char y_luma, unsigned char o_val,
+                                unsigned char u_val, unsigned char v_val, int is_odd, unsigned char cl)
+{
+    g3x_shadow2_write_pixel(host_shadow_bm, host_shadow_op, x, y, y_luma, o_val, u_val, v_val, is_odd, cl);
+}
+
+void harness_fill_shadow_span(int x_start, int x_end, int y, unsigned int uyvy_word,
+                              unsigned char op_byte, unsigned char cl)
+{
+    g3x_shadow2_fill_span(host_shadow_bm, host_shadow_op, x_start, x_end, y, uyvy_word, op_byte, cl);
+}
+
+/* Replicates staged g3x_dbuf_shadow_draw_pixel with the SHADOW2 mode guard */
+void harness_legacy_shadow_draw_pixel(unsigned int offset, unsigned int offs2,
+                                      unsigned int y, unsigned int o,
+                                      unsigned int u, unsigned int v, int is_odd)
+{
+    (void)offs2;
+    if (g3x_shadow2_mode != G3X_SHADOW_MODE_RECT)
+        return;
+    if (!host_shadow_bm || !host_shadow_op)
+        return;
+    int buf_w = camera_screen.buffer_width ? camera_screen.buffer_width : 928;
+    int screen_y = (int)(offset / buf_w);
+    int screen_x = (int)(offset % buf_w);
+    if (screen_x >= G3X_MENU_X0 && screen_x <= G3X_MENU_X1 &&
+        screen_y >= G3X_MENU_Y0 && screen_y <= G3X_MENU_Y1)
+    {
+        int rx = screen_x - G3X_MENU_X0;
+        int ry = screen_y - G3X_MENU_Y0;
+        unsigned int sh_offset = (unsigned int)(ry * G3X_SHADOW_WIDTH + rx);
+        unsigned int sh_offs2 = (sh_offset >> 1) << 2;
+        if (sh_offset < G3X_SHADOW_OP_SIZE)
+        {
+            host_shadow_op[sh_offset] = (unsigned char)o;
+            if (is_odd)
+            {
+                host_shadow_bm[sh_offs2 + 3] = (unsigned char)y;
+            }
+            else
+            {
+                host_shadow_bm[sh_offs2 + 0] = (unsigned char)u;
+                host_shadow_bm[sh_offs2 + 1] = (unsigned char)y;
+                host_shadow_bm[sh_offs2 + 2] = (unsigned char)v;
+            }
+        }
+    }
+}
+
+int harness_check_redzone_intact(void)
+{
+    const unsigned char *base = host_shadow_bm;
+    if (!base || g3x_shadow2_bytes == 0u)
+        return 0;
+    for (unsigned int i = 0; i < REDZONE_BYTES; ++i)
+    {
+        if (base[g3x_shadow2_bytes + i] != 0xA5u)
+            return 0;
+    }
+    return 1;
+}
+
+unsigned char harness_read_shadow_byte(unsigned int byte_offset)
+{
+    return host_shadow_bm[byte_offset];
 }
 
 unsigned int harness_read_bm_word(int buf_idx, int x, int y)
@@ -429,6 +505,7 @@ class TestPort48ShadowAlloc(unittest.TestCase):
         cls.lib.harness_get_full_count.restype = ctypes.c_uint
         cls.lib.harness_read_bm_word.restype = ctypes.c_uint
         cls.lib.harness_read_op_word.restype = ctypes.c_ushort
+        cls.lib.harness_read_shadow_byte.restype = ctypes.c_ubyte
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -590,35 +667,62 @@ class TestPort48ShadowAlloc(unittest.TestCase):
         self.lib.harness_set_alt_mode(1)
         self.lib.harness_set_counters(1, 12, 3, 45, 0)
 
-        # S:NULL with largest-free-block '-'
+        # S:NULL with largest-free-block '-' (GetMemInfo NOT called by gui_diag_draw)
         self.lib.harness_set_free_block_max_size(0)
+        before_gmi = self.lib.harness_get_getmeminfo_calls()
         self.lib.gui_diag_draw()
+        self.assertEqual(self.lib.harness_get_getmeminfo_calls(), before_gmi)
         line = self.lib.harness_get_last_line().decode("ascii")
         self.assertEqual(line, "H:1/0012 S:NULL - L:0003 R:0045 F:0000")
         self.assertLessEqual(len(line), 55)
 
-        # S:OK/1670400/exmem with largest-free-block 614400
+        # S:OK/1670400/exmem with largest-free-block 614400 (600K) cached on ALT entry
         self.lib.harness_set_alloc_mocks(1, 0, 0, 0, 0)
-        self.lib.g3x_diag_on_alt_enter()
         self.lib.harness_set_free_block_max_size(614400)
-        self.lib.gui_diag_draw()
+        before_gmi = self.lib.harness_get_getmeminfo_calls()
+        self.lib.g3x_diag_on_alt_enter()
+        self.assertEqual(self.lib.harness_get_getmeminfo_calls(), before_gmi + 1)
+
+        # Subsequent draws use cached largest-free value without calling GetMemInfo
+        for _ in range(5):
+            self.lib.gui_diag_draw()
+        self.assertEqual(self.lib.harness_get_getmeminfo_calls(), before_gmi + 1)
         line = self.lib.harness_get_last_line().decode("ascii")
-        self.assertEqual(line, "H:1/0012 S:OK/1670400/exmem 614400 L:0003 R:0045 F:0000")
-        self.assertEqual(len(line), 55)
-        self.assertEqual(self.lib.harness_get_last_draw_x(), 10)
+        self.assertEqual(line, "H:1/0012 S:OK/1670400/exmem 600K L:0003 R:0045 F:0000")
+        self.assertEqual(len(line), 53)
+        self.assertEqual(self.lib.harness_get_last_draw_x(), (900 - 53 * 16) // 2)
         self.assertEqual(self.lib.harness_get_last_draw_y(), 600 - 2 * 32)
 
+        # Worst-case 7-8 digit largest-free value (e.g. 16777216 -> 16384K, 99999999 -> 97656K)
+        # must never truncate the F: counter and must stay <= 55 chars
+        self.lib.harness_set_free_block_max_size(16777216)
+        self.lib.g3x_diag_on_alt_enter()
+        self.assertEqual(self.lib.harness_get_getmeminfo_calls(), before_gmi + 2)
+        self.lib.gui_diag_draw()
+        line = self.lib.harness_get_last_line().decode("ascii")
+        self.assertEqual(line, "H:1/0012 S:OK/1670400/exmem 16384K L:0003 R:0045 F:0000")
+        self.assertEqual(len(line), 55)
+        self.assertTrue(line.endswith("F:0000"))
+
+        self.lib.harness_set_free_block_max_size(99999999)
+        self.lib.gui_diag_draw()
+        line = self.lib.harness_get_last_line().decode("ascii")
+        self.assertEqual(line, "H:1/0012 S:OK/1670400/exmem 97656K L:0003 R:0045 F:0000")
+        self.assertEqual(len(line), 55)
+        self.assertTrue(line.endswith("F:0000"))
+
         # S:OK/1520640/heap
+        self.lib.harness_set_free_block_max_size(614400)
         self.lib.harness_set_mode_override(2, 1520640)
         self.lib.gui_diag_draw()
         line = self.lib.harness_get_last_line().decode("ascii")
-        self.assertEqual(line, "H:1/0012 S:OK/1520640/heap 614400 L:0003 R:0045 F:0000")
+        self.assertEqual(line, "H:1/0012 S:OK/1520640/heap 600K L:0003 R:0045 F:0000")
 
         # S:OK/1520640/rect
         self.lib.harness_set_mode_override(3, 1520640)
         self.lib.gui_diag_draw()
         line = self.lib.harness_get_last_line().decode("ascii")
-        self.assertEqual(line, "H:1/0012 S:OK/1520640/rect 614400 L:0003 R:0045 F:0000")
+        self.assertEqual(line, "H:1/0012 S:OK/1520640/rect 600K L:0003 R:0045 F:0000")
 
         # S:OK/506880/idx with '-'
         self.lib.harness_set_mode_override(4, 506880)
@@ -711,6 +815,173 @@ class TestPort48ShadowAlloc(unittest.TestCase):
         self.assertEqual(self.lib.harness_get_restore_count(), 1)
         self.assertEqual(self.lib.harness_get_full_count(), 0)
 
+    def test_shadow2_staged_sources_have_no_active_legacy_shadow_pixel_calls(self) -> None:
+        import sys
+        sys.path.insert(0, str(REPO_ROOT / "scripts"))
+        sys.path.insert(0, str(REPO_ROOT / "tools"))
+        from build_port41_full import apply_gui_fix_staging_patches, overlay_tree  # type: ignore
+        from build_port43_dbuf import (  # type: ignore
+            apply_dbuf_staging_patches,
+            apply_gui_diag_staging_patches,
+            apply_kbd_check_staging_patches,
+            apply_no_overdraw_staging_patches,
+            apply_shadow2_staging_patches,
+            verify_shadow2_staged_sources,
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            stage_dir = Path(td) / "stage_chdk"
+            stage_dir.mkdir(parents=True, exist_ok=True)
+            for sub in ["core", "include", "platform/g3x"]:
+                shutil.copytree(REPO_ROOT / "chdk-port" / sub, stage_dir / sub, symlinks=True)
+            overlay_tree(REPO_ROOT / "full_build" / "g3x", stage_dir / "platform" / "g3x", ignore={"loader"})
+            shutil.copy2(
+                REPO_ROOT / "chdk-port" / "platform" / "g3x" / "gui_menu.c",
+                stage_dir / "platform" / "g3x" / "gui_menu.c",
+            )
+
+            apply_gui_fix_staging_patches(stage_dir, legacy_dbuf_snapshot=False)
+            apply_dbuf_staging_patches(stage_dir)
+            apply_no_overdraw_staging_patches(stage_dir)
+            apply_kbd_check_staging_patches(stage_dir)
+            apply_gui_diag_staging_patches(stage_dir)
+            apply_shadow2_staging_patches(stage_dir)
+
+            # Should pass structural verification cleanly
+            verify_shadow2_staged_sources(stage_dir)
+
+            staged_draw = (stage_dir / "core" / "gui_draw.c").read_text(encoding="utf-8")
+
+            # Verify negative cases fail closed:
+            # 1) Injecting an active call to g3x_dbuf_shadow_draw_pixel in a SHADOW2 block
+            bad_call = staged_draw.replace(
+                "g3x_dbuf_shadow2_draw_pixel(offset, y_luma, op, u_val, v_val, 1, simple_clr[px & 1]);",
+                "g3x_dbuf_shadow_draw_pixel(offset, offs2, y_luma, op, u_val, v_val, 1);",
+                1,
+            )
+            (stage_dir / "core" / "gui_draw.c").write_text(bad_call, encoding="utf-8")
+            with self.assertRaises(RuntimeError):
+                verify_shadow2_staged_sources(stage_dir)
+
+            # 2) Removing the G3X_SHADOW_MODE_RECT guard from g3x_dbuf_shadow_draw_pixel
+            bad_guard = staged_draw.replace(
+                "    if (g3x_shadow2_mode != G3X_SHADOW_MODE_RECT)\n        return;\n",
+                "",
+                1,
+            )
+            (stage_dir / "core" / "gui_draw.c").write_text(bad_guard, encoding="utf-8")
+            with self.assertRaises(RuntimeError):
+                verify_shadow2_staged_sources(stage_dir)
+
+            # Restore valid staged file
+            (stage_dir / "core" / "gui_draw.c").write_text(staged_draw, encoding="utf-8")
+            verify_shadow2_staged_sources(stage_dir)
+
+    def test_shadow_writers_max_write_offset_below_allocated_size_for_each_mode(self) -> None:
+        # Mode specifications: (name, mocks, x0, y0, w, h, total_bytes, is_idx)
+        modes = [
+            ("exmem", (1, 0, 0, 0, 0), 0, 0, 928, 600, 928 * 600 * 3, False),
+            ("rect", (0, 1, 0, 0, 0), 10, 12, 880, 576, 880 * 576 * 3, False),
+            ("idx", (0, 0, 0, 1, 0), 10, 12, 880, 576, 880 * 576 * 1, True),
+        ]
+
+        for name, mocks, x0, y0, w, h, alloc_size, is_idx in modes:
+            with self.subTest(mode=name):
+                self.lib.harness_reset()
+                self.lib.harness_set_alt_mode(1)
+                self.lib.harness_set_alloc_mocks(*mocks)
+                self.lib.g3x_diag_on_alt_enter()
+                self.assertEqual(self.lib.harness_get_shadow_bytes(), alloc_size)
+
+                max_pixels = w * h
+                last_x = x0 + w - 1
+                last_y = y0 + h - 1
+                last_even_x = x0 + w - 2
+
+                # 1. Analytical max write offset check for every shadow writer:
+                # (a) g3x_shadow2_write_pixel (even and odd):
+                max_sh_offset = (h - 1) * w + (w - 1)
+                self.assertEqual(max_sh_offset, max_pixels - 1)
+                if is_idx:
+                    max_pixel_write_off = max_sh_offset
+                    max_pair_write_off = ((h - 1) * w + (w - 2)) + 1
+                    max_span_write_off = (h - 1) * w + w - 1
+                else:
+                    # Full depth: bm is at [0 .. 2*W*H - 1], op is at [2*W*H .. 3*W*H - 1]
+                    sh_offs2 = (max_sh_offset >> 1) << 2
+                    max_bm_odd_off = sh_offs2 + 3
+                    max_bm_even_off = (((max_sh_offset - 1) >> 1) << 2) + 2
+                    max_op_off = (2 * max_pixels) + max_sh_offset
+                    self.assertLess(max_bm_odd_off, 2 * max_pixels)
+                    self.assertLess(max_bm_even_off, 2 * max_pixels)
+                    max_pixel_write_off = max(max_bm_odd_off, max_bm_even_off, max_op_off)
+
+                    max_sh_pair = ((h - 1) * w + (w - 2)) >> 1
+                    max_pair_bm_off = max_sh_pair * 4 + 3
+                    max_pair_op_off = (2 * max_pixels) + max_sh_pair * 2 + 1
+                    self.assertLess(max_pair_bm_off, 2 * max_pixels)
+                    max_pair_write_off = max(max_pair_bm_off, max_pair_op_off)
+
+                    max_span_bm_off = (max_pixels // 2) * 4 - 1
+                    max_span_op_off = (2 * max_pixels) + max_pixels - 1
+                    self.assertLess(max_span_bm_off, 2 * max_pixels)
+                    max_span_write_off = max(max_span_bm_off, max_span_op_off)
+
+                self.assertEqual(max_pixel_write_off, alloc_size - 1)
+                self.assertEqual(max_pair_write_off, alloc_size - 1)
+                self.assertEqual(max_span_write_off, alloc_size - 1)
+                self.assertLess(max_pixel_write_off, alloc_size)
+                self.assertLess(max_pair_write_off, alloc_size)
+                self.assertLess(max_span_write_off, alloc_size)
+
+                # 2. Runtime boundary and out-of-bounds execution check with redzone verification:
+                # Write at the very last valid pixel (odd), last even pixel, and out-of-bounds pixels
+                self.lib.harness_write_shadow_pixel(last_even_x, last_y, 0x11, 0x22, 0x33, 0x44, 0, 0x55)
+                self.lib.harness_write_shadow_pixel(last_x, last_y, 0x66, 0x77, 0x88, 0x99, 1, 0xAA)
+                self.lib.harness_write_shadow_pixel(last_x + 1, last_y, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0xFF)
+                self.lib.harness_write_shadow_pixel(last_x, last_y + 1, 0xFF, 0xFF, 0xFF, 0xFF, 1, 0xFF)
+                self.lib.harness_write_shadow_pixel(-1, -1, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0xFF)
+                self.assertEqual(self.lib.harness_check_redzone_intact(), 1)
+                self.assertEqual(
+                    self.lib.harness_read_shadow_byte(alloc_size - 1),
+                    0xAA if is_idx else 0x77,
+                )
+
+                # Write pair at last valid pair and out-of-bounds pair
+                self.lib.harness_write_shadow_pair(last_even_x, last_y, 0x12345678, 0x9ABC, 0xCC, 0xDD)
+                self.lib.harness_write_shadow_pair(last_x, last_y, 0xFFFFFFFF, 0xFFFF, 0xFF, 0xFF)
+                self.lib.harness_write_shadow_pair(last_x + 2, last_y + 2, 0xFFFFFFFF, 0xFFFF, 0xFF, 0xFF)
+                self.assertEqual(self.lib.harness_check_redzone_intact(), 1)
+                self.assertEqual(
+                    self.lib.harness_read_shadow_byte(alloc_size - 1),
+                    0xDD if is_idx else 0x9A,
+                )
+
+                # Fill span across entire last row and beyond bounds
+                self.lib.harness_fill_shadow_span(x0 - 20, last_x + 20, last_y, 0xCAFEBABE, 0xEE, 0x7E)
+                self.lib.harness_fill_shadow_span(x0, last_x, last_y + 1, 0xFFFFFFFF, 0xFF, 0xFF)
+                self.assertEqual(self.lib.harness_check_redzone_intact(), 1)
+                self.assertEqual(
+                    self.lib.harness_read_shadow_byte(alloc_size - 1),
+                    0x7E if is_idx else 0xEE,
+                )
+
+                # Legacy g3x_dbuf_shadow_draw_pixel defence-in-depth guard:
+                # In exmem or idx mode, calling legacy writer must be a no-op; in rect mode it stays in bounds
+                last_menu_offset = 587 * 928 + 889
+                self.lib.harness_legacy_shadow_draw_pixel(
+                    last_menu_offset, (last_menu_offset >> 1) << 2, 0x42, 0x37, 0x80, 0x80, 1
+                )
+                self.assertEqual(self.lib.harness_check_redzone_intact(), 1)
+                if name == "rect":
+                    self.assertEqual(self.lib.harness_read_shadow_byte(alloc_size - 1), 0x37)
+                else:
+                    # Unchanged from fill_span
+                    self.assertEqual(
+                        self.lib.harness_read_shadow_byte(alloc_size - 1),
+                        0x7E if is_idx else 0xEE,
+                    )
+
     def test_candidate_manifest_core_end_and_earlier_build_invariance(self) -> None:
         self.assertTrue(MANIFEST_PATH.is_file(), f"Missing {MANIFEST_PATH}")
         manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
@@ -725,7 +996,7 @@ class TestPort48ShadowAlloc(unittest.TestCase):
             self.assertIn(req_flag, flags)
 
         core_end = int(manifest["core_end"], 16)
-        self.assertEqual(manifest["core_end"], "0x00369ec0")
+        self.assertEqual(manifest["core_end"], "0x00369ee0")
         self.assertLessEqual(core_end - PORT47_CORE_END, MAX_CORE_END_GROWTH)
 
         diskboot_entry = manifest["artifacts"]["DISKBOOT.BIN"]

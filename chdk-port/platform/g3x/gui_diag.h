@@ -12,12 +12,12 @@
  * - chdk-port/platform/generic/wrappers.c:1020,1045,1090 (canon_malloc, umalloc, GetMemInfo)
  * - chdk-port/core/memmgmt.c:180-186 (exmem_alloc_cached pool 0 = EXMEM_RAMDISK)
  * - chdk-port/core/main.c:316 (caller)
- * - reference/finsig_gm110c/stubs_entry.S:186 (active_bitmap_buffer = 0x0000D2A4)
- * - reference/finsig_gm110c/stubs_entry.S:188 (bitmap_buffer = 0x0000D2A8)
- * - reference/finsig_gm110c/stubs_entry.S:197 (AllocateUncacheableMemory = 0xFC144471)
- * - reference/finsig_gm110c/stubs_entry.S:239 (GetMemInfo = 0xFC610AB9)
- * - reference/finsig_gm110c/stubs_entry.S:302 (exmem_alloc = 0xFC092537)
- * - reference/finsig_gm110c/stubs_entry.S:308 (malloc = 0xFC381525)
+ * - reference/finsig_gm110c/stubs_entry.S:186 (active_bitmap_buffer = 0x0000D2A4; platform stubs_entry.S:190)
+ * - reference/finsig_gm110c/stubs_entry.S:188 (bitmap_buffer = 0x0000D2A8; platform stubs_entry.S:192)
+ * - reference/finsig_gm110c/stubs_entry.S:197 (AllocateUncacheableMemory = 0xFC144471; platform stubs_entry.S:201)
+ * - reference/finsig_gm110c/stubs_entry.S:235 (GetMemInfo = 0xFC610AB9; platform stubs_entry.S:239)
+ * - reference/finsig_gm110c/stubs_entry.S:298 (exmem_alloc = 0xFC092537; platform stubs_entry.S:302)
+ * - reference/finsig_gm110c/stubs_entry.S:308 (malloc = 0xFC381525; platform stubs_entry.S:312)
  */
 #ifndef G3X_GUI_DIAG_H
 #define G3X_GUI_DIAG_H
@@ -515,6 +515,7 @@ void g3x_diag_shadow_ensure_allocated(unsigned char **bm_ptr,
         g3x_shadow2_w = G3X_SHADOW_FULL_WIDTH;
         g3x_shadow2_h = G3X_SHADOW_FULL_HEIGHT;
         *valid_ptr = 1;
+        (void)g3x_shadow2_query_largest_free();
         return;
     }
 
@@ -536,6 +537,7 @@ void g3x_diag_shadow_ensure_allocated(unsigned char **bm_ptr,
         g3x_shadow2_w = G3X_SHADOW_RECT_WIDTH;
         g3x_shadow2_h = G3X_SHADOW_RECT_HEIGHT;
         *valid_ptr = 1;
+        (void)g3x_shadow2_query_largest_free();
         return;
     }
 
@@ -557,6 +559,7 @@ void g3x_diag_shadow_ensure_allocated(unsigned char **bm_ptr,
         g3x_shadow2_w = G3X_SHADOW_IDX_WIDTH;
         g3x_shadow2_h = G3X_SHADOW_IDX_HEIGHT;
         *valid_ptr = 1;
+        (void)g3x_shadow2_query_largest_free();
         return;
     }
 
@@ -571,6 +574,7 @@ void g3x_diag_shadow_ensure_allocated(unsigned char **bm_ptr,
     g3x_shadow2_y0 = 0;
     g3x_shadow2_w = 0;
     g3x_shadow2_h = 0;
+    (void)g3x_shadow2_query_largest_free();
 #else
     void *buf = malloc(G3X_SHADOW_TOTAL_SIZE);
     if (buf == 0)
@@ -597,12 +601,18 @@ void g3x_diag_shadow_ensure_allocated(unsigned char **bm_ptr,
 }
 
 /* Engage adapted G5X check_gui_needs_redraw mechanism on ALT entry,
- * and retry shadow allocation if still NULL. */
+ * retry shadow allocation if still NULL, and cache GetMemInfo once on ALT entry. */
 void g3x_diag_on_alt_enter(void)
 {
-    g3x_dbuf_shadow_ensure_allocated();
 #if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)
-    (void)g3x_shadow2_query_largest_free();
+    int was_allocated = g3x_dbuf_shadow_is_allocated();
+    g3x_dbuf_shadow_ensure_allocated();
+    if (was_allocated)
+    {
+        (void)g3x_shadow2_query_largest_free();
+    }
+#else
+    g3x_dbuf_shadow_ensure_allocated();
 #endif
     g3x_diag_suppress_engaged = 1;
     g3x_diag_last_bitmap_buffer = active_bitmap_buffer;
@@ -685,7 +695,10 @@ void g3x_diag_format_line(char *line)
     char free_tok[16];
     if (g3x_shadow2_largest_free > 0)
     {
-        sprintf(free_tok, "%d", g3x_shadow2_largest_free);
+        unsigned int free_kb = ((unsigned int)g3x_shadow2_largest_free) >> 10;
+        if (free_kb > 99999u)
+            free_kb = 99999u;
+        sprintf(free_tok, "%uK", free_kb);
     }
     else
     {
@@ -712,7 +725,6 @@ void gui_diag_draw(void)
         return;
 
 #if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)
-    (void)g3x_shadow2_query_largest_free();
     char line[64];
     g3x_diag_format_line(line);
     int y = camera_screen.height - 2 * FONT_HEIGHT;

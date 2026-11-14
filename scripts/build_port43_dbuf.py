@@ -18,6 +18,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -995,7 +996,8 @@ def apply_shadow2_staging_patches(stage_dir: Path) -> None:
         '#include "gui_diag.h"\n'
         "#if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)\n"
         "/* Adapted from chdk-port/platform/generic/wrappers.c:1003 and chdk-port/core/memmgmt.c:181-182:\n"
-        " * _exmem_alloc = 0xFC092537 (FINSIG, reference/finsig_gm110c/stubs_entry.S:302) */\n"
+        " * _exmem_alloc = 0xFC092537 (FINSIG, reference/finsig_gm110c/stubs_entry.S:298;\n"
+        " * chdk-port/platform/g3x/sub/110c/stubs_entry.S:302) */\n"
         "extern void *_exmem_alloc(unsigned int pool_id, unsigned int size, int unk, int unk2);\n"
         "void *exmem_alloc_cached(unsigned int pool_id, unsigned int size, int unk, int unk2)\n"
         "{\n"
@@ -1049,7 +1051,13 @@ def apply_shadow2_staging_patches(stage_dir: Path) -> None:
         raise RuntimeError("PORT-48 shadow reset anchor not found in staged core/gui_draw.c")
     draw_text = draw_text.replace(reset_anchor, reset_replacement, 1)
 
-    pixel_helper_anchor = "void g3x_dbuf_shadow_draw_pixel(unsigned int offset, unsigned int offs2, unsigned int y, unsigned int o, unsigned int u, unsigned int v, int is_odd)\n"
+    pixel_helper_anchor = (
+        "void g3x_dbuf_shadow_draw_pixel(unsigned int offset, unsigned int offs2, unsigned int y, unsigned int o, unsigned int u, unsigned int v, int is_odd)\n"
+        "{\n"
+        "    (void)offs2;\n"
+        "    if (!g3x_shadow_bitmap || !g3x_shadow_opacity)\n"
+        "        return;"
+    )
     pixel_helper_replacement = (
         "#if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)\n"
         "static void g3x_dbuf_shadow2_draw_pixel(unsigned int offset, unsigned int y, unsigned int o, unsigned int u, unsigned int v, int is_odd, unsigned char cl)\n"
@@ -1064,7 +1072,15 @@ def apply_shadow2_staging_patches(stage_dir: Path) -> None:
         "                            is_odd, cl);\n"
         "}\n"
         "#endif\n\n"
-        + pixel_helper_anchor
+        "void g3x_dbuf_shadow_draw_pixel(unsigned int offset, unsigned int offs2, unsigned int y, unsigned int o, unsigned int u, unsigned int v, int is_odd)\n"
+        "{\n"
+        "    (void)offs2;\n"
+        "#if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)\n"
+        "    if (g3x_shadow2_mode != G3X_SHADOW_MODE_RECT)\n"
+        "        return;\n"
+        "#endif\n"
+        "    if (!g3x_shadow_bitmap || !g3x_shadow_opacity)\n"
+        "        return;"
     )
     if draw_text.count(pixel_helper_anchor) != 1:
         raise RuntimeError("PORT-48 shadow_draw_pixel anchor not found in staged core/gui_draw.c")
@@ -1259,16 +1275,31 @@ def apply_shadow2_staging_patches(stage_dir: Path) -> None:
         raise RuntimeError("PORT-48 draw_pixel_simple_start anchor not found in staged core/gui_draw.c")
     draw_text = draw_text.replace(simple_start_anchor, simple_start_replacement, 1)
 
-    for odd_val in ["1", "0"]:
-        s1_anchor = f"            g3x_dbuf_shadow_draw_pixel(offset, offs2, y_luma, op, u_val, v_val, {odd_val});\n"
-        s1_repl = (
-            "#if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)\n"
-            f"            g3x_dbuf_shadow2_draw_pixel(offset, y_luma, op, u_val, v_val, {odd_val}, simple_clr[px & 1]);\n"
-            "#else\n"
-            f"            g3x_dbuf_shadow_draw_pixel(offset, offs2, y_luma, op, u_val, v_val, {odd_val});\n"
-            "#endif\n"
+    expected_s1_counts = {"1": 3, "0": 1}
+    for odd_val, expected_count in expected_s1_counts.items():
+        s1_pat = re.compile(
+            rf"^([ \t]+)g3x_dbuf_shadow_draw_pixel\(offset, offs2, y_luma, op, u_val, v_val, {odd_val}\);\n",
+            re.MULTILINE,
         )
-        draw_text = draw_text.replace(s1_anchor, s1_repl)
+        matches = s1_pat.findall(draw_text)
+        if len(matches) != expected_count:
+            raise RuntimeError(
+                f"PORT-48 simple shadow_draw_pixel(is_odd={odd_val}) count mismatch in staged core/gui_draw.c: "
+                f"expected {expected_count}, got {len(matches)}"
+            )
+        draw_text, sub_count = s1_pat.subn(
+            "#if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)\n"
+            rf"\1g3x_dbuf_shadow2_draw_pixel(offset, y_luma, op, u_val, v_val, {odd_val}, simple_clr[px & 1]);" "\n"
+            "#else\n"
+            rf"\1g3x_dbuf_shadow_draw_pixel(offset, offs2, y_luma, op, u_val, v_val, {odd_val});" "\n"
+            "#endif\n",
+            draw_text,
+        )
+        if sub_count != expected_count:
+            raise RuntimeError(
+                f"PORT-48 simple shadow_draw_pixel(is_odd={odd_val}) replacement count mismatch: "
+                f"expected {expected_count}, got {sub_count}"
+            )
 
     s2_anchor = (
         "        // Shadow copy update (16-bit opacity word, 32-bit UYVY bitmap word)\n"
@@ -1338,6 +1369,91 @@ def apply_shadow2_staging_patches(stage_dir: Path) -> None:
     draw_text = draw_text.replace(hl_anchor, hl_replacement, 1)
 
     draw_c.write_text(draw_text, encoding="utf-8")
+    verify_shadow2_staged_sources(stage_dir)
+
+
+def verify_shadow2_staged_sources(stage_dir: Path) -> None:
+    """Verify that staged core/gui_draw.c has no active G3X_GUI_SHADOW2=1 calls to g3x_dbuf_shadow_draw_pixel
+    and that the legacy g3x_dbuf_shadow_draw_pixel body is guarded by G3X_SHADOW_MODE_RECT."""
+    draw_c = stage_dir / "core" / "gui_draw.c"
+    if not draw_c.is_file():
+        raise RuntimeError(f"Missing staged file: {draw_c}")
+    text = draw_c.read_text(encoding="utf-8")
+
+    guard_snippet = (
+        "void g3x_dbuf_shadow_draw_pixel(unsigned int offset, unsigned int offs2, unsigned int y, unsigned int o, unsigned int u, unsigned int v, int is_odd)\n"
+        "{\n"
+        "    (void)offs2;\n"
+        "#if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)\n"
+        "    if (g3x_shadow2_mode != G3X_SHADOW_MODE_RECT)\n"
+        "        return;\n"
+        "#endif\n"
+    )
+    if text.count(guard_snippet) != 1:
+        raise RuntimeError(
+            "PORT-48 verification failed: g3x_dbuf_shadow_draw_pixel is missing the G3X_SHADOW_MODE_RECT guard"
+        )
+
+    pp_stack: list[str] = []
+    def_count = 0
+    inactive_call_count = 0
+    shadow2_call_count = 0
+
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if stripped.startswith("#if"):
+            if "G3X_GUI_SHADOW2" in stripped and "!defined(G3X_GUI_SHADOW2)" not in stripped and "!= 1" not in stripped:
+                pp_stack.append("shadow2_then")
+            elif "G3X_GUI_SHADOW2" in stripped:
+                pp_stack.append("shadow2_else")
+            else:
+                pp_stack.append("other")
+        elif stripped.startswith("#elif"):
+            if not pp_stack:
+                raise RuntimeError(f"Unmatched #elif at {draw_c}:{lineno}")
+            if "G3X_GUI_SHADOW2" in stripped and "!defined(G3X_GUI_SHADOW2)" not in stripped and "!= 1" not in stripped:
+                pp_stack[-1] = "shadow2_then"
+            else:
+                pp_stack[-1] = "other"
+        elif stripped.startswith("#else"):
+            if not pp_stack:
+                raise RuntimeError(f"Unmatched #else at {draw_c}:{lineno}")
+            if pp_stack[-1] == "shadow2_then":
+                pp_stack[-1] = "shadow2_else"
+            elif pp_stack[-1] == "shadow2_else":
+                pp_stack[-1] = "shadow2_then"
+        elif stripped.startswith("#endif"):
+            if not pp_stack:
+                raise RuntimeError(f"Unmatched #endif at {draw_c}:{lineno}")
+            pp_stack.pop()
+
+        if "g3x_dbuf_shadow2_draw_pixel(" in stripped and not stripped.startswith("static void g3x_dbuf_shadow2_draw_pixel("):
+            if "shadow2_then" not in pp_stack or "shadow2_else" in pp_stack:
+                raise RuntimeError(
+                    f"PORT-48 verification failed: g3x_dbuf_shadow2_draw_pixel call outside active SHADOW2 branch at {draw_c}:{lineno}"
+                )
+            shadow2_call_count += 1
+
+        if "g3x_dbuf_shadow_draw_pixel(" in stripped:
+            if stripped.startswith("void g3x_dbuf_shadow_draw_pixel("):
+                def_count += 1
+            else:
+                if "shadow2_else" not in pp_stack:
+                    raise RuntimeError(
+                        f"PORT-48 verification failed: active SHADOW2 call to old g3x_dbuf_shadow_draw_pixel at {draw_c}:{lineno}: {stripped}"
+                    )
+                inactive_call_count += 1
+
+    if def_count != 1:
+        raise RuntimeError(f"PORT-48 verification failed: expected 1 definition of g3x_dbuf_shadow_draw_pixel, got {def_count}")
+    if inactive_call_count != 5:
+        raise RuntimeError(
+            f"PORT-48 verification failed: expected 5 #else-guarded g3x_dbuf_shadow_draw_pixel calls, got {inactive_call_count}"
+        )
+    if shadow2_call_count != 5:
+        raise RuntimeError(
+            f"PORT-48 verification failed: expected 5 active g3x_dbuf_shadow2_draw_pixel calls, got {shadow2_call_count}"
+        )
 
 
 def build_port43_dbuf(

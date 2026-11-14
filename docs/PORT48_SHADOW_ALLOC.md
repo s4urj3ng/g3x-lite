@@ -57,13 +57,23 @@ No ROM read of `firmware/dumps/GM1.10C/PRIMARY.BIN` was needed. Every GM1.10C sy
 
 | Symbol / Mechanism | GM1.10C Address / Value | Label | Sibling / Generic `path:line` | GM1.10C Citation (`path:line`) | Role under `G3X_GUI_SHADOW2=1` |
 |---|---|---|---|---|---|
-| `_exmem_alloc` (`exmem_alloc_cached`, pool `0 = EXMEM_RAMDISK`) | `0xFC092537` | `FINSIG` (`VERIFIED`) | `chdk-port/platform/generic/wrappers.c:1003`; `chdk-port/core/memmgmt.c:180-186`; `chdk-port/platform/g7x/sub/100d/boot.c:55`; `chdk-port/platform/g7x/sub/100d/stubs_entry.S:279` (`0xFC095253`) | `reference/finsig_gm110c/stubs_entry.S:100,302`; `chdk-port/platform/g3x/sub/110c/stubs_entry.S:100,302` | Step 1 of ordered fallback chain on `<ALT>` entry: full-screen shadow (`928 * 600 * 3 = 1,670,400` B, tag `exmem`) |
-| `_malloc` (`canon_malloc` / `malloc`) | `0xFC381525` | `FINSIG` (`VERIFIED`) | `chdk-port/platform/generic/wrappers.c:1018-1031`; `chdk-port/core/memmgmt.c:284-297`; `chdk-port/platform/g5x/sub/100c/stubs_entry.S:286` (`0xFC3BF235`) | `reference/finsig_gm110c/stubs_entry.S:308`; `chdk-port/platform/g3x/sub/110c/stubs_entry.S:308` | Step 2 (`880 * 576 * 3 = 1,520,640` B reduced rect at full depth, tag `rect`) and Step 3 (`880 * 576 * 1 = 506,880` B reduced 1 B/px palette index, tag `idx`) primary heap allocator |
-| `_AllocateUncacheableMemory` (`umalloc`) | `0xFC144471` | `FINSIG` (`VERIFIED`) | `chdk-port/platform/generic/wrappers.c:1045-1057`; `chdk-port/platform/g5x/sub/100c/stubs_entry.S:191` (`0xFC16F5F1`) | `reference/finsig_gm110c/stubs_entry.S:197`; `chdk-port/platform/g3x/sub/110c/stubs_entry.S:197` | Step 2 (`1,520,640` B, tag `rect`) and Step 3 (`506,880` B, tag `idx`) uncached heap fallback when `malloc` returns `NULL` |
-| `_GetMemInfo` (`GetMemInfo`, `fw_info[7] = free_block_max_size`) | `0xFC610AB9` | `FINSIG` (`VERIFIED`) | `chdk-port/platform/generic/wrappers.c:1090-1110`; `chdk-port/platform/g5x/sub/100c/stubs_entry.S:219` (`0xFC34A6C9`) | `reference/finsig_gm110c/stubs_entry.S:239`; `chdk-port/platform/g3x/sub/110c/stubs_entry.S:239` | Queries DryOS system heap `free_block_max_size` (`fw_info[7]`) displayed on the `<ALT>` diagnostic line (or `'-'` if `<= 0` / none) |
-| `active_bitmap_buffer` | `0x0000D2A4` | `FINSIG` (`VERIFIED`) | `chdk-port/platform/g5x/lib.c:206`; `chdk-port/platform/g5x/platform_camera.h:85`; `chdk-port/platform/g5x/sub/100c/stubs_entry.S:180` (`0x0000A034`) | `reference/finsig_gm110c/stubs_entry.S:186`; `chdk-port/platform/g3x/sub/110c/stubs_entry.S:186` | `<ALT>`-scoped `check_gui_needs_redraw()` buffer-flip detector (`g3x_diag_check_suppress`) |
-| `bitmap_buffer` | `0x0000D2A8` | `FINSIG` (`VERIFIED`) | `chdk-port/platform/g5x/lib.c:195`; `chdk-port/platform/g5x/sub/100c/stubs_entry.S:182` (`0x0000A038`) | `reference/finsig_gm110c/stubs_entry.S:188`; `chdk-port/platform/g3x/sub/110c/stubs_entry.S:188` | Dual 16-bpp UYVY overlay buffers (`928 * 600 * 2` B each) restored by `g3x_shadow2_blit_restore` |
+| `_exmem_alloc` (`exmem_alloc_cached`, pool `0 = EXMEM_RAMDISK`) | `0xFC092537` | `FINSIG` (`VERIFIED`) | `chdk-port/platform/generic/wrappers.c:1003`; `chdk-port/core/memmgmt.c:180-186`; `chdk-port/platform/g7x/sub/100d/boot.c:55`; `chdk-port/platform/g7x/sub/100d/stubs_entry.S:279` (`0xFC095253`) | `reference/finsig_gm110c/stubs_entry.S:132,298`; `chdk-port/platform/g3x/sub/110c/stubs_entry.S:132,302` | Step 1 of ordered fallback chain on `<ALT>` entry: full-screen shadow (`928 * 600 * 3 = 1,670,400` B, tag `exmem`) |
+| `_malloc` (`canon_malloc` / `malloc`) | `0xFC381525` | `FINSIG` (`VERIFIED`) | `chdk-port/platform/generic/wrappers.c:1018-1031`; `chdk-port/core/memmgmt.c:284-297`; `chdk-port/platform/g5x/sub/100c/stubs_entry.S:286` (`0xFC3BF235`) | `reference/finsig_gm110c/stubs_entry.S:308`; `chdk-port/platform/g3x/sub/110c/stubs_entry.S:312` | Step 2 (`880 * 576 * 3 = 1,520,640` B reduced rect at full depth, tag `rect`) and Step 3 (`880 * 576 * 1 = 506,880` B reduced 1 B/px palette index, tag `idx`) primary heap allocator |
+| `_AllocateUncacheableMemory` (`umalloc`) | `0xFC144471` | `FINSIG` (`VERIFIED`) | `chdk-port/platform/generic/wrappers.c:1045-1057`; `chdk-port/platform/g5x/sub/100c/stubs_entry.S:191` (`0xFC16F5F1`) | `reference/finsig_gm110c/stubs_entry.S:197`; `chdk-port/platform/g3x/sub/110c/stubs_entry.S:201` | Step 2 (`1,520,640` B, tag `rect`) and Step 3 (`506,880` B, tag `idx`) uncached heap fallback when `malloc` returns `NULL` |
+| `_GetMemInfo` (`GetMemInfo`, `fw_info[7] = free_block_max_size`) | `0xFC610AB9` | `FINSIG` (`VERIFIED`) | `chdk-port/platform/generic/wrappers.c:1090-1110`; `chdk-port/platform/g5x/sub/100c/stubs_entry.S:219` (`0xFC34A6C9`) | `reference/finsig_gm110c/stubs_entry.S:235`; `chdk-port/platform/g3x/sub/110c/stubs_entry.S:239` | Queries DryOS system heap `free_block_max_size` (`fw_info[7]`) once on `<ALT>` entry (and after each allocation attempt), cached and displayed in KiB (`<kb>K` or `'-'` if `<= 0` / none) |
+| `active_bitmap_buffer` | `0x0000D2A4` | `FINSIG` (`VERIFIED`) | `chdk-port/platform/g5x/lib.c:206`; `chdk-port/platform/g5x/platform_camera.h:85`; `chdk-port/platform/g5x/sub/100c/stubs_entry.S:180` (`0x0000A034`) | `reference/finsig_gm110c/stubs_entry.S:186`; `chdk-port/platform/g3x/sub/110c/stubs_entry.S:190` | `<ALT>`-scoped `check_gui_needs_redraw()` buffer-flip detector (`g3x_diag_check_suppress`) |
+| `bitmap_buffer` | `0x0000D2A8` | `FINSIG` (`VERIFIED`) | `chdk-port/platform/g5x/lib.c:195`; `chdk-port/platform/g5x/sub/100c/stubs_entry.S:182` (`0x0000A038`) | `reference/finsig_gm110c/stubs_entry.S:188`; `chdk-port/platform/g3x/sub/110c/stubs_entry.S:192` | Dual 16-bpp UYVY overlay buffers (`928 * 600 * 2` B each) restored by `g3x_shadow2_blit_restore` |
 | `opacity_buffer` | `0x5FC40000` / `0x5FB80000` | `HISTORICAL_CHDK` (`VERIFIED` in ROM @ `0xFC175B8C`) | `chdk-port/platform/g5x/lib.c:127`; `chdk-port/platform/g7x/lib.c:167` | `full_build/g3x/lib.c:91`; `docs/PORT35_GUI_ADDRESSES.md:27` | Dual 8-bpp alpha/opacity buffers (`928 * 600` B each) restored by `g3x_shadow2_blit_restore` |
+
+### Diagnostic Line Format & Enum Notes (`G3X_GUI_SHADOW2=1`)
+
+- **Final diagnostic line format**:
+  `H:<0/1>/<hits> S:<OK/<bytes>/<exmem|heap|rect|idx>|NULL> <free_kb>K|- L:<loss> R:<restore> F:<full>`
+  - `GetMemInfo` (`_GetMemInfo`, `0xFC610AB9`) is called once on `<ALT>` entry (and immediately after each shadow allocation attempt), cached in `g3x_shadow2_largest_free`, and rendered in KiB with a `'K'` suffix (`((unsigned int)free_block_max_size) >> 10`, clamped at `99999K`, e.g., `600K` for `614,400` B, or `'-'` when `<= 0` / unavailable). It is not called on every draw cycle.
+  - Because `free_tok` is at most 6 characters (`99999K`), even the worst-case line (`H:1/9999 S:OK/1670400/exmem 99999K L:9999 R:9999 F:9999`) is `55` characters (`55 * 16 = 880` px `<= G3X_MENU_WIDTH`), so `F:%04u` can never be truncated.
+- **Dropped `M:` field and `heap` tag**:
+  - Compared with PORT-47 (`G3X_GUI_DIAG=1` without `G3X_GUI_SHADOW2=1`), the `M:<mode>` field is replaced by the `GetMemInfo` largest-free-block token (`<kb>K` or `'-'`) on the `G3X_GUI_SHADOW2=1` diagnostic line so that `H:`, `S:`, `<free>`, `L:`, `R:`, and `F:` all fit on the 55-character row.
+  - In `enum g3x_shadow_mode` (`chdk-port/platform/g3x/gui_diag.h`), `G3X_SHADOW_MODE_HEAP = 2` (tag `"heap"`) is defined to preserve the four-tag specification `<exmem|heap|rect|idx>` and for host-test formatting coverage, while the runtime 3-step fallback chain assigns `G3X_SHADOW_MODE_EXMEM` (`"exmem"`, step 1), `G3X_SHADOW_MODE_RECT` (`"rect"`, step 2), or `G3X_SHADOW_MODE_IDX` (`"idx"`, step 3).
 
 ---
 
@@ -72,39 +82,42 @@ No ROM read of `firmware/dumps/GM1.10C/PRIMARY.BIN` was needed. Every GM1.10C sy
 - **Build command**: `python3 -B scripts/build_port43_dbuf.py --shadow2`
 - **Manifest**: `manifests/port48_shadow_alloc_manifest.json`
 - **Build flags**: `G3X_FULL_BUILD=1`, `G3X_DISABLE_CARD_WRITES=1`, `CAM_SUPPORT_BITMAP_RES_CHANGE=1`, `OPT_DISABLE_FILE_WRITES=1`, `G3X_GUI5=1`, `G3X_GUI_FIX=1`, `G3X_GUI_DBUF=1`, `G3X_GUI_NOOVERDRAW=1`, `G3X_KBD_CHECK=1`, `G3X_GUI_DIAG=1`, `G3X_GUI_SHADOW2=1`
-- **Candidate `DISKBOOT.BIN` SHA-256**: `436841c12ab1c7c77d055abba7dc89869d9d21a891666d386fb044e275db57f5` (`129,329` bytes)
-- **Core `_end`**: `0x00369ec0` (compared with PORT-47 `0x003699b0`: delta `+0x510 = +1,296` bytes / `+1.27 KiB`, well within the `<= 8 KiB` budget; zero static large buffers added).
+- **Candidate `DISKBOOT.BIN` SHA-256**: `8eac35346fdc1f472d6e8d58625ee068b716530410bc47dafdf52c45eb6347cb` (`129,361` bytes)
+- **Core `_end`**: `0x00369ee0` (compared with PORT-47 `0x003699b0`: delta `+0x530 = +1,328` bytes / `+1.30 KiB`, well within the `<= 8 KiB` budget; zero static large buffers added).
 
 ### SHA-256 Invariance of Default and Earlier Builds Without `G3X_GUI_SHADOW2=1`
 
 | Build Variant | Flags / Script | `DISKBOOT.BIN` Size (B) | Expected SHA-256 | Rebuilt SHA-256 | Status |
 |---|---|---:|---|---|---|
-| Default (`candidate_port2a`) | `tools/build_candidate_port2a.py` (no opt-in flags) | `24,961` | `3b2a0d5fe786933bb218f99de7acd5bb53276459f88e7cbeb2fa0e8085494d72` | `3b2a0d5fe786933bb218f99de7acd5bb53276459f88e7cbeb2fa0e8085494d72` | Byte-identical |
+| Default (`chdk-port/bin/DISKBOOT.BIN`) | `tools/build_candidate_port2a.py` (no opt-in flags) | `116,073` | `3b2a0d5fe786933bb218f99de7acd5bb53276459f88e7cbeb2fa0e8085494d72` | `3b2a0d5fe786933bb218f99de7acd5bb53276459f88e7cbeb2fa0e8085494d72` | Byte-identical |
+| Default (`candidate_port2a/DISKBOOT.BIN`) | `tools/build_candidate_port2a.py` (no opt-in flags) | `118,001` | `9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136` | `9468257364d753d9880791bfce0c0792dd5d0fee29b832566a5eca622a906136` | Byte-identical |
 | PORT-43 (`G3X_GUI_DBUF=1`) | `scripts/build_port43_dbuf.py` | `126,329` | `8d5509e597a598e8bb023adae46d4caa2c7ee1e2b763e4ff292f0aef21f9b140` | `8d5509e597a598e8bb023adae46d4caa2c7ee1e2b763e4ff292f0aef21f9b140` | Byte-identical |
-| PORT-44 (`G3X_GUI_DBUF=1` heap) | `scripts/build_port44_dbuf_heap.py` | `126,769` | `2017b13c3330cd30edf9a8923d58a2fb12f6a4d1f77c9f51923bc60f79247382` | `2017b13c3330cd30edf9a8923d58a2fb12f6a4d1f77c9f51923bc60f79247382` | Byte-identical |
-| PORT-45 (`G3X_GUI_NOOVERDRAW=1`) | `scripts/build_port43_dbuf.py --no-overdraw` | `127,217` | `f22a406055317ce03ebaa7840207c92a49bf9811d8a328fa0676c14a4b3d4a2b` | `f22a406055317ce03ebaa7840207c92a49bf9811d8a328fa0676c14a4b3d4a2b` | Byte-identical |
-| PORT-46 (`G3X_KBD_CHECK=1`) | `scripts/build_port43_dbuf.py --no-overdraw --kbd-check` | `127,697` | `02bc19468b44e0632afdf91e6e60c367c6550a8da4d734b19655b306c6e0425f` | `02bc19468b44e0632afdf91e6e60c367c6550a8da4d734b19655b306c6e0425f` | Byte-identical |
+| PORT-44 (`G3X_GUI_DBUF=1` heap) | `tools/build_port44_dbuf_heap.py` | `126,769` | `2017b13c3330cd30edf9a8923d58a2fb12f6a4d1f77c9f51923bc60f79247382` | `2017b13c3330cd30edf9a8923d58a2fb12f6a4d1f77c9f51923bc60f79247382` | Byte-identical |
+| PORT-45 (`G3X_GUI_NOOVERDRAW=1`) | `scripts/build_port45_no_overdraw.py` | `126,977` | `2be1877e495a0d2aee07851eee6e0294eb2d62ba9db2707b929fa2cf7927a684` | `2be1877e495a0d2aee07851eee6e0294eb2d62ba9db2707b929fa2cf7927a684` | Byte-identical |
+| PORT-46 (`G3X_KBD_CHECK=1`, `dbuf`) | `scripts/build_port43_dbuf.py --kbd-check` | `127,233` | `890bc9ddc9152e49a46a95947ca1852e89f0eae62fa128391e5dea1c5f3d43f0` | `890bc9ddc9152e49a46a95947ca1852e89f0eae62fa128391e5dea1c5f3d43f0` | Byte-identical |
+| PORT-46 (`G3X_KBD_CHECK=1`, `no-overdraw`) | `scripts/build_port43_dbuf.py --no-overdraw --kbd-check` | `127,449` | `7c91eaa622ff0ca44b8d60219da1418ca34dc4a837a6112c39b6bbd31e285798` | `7c91eaa622ff0ca44b8d60219da1418ca34dc4a837a6112c39b6bbd31e285798` | Byte-identical |
 | PORT-47 (`G3X_GUI_DIAG=1`) | `scripts/build_port43_dbuf.py --no-overdraw --kbd-check --gui-diag` | `128,057` | `9b6d9ad95b2512e487f9d7d6ae694ab9fddbaee731339570240f77bbcfc7e5f7` | `9b6d9ad95b2512e487f9d7d6ae694ab9fddbaee731339570240f77bbcfc7e5f7` | Byte-identical |
-| **PORT-48 (`G3X_GUI_SHADOW2=1`)** | `scripts/build_port43_dbuf.py --shadow2` | `129,329` | `436841c12ab1c7c77d055abba7dc89869d9d21a891666d386fb044e275db57f5` | `436841c12ab1c7c77d055abba7dc89869d9d21a891666d386fb044e275db57f5` | Reproducible |
+| **PORT-48 (`G3X_GUI_SHADOW2=1`)** | `scripts/build_port43_dbuf.py --shadow2` | `129,361` | `8eac35346fdc1f472d6e8d58625ee068b716530410bc47dafdf52c45eb6347cb` | `8eac35346fdc1f472d6e8d58625ee068b716530410bc47dafdf52c45eb6347cb` | Reproducible |
 
 ---
 
 ## 9. Owner Trial Plan (`PORT-48` / `G3X_GUI_SHADOW2=1`)
 
-- **Candidate `DISKBOOT.BIN` SHA-256**: `436841c12ab1c7c77d055abba7dc89869d9d21a891666d386fb044e275db57f5` (`129,329` bytes, `manifests/port48_shadow_alloc_manifest.json`)
+- **Candidate `DISKBOOT.BIN` SHA-256**: `8eac35346fdc1f472d6e8d58625ee068b716530410bc47dafdf52c45eb6347cb` (`129,361` bytes, `manifests/port48_shadow_alloc_manifest.json`)
 - **Rollback `DISKBOOT.BIN` (PORT-47 `9b6d9ad9`) SHA-256**: `9b6d9ad95b2512e487f9d7d6ae694ab9fddbaee731339570240f77bbcfc7e5f7` (`128,057` bytes, `manifests/port47_gui_diag_manifest.json`)
 
 ### Trial Steps
-- [ ] **1. Stage SD card and verify hash**: Copy `DISKBOOT.BIN` (`436841c12ab1c7c77d055abba7dc89869d9d21a891666d386fb044e275db57f5`) and `CHDK/` from `out/port48-shadow-alloc/` onto the locked bootable SD card.
+- [ ] **1. Stage SD card and verify hash**: Copy `DISKBOOT.BIN` (`8eac35346fdc1f472d6e8d58625ee068b716530410bc47dafdf52c45eb6347cb`) and `CHDK/` from `out/port48-shadow-alloc/` onto the locked bootable SD card.
 - [ ] **2. Boot — held press first, then short press**:
-  - Test a **held press** of `PLAY` or `POWER` first and observe whether the camera boots into CHDK (expected: no boot on held press per PORT-44..47 behavior).
+  - Test a **held press** of `PLAY` or `POWER` first and record whether the camera boots into CHDK (in PORT-47 `docs/PORT47_TRIAL.md:19-20`, held `PLAY` booted cleanly into Playback mode and transitioned via shutter half-press into Shooting mode).
   - Test a **short press** of `PLAY` or `POWER` and verify clean boot into live view / playback with nothing allocated at boot.
 - [ ] **3. Enter `<ALT>` and read diagnostic line**:
-  - Press the `<ALT>` button (`SHORTCUT` / `VIDEO`) to enter `<ALT>` mode (which triggers the lazy ordered shadow allocation chain).
-  - Read the second bottom diagnostic line (`H:<0/1>/<hits> S:<status> <largest_free> L:<loss> R:<restore> F:<full>`):
+  - Press the `<ALT>` button (`SHORTCUT` / `VIDEO`) to enter `<ALT>` mode (which triggers the lazy ordered shadow allocation chain and caches `GetMemInfo`).
+  - Read the second bottom diagnostic line (`H:<0/1>/<hits> S:<status> <free_kb>K|- L:<loss> R:<restore> F:<full>`):
     - Record `S:`: expected `S:OK/1670400/exmem` (Step 1 `exmem_alloc`), `S:OK/1520640/rect` (Step 2 full-depth rect), `S:OK/506880/idx` (Step 3 1 B/px palette-index rect), or `S:NULL`.
-    - Record the **largest-free-block value** from `GetMemInfo` (`free_block_max_size` in bytes, e.g. `~600000`, or `'-'` if none).
+    - Record the **largest-free-block value** from `GetMemInfo` (`free_block_max_size` in KiB with a `'K'` suffix, e.g. `~600K`, or `'-'` if none).
     - Record the initial counters `H:1/xxxx`, `L:xxxx`, `R:xxxx`, `F:xxxx` at rest.
+    - If `S:OK/1670400/exmem` is reported, watch for any camera instability during shooting, mode switches, or playback (`EXMEM_RAMDISK` pool `0` is allocated at runtime on `<ALT>` entry and never freed).
 - [ ] **4. Pan camera or run AF (half-press shutter)**:
   - While in `<ALT>` mode (and in the CHDK menu via `MENU`), **pan the camera** across a changing scene or **run AF** (half-press `SHOOT_HALF`).
   - Check whether:
