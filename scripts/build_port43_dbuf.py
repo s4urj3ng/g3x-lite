@@ -31,6 +31,7 @@ CROSS_COMPILE = str(TOOLCHAIN_BIN / "arm-none-eabi-")
 
 OUT_DIR = REPO_ROOT / "out" / "port43-dbuf"
 STAGE_DIR = OUT_DIR / "stage_chdk"
+SEED_STAGE_DIR = REPO_ROOT / "out" / ".port43_seed_stage"
 
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 from build_port41_full import (  # type: ignore
@@ -40,6 +41,89 @@ from build_port41_full import (  # type: ignore
     overlay_tree,
     sha256_file,
 )
+
+
+def _clean_platform_and_core_artifacts(stage_dir: Path) -> None:
+    """Clean stale objects/archives/binaries in core, platform, loader, and bin while preserving prebuilt tools/lib/modules/CHDK."""
+    subprocess.run(["chmod", "-R", "u+w", str(stage_dir)], check=True)
+    for sub in ["core", "platform", "loader", "bin"]:
+        target = stage_dir / sub
+        if not target.is_dir():
+            continue
+        for o2 in target.glob("**/.o2"):
+            if o2.is_dir():
+                shutil.rmtree(o2, ignore_errors=True)
+        for ext in ("*.o", "*.a", "*.d", "*.flt", "*.dump", "*.elf", "*.bin"):
+            for f in target.glob(f"**/{ext}"):
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+
+
+def _ensure_dbuf_seed_stage() -> Path:
+    """Build or return a cached staging seed with prebuilt tools/, lib/, modules/, and CHDK/."""
+    sentinel = SEED_STAGE_DIR / ".seed_ready"
+    if (
+        sentinel.is_file()
+        and (SEED_STAGE_DIR / "tools" / "dancingbits").is_file()
+        and (SEED_STAGE_DIR / "lib" / "core" / ".o2" / "libcore.a").is_file()
+        and len(list((SEED_STAGE_DIR / "modules" / ".o2").glob("*.flt"))) == 34
+    ):
+        return SEED_STAGE_DIR
+
+    if SEED_STAGE_DIR.exists():
+        shutil.rmtree(SEED_STAGE_DIR)
+    SEED_STAGE_DIR.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(CHDK_PORT, SEED_STAGE_DIR, symlinks=True)
+    clean_staging_artifacts(SEED_STAGE_DIR)
+
+    platform_target = SEED_STAGE_DIR / "platform" / "g3x"
+    overlay_tree(FULL_BUILD_SRC, platform_target, ignore={"loader"})
+    loader_src = FULL_BUILD_SRC / "loader"
+    if loader_src.is_dir():
+        overlay_tree(loader_src, SEED_STAGE_DIR / "loader" / "g3x")
+    dbuf_menu = CHDK_PORT / "platform" / "g3x" / "gui_menu.c"
+    if dbuf_menu.is_file():
+        shutil.copy2(dbuf_menu, platform_target / "gui_menu.c")
+    for proto_name in ["boot_prototype.c", "stubs_prototype.S"]:
+        proto_file = platform_target / "sub" / "110c" / proto_name
+        if proto_file.exists():
+            proto_file.unlink()
+
+    apply_gui_fix_staging_patches(SEED_STAGE_DIR, legacy_dbuf_snapshot=False)
+    apply_dbuf_staging_patches(SEED_STAGE_DIR)
+
+    cmd = [
+        "make",
+        "-C",
+        str(SEED_STAGE_DIR),
+        "PLATFORM=g3x",
+        "PLATFORMSUB=110c",
+        "G3X_FULL_BUILD=1",
+        f"CROSS_COMPILE={CROSS_COMPILE}",
+        "OPT_CAPSTONE_TOOLS=0",
+        "G3X_GUI_FIX=1",
+        "G3X_GUI_DBUF=1",
+        "fir",
+    ]
+    env = os.environ.copy()
+    wrapper_script = REPO_ROOT / "scripts" / "gcc_deterministic_wrapper.sh"
+    if wrapper_script.is_file() and os.access(wrapper_script, os.X_OK):
+        env["MAKEFLAGS"] = f"CC={wrapper_script}"
+    env["G3X_GUI_FIX"] = "1"
+    env["G3X_GUI_DBUF"] = "1"
+    subprocess.run(cmd, cwd=str(SEED_STAGE_DIR), env=env, check=True, stdout=subprocess.DEVNULL)
+
+    for rel in ["core", "include", "platform/g3x", "loader/g3x"]:
+        dst = SEED_STAGE_DIR / rel
+        if dst.exists():
+            shutil.rmtree(dst)
+        shutil.copytree(CHDK_PORT / rel, dst, symlinks=True)
+    _clean_platform_and_core_artifacts(SEED_STAGE_DIR)
+
+    sentinel.write_text("ok\n", encoding="utf-8")
+    return SEED_STAGE_DIR
 
 
 def apply_dbuf_staging_patches(stage_dir: Path) -> None:
@@ -918,10 +1002,11 @@ def build_port43_dbuf(
         shutil.rmtree(effective_stage_dir)
 
     if not effective_stage_dir.exists():
+        seed_dir = _ensure_dbuf_seed_stage()
         print(f"Staging CHDK tree to {effective_stage_dir}...")
-        shutil.copytree(CHDK_PORT, effective_stage_dir, symlinks=True)
+        shutil.copytree(seed_dir, effective_stage_dir, symlinks=True)
 
-    clean_staging_artifacts(effective_stage_dir)
+    _clean_platform_and_core_artifacts(effective_stage_dir)
 
     # 1. Overlay full_build/g3x onto stage_chdk/platform/g3x/ (excluding loader)
     platform_target = effective_stage_dir / "platform" / "g3x"
@@ -1027,7 +1112,7 @@ def build_port43_dbuf(
         cmd.append("G3X_GUI_DIAG=1")
     if full_hooks:
         cmd.append("FULL_HOOKS=1")
-    cmd.append("fir")
+    cmd.extend(["SKIP_TOOLS=1", "SKIP_MODULES=1", "SKIP_CHDK=1", "fir"])
 
     print(f"Running build: {' '.join(cmd)}")
     env = os.environ.copy()
