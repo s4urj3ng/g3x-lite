@@ -55,3 +55,5 @@ Scope: Phase 0 READ-ONLY. Hardware remains **STRICT NO-GO**.
 1. **Retain keymap and masks**: Keep current `keymap[]` and `KEYS_MASK0=0x000533F9` without modifications; all menu, d-pad, SET, and ALT keys are covered while Power pass-through is preserved.
 2. **Link DBUF menu and kbd task**: Build `gui_menu.thm.o` from `platform/g3x/gui_menu.c` and maintain the `mykbd_task` / `task_PhySw` hook so entering ALT and pressing MENU transitions into `menuGuiHandler` with double-buffered rendering.
 3. **Unwrap file I/O for `G3X_GUI_MENU=1`**: Under `G3X_GUI_MENU=1`, omit `-Wl,--wrap=conf_save` and file write wrappers in `sub/110c/Makefile` and guard them in `platform/g3x/lib.c` so `conf_save()` and `conf_restore()` execute via native FINSIG FatFs stubs. Default builds without `G3X_GUI_MENU` retain all wrappers and remain 100% byte-identical to base.
+
+The source of truth for the `gui.c`, `conf.c`, `lib.c`, and `Makefile` changes is `scripts/build_port43_dbuf.py --gui-menu`.

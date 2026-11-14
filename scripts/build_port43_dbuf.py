@@ -2211,6 +2211,34 @@ def build_port43_dbuf(
         artifacts_dict["core_end"] = core_end_hex
         artifacts_dict["_end"] = core_end_hex
 
+    if gui_menu:
+        manifest_data["card_writes"] = "enabled"
+        manifest_data["card_writes_note"] = (
+            "G3X_GUI_MENU=1 overrides G3X_DISABLE_CARD_WRITES=1 and OPT_DISABLE_FILE_WRITES=1 "
+            "(no C code reads them; all linker wrappers are removed and real file I/O is enabled)"
+        )
+        build_dict = manifest_data["build"]
+        assert isinstance(build_dict, dict)
+        build_dict["card_writes"] = "enabled"
+        build_dict["card_writes_note"] = (
+            "G3X_GUI_MENU=1 overrides G3X_DISABLE_CARD_WRITES=1 and OPT_DISABLE_FILE_WRITES=1 "
+            "(no C code reads them; all linker wrappers are removed and real file I/O is enabled)"
+        )
+        manifest_data["removed_wrappers"] = [
+            "write",
+            "fwrite",
+            "open",
+            "fopen",
+            "creat",
+            "mkdir",
+            "MakeDirectory_Fut",
+            "remove",
+            "DeleteFile_Fut",
+            "DeleteDirectory_Fut",
+            "rename",
+            "RenameFile_Fut",
+        ]
+
     manifest_path = effective_out_dir / manifest_name
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest_data, f, indent=2)

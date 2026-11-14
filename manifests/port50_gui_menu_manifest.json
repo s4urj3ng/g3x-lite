@@ -18,7 +18,9 @@
       "G3X_GUI_MENU=1"
     ],
     "toolchain": "gcc-arm-none-eabi-5_4-2016q3",
-    "deterministic_wrapper": "scripts/gcc_deterministic_wrapper.sh"
+    "deterministic_wrapper": "scripts/gcc_deterministic_wrapper.sh",
+    "card_writes": "enabled",
+    "card_writes_note": "G3X_GUI_MENU=1 overrides G3X_DISABLE_CARD_WRITES=1 and OPT_DISABLE_FILE_WRITES=1 (no C code reads them; all linker wrappers are removed and real file I/O is enabled)"
   },
   "artifacts": {
     "DISKBOOT.BIN": {
@@ -1140,5 +1142,21 @@
     "_end": "0x0036a6b0"
   },
   "core_end": "0x0036a6b0",
-  "_end": "0x0036a6b0"
+  "_end": "0x0036a6b0",
+  "card_writes": "enabled",
+  "card_writes_note": "G3X_GUI_MENU=1 overrides G3X_DISABLE_CARD_WRITES=1 and OPT_DISABLE_FILE_WRITES=1 (no C code reads them; all linker wrappers are removed and real file I/O is enabled)",
+  "removed_wrappers": [
+    "write",
+    "fwrite",
+    "open",
+    "fopen",
+    "creat",
+    "mkdir",
+    "MakeDirectory_Fut",
+    "remove",
+    "DeleteFile_Fut",
+    "DeleteDirectory_Fut",
+    "rename",
+    "RenameFile_Fut"
+  ]
 }

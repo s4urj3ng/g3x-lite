@@ -37,6 +37,8 @@ BASE_CANONICAL_DISKBOOT_SHA256 = "3b2a0d5fe786933bb218f99de7acd5bb53276459f88e7c
 BASE_CANONICAL_DISKBOOT_SIZE = 116073
 BASE_PORT41_DEFAULT_SHA256 = "24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9"
 BASE_PORT41_DEFAULT_SIZE = 124097
+BASE_PORT49_DEFAULT_SHA256 = BASE_PORT41_DEFAULT_SHA256
+BASE_PORT49_DEFAULT_SIZE = BASE_PORT41_DEFAULT_SIZE
 BASE_PORT49_CANDIDATE_SHA256 = "e31e97a1b4e700aaff36e1da80ffff8e335fd162d29be2e6b3400afe8aa5a2a1"
 BASE_PORT50_CANDIDATE_SHA256 = "7fa091329c0d3d43e531004bcd135ab4f452e2a574aad4949888445720d6fca8"
 BASE_PORT50_CANDIDATE_SIZE = 131321
@@ -292,6 +294,23 @@ class TestPort50BuildAndArtifacts(unittest.TestCase):
         self.assertEqual(pinned["build"]["flags"], expected_flags)
         self.assertEqual(pinned["core_end"], pinned["artifacts"]["core_end"])
         self.assertRegex(pinned["core_end"], r"^0x003[0-9a-f]{5}$")
+        self.assertEqual(pinned["card_writes"], "enabled")
+        self.assertIn("G3X_GUI_MENU=1 overrides G3X_DISABLE_CARD_WRITES=1", pinned["card_writes_note"])
+        expected_removed_wrappers = [
+            "write",
+            "fwrite",
+            "open",
+            "fopen",
+            "creat",
+            "mkdir",
+            "MakeDirectory_Fut",
+            "remove",
+            "DeleteFile_Fut",
+            "DeleteDirectory_Fut",
+            "rename",
+            "RenameFile_Fut",
+        ]
+        self.assertEqual(pinned["removed_wrappers"], expected_removed_wrappers)
 
         snap = distribution_snapshot(self.build_p50)
         expected = dict(pinned["artifacts"]["chdk_files"])
@@ -343,22 +362,26 @@ class TestPort50BuildAndArtifacts(unittest.TestCase):
         self.assertRegex(dump_out, r"<close>:[\s\S]*?bl\s+[0-9a-f]+\s+<_Close>")
         self.assertRegex(dump_out, r"<_Close>:[\s\S]*?\.word\s+0xfc37b439")
 
-    def test_default_build_is_byte_identical_to_port41_default(self):
+    def test_default_build_is_byte_identical_to_port49_default(self):
         canonical_diskboot = ROOT / "chdk-port/bin/DISKBOOT.BIN"
         self.assertEqual(canonical_diskboot.stat().st_size, BASE_CANONICAL_DISKBOOT_SIZE)
         self.assertEqual(sha256_file(canonical_diskboot), BASE_CANONICAL_DISKBOOT_SHA256)
 
         default_diskboot = self.build_default / "DISKBOOT.BIN"
-        self.assertEqual(default_diskboot.stat().st_size, BASE_PORT41_DEFAULT_SIZE)
-        self.assertEqual(sha256_file(default_diskboot), BASE_PORT41_DEFAULT_SHA256)
+        self.assertEqual(default_diskboot.stat().st_size, BASE_PORT49_DEFAULT_SIZE)
+        self.assertEqual(sha256_file(default_diskboot), BASE_PORT49_DEFAULT_SHA256)
 
+        # The PORT-49 default build output is byte-identical to PORT-41 default
         port41_pinned = json.loads(MANIFEST_P41.read_text(encoding="utf-8"))
         default_snap = distribution_snapshot(self.build_default)
-        expected_p41 = dict(port41_pinned["artifacts"]["chdk_files"])
-        expected_p41["DISKBOOT.BIN"] = {
+        expected_p49_default = dict(port41_pinned["artifacts"]["chdk_files"])
+        expected_p49_default["DISKBOOT.BIN"] = {
             k: port41_pinned["artifacts"]["DISKBOOT.BIN"][k] for k in ("size", "sha256")
         }
-        self.assertEqual(default_snap, expected_p41)
+        self.assertEqual(default_snap, expected_p49_default)
+
+    def test_default_build_is_byte_identical_to_port41_default(self):
+        self.test_default_build_is_byte_identical_to_port49_default()
 
     def test_trial_plan_document_structure(self):
         self.assertTrue(DOC_TRIAL.is_file(), f"Missing {DOC_TRIAL}")
@@ -371,6 +394,27 @@ class TestPort50BuildAndArtifacts(unittest.TestCase):
         self.assertIn("Battery-pull recovery", text)
         self.assertIn("Rollback to PORT-49", text)
         self.assertIn("7fa091329c0d3d43e531004bcd135ab4f452e2a574aad4949888445720d6fca8", text)
+
+        # Feedback Item 1: Card writes row or section, writes ARE enabled, wrappers listed, files named, card recommendation
+        self.assertIn("Card Writes", text)
+        self.assertIn("are enabled", text.lower())
+        for w in [
+            "write", "fwrite", "open", "fopen", "creat", "mkdir",
+            "MakeDirectory_Fut", "remove", "DeleteFile_Fut",
+            "DeleteDirectory_Fut", "rename", "RenameFile_Fut",
+        ]:
+            self.assertIn(f"`{w}`", text)
+        self.assertIn("A/CHDK/", text)
+        self.assertIn("spare", text.lower())
+
+        # Feedback Item 2: Trial (B) fallback
+        self.assertIn("Fallback", text)
+        self.assertIn("explicit save option", text)
+
+        # Feedback Item 4: Optional hints
+        self.assertIn("scripts/build_port43_dbuf.py --gui-menu", text)
+        self.assertIn("does not use zoom", text.lower())
+        self.assertIn("height - 3 * FONT_HEIGHT", text)
 
 
 if __name__ == "__main__":
