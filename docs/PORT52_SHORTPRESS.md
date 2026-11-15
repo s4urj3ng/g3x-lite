@@ -1,5 +1,11 @@
 # PORT-52: Short-Press Boot Mechanism Table (Sibling Adaptation)
 
+## Status: CLOSED (redundant)
+
+The owner confirmed that short-press boot already works on PORT-44 and later candidates (PORT-44+). No G3X_SHORTPRESS flag, candidate, manifest or trial plan will be produced, and no further short-press work is planned. The existing research table stays as reference only.
+
+---
+
 ## Implementation Status in Existing G3X Code
 
 > [!IMPORTANT]
