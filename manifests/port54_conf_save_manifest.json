@@ -4,8 +4,10 @@
     "platform_sub": "110c",
     "flags": [
       "G3X_FULL_BUILD=1",
-      "G3X_CONF_SAVE=1",
+      "G3X_DISABLE_CARD_WRITES=1",
       "CAM_SUPPORT_BITMAP_RES_CHANGE=1",
+      "OPT_DISABLE_FILE_WRITES=1",
+      "G3X_CONF_SAVE=1",
       "G3X_GUI5=1",
       "G3X_GUI_FIX=1",
       "G3X_GUI_DBUF=1",
@@ -26,8 +28,8 @@
   "artifacts": {
     "DISKBOOT.BIN": {
       "path": "DISKBOOT.BIN",
-      "size": 132401,
-      "sha256": "220a9d7af1037638443c5f380932834c3760dce3bd997cdb1ff37b1eea64c783"
+      "size": 133153,
+      "sha256": "c5ef5bcf4962459d45d92b2f0dcf1f8f0b7db169a63f9bff6efd438e116d237f"
     },
     "modules_count": 34,
     "modules": {
@@ -1139,11 +1141,11 @@
         "sha256": "3ffbe9b6390041f1ed9da96b6b0d43e1c43fb2ca2cb31d92d8970174d985a2f3"
       }
     },
-    "core_end": "0x0036ab00",
-    "_end": "0x0036ab00"
+    "core_end": "0x0036adf0",
+    "_end": "0x0036adf0"
   },
-  "core_end": "0x0036ab00",
-  "_end": "0x0036ab00",
+  "core_end": "0x0036adf0",
+  "_end": "0x0036adf0",
   "card_writes": "sandboxed_conf_save",
   "card_writes_note": "Config save enabled under G3X_CONF_SAVE=1 with central A/CHDK/ path check and spytask_can_start gate; blocking write wrappers remain active for non-conf writes (fwrite, creat, mkdir, remove, rename); raw/jpeg hooks, scripts and logging writes remain disabled",
   "removed_wrappers": [

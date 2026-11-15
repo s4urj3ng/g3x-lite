@@ -91,7 +91,9 @@ int g3x_playback_menu_redraw_needed(void);
 #ifndef G3X_CONF_SAVE_FAIL
 #define G3X_CONF_SAVE_FAIL 2
 #endif
+extern volatile int g3x_conf_save_active;
 int g3x_is_safe_chdk_write_path(const char *path);
+int g3x_is_conf_file_path(const char *path);
 #if (!defined(G3X_GUI_MENU) || (G3X_GUI_MENU != 1)) && (!defined(G3X_PLAYBACK_MENU) || (G3X_PLAYBACK_MENU != 1))
 extern unsigned int g3x_menu_open_count;
 extern int g3x_conf_save_status;

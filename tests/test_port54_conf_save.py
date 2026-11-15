@@ -40,11 +40,11 @@ OBJDUMP = TOOLCHAIN_BIN / "arm-none-eabi-objdump"
 BASE_DEFAULT_SHA256 = "24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9"
 BASE_DEFAULT_SIZE = 124097
 
-BASE_ALONE_SHA256 = "0cc196f81126e8983b7b3921ecb220cb0f206d1375830cc15f07a56da2abd93b"
-BASE_ALONE_SIZE = 124369
+BASE_ALONE_SHA256 = "9182ff256ea72e71bd81e35f321e68ee2865f036f197898b1cf78eb9ff87a114"
+BASE_ALONE_SIZE = 124625
 
-BASE_CANDIDATE_SHA256 = "220a9d7af1037638443c5f380932834c3760dce3bd997cdb1ff37b1eea64c783"
-BASE_CANDIDATE_SIZE = 132401
+BASE_CANDIDATE_SHA256 = "c5ef5bcf4962459d45d92b2f0dcf1f8f0b7db169a63f9bff6efd438e116d237f"
+BASE_CANDIDATE_SIZE = 133153
 
 
 def sha256_file(path: Path) -> str:
@@ -239,11 +239,24 @@ class TestPort54FilesystemReadyGate(unittest.TestCase):
 #include <string.h>
 
 volatile int spytask_can_start = 0;
+volatile int g3x_conf_save_active = 1;
 
 static int g3x_tolower(int c)
 {
     if (c >= 'A' && c <= 'Z') return c + ('a' - 'A');
     return c;
+}
+
+static int g3x_strcasecmp(const char *s1, const char *s2)
+{
+    while (*s1 && *s2) {
+        if (g3x_tolower((unsigned char)*s1) != g3x_tolower((unsigned char)*s2)) {
+            return (unsigned char)*s1 - (unsigned char)*s2;
+        }
+        s1++;
+        s2++;
+    }
+    return (unsigned char)*s1 - (unsigned char)*s2;
 }
 
 int g3x_is_safe_chdk_write_path(const char *path)
@@ -265,6 +278,24 @@ int g3x_is_safe_chdk_write_path(const char *path)
     return 1;
 }
 
+int g3x_is_conf_file_path(const char *path)
+{
+    if (!g3x_is_safe_chdk_write_path(path)) return 0;
+    int idx = 1;
+    if (path[idx] == ':') idx++;
+    if (path[idx] != '/') return 0;
+    idx++;
+    idx += 5;
+    const char *sub = path + idx;
+    if (g3x_strcasecmp(sub, "cchdk4.cfg") == 0 ||
+        g3x_strcasecmp(sub, "osd__4.cfg") == 0 ||
+        g3x_strcasecmp(sub, "umenu4.cfg") == 0 ||
+        g3x_strcasecmp(sub, "gps__4.cfg") == 0) {
+        return 1;
+    }
+    return 0;
+}
+
 static int mock_real_write_calls = 0;
 static int mock_real_open_calls = 0;
 
@@ -282,7 +313,7 @@ int __real_open(const char *name, int flags, int mode)
 
 int __wrap_write(int fd, const void *buf, int n)
 {
-    if (!spytask_can_start) {
+    if (!spytask_can_start || !g3x_conf_save_active) {
         return -1;
     }
     return __real_write(fd, buf, n);
@@ -291,10 +322,13 @@ int __wrap_write(int fd, const void *buf, int n)
 int __wrap_open(const char *name, int flags, int mode)
 {
     if ((flags & 3) != 0 || (flags & (0x08 | 0x0100 | 0x0200 | 0x0400 | 0x0800))) {
-        if (!spytask_can_start) {
+        if (!spytask_can_start || !g3x_conf_save_active) {
             return -1;
         }
         if (!g3x_is_safe_chdk_write_path(name)) {
+            return -1;
+        }
+        if (!g3x_is_conf_file_path(name)) {
             return -1;
         }
     }
@@ -347,6 +381,234 @@ int main(int argc, char **argv)
         # spytask_can_start = 1 but path outside A/CHDK/ -> must be blocked
         res = subprocess.run([str(self.bin_path), "1", "open", "A/DCIM/IMG.JPG"])
         self.assertEqual(res.returncode, 1, "open outside A/CHDK/ must be blocked even when fs is ready")
+
+
+class TestPort54SettingsSaveScopedPermission(unittest.TestCase):
+    """Verifies that write permissions are scoped strictly to settings save operations."""
+
+    @classmethod
+    def setUpClass(cls):
+        c_code = """
+#include <stdio.h>
+#include <string.h>
+
+volatile int spytask_can_start = 1;
+volatile int g3x_conf_save_active = 0;
+
+static int g3x_tolower(int c)
+{
+    if (c >= 'A' && c <= 'Z') return c + ('a' - 'A');
+    return c;
+}
+
+static int g3x_strcasecmp(const char *s1, const char *s2)
+{
+    while (*s1 && *s2) {
+        if (g3x_tolower((unsigned char)*s1) != g3x_tolower((unsigned char)*s2)) {
+            return (unsigned char)*s1 - (unsigned char)*s2;
+        }
+        s1++;
+        s2++;
+    }
+    return (unsigned char)*s1 - (unsigned char)*s2;
+}
+
+int g3x_is_safe_chdk_write_path(const char *path)
+{
+    if (!path) return 0;
+    const char *p;
+    for (p = path; *p; ++p) if (*p == '\\\\') return 0;
+    for (p = path; *p; ++p) if (p[0] == '.' && p[1] == '.') return 0;
+    if (g3x_tolower((unsigned char)path[0]) != 'a') return 0;
+    int idx = 1;
+    if (path[idx] == ':') idx++;
+    if (path[idx] != '/') return 0;
+    idx++;
+    const char *target = "chdk/";
+    int i;
+    for (i = 0; i < 5; ++i) {
+        if (g3x_tolower((unsigned char)path[idx + i]) != target[i]) return 0;
+    }
+    return 1;
+}
+
+int g3x_is_conf_file_path(const char *path)
+{
+    if (!g3x_is_safe_chdk_write_path(path)) return 0;
+    int idx = 1;
+    if (path[idx] == ':') idx++;
+    if (path[idx] != '/') return 0;
+    idx++;
+    idx += 5;
+    const char *sub = path + idx;
+    if (g3x_strcasecmp(sub, "cchdk4.cfg") == 0 ||
+        g3x_strcasecmp(sub, "osd__4.cfg") == 0 ||
+        g3x_strcasecmp(sub, "umenu4.cfg") == 0 ||
+        g3x_strcasecmp(sub, "gps__4.cfg") == 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static int mock_real_write_calls = 0;
+static int mock_real_open_calls = 0;
+
+int __real_write(int fd, const void *buf, int n)
+{
+    mock_real_write_calls++;
+    return n;
+}
+
+int __real_open(const char *name, int flags, int mode)
+{
+    mock_real_open_calls++;
+    return 42;
+}
+
+int __wrap_write(int fd, const void *buf, int n)
+{
+    if (!spytask_can_start || !g3x_conf_save_active) {
+        return -1;
+    }
+    return __real_write(fd, buf, n);
+}
+
+int __wrap_open(const char *name, int flags, int mode)
+{
+    if ((flags & 3) != 0 || (flags & (0x08 | 0x0100 | 0x0200 | 0x0400 | 0x0800))) {
+        if (!spytask_can_start || !g3x_conf_save_active) {
+            return -1;
+        }
+        if (!g3x_is_safe_chdk_write_path(name)) {
+            return -1;
+        }
+        if (!g3x_is_conf_file_path(name)) {
+            return -1;
+        }
+    }
+    return __real_open(name, flags, mode);
+}
+
+int test_script_print_screen_open(int val)
+{
+    char print_screen_file[100];
+    sprintf(print_screen_file, "A/CHDK/LOGS/LOG_%04d.TXT", val);
+    return __wrap_open(print_screen_file, 0x0201 /* O_WRONLY|O_CREAT|O_TRUNC */, 0777);
+}
+
+int test_script_console_write(int fd, const char *msg)
+{
+    return __wrap_write(fd, msg, strlen(msg));
+}
+
+int main(int argc, char **argv)
+{
+    if (argc < 3) return 99;
+    const char *cmd = argv[1];
+    const char *arg = argv[2];
+
+    if (strcmp(cmd, "script_open") == 0) {
+        int fd = test_script_print_screen_open(1);
+        return (fd < 0 && mock_real_open_calls == 0) ? 0 : 1;
+    }
+    if (strcmp(cmd, "script_write") == 0) {
+        int wb = test_script_console_write(42, "log line");
+        return (wb < 0 && mock_real_write_calls == 0) ? 0 : 1;
+    }
+    if (strcmp(cmd, "open_inactive") == 0) {
+        g3x_conf_save_active = 0;
+        int fd = __wrap_open(arg, 0x0201, 0666);
+        return (fd < 0 && mock_real_open_calls == 0) ? 0 : 1;
+    }
+    if (strcmp(cmd, "write_inactive") == 0) {
+        g3x_conf_save_active = 0;
+        int wb = __wrap_write(1, "data", 4);
+        return (wb < 0 && mock_real_write_calls == 0) ? 0 : 1;
+    }
+    if (strcmp(cmd, "open_active") == 0) {
+        g3x_conf_save_active = 1;
+        int fd = __wrap_open(arg, 0x0201, 0666);
+        return (fd == 42 && mock_real_open_calls == 1) ? 0 : 1;
+    }
+    if (strcmp(cmd, "write_active") == 0) {
+        g3x_conf_save_active = 1;
+        int wb = __wrap_write(1, "data", 4);
+        return (wb == 4 && mock_real_write_calls == 1) ? 0 : 1;
+    }
+    return 99;
+}
+"""
+        cls.temp_dir = tempfile.TemporaryDirectory()
+        src_path = Path(cls.temp_dir.name) / "test_scope.c"
+        src_path.write_text(c_code, encoding="utf-8")
+        cls.bin_path = Path(cls.temp_dir.name) / "test_scope"
+        subprocess.run(["gcc", "-O2", str(src_path), "-o", str(cls.bin_path)], check=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temp_dir.cleanup()
+
+    def test_script_logging_blocked(self):
+        # (a) script logging cannot reach __real_open or __real_write
+        res = subprocess.run([str(self.bin_path), "script_open", "1"])
+        self.assertEqual(res.returncode, 0, "script print screen open should return -1 and never reach __real_open")
+
+        res = subprocess.run([str(self.bin_path), "script_write", "msg"])
+        self.assertEqual(res.returncode, 0, "script console write should return -1 and never reach __real_write")
+
+    def test_outside_conf_save_scope_rejected(self):
+        # (b) write to an A/CHDK/ path outside the conf-save scope is rejected
+        outside_paths = [
+            "A/CHDK/LOGS/LOG_0001.TXT",
+            "A/CHDK/CCHDK4.CFG",
+            "A/CHDK/OSD__4.CFG",
+            "A/CHDK/UMENU4.CFG",
+            "A/CHDK/GPS__4.CFG",
+            "A/CHDK/test.cfg",
+        ]
+        for p in outside_paths:
+            res = subprocess.run([str(self.bin_path), "open_inactive", p])
+            self.assertEqual(res.returncode, 0, f"open outside scope should reject '{p}'")
+
+        res = subprocess.run([str(self.bin_path), "write_inactive", "dummy"])
+        self.assertEqual(res.returncode, 0, "write outside scope should be rejected")
+
+    def test_conf_file_inside_scope_accepted(self):
+        # (c) The conf file path inside the scope is accepted
+        conf_paths = [
+            "A/CHDK/CCHDK4.CFG",
+            "a/chdk/cchdk4.cfg",
+            "A/CHDK/OSD__4.CFG",
+            "a/chdk/osd__4.cfg",
+            "A/CHDK/UMENU4.CFG",
+            "a/chdk/umenu4.cfg",
+            "A/CHDK/GPS__4.CFG",
+            "a/chdk/gps__4.cfg",
+            "A:/CHDK/CCHDK4.CFG",
+            "a:/chdk/cchdk4.cfg",
+        ]
+        for p in conf_paths:
+            res = subprocess.run([str(self.bin_path), "open_active", p])
+            self.assertEqual(res.returncode, 0, f"conf file inside scope '{p}' should be accepted")
+
+        res = subprocess.run([str(self.bin_path), "write_active", "dummy"])
+        self.assertEqual(res.returncode, 0, "write inside scope should succeed")
+
+    def test_non_conf_paths_inside_scope_rejected(self):
+        # Non-conf paths must still be rejected even inside conf-save scope
+        non_conf = [
+            "A/CHDK/LOGS/LOG_0001.TXT",
+            "A/CHDK/SCRIPTS/test.lua",
+            "A/CHDK/FONTS/font.rbf",
+            "A/CHDK/MODULES/module.flt",
+            "A/DCIM/100CANON/IMG_0001.JPG",
+            "../A/CHDK/CCHDK4.CFG",
+            "B/CHDK/CCHDK4.CFG",
+            "A\\CHDK\\CCHDK4.CFG",
+        ]
+        for p in non_conf:
+            res = subprocess.run([str(self.bin_path), "open_active", p])
+            self.assertEqual(res.returncode, 1, f"non-conf path '{p}' inside scope must be rejected")
 
 
 class TestPort54DiagMarker(unittest.TestCase):
@@ -605,16 +867,128 @@ class TestPort54BuildsAndSymbols(unittest.TestCase):
         candidate_elf = self.build_candidate / "stage_chdk/platform/g3x/sub/110c/main.elf"
         dump = subprocess.check_output([str(OBJDUMP), "-d", str(candidate_elf)], text=True)
 
-        # __wrap_open calls g3x_is_safe_chdk_write_path
+        # __wrap_open calls g3x_is_safe_chdk_write_path and g3x_is_conf_file_path
         self.assertIn("<__wrap_open>:", dump)
         self.assertIn("<g3x_is_safe_chdk_write_path>", dump)
+        self.assertIn("<g3x_is_conf_file_path>", dump)
 
         # __wrap_write is present
         self.assertIn("<__wrap_write>:", dump)
 
+        # g3x_conf_save_active symbol is present
+        nm_out = subprocess.check_output([str(NM), str(candidate_elf)], text=True)
+        self.assertIn("g3x_conf_save_active", nm_out)
+
         # non-conf blocking wrappers are present and return without write
         for wrap in ["<__wrap__MakeDirectory_Fut>:", "<__wrap__DeleteFile_Fut>:", "<__wrap_remove>:", "<__wrap_mkdir>:"]:
             self.assertIn(wrap, dump)
+
+
+class TestPort54ConfSaveReachability(unittest.TestCase):
+    """Verifies that conf_save/config_save reach the real open/write path in the combined
+    configuration rather than the SAVE:OFF early return, while default and PLAYBACK_MENU-without-CONF_SAVE
+    builds retain the SAVE:OFF early return / empty stub."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.candidate_elf = ROOT / "out/port54-conf-save/stage_chdk/platform/g3x/sub/110c/main.elf"
+        cls.default_elf = ROOT / "out/build-default/stage_chdk/platform/g3x/sub/110c/main.elf"
+        cls.staged_conf_c = ROOT / "out/port54-conf-save/stage_chdk/core/conf.c"
+        cls.gcc = TOOLCHAIN_BIN / "arm-none-eabi-gcc"
+        cls.stage_dir = ROOT / "out/port54-conf-save/stage_chdk"
+
+    def test_combined_candidate_disassembly_reaches_real_open_and_write(self):
+        self.assertTrue(self.candidate_elf.is_file(), f"Missing {self.candidate_elf}")
+        dump = subprocess.check_output([str(OBJDUMP), "-d", str(self.candidate_elf)], text=True)
+
+        # Extract config_save disassembly
+        m = re.search(r"<config_save>:\s*\n((?:\s+[0-9a-f]+:.*\n)+)", dump)
+        self.assertIsNotNone(m, "config_save symbol not found in candidate disassembly")
+        config_save_asm = m.group(1)
+
+        # Must call __wrap_open and __wrap_write and close and umalloc
+        self.assertIn("<__wrap_open>", config_save_asm)
+        self.assertIn("<__wrap_write>", config_save_asm)
+        self.assertIn("<close>", config_save_asm)
+        self.assertIn("<umalloc>", config_save_asm)
+
+        # Must NOT be the 2-instruction early return stub: movs r0, #3; b.w g3x_conf_record_save_result
+        self.assertNotRegex(
+            config_save_asm.strip(),
+            r"^[0-9a-f]+:\s+2003\s+movs\s+r0,\s+#3\s*\n\s*[0-9a-f]+:\s+f7fd\s+bd[0-9a-f]{2}\s+b\.w\s+[0-9a-f]+\s+<g3x_conf_record_save_result>$",
+        )
+
+        # Extract conf_save disassembly
+        m2 = re.search(r"<conf_save>:\s*\n((?:\s+[0-9a-f]+:.*\n)+)", dump)
+        self.assertIsNotNone(m2, "conf_save symbol not found in candidate disassembly")
+        conf_save_asm = m2.group(1)
+        self.assertIn("<config_save>", conf_save_asm)
+        self.assertIn("<config_has_changed>", conf_save_asm)
+
+    def test_preprocessor_actual_staged_source_combined_vs_playback_without_conf_save(self):
+        self.assertTrue(self.staged_conf_c.is_file(), f"Missing {self.staged_conf_c}")
+        base_cmd = [
+            str(self.gcc),
+            "-E",
+            "-nostdinc",
+            f"-I{self.stage_dir}/include",
+            f"-I{self.stage_dir}/core",
+            f"-I{self.stage_dir}/modules",
+            f"-I{self.stage_dir}/platform/g3x",
+            f"-I{self.stage_dir}/platform/generic",
+            "-DG3X_FULL_BUILD=1",
+            "-DG3X_GUI_SHADOW2=1",
+            "-DG3X_GUI_SYNC=1",
+            "-DG3X_GUI_MENU=1",
+            "-DG3X_GUI_RESTORE2=1",
+            "-DG3X_PLAYBACK_MENU=1",
+            "-DG3X_GUI_DIAG=1",
+            "-DG3X_KBD_CHECK=1",
+            "-DG3X_GUI_FIX=1",
+            "-DG3X_GUI_DBUF=1",
+            "-DG3X_GUI_NOOVERDRAW=1",
+            "-DG3X_DISABLE_CARD_WRITES=1",
+            "-DCAM_SUPPORT_BITMAP_RES_CHANGE=1",
+            "-DOPT_DISABLE_FILE_WRITES=1",
+        ]
+
+        # 1. Combined configuration (+ G3X_CONF_SAVE=1)
+        cmd_cand = base_cmd + ["-DG3X_CONF_SAVE=1", str(self.staged_conf_c)]
+        out_cand = subprocess.check_output(cmd_cand, text=True)
+        # In config_save: reaches open and write, sets g3x_conf_save_active
+        m_cand = re.search(r"void config_save\([^)]*\)\s*\{(.*?)\n\}", out_cand, re.DOTALL)
+        self.assertIsNotNone(m_cand, "config_save not found in preprocessed candidate output")
+        cfg_cand_body = m_cand.group(1)
+        self.assertIn("open(filename,", cfg_cand_body)
+        self.assertIn("write(fd,", cfg_cand_body)
+        self.assertIn("g3x_conf_save_active = 1;", cfg_cand_body)
+        self.assertIn("g3x_conf_save_active = 0;", cfg_cand_body)
+        self.assertNotIn("g3x_conf_record_save_result(3", cfg_cand_body)
+
+        # 2. PLAYBACK_MENU-without-CONF_SAVE (no G3X_CONF_SAVE)
+        cmd_p53 = base_cmd + [str(self.staged_conf_c)]
+        out_p53 = subprocess.check_output(cmd_p53, text=True)
+        m_p53 = re.search(r"void config_save\([^)]*\)\s*\{(.*?)\n\}", out_p53, re.DOTALL)
+        self.assertIsNotNone(m_p53, "config_save not found in preprocessed PORT-53 output")
+        cfg_p53_body = m_p53.group(1)
+        self.assertIn("g3x_conf_record_save_result(3", cfg_p53_body)
+        self.assertNotIn("open(filename,", cfg_p53_body)
+        self.assertNotIn("write(fd,", cfg_p53_body)
+
+    def test_default_build_conf_save_unreachable(self):
+        self.assertTrue(self.default_elf.is_file(), f"Missing {self.default_elf}")
+        dump = subprocess.check_output([str(OBJDUMP), "-d", str(self.default_elf)], text=True)
+
+        # Default build wraps conf_save to __wrap_conf_save
+        self.assertIn("<__wrap_conf_save>:", dump)
+        # __wrap_conf_save is an empty stub (just bx lr)
+        m = re.search(r"<__wrap_conf_save>:\s*\n\s*[0-9a-f]+:\s+4770\s+bx\s+lr", dump)
+        self.assertIsNotNone(m, "__wrap_conf_save must be an empty bx lr stub in default build")
+
+        # __wrap_open in default build blocks all write flags unconditionally
+        self.assertIn("<__wrap_open>:", dump)
+        # g3x_is_safe_chdk_write_path is not in default build
+        self.assertNotIn("<g3x_is_safe_chdk_write_path>", dump)
 
 
 class TestPort54Manifest(unittest.TestCase):
