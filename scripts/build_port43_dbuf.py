@@ -1663,6 +1663,115 @@ def apply_gui_sync_staging_patches(stage_dir: Path) -> None:
     draw_c.write_text(draw_text, encoding="utf-8")
 
 
+def apply_conf_save_staging_patches(stage_dir: Path) -> None:
+    """Gate conf_save, config_save, and save_config_file under write-disable flags and record SAVE:OFF."""
+    conf_c = stage_dir / "core/conf.c"
+    conf_text = conf_c.read_text(encoding="utf-8")
+    if "g3x_conf_record_save_result" in conf_text and "save_config_file" in conf_text and "int save_config_file(int config_base, const char *filename)\n{\n#if" in conf_text:
+        return
+
+    # 1. config_save guard
+    guard_anchor = "void config_save(ConfInfo *ci, const char *filename, int config_base)\n{\n"
+    guard_code = (
+        "void config_save(ConfInfo *ci, const char *filename, int config_base)\n"
+        "{\n"
+        "#if ((defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)) || \\\n"
+        "     (defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1))) && \\\n"
+        "    ((defined(G3X_DISABLE_CARD_WRITES) && (G3X_DISABLE_CARD_WRITES == 1)) || \\\n"
+        "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1)))\n"
+        "    (void)ci;\n"
+        "    (void)filename;\n"
+        "    (void)config_base;\n"
+        "    extern void g3x_conf_record_save_result(int ok);\n"
+        "    g3x_conf_record_save_result(3 /* G3X_CONF_SAVE_OFF */);\n"
+        "    return;\n"
+        "#else\n"
+    )
+    if "void config_save(ConfInfo *ci, const char *filename, int config_base)\n{\n#if" not in conf_text:
+        if conf_text.count(guard_anchor) != 1:
+            raise RuntimeError("PORT-50/53 config_save start anchor not found in staged core/conf.c")
+        conf_text = conf_text.replace(guard_anchor, guard_code, 1)
+        end_anchor = "\n#if defined(OPT_FORCE_LUA_CALL_NATIVE)\n    conf.script_allow_lua_native_calls = 1;\n#endif\n}"
+        if conf_text.count(end_anchor) != 1:
+            raise RuntimeError("PORT-50/53 config_save end anchor not found in staged core/conf.c")
+        conf_text = conf_text.replace(end_anchor, end_anchor[:-1] + "#endif\n}", 1)
+
+    # 2. conf_save guard (skips config_save AND save_params_values, records SAVE:OFF)
+    conf_save_anchor = "void conf_save()\n{\n"
+    conf_save_code = (
+        "void conf_save()\n"
+        "{\n"
+        "#if ((defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)) || \\\n"
+        "     (defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1))) && \\\n"
+        "    ((defined(G3X_DISABLE_CARD_WRITES) && (G3X_DISABLE_CARD_WRITES == 1)) || \\\n"
+        "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1)))\n"
+        "    extern void g3x_conf_record_save_result(int ok);\n"
+        "    g3x_conf_record_save_result(3 /* G3X_CONF_SAVE_OFF */);\n"
+        "    return;\n"
+        "#else\n"
+    )
+    if "void conf_save()\n{\n#if" not in conf_text:
+        if conf_text.count(conf_save_anchor) != 1:
+            raise RuntimeError("PORT-50/53 conf_save start anchor not found in staged core/conf.c")
+        conf_text = conf_text.replace(conf_save_anchor, conf_save_code, 1)
+        conf_save_end_anchor = "    // Save current script parameters if they have changed.\n    save_params_values(0);\n}"
+        if conf_text.count(conf_save_end_anchor) != 1:
+            raise RuntimeError("PORT-50/53 conf_save end anchor not found in staged core/conf.c")
+        conf_text = conf_text.replace(conf_save_end_anchor, conf_save_end_anchor[:-1] + "#endif\n}", 1)
+
+    # 3. save_config_file guard (skips config_save, records SAVE:OFF)
+    save_cfg_anchor = (
+        "int save_config_file(int config_base, const char *filename)\n"
+        "{\n"
+        "    int i;\n"
+        "    for (i=0; confinfo_handlers[i].ci != 0; i++)\n"
+        "    {\n"
+        "        if ((config_base >= confinfo_handlers[i].start_id) && (config_base <= confinfo_handlers[i].end_id))\n"
+        "        {\n"
+        "            config_save(confinfo_handlers[i].ci, (filename != 0) ? filename : confinfo_handlers[i].filename, confinfo_handlers[i].start_id);\n"
+        "            if (filename == 0)  // Reset 'last_saved' values after saving default file\n"
+        "                config_update_last_saved(confinfo_handlers[i].ci);\n"
+        "            return 1;\n"
+        "        }\n"
+        "    }\n"
+        "    return 0;\n"
+        "}"
+    )
+    save_cfg_replacement = (
+        "int save_config_file(int config_base, const char *filename)\n"
+        "{\n"
+        "#if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1) && \\\n"
+        "    ((defined(G3X_DISABLE_CARD_WRITES) && (G3X_DISABLE_CARD_WRITES == 1)) || \\\n"
+        "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1)))\n"
+        "    (void)config_base;\n"
+        "    (void)filename;\n"
+        "    extern void g3x_conf_record_save_result(int ok);\n"
+        "    g3x_conf_record_save_result(3 /* G3X_CONF_SAVE_OFF */);\n"
+        "    return 0;\n"
+        "#else\n"
+        "    int i;\n"
+        "    for (i=0; confinfo_handlers[i].ci != 0; i++)\n"
+        "    {\n"
+        "        if ((config_base >= confinfo_handlers[i].start_id) && (config_base <= confinfo_handlers[i].end_id))\n"
+        "        {\n"
+        "            config_save(confinfo_handlers[i].ci, (filename != 0) ? filename : confinfo_handlers[i].filename, confinfo_handlers[i].start_id);\n"
+        "            if (filename == 0)  // Reset 'last_saved' values after saving default file\n"
+        "                config_update_last_saved(confinfo_handlers[i].ci);\n"
+        "            return 1;\n"
+        "        }\n"
+        "    }\n"
+        "    return 0;\n"
+        "#endif\n"
+        "}"
+    )
+    if "int save_config_file(int config_base, const char *filename)\n{\n#if" not in conf_text:
+        if conf_text.count(save_cfg_anchor) != 1:
+            raise RuntimeError("PORT-50/53 save_config_file anchor not found in staged core/conf.c")
+        conf_text = conf_text.replace(save_cfg_anchor, save_cfg_replacement, 1)
+
+    conf_c.write_text(conf_text, encoding="utf-8")
+
+
 def apply_gui_menu_staging_patches(stage_dir: Path) -> None:
     """Apply G3X_GUI_MENU=1 compile flags, unwrap conf_save/param save, retain blocking write wrappers, and gate conf/script save paths."""
     shutil.copy2(CHDK_PORT / "platform/g3x/gui_diag.h", stage_dir / "platform/g3x/gui_diag.h")
@@ -1794,57 +1903,8 @@ def apply_gui_menu_staging_patches(stage_dir: Path) -> None:
     gui_text = gui_text.replace(gui_anchor, gui_replacement, 1)
     gui_c.write_text(gui_text, encoding="utf-8")
 
-    # 5. In core/conf.c: gate BOTH conf_save and config_save under G3X_GUI_MENU=1 and write-disable flags
-    conf_c = stage_dir / "core/conf.c"
-    conf_text = conf_c.read_text(encoding="utf-8")
-    if "g3x_conf_record_save_result" not in conf_text:
-        # 5a. config_save guard
-        guard_anchor = "void config_save(ConfInfo *ci, const char *filename, int config_base)\n{\n"
-        guard_code = (
-            "void config_save(ConfInfo *ci, const char *filename, int config_base)\n"
-            "{\n"
-            "#if ((defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)) || \\\n"
-            "     (defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1))) && \\\n"
-            "    ((defined(G3X_DISABLE_CARD_WRITES) && (G3X_DISABLE_CARD_WRITES == 1)) || \\\n"
-            "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1)))\n"
-            "    (void)ci;\n"
-            "    (void)filename;\n"
-            "    (void)config_base;\n"
-            "    extern void g3x_conf_record_save_result(int ok);\n"
-            "    g3x_conf_record_save_result(3 /* G3X_CONF_SAVE_OFF */);\n"
-            "    return;\n"
-            "#else\n"
-        )
-        if conf_text.count(guard_anchor) != 1:
-            raise RuntimeError("PORT-50 config_save start anchor not found in staged core/conf.c")
-        conf_text = conf_text.replace(guard_anchor, guard_code, 1)
-        end_anchor = "\n#if defined(OPT_FORCE_LUA_CALL_NATIVE)\n    conf.script_allow_lua_native_calls = 1;\n#endif\n}"
-        if conf_text.count(end_anchor) != 1:
-            raise RuntimeError("PORT-50 config_save end anchor not found in staged core/conf.c")
-        conf_text = conf_text.replace(end_anchor, end_anchor[:-1] + "#endif\n}", 1)
-
-        # 5b. conf_save guard (skips config_save AND save_params_values, records SAVE:OFF)
-        conf_save_anchor = "void conf_save()\n{\n"
-        conf_save_code = (
-            "void conf_save()\n"
-            "{\n"
-            "#if ((defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)) || \\\n"
-            "     (defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1))) && \\\n"
-            "    ((defined(G3X_DISABLE_CARD_WRITES) && (G3X_DISABLE_CARD_WRITES == 1)) || \\\n"
-            "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1)))\n"
-            "    extern void g3x_conf_record_save_result(int ok);\n"
-            "    g3x_conf_record_save_result(3 /* G3X_CONF_SAVE_OFF */);\n"
-            "    return;\n"
-            "#else\n"
-        )
-        if conf_text.count(conf_save_anchor) != 1:
-            raise RuntimeError("PORT-50 conf_save start anchor not found in staged core/conf.c")
-        conf_text = conf_text.replace(conf_save_anchor, conf_save_code, 1)
-        conf_save_end_anchor = "    // Save current script parameters if they have changed.\n    save_params_values(0);\n}"
-        if conf_text.count(conf_save_end_anchor) != 1:
-            raise RuntimeError("PORT-50 conf_save end anchor not found in staged core/conf.c")
-        conf_text = conf_text.replace(conf_save_end_anchor, conf_save_end_anchor[:-1] + "#endif\n}", 1)
-        conf_c.write_text(conf_text, encoding="utf-8")
+    # 5. In core/conf.c: gate conf_save, config_save, and save_config_file under write-disable flags
+    apply_conf_save_staging_patches(stage_dir)
 
     # 6. In core/gui_script.c: gate save_params_values and do_save_param_file write sinks
     gui_script_c = stage_dir / "core/gui_script.c"
@@ -2171,6 +2231,33 @@ def apply_playback_menu_staging_patches(stage_dir: Path, alone: bool = False) ->
         )
         main_text += main_hook
         main_c.write_text(main_text, encoding="utf-8")
+
+    # 5. Gate conf_save, config_save, and save_config_file in core/conf.c
+    apply_conf_save_staging_patches(stage_dir)
+
+    # 6. In core/gui.c: record menu open event when transitioning to menuGuiHandler
+    gui_c = stage_dir / "core/gui.c"
+    gui_text = gui_c.read_text(encoding="utf-8")
+    if "g3x_playback_menu_record_open" not in gui_text:
+        gui_anchor = "    gui_handler *old_mode = gui_mode;\n    gui_mode = mode;\n"
+        gui_replacement = (
+            "    gui_handler *old_mode = gui_mode;\n"
+            "    gui_mode = mode;\n"
+            "#if (defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)) || (defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1))\n"
+            "    if (mode == &menuGuiHandler && old_mode != &menuGuiHandler)\n"
+            "    {\n"
+            "        extern void g3x_menu_record_open(void);\n"
+            "        g3x_menu_record_open();\n"
+            "#if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)\n"
+            "        extern void g3x_playback_menu_record_open(void);\n"
+            "        g3x_playback_menu_record_open();\n"
+            "#endif\n"
+            "    }\n"
+            "#endif\n"
+        )
+        if gui_text.count(gui_anchor) == 1:
+            gui_text = gui_text.replace(gui_anchor, gui_replacement, 1)
+            gui_c.write_text(gui_text, encoding="utf-8")
 
 
 def build_port43_dbuf(

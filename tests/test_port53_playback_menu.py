@@ -51,9 +51,9 @@ BASE_PORT51_RESTORE2_NO_FULLHOOKS_SHA256 = "f8df17f182289b4a100e8c348ecdca1ea7f2
 BASE_PORT51_RESTORE2_NO_FULLHOOKS_SIZE = 131865
 BASE_PORT51_RESTORE2_NO_FULLHOOKS_END = "0x0036a8e0"
 
-BASE_PORT53_CANDIDATE_SHA256 = "435846477f3c55c4165e10f47e41997b4321d01aa6c5363f059d360a5ba36e0a"
-BASE_PORT53_CANDIDATE_SIZE = 132281
-BASE_PORT53_CORE_END = "0x0036aa90"
+BASE_PORT53_CANDIDATE_SHA256 = "620f39ccae74eceae96f9e4b6c41c77f3ed5e5219c42a013067b36241d6bf759"
+BASE_PORT53_CANDIDATE_SIZE = 132209
+BASE_PORT53_CORE_END = "0x0036aa40"
 
 
 def sha256_file(path: Path) -> str:
@@ -111,6 +111,40 @@ class TestPort53KeymapAndPhysw(unittest.TestCase):
         kbd_h_text = PLAT_KBD_H.read_text(encoding="utf-8")
         keymap_doc = DOC_KEYMAP.read_text(encoding="utf-8")
 
+        # Parse navigation and ALT key bits from docs/PORT46_KEYMAP.md
+        nav_and_alt_keys = [
+            "KEY_MENU",
+            "KEY_UP",
+            "KEY_DOWN",
+            "KEY_RIGHT",
+            "KEY_LEFT",
+            "KEY_SET",
+            "KEY_VIDEO",
+            "KEY_DISPLAY",
+            "KEY_WIFI",
+            "KEY_PLAYBACK",
+        ]
+        parsed_doc_keys = {}
+        for k in nav_and_alt_keys:
+            m = re.search(rf"\|\s*{re.escape(k)}[^\n|]*\|\s*w(\d+)\.b(\d+),\s*`?(0x[0-9a-fA-F]+)`?", keymap_doc)
+            self.assertIsNotNone(m, f"Could not parse {k} from {DOC_KEYMAP}")
+            word = int(m.group(1))
+            bit = int(m.group(2))
+            hex_str = m.group(3)
+            mask_val = int(hex_str, 16)
+            self.assertEqual(mask_val, 1 << bit, f"Mask for {k} ({hex_str}) does not match bit {bit}")
+            parsed_doc_keys[k] = (word, bit, mask_val, hex_str)
+
+        # Assert parsed doc values match both physw_bits.txt and kbd.c / platform headers
+        for k, (word, bit, mask_val, hex_str) in parsed_doc_keys.items():
+            # 1. Matches kbd.c key mapping table
+            kbd_pattern = rf"\{{\s*{word},\s*{re.escape(k)}\s*,\s*{re.escape(hex_str)}\s*\}}"
+            self.assertRegex(kbd_text, kbd_pattern, f"{k} mapping in kbd.c does not match {DOC_KEYMAP}")
+
+            # 2. Matches reference/finsig_gm110c/physw_bits.txt
+            physw_pattern = rf"\s+{word}\s+{re.escape(hex_str)}"
+            self.assertRegex(physw_text, physw_pattern, f"{k} bit in physw_bits.txt does not match {DOC_KEYMAP}")
+
         # 1. KEY_MENU: w0.b4, mask 0x00000010, event 0x14
         self.assertRegex(kbd_text, r'\{\s*0,\s*KEY_MENU\s*,\s*0x00000010\s*\}')
         self.assertRegex(physw_text, r'0x00000014\s+0\s+0x00000010')
@@ -152,15 +186,10 @@ class TestPort53KeymapAndPhysw(unittest.TestCase):
         # 7. KEYS_MASK0 covers all menu and navigation keys
         self.assertIn("0x000533F9", kbd_h_text)
         keys_mask0 = 0x000533F9
-        self.assertTrue(keys_mask0 & 0x00000010)  # KEY_MENU
-        self.assertTrue(keys_mask0 & 0x00000020)  # KEY_UP
-        self.assertTrue(keys_mask0 & 0x00000040)  # KEY_DOWN
-        self.assertTrue(keys_mask0 & 0x00000080)  # KEY_RIGHT
-        self.assertTrue(keys_mask0 & 0x00000100)  # KEY_LEFT
-        self.assertTrue(keys_mask0 & 0x00000200)  # KEY_SET
-        self.assertTrue(keys_mask0 & 0x00001000)  # KEY_DISPLAY
-        self.assertTrue(keys_mask0 & 0x00002000)  # KEY_WIFI
-        self.assertTrue(keys_mask0 & 0x00010000)  # KEY_PLAYBACK
+        for k in nav_and_alt_keys:
+            word, bit, mask_val, _ = parsed_doc_keys[k]
+            if word == 0:
+                self.assertTrue(keys_mask0 & mask_val, f"KEYS_MASK0 does not cover {k} (mask {hex(mask_val)})")
         self.assertFalse(keys_mask0 & 0x00020000) # KEY_POWER pass-through
 
     def test_playback_menu_active_predicate(self):
@@ -490,9 +519,11 @@ class TestPort53BuildAndArtifacts(unittest.TestCase):
             "<__wrap_fwrite>",
         ]
 
-        # conf_save() must call g3x_conf_record_save_result and must NOT call write stubs
+        # conf_save() must call g3x_conf_record_save_result and must NOT call config_save or write stubs
         conf_save_body = get_func_body("conf_save")
         self.assertIn("<g3x_conf_record_save_result>", conf_save_body)
+        self.assertNotIn("<config_save>", conf_save_body)
+        self.assertNotIn("<save_params_values>", conf_save_body)
         for call in forbidden_write_calls:
             self.assertNotIn(call, conf_save_body)
 
@@ -501,6 +532,13 @@ class TestPort53BuildAndArtifacts(unittest.TestCase):
         self.assertIn("<g3x_conf_record_save_result>", config_save_body)
         for call in forbidden_write_calls:
             self.assertNotIn(call, config_save_body)
+
+        # save_config_file() must call g3x_conf_record_save_result and must NOT call config_save or write stubs
+        save_cfg_body = get_func_body("save_config_file")
+        self.assertIn("<g3x_conf_record_save_result>", save_cfg_body)
+        self.assertNotIn("<config_save>", save_cfg_body)
+        for call in forbidden_write_calls:
+            self.assertNotIn(call, save_cfg_body)
 
         # save_params_values() must not call write stubs
         save_params_body = get_func_body("save_params_values")
@@ -511,6 +549,92 @@ class TestPort53BuildAndArtifacts(unittest.TestCase):
         save_int_body = get_func_body("save_int_value_file")
         for call in forbidden_write_calls:
             self.assertNotIn(call, save_int_body)
+
+    def test_save_entry_points_guarded_in_staged_sources_config_b_and_c(self):
+        """Host test: check that in actual staged sources for config (b) and (c),
+        every save entry point (conf_save, config_save, save_config_file) is guarded
+        and returns early with SAVE:OFF when card writes are disabled.
+        """
+        for build_name, build_path in [("config_b", self.build_b), ("config_c", self.build_c)]:
+            staged_conf_c = build_path / "stage_chdk/core/conf.c"
+            self.assertTrue(staged_conf_c.is_file(), f"Missing staged conf.c in {build_name}: {staged_conf_c}")
+            conf_text = staged_conf_c.read_text(encoding="utf-8")
+
+            # 1. config_save is guarded with early return calling g3x_conf_record_save_result(3)
+            self.assertIn("void config_save(ConfInfo *ci, const char *filename, int config_base)\n{", conf_text)
+            self.assertRegex(
+                conf_text,
+                r"void config_save\(ConfInfo \*ci, const char \*filename, int config_base\)\s*\{\s*"
+                r"#if\s+\(\(defined\(G3X_GUI_MENU\)[\s\S]*?g3x_conf_record_save_result\(3\s*/\*\s*G3X_CONF_SAVE_OFF\s*\*/\);\s*return;\s*#else"
+            )
+
+            # 2. conf_save is guarded with early return calling g3x_conf_record_save_result(3)
+            self.assertIn("void conf_save()\n{", conf_text)
+            self.assertRegex(
+                conf_text,
+                r"void conf_save\(\)\s*\{\s*"
+                r"#if\s+\(\(defined\(G3X_GUI_MENU\)[\s\S]*?g3x_conf_record_save_result\(3\s*/\*\s*G3X_CONF_SAVE_OFF\s*\*/\);\s*return;\s*#else"
+            )
+
+            # 3. save_config_file is guarded with early return calling g3x_conf_record_save_result(3)
+            self.assertIn("int save_config_file(int config_base, const char *filename)\n{", conf_text)
+            self.assertRegex(
+                conf_text,
+                r"int save_config_file\(int config_base, const char \*filename\)\s*\{\s*"
+                r"#if\s+defined\(G3X_PLAYBACK_MENU\)[\s\S]*?g3x_conf_record_save_result\(3\s*/\*\s*G3X_CONF_SAVE_OFF\s*\*/\);\s*return 0;\s*#else"
+            )
+
+    def test_save_entry_points_compiled_asm_config_b_and_c(self):
+        """Host test: check that in compiled ELFs for config (b) and (c),
+        every save entry point (conf_save, config_save, save_config_file) calls
+        g3x_conf_record_save_result and no unguarded call to config_save, save_params_values,
+        or write calls remains.
+        """
+        forbidden_write_calls = [
+            "<write>",
+            "<open>",
+            "<close>",
+            "<_Write>",
+            "<_Open>",
+            "<_Close>",
+            "<fwrite>",
+            "<fopen>",
+            "<fclose>",
+            "<__wrap_write>",
+            "<__wrap_open>",
+            "<__wrap_fwrite>",
+        ]
+
+        for build_name, build_path in [("config_b", self.build_b), ("config_c", self.build_c)]:
+            main_elf = build_path / "stage_chdk/platform/g3x/sub/110c/main.elf"
+            self.assertTrue(main_elf.is_file(), f"Missing main.elf in {build_name}: {main_elf}")
+            dump_out = subprocess.check_output([str(OBJDUMP), "-d", str(main_elf)], text=True)
+
+            def get_func_body(func_name: str) -> str:
+                m = re.search(rf"<{func_name}>:([\s\S]*?)(?:\n[0-9a-f]{{8}}\s+<|$)", dump_out)
+                self.assertIsNotNone(m, f"Could not find <{func_name}> in objdump of {build_name}")
+                return m.group(1)
+
+            # conf_save: calls g3x_conf_record_save_result, NO call to config_save or save_params_values or write
+            conf_save_body = get_func_body("conf_save")
+            self.assertIn("<g3x_conf_record_save_result>", conf_save_body, f"conf_save in {build_name} missing record call")
+            self.assertNotIn("<config_save>", conf_save_body, f"conf_save in {build_name} calls config_save")
+            self.assertNotIn("<save_params_values>", conf_save_body, f"conf_save in {build_name} calls save_params_values")
+            for call in forbidden_write_calls:
+                self.assertNotIn(call, conf_save_body, f"conf_save in {build_name} contains forbidden call {call}")
+
+            # config_save: calls g3x_conf_record_save_result, NO write calls
+            config_save_body = get_func_body("config_save")
+            self.assertIn("<g3x_conf_record_save_result>", config_save_body, f"config_save in {build_name} missing record call")
+            for call in forbidden_write_calls:
+                self.assertNotIn(call, config_save_body, f"config_save in {build_name} contains forbidden call {call}")
+
+            # save_config_file: calls g3x_conf_record_save_result, NO call to config_save or write
+            save_config_file_body = get_func_body("save_config_file")
+            self.assertIn("<g3x_conf_record_save_result>", save_config_file_body, f"save_config_file in {build_name} missing record call")
+            self.assertNotIn("<config_save>", save_config_file_body, f"save_config_file in {build_name} calls config_save")
+            for call in forbidden_write_calls:
+                self.assertNotIn(call, save_config_file_body, f"save_config_file in {build_name} contains forbidden call {call}")
 
     def test_diag_format_displays_save_off(self):
         diag_text = DIAG_HEADER.read_text(encoding="utf-8")
@@ -647,6 +771,18 @@ class TestPort53DeliverablesAndNotes(unittest.TestCase):
         self.assertIn("SAVE:OFF", trial)
         self.assertIn("battery", trial.lower())
         self.assertIn("checklist", trial.lower())
+
+        # Recovery and rollback checks
+        self.assertNotIn("port52_shortpress_manifest.json", trial)
+        self.assertTrue(
+            "manifests/port51_restore2_nofullhooks_manifest.json" in trial
+            or "manifests/port51_restore2_manifest.json" in trial
+        )
+        self.assertTrue(
+            BASE_PORT51_RESTORE2_NO_FULLHOOKS_SHA256 in trial
+            or "4fad35b503be9f0a0ed799cf4cd62721db61e8dc6fa0ba348a507e52937d622a" in trial
+        )
+        self.assertIn("stops the current session", trial.lower())
 
         # Check numbered items
         for step in range(1, 11):

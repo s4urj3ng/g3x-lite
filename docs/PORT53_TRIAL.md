@@ -18,15 +18,15 @@ Before inserting the SD card into the camera, verify the candidate artifacts aga
    python3 -B scripts/build_port43_dbuf.py --no-overdraw --kbd-check --gui-diag --shadow2 --gui-sync --gui-menu --gui-restore2 --playback-menu --out-dir out/port53-playback-menu
    ```
    *Confirmation*: Config (c) build command contains NO `--full-hooks` flag and operates strictly without `FULL_HOOKS=1`.
-2. **DISKBOOT.BIN SHA-256**: `435846477f3c55c4165e10f47e41997b4321d01aa6c5363f059d360a5ba36e0a` (confirmed matching fresh rebuild)
-3. **DISKBOOT.BIN Size**: `132,281` bytes
-4. **Core `_end`**: `0x0036aa90` (confirmed matching fresh rebuild)
+2. **DISKBOOT.BIN SHA-256**: `620f39ccae74eceae96f9e4b6c41c77f3ed5e5219c42a013067b36241d6bf759` (confirmed matching fresh rebuild)
+3. **DISKBOOT.BIN Size**: `132,209` bytes
+4. **Core `_end`**: `0x0036aa40` (confirmed matching fresh rebuild)
 5. **CHDK Files Count**: `34` modules in `CHDK/MODULES/`, plus `FONTS` and `LANG` distributions matching manifest.
 
 Verify on host:
 ```sh
 sha256sum out/port53-playback-menu/DISKBOOT.BIN
-# Must match: 435846477f3c55c4165e10f47e41997b4321d01aa6c5363f059d360a5ba36e0a
+# Must match: 620f39ccae74eceae96f9e4b6c41c77f3ed5e5219c42a013067b36241d6bf759
 ```
 
 ## 3. Boot Method
@@ -81,5 +81,5 @@ For every numbered step above, record:
 
 ## 7. Emergency Recovery & Rollback
 
-- **Battery-pull recovery**: If the camera locks up, fails to respond to key presses, or exhibits display distortion, immediately open the battery door and remove the battery. Wait at least 10 seconds. Close door, reinsert battery, and power on. Camera will boot cleanly into stock Canon firmware from read-only internal ROM.
-- **Card rollback to PORT-52**: Remove SD card, place in host card reader, and replace `DISKBOOT.BIN` and `CHDK/` with the PORT-52 verified build (`manifests/port52_shortpress_manifest.json`, `DISKBOOT.BIN` SHA-256 `93f18eec00c2837bc2fd17b0d0dc08709cf906ee6225b68e9ee263b6b158fcda`, `131,985` bytes). Ensure SD card physical lock switch is engaged before returning card to camera.
+- **Battery-pull recovery**: If the camera locks up, fails to respond to key presses, or exhibits display distortion, immediately open the battery door and remove the battery. Wait at least 10 seconds. Note that pulling the battery only stops the current session: because the SD card holds the candidate `DISKBOOT.BIN` and is write-protect locked, the candidate loads again on the next boot until the card holds the baseline files or no `DISKBOOT.BIN`.
+- **Card rollback to baseline files**: Remove SD card, place in host card reader, and replace `DISKBOOT.BIN` and `CHDK/` with the verified PORT-51 RESTORE2 no-FULL_HOOKS baseline files (`manifests/port51_restore2_nofullhooks_manifest.json`, `DISKBOOT.BIN` SHA-256 `f8df17f182289b4a100e8c348ecdca1ea7f2e9a8c1613058d9777dd832fed3cf`, `131,865` bytes, `_end` `0x0036a8e0`) or the earlier candidate manifest (`manifests/port51_restore2_manifest.json`, `DISKBOOT.BIN` SHA-256 `4fad35b503be9f0a0ed799cf4cd62721db61e8dc6fa0ba348a507e52937d622a`, `131,929` bytes, `_end` `0x0036a920`), or remove `DISKBOOT.BIN` entirely to boot stock Canon firmware. Ensure SD card physical lock switch is engaged before returning card to camera.
