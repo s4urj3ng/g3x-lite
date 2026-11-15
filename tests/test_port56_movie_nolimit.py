@@ -221,10 +221,26 @@ class TestPort56FlagPlumbing(unittest.TestCase):
             self.assertIn("g3x_get_movie_cur_frames(void)", text)
 
     def test_kbd_loop_wiring(self):
-        for path in [KBD_C, FULL_KBD_C]:
-            text = path.read_text(encoding="utf-8")
-            self.assertIn("#if defined(G3X_MOVIE_NOLIMIT) && (G3X_MOVIE_NOLIMIT == 1)", text)
-            self.assertIn("g3x_movie_nolimit_poll();", text)
+        # Verify full_build source wiring
+        text_full = FULL_KBD_C.read_text(encoding="utf-8")
+        self.assertIn("#if defined(G3X_MOVIE_NOLIMIT) && (G3X_MOVIE_NOLIMIT == 1)", text_full)
+        self.assertIn("g3x_movie_nolimit_poll();", text_full)
+
+        # Verify staging patches hook kbd.c in alone configuration
+        ensure_build_alone()
+        alone_staged_kbd = ROOT / "out/build-nolimit-alone/stage_chdk/platform/g3x/kbd.c"
+        self.assertTrue(alone_staged_kbd.is_file(), f"Missing {alone_staged_kbd}")
+        text_alone = alone_staged_kbd.read_text(encoding="utf-8")
+        self.assertIn("#if defined(G3X_MOVIE_NOLIMIT) && (G3X_MOVIE_NOLIMIT == 1)", text_alone)
+        self.assertIn("g3x_movie_nolimit_poll();", text_alone)
+
+        # Verify staging patches hook kbd.c in combined configuration
+        ensure_build_combined()
+        comb_staged_kbd = ROOT / "out/port56-movie-nolimit/stage_chdk/platform/g3x/kbd.c"
+        self.assertTrue(comb_staged_kbd.is_file(), f"Missing {comb_staged_kbd}")
+        text_comb = comb_staged_kbd.read_text(encoding="utf-8")
+        self.assertIn("#if defined(G3X_MOVIE_NOLIMIT) && (G3X_MOVIE_NOLIMIT == 1)", text_comb)
+        self.assertIn("g3x_movie_nolimit_poll();", text_comb)
 
     def test_gui_diag_marker_gating(self):
         text = DIAG_HEADER.read_text(encoding="utf-8")
