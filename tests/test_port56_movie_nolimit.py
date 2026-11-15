@@ -149,6 +149,31 @@ def setUpModule() -> None:
     ensure_build_combined()
 
 
+def parse_imm(s: str) -> int:
+    """Parse immediate operand formatted as decimal, hex, or negative value."""
+    s = s.strip().lstrip("#").strip()
+    if s.startswith("-0x") or s.startswith("-0X"):
+        return -int(s[3:], 16)
+    if s.startswith("0x") or s.startswith("0X"):
+        return int(s[2:], 16)
+    return int(s, 10)
+
+
+def extract_literal_words(disasm: str) -> dict[int, int]:
+    """Extract literal pool words mapped by their address."""
+    pool: dict[int, int] = {}
+    for line in disasm.splitlines():
+        line_clean = line.split(";")[0].strip()
+        m = re.match(r"^\s*([0-9a-fA-F]+):\s*(?:[0-9a-fA-F\s]+?\t)?(?:\.word\s+(?:0x)?([0-9a-fA-F]+))", line_clean)
+        if m:
+            pool[int(m.group(1), 16)] = int(m.group(2), 16)
+            continue
+        m = re.match(r"^\s*([0-9a-fA-F]+):\s+([0-9a-fA-F]{8})(?:\s+|$)", line_clean)
+        if m:
+            pool[int(m.group(1), 16)] = int(m.group(2), 16)
+    return pool
+
+
 def parse_function_instructions(disasm: str, symbol_name: str) -> list[dict[str, str]]:
     """Extract and parse instruction records for a given symbol from objdump output."""
     marker = f"<{symbol_name}>:"
@@ -161,11 +186,11 @@ def parse_function_instructions(disasm: str, symbol_name: str) -> list[dict[str,
         line_s = line.strip()
         if not line_s:
             continue
-        if re.match(r"^[0-9a-f]+\s+<[^>]+>:", line):
+        if re.match(r"^[0-9a-fA-F]+\s+<[^>]+>:", line):
             break
         if line_s == "...":
             continue
-        m = re.match(r"^\s*([0-9a-f]+):\s+([0-9a-f\s]+?)\t([a-z0-9\._]+)\s*(.*)$", line)
+        m = re.match(r"^\s*([0-9a-fA-F]+):\s+([0-9a-fA-F]{2,8}(?:\s+[0-9a-fA-F]{2,8})?)\s+([a-z0-9\._]+)\s*(.*)$", line)
         if m:
             addr, raw_bytes, mnemonic, rest = m.groups()
             operands = rest.split(";")[0].strip()
@@ -179,6 +204,245 @@ def parse_function_instructions(disasm: str, symbol_name: str) -> list[dict[str,
                 "line": line.strip(),
             })
     return instrs
+
+
+def parse_store_info(mnem: str, operands: str) -> dict:
+    """Parse store instruction to extract base register, immediate offset, and source register."""
+    m = mnem.lower()
+    ops = operands.strip()
+    if m.startswith("push"):
+        return {"is_stack": True}
+    if m.startswith("stm"):
+        m_stm = re.match(r"^([a-z0-9]+)!?\s*,\s*\{([^}]+)\}", ops, re.I)
+        if m_stm:
+            base_reg = m_stm.group(1).lower()
+            if base_reg in ("sp", "r13"):
+                return {"is_stack": True}
+            return {
+                "is_stack": False,
+                "base_reg": base_reg,
+                "offset": 0,
+                "src_reg": m_stm.group(2).split(",")[0].strip().lower(),
+            }
+        return {"is_stack": False, "error": f"Unrecognized stm syntax: {ops}"}
+
+    m_str = re.match(r"^(.*?),\s*\[\s*([a-z0-9]+)(?:\s*,\s*#?([+-]?(?:0x[0-9a-fA-F]+|[0-9]+)))?\s*\]", ops, re.I)
+    if m_str:
+        src = m_str.group(1).strip().split(",")[-1].strip().lower()
+        base_reg = m_str.group(2).lower()
+        offset_str = m_str.group(3)
+        offset = 0
+        if offset_str:
+            offset = parse_imm(offset_str)
+        if base_reg in ("sp", "r13"):
+            return {"is_stack": True}
+        return {
+            "is_stack": False,
+            "base_reg": base_reg,
+            "offset": offset,
+            "src_reg": src,
+        }
+    return {"is_stack": False, "error": f"Unrecognized store syntax: {ops}"}
+
+
+def resolve_register_value(
+    instrs: list[dict[str, str]],
+    stop_idx: int,
+    target_reg: str,
+    literal_pool: dict[int, int],
+    depth: int = 0,
+) -> int | None:
+    """Track register back to its immediate value, literal-pool load, movw/movt, or mov/adds/subs."""
+    if depth > 10:
+        return None
+    target_reg = target_reg.lower()
+    for i in range(stop_idx - 1, -1, -1):
+        instr = instrs[i]
+        mnem = instr["mnemonic"]
+        ops = [op.strip() for op in instr["operands"].split(",") if op.strip()]
+        if not ops:
+            continue
+        dest_reg = ops[0].lower()
+
+        # movw: 16-bit immediate with top 16 bits cleared to zero
+        if mnem.startswith("movw") and dest_reg == target_reg and len(ops) >= 2:
+            imm_lo = parse_imm(ops[1]) & 0xFFFF
+            imm_hi = 0
+            for k in range(i + 1, stop_idx):
+                k_instr = instrs[k]
+                k_ops = [op.strip() for op in k_instr["operands"].split(",") if op.strip()]
+                if k_instr["mnemonic"].startswith("movt") and k_ops and k_ops[0].lower() == target_reg and len(k_ops) >= 2:
+                    imm_hi = parse_imm(k_ops[1]) & 0xFFFF
+                    break
+            return ((imm_hi << 16) | imm_lo) & 0xFFFFFFFF
+
+        # movt: high 16-bit immediate; find preceding movw
+        if mnem.startswith("movt") and dest_reg == target_reg and len(ops) >= 2:
+            imm_hi = parse_imm(ops[1]) & 0xFFFF
+            imm_lo = None
+            for k in range(i - 1, -1, -1):
+                k_instr = instrs[k]
+                k_ops = [op.strip() for op in k_instr["operands"].split(",") if op.strip()]
+                if k_instr["mnemonic"].startswith("movw") and k_ops and k_ops[0].lower() == target_reg and len(k_ops) >= 2:
+                    imm_lo = parse_imm(k_ops[1]) & 0xFFFF
+                    break
+            if imm_lo is not None:
+                return ((imm_hi << 16) | imm_lo) & 0xFFFFFFFF
+            return None
+
+        # ldr reg, [pc, #...] (literal pool load)
+        if mnem.startswith("ldr") and dest_reg == target_reg:
+            m_pc = re.search(r"\[\s*pc\s*(?:,\s*#?([+-]?(?:0x[0-9a-fA-F]+|[0-9]+)))?\s*\]", instr["operands"], re.I)
+            if m_pc:
+                m_target = re.search(r"\(\s*([0-9a-fA-F]+)", instr["comment"])
+                if m_target:
+                    target_addr = int(m_target.group(1), 16)
+                else:
+                    pc_off = parse_imm(m_pc.group(1)) if m_pc.group(1) else 0
+                    instr_addr = int(instr["addr"], 16)
+                    target_addr = ((instr_addr + 4) & ~3) + pc_off
+                if target_addr in literal_pool:
+                    return literal_pool[target_addr] & 0xFFFFFFFF
+                return None
+            else:
+                return None
+
+        # mov / movs / mov.w / mov<cond>
+        if re.match(r"^mov[a-z0-9\._]*$", mnem) and not mnem.startswith("movw") and not mnem.startswith("movt") and dest_reg == target_reg:
+            if len(ops) >= 2:
+                if ops[1].startswith("#") or ops[1].startswith("0x") or ops[1].lstrip("-").isdigit():
+                    return parse_imm(ops[1]) & 0xFFFFFFFF
+                else:
+                    return resolve_register_value(instrs, i, ops[1].lower(), literal_pool, depth + 1)
+            return None
+
+        # mvn / mvns / mvn<cond>
+        if re.match(r"^mvn[a-z0-9\._]*$", mnem) and dest_reg == target_reg and len(ops) >= 2:
+            if ops[1].startswith("#") or ops[1].startswith("0x") or ops[1].lstrip("-").isdigit():
+                return (~parse_imm(ops[1])) & 0xFFFFFFFF
+            return None
+
+        # add / adds
+        if re.match(r"^add[a-z0-9\._]*$", mnem) and dest_reg == target_reg:
+            if len(ops) == 2:
+                prev = resolve_register_value(instrs, i, target_reg, literal_pool, depth + 1)
+                if prev is not None:
+                    return (prev + parse_imm(ops[1])) & 0xFFFFFFFF
+                return None
+            elif len(ops) >= 3:
+                src = ops[1].lower()
+                prev = resolve_register_value(instrs, i, src, literal_pool, depth + 1)
+                if prev is not None:
+                    return (prev + parse_imm(ops[2])) & 0xFFFFFFFF
+                return None
+
+        # sub / subs
+        if re.match(r"^sub[a-z0-9\._]*$", mnem) and dest_reg == target_reg:
+            if len(ops) == 2:
+                prev = resolve_register_value(instrs, i, target_reg, literal_pool, depth + 1)
+                if prev is not None:
+                    return (prev - parse_imm(ops[1])) & 0xFFFFFFFF
+                return None
+            elif len(ops) >= 3:
+                src = ops[1].lower()
+                prev = resolve_register_value(instrs, i, src, literal_pool, depth + 1)
+                if prev is not None:
+                    return (prev - parse_imm(ops[2])) & 0xFFFFFFFF
+                return None
+
+        # Function calls or pops that overwrite target_reg
+        if mnem.startswith("bl") and target_reg in ("r0", "r1", "r2", "r3", "ip", "lr"):
+            return None
+        if mnem.startswith("pop") and target_reg in [o.strip("{}").lower() for o in ops]:
+            return None
+        if dest_reg == target_reg:
+            return None
+
+    return None
+
+
+def verify_movie_nolimit_stores(
+    disasm: str,
+    entry_symbol: str = "g3x_movie_nolimit_poll",
+    allowed_helpers: set[str] | None = None,
+) -> list[dict]:
+    """Resolve destination address and stored value for every non-stack store in entry_symbol and its helpers.
+
+    Enforces:
+    1. Every non-stack store must resolve to exactly 0x0000C274. If unresolvable, fails.
+    2. At least one store to 0x0000C274 must exist.
+    3. Value stored must come from 0xFFFFFFFF.
+    """
+    literal_pool = extract_literal_words(disasm)
+    visited: set[str] = set()
+    queue = [entry_symbol]
+    all_stores: list[dict] = []
+
+    while queue:
+        sym = queue.pop(0)
+        if sym in visited:
+            continue
+        visited.add(sym)
+        instrs = parse_function_instructions(disasm, sym)
+        if not instrs:
+            continue
+
+        for i, instr in enumerate(instrs):
+            mnem = instr["mnemonic"]
+            if mnem.startswith("bl") or mnem.startswith("b"):
+                m_call = re.search(r"<([a-zA-Z0-9_]+)>", instr["comment"] or instr["operands"])
+                if m_call:
+                    target_sym = m_call.group(1)
+                    if (allowed_helpers is None or target_sym in allowed_helpers) and f"<{target_sym}>:" in disasm and target_sym not in visited:
+                        queue.append(target_sym)
+
+            if not (mnem.startswith("str") or mnem.startswith("stm") or mnem.startswith("push")):
+                continue
+            store_info = parse_store_info(mnem, instr["operands"])
+            if store_info.get("is_stack"):
+                continue
+            base_reg = store_info.get("base_reg")
+            offset = store_info.get("offset", 0)
+            src_reg = store_info.get("src_reg")
+
+            base_val = resolve_register_value(instrs, i, base_reg, literal_pool) if base_reg else None
+            dest_addr = (base_val + offset) & 0xFFFFFFFF if base_val is not None else None
+            stored_val = resolve_register_value(instrs, i, src_reg, literal_pool) if src_reg else None
+
+            all_stores.append({
+                "symbol": sym,
+                "addr": instr["addr"],
+                "mnemonic": mnem,
+                "operands": instr["operands"],
+                "base_reg": base_reg,
+                "offset": offset,
+                "dest_addr": dest_addr,
+                "src_reg": src_reg,
+                "stored_val": stored_val,
+                "line": instr["line"],
+            })
+
+    found_c274_store = False
+    for s in all_stores:
+        if s["dest_addr"] is None:
+            raise AssertionError(
+                f"Store at {s['addr']} in {s['symbol']} ({s['mnemonic']} {s['operands']}) destination could not be resolved"
+            )
+        if s["dest_addr"] != 0x0000C274:
+            raise AssertionError(
+                f"Store at {s['addr']} in {s['symbol']} writes to 0x{s['dest_addr']:08X}, expected only 0x0000C274"
+            )
+        if s["dest_addr"] == 0x0000C274:
+            found_c274_store = True
+            if s["stored_val"] != 0xFFFFFFFF:
+                raise AssertionError(
+                    f"Store to 0x0000C274 in {s['symbol']} stored value is 0x{s['stored_val']:08X}, expected 0xFFFFFFFF"
+                )
+
+    if not found_c274_store:
+        raise AssertionError(f"No store to 0x0000C274 found in {entry_symbol} or its helpers")
+
+    return all_stores
 
 
 class TestPort56FlagPlumbing(unittest.TestCase):
@@ -286,10 +550,18 @@ class TestPort56WriteAddressAllowlist(unittest.TestCase):
         cls.alone_obj = ROOT / "out/build-nolimit-alone/stage_chdk/platform/g3x/sub/110c/movie_rec.o"
 
     def test_g3x_movie_nolimit_poll_writes_only_c274(self):
-        """Verify g3x_movie_nolimit_poll writes ONLY to 0x0000C274."""
+        """Verify g3x_movie_nolimit_poll (and inlined/called helpers in movie_rec.o) writes ONLY to 0x0000C274."""
+        movie_rec_helpers = {
+            "g3x_get_movie_status",
+            "g3x_get_movie_max_frames",
+            "g3x_get_movie_cur_frames",
+            "change_video_tables",
+            "set_quality",
+        }
         targets = [
-            (self.combined_elf, "combined main.elf"),
-            (self.alone_obj, "alone movie_rec.o"),
+            (self.alone_obj, "alone configuration (b) movie_rec.o"),
+            (self.alone_elf, "alone configuration (b) main.elf"),
+            (self.combined_elf, "combined configuration (c) main.elf"),
         ]
         for target_path, desc in targets:
             self.assertTrue(target_path.is_file(), f"Target not found: {target_path}")
@@ -301,25 +573,144 @@ class TestPort56WriteAddressAllowlist(unittest.TestCase):
             )
             disasm = res.stdout
 
-            instrs = parse_function_instructions(disasm, "g3x_movie_nolimit_poll")
-            self.assertGreater(
-                len(instrs),
-                0,
-                f"Expected parsed instructions for g3x_movie_nolimit_poll in {desc}, found none",
+            stores = verify_movie_nolimit_stores(
+                disasm,
+                entry_symbol="g3x_movie_nolimit_poll",
+                allowed_helpers=movie_rec_helpers,
             )
 
-            found_store = False
-            for instr in instrs:
-                mnem = instr["mnemonic"]
-                operands = instr["operands"]
-                # If it's a store instruction (not push/stack store)
-                if mnem.startswith("str"):
-                    found_store = True
-                    # In ARM/Thumb, stores to target address should be `str rX, [rY]` where rY contains 0x0000C274
-                    # Verify no stores target other registers or sp
-                    self.assertNotIn("sp", operands)
+            # Every store must write strictly to 0x0000C274
+            for s in stores:
+                self.assertIsNotNone(
+                    s["dest_addr"],
+                    f"Unresolved store destination in {desc}: {s}",
+                )
+                self.assertEqual(
+                    s["dest_addr"],
+                    0x0000C274,
+                    f"Forbidden write to 0x{s['dest_addr']:08X} in {desc}: {s['line']}",
+                )
 
-            self.assertTrue(found_store, f"Did not find store instruction in g3x_movie_nolimit_poll in {desc}")
+            # Positive check: at least one store to 0xC274 exists with value 0xFFFFFFFF
+            c274_stores = [s for s in stores if s["dest_addr"] == 0x0000C274]
+            self.assertGreaterEqual(
+                len(c274_stores),
+                1,
+                f"Expected at least one store to 0x0000C274 in {desc}, found none",
+            )
+            for s in c274_stores:
+                self.assertEqual(
+                    s["stored_val"],
+                    0xFFFFFFFF,
+                    f"Store to 0x0000C274 in {desc} does not store 0xFFFFFFFF (stored {s['stored_val']}): {s['line']}",
+                )
+
+    def test_synthetic_resolver_fixtures_reject_forbidden_destinations(self):
+        """Verify the address resolver rejects forbidden destinations and unresolved stores."""
+        # Negative fixture (a): store to 0xC0E4 via literal-pool base
+        fixture_a = """
+00000000 <g3x_movie_nolimit_poll>:
+   0: 4a02       ldr r2, [pc, #8] ; (c <g3x_movie_nolimit_poll+0xc>)
+   2: f04f 33ff  mov.w r3, #4294967295
+   6: 6013       str r3, [r2, #0]
+   8: 4770       bx lr
+   a: bf00       nop
+   c: 0000c0e4   .word 0x0000c0e4
+"""
+        with self.assertRaises(AssertionError) as ctx_a:
+            verify_movie_nolimit_stores(fixture_a, "g3x_movie_nolimit_poll")
+        self.assertIn("0x0000C0E4", str(ctx_a.exception))
+
+        # Negative fixture (b): store to 0xC0C0 via movw/movt
+        fixture_b = """
+00000000 <g3x_movie_nolimit_poll>:
+   0: f24c 02c0  movw r2, #49344 ; 0xc0c0
+   4: f2c0 0200  movt r2, #0
+   8: f04f 33ff  mov.w r3, #4294967295
+   c: 6013       str r3, [r2, #0]
+   e: 4770       bx lr
+"""
+        with self.assertRaises(AssertionError) as ctx_b:
+            verify_movie_nolimit_stores(fixture_b, "g3x_movie_nolimit_poll")
+        self.assertIn("0x0000C0C0", str(ctx_b.exception))
+
+        # Negative fixture (c): store using base 0xC274 with offset #4 (resolves to 0xC278)
+        fixture_c = """
+00000000 <g3x_movie_nolimit_poll>:
+   0: f24c 2274  movw r2, #49780 ; 0xc274
+   4: f04f 33ff  mov.w r3, #4294967295
+   8: 6053       str r3, [r2, #4]
+   a: 4770       bx lr
+"""
+        with self.assertRaises(AssertionError) as ctx_c:
+            verify_movie_nolimit_stores(fixture_c, "g3x_movie_nolimit_poll")
+        self.assertIn("0x0000C278", str(ctx_c.exception))
+
+        # Negative fixture (d): store through a register that cannot be resolved
+        fixture_d = """
+00000000 <g3x_movie_nolimit_poll>:
+   0: 680a       ldr r2, [r1, #0]
+   2: f04f 33ff  mov.w r3, #4294967295
+   4: 6013       str r3, [r2, #0]
+   6: 4770       bx lr
+"""
+        with self.assertRaises(AssertionError) as ctx_d:
+            verify_movie_nolimit_stores(fixture_d, "g3x_movie_nolimit_poll")
+        self.assertIn("could not be resolved", str(ctx_d.exception))
+
+        # Positive fixture: store to 0xC274 with value 0xFFFFFFFF
+        fixture_pos = """
+00000000 <g3x_movie_nolimit_poll>:
+   0: f24c 2274  movw r2, #49780 ; 0xc274
+   4: f04f 33ff  mov.w r3, #4294967295
+   8: 6013       str r3, [r2, #0]
+   a: 4770       bx lr
+"""
+        stores_pos = verify_movie_nolimit_stores(fixture_pos, "g3x_movie_nolimit_poll")
+        self.assertEqual(len(stores_pos), 1)
+        self.assertEqual(stores_pos[0]["dest_addr"], 0x0000C274)
+        self.assertEqual(stores_pos[0]["stored_val"], 0xFFFFFFFF)
+
+        # Positive fixture variant: value loaded with mvn r3, #0
+        fixture_pos_mvn = """
+00000000 <g3x_movie_nolimit_poll>:
+   0: f24c 2274  movw r2, #49780 ; 0xc274
+   4: f06f 0300  mvn r3, #0
+   8: 6013       str r3, [r2, #0]
+   a: 4770       bx lr
+"""
+        stores_mvn = verify_movie_nolimit_stores(fixture_pos_mvn, "g3x_movie_nolimit_poll")
+        self.assertEqual(len(stores_mvn), 1)
+        self.assertEqual(stores_mvn[0]["dest_addr"], 0x0000C274)
+        self.assertEqual(stores_mvn[0]["stored_val"], 0xFFFFFFFF)
+
+        # Positive fixture variant: value loaded with movs r3, #-1
+        fixture_pos_movs = """
+00000000 <g3x_movie_nolimit_poll>:
+   0: f24c 2274  movw r2, #49780 ; 0xc274
+   4: 23ff       movs r3, #-1
+   6: 6013       str r3, [r2, #0]
+   8: 4770       bx lr
+"""
+        stores_movs = verify_movie_nolimit_stores(fixture_pos_movs, "g3x_movie_nolimit_poll")
+        self.assertEqual(len(stores_movs), 1)
+        self.assertEqual(stores_movs[0]["dest_addr"], 0x0000C274)
+        self.assertEqual(stores_movs[0]["stored_val"], 0xFFFFFFFF)
+
+        # Positive fixture variant: value loaded from literal pool 0xFFFFFFFF
+        fixture_pos_lit = """
+00000000 <g3x_movie_nolimit_poll>:
+   0: f24c 2274  movw r2, #49780 ; 0xc274
+   4: 4b01       ldr r3, [pc, #4] ; (c)
+   6: 6013       str r3, [r2, #0]
+   8: 4770       bx lr
+   a: bf00       nop
+   c: ffffffff   .word 0xffffffff
+"""
+        stores_lit = verify_movie_nolimit_stores(fixture_pos_lit, "g3x_movie_nolimit_poll")
+        self.assertEqual(len(stores_lit), 1)
+        self.assertEqual(stores_lit[0]["dest_addr"], 0x0000C274)
+        self.assertEqual(stores_lit[0]["stored_val"], 0xFFFFFFFF)
 
     def test_g3x_get_movie_cur_frames_is_read_only(self):
         """Verify g3x_get_movie_cur_frames has zero stores and loads 0x0000C278."""
