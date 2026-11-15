@@ -21,3 +21,19 @@
 2. **Missing FINSIG stub analysis (`RenameFile_Fut`)**: `RenameFile_Fut` is marked missing in `reference/finsig_gm110c/stubs_entry.S:266` (`ERROR: RenameFile_Fut is not found`). It is safely mapped to `NULL_SUB` (`0xFC000011`) in `chdk-port/platform/g3x/sub/110c/stubs_entry_2.S:28` and blocked by linker wrap in `Makefile:20` and `full_build/g3x/lib.c:182`. If ever required for non-conf tasks, its bounded ROM search range is proposed as `0xFC37B000..0xFC37F500` (length `0x4500` / 17,664 bytes) within the GM1.10C DryOS filesystem cluster. Because `RenameFile_Fut` is not reached by conf save/load, zero ROM reads were executed.
 3. **Central write sandbox**: Placing the `A/CHDK/` path check in `__wrap_open` (`full_build/g3x/lib.c:147`) ensures that every file write opened via POSIX flags is gated through a single choke point. Any write attempt targeting outside `A/CHDK/` (such as `A/DCIM/`, `A/MISC/`, or root `A/`) is immediately refused with `errno = EACCES` (`-1`).
 4. **Diagnostic marker update**: Setting `g3x_conf_save_status = 1` yields `"SAVE:OK"`, while status `2` (updated from `"ERR"` to `"FAIL"`) yields `"SAVE:FAIL"` on the OSD banner (`chdk-port/platform/g3x/gui_diag.h`), providing immediate visual confirmation on camera without reading back the card.
+
+## Adapted GM1.10C Stubs and Symbols Table
+
+| Symbol | Address / Value | FINSIG line (`reference/finsig_gm110c/stubs_entry.S`) | Type / Role | Conf Path | Status |
+|---|---|---|---|---|---|
+| `Open` (`_Open`) | `0xfc37b3b5` | Line 253 | NHSTUB | Save (`O_WRONLY\|O_CREAT\|O_TRUNC`) & Load (`O_RDONLY`) | Gated by `g3x_is_safe_chdk_write_path` & `spytask_can_start` |
+| `Close` (`_Close`) | `0xfc37b439` | Line 198 | NHSTUB | Save & Load | Active / Unwrapped |
+| `Read` (`_Read`) | `0xfc418d61` | Line 263 | NHSTUB | Load (`conf_restore`) | Active / Unwrapped |
+| `Write` (`_Write`) | `0xfc37b471` | Line 289 | NHSTUB | Save (`conf_save`) | Gated by `spytask_can_start`; routes to `__real_write` |
+| `stat` (`_stat`) | `0xfc37b5cd` | Line 322 | NHSTUB | Load (`conf_restore` file check) | Active / Unwrapped |
+| `fileio_semaphore` | `0x000149c0` | Line 174 | DEF | File I/O semaphore mutex | Active / Wrappers serialize |
+| `TakeSemaphore` | `0xbfe153e1` | Line 280 | NHSTUB | Semaphore acquire | Active / Wrappers serialize |
+| `GiveSemaphore` | `0xbfe15459` | Line 244 | NHSTUB | Semaphore release | Active / Wrappers serialize |
+| `task_InitFileModules` | `0xfc0bd071` | Line 338 | DEF | Filesystem init task hook | Signals `core_spytask_can_start()` |
+| `task_FileWrite` | `0xfc25f3a7` | Line 337 | DEF | Raw/JPEG image writer task | Stock pass-through (unhooked / disabled) |
+
