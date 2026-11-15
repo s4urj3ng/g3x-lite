@@ -1678,7 +1678,8 @@ def apply_conf_save_staging_patches(stage_dir: Path) -> None:
         "#if ((defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)) || \\\n"
         "     (defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1))) && \\\n"
         "    ((defined(G3X_DISABLE_CARD_WRITES) && (G3X_DISABLE_CARD_WRITES == 1)) || \\\n"
-        "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1)))\n"
+        "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1))) && \\\n"
+        "    (!defined(G3X_CONF_SAVE) || (G3X_CONF_SAVE != 1))\n"
         "    (void)ci;\n"
         "    (void)filename;\n"
         "    (void)config_base;\n"
@@ -1702,9 +1703,11 @@ def apply_conf_save_staging_patches(stage_dir: Path) -> None:
         "void conf_save()\n"
         "{\n"
         "#if ((defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)) || \\\n"
-        "     (defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1))) && \\\n"
+        "     (defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)) || \\\n"
+        "     (defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1))) && \\\n"
         "    ((defined(G3X_DISABLE_CARD_WRITES) && (G3X_DISABLE_CARD_WRITES == 1)) || \\\n"
-        "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1)))\n"
+        "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1))) && \\\n"
+        "    (!defined(G3X_CONF_SAVE) || (G3X_CONF_SAVE != 1))\n"
         "    extern void g3x_conf_record_save_result(int ok);\n"
         "    g3x_conf_record_save_result(3 /* G3X_CONF_SAVE_OFF */);\n"
         "    return;\n"
@@ -1742,7 +1745,8 @@ def apply_conf_save_staging_patches(stage_dir: Path) -> None:
         "{\n"
         "#if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1) && \\\n"
         "    ((defined(G3X_DISABLE_CARD_WRITES) && (G3X_DISABLE_CARD_WRITES == 1)) || \\\n"
-        "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1)))\n"
+        "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1))) && \\\n"
+        "    (!defined(G3X_CONF_SAVE) || (G3X_CONF_SAVE != 1))\n"
         "    (void)config_base;\n"
         "    (void)filename;\n"
         "    extern void g3x_conf_record_save_result(int ok);\n"
@@ -1917,7 +1921,8 @@ def apply_gui_menu_staging_patches(stage_dir: Path) -> None:
         "#if ((defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)) || \\\n"
         "     (defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1))) && \\\n"
         "    ((defined(G3X_DISABLE_CARD_WRITES) && (G3X_DISABLE_CARD_WRITES == 1)) || \\\n"
-        "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1)))\n"
+        "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1)) || \\\n"
+        "     (defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1)))\n"
         "    return;\n"
         "#else\n"
     )
@@ -1936,7 +1941,8 @@ def apply_gui_menu_staging_patches(stage_dir: Path) -> None:
         "#if ((defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)) || \\\n"
         "     (defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1))) && \\\n"
         "    ((defined(G3X_DISABLE_CARD_WRITES) && (G3X_DISABLE_CARD_WRITES == 1)) || \\\n"
-        "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1)))\n"
+        "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1)) || \\\n"
+        "     (defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1)))\n"
         "    (void)enforce;\n"
         "    return;\n"
         "#else\n"
@@ -1960,7 +1966,8 @@ def apply_gui_menu_staging_patches(stage_dir: Path) -> None:
         "#if ((defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)) || \\\n"
         "     (defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1))) && \\\n"
         "    ((defined(G3X_DISABLE_CARD_WRITES) && (G3X_DISABLE_CARD_WRITES == 1)) || \\\n"
-        "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1)))\n"
+        "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1)) || \\\n"
+        "     (defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1)))\n"
         "    (void)filename;\n"
         "    (void)value;\n"
         "    return;\n"
@@ -2260,6 +2267,334 @@ def apply_playback_menu_staging_patches(stage_dir: Path, alone: bool = False) ->
             gui_c.write_text(gui_text, encoding="utf-8")
 
 
+def apply_port54_conf_save_staging_patches(stage_dir: Path, alone: bool = False) -> None:
+    """PORT-54: Apply G3X_CONF_SAVE=1 central A/CHDK/ path check and conf_save hooks."""
+    # Ensure standard conf_save staging patches are applied
+    apply_conf_save_staging_patches(stage_dir)
+
+    # 1. Update platform/g3x/gui_diag.h in staging
+    shutil.copy2(CHDK_PORT / "platform/g3x/gui_diag.h", stage_dir / "platform/g3x/gui_diag.h")
+
+    # 2. Update makefiles with -DG3X_CONF_SAVE=1 (retain general write-disable flags)
+    for rel in ["platform/g3x/Makefile", "platform/g3x/sub/110c/Makefile"]:
+        mpath = stage_dir / rel
+        text = mpath.read_text(encoding="utf-8")
+        if "-DG3X_CONF_SAVE=1" not in text:
+            if "CFLAGS += -DG3X_PLAYBACK_MENU=1" in text:
+                text = text.replace("CFLAGS += -DG3X_PLAYBACK_MENU=1", "CFLAGS += -DG3X_PLAYBACK_MENU=1 -DG3X_CONF_SAVE=1")
+            elif "CFLAGS +=" in text:
+                text = text.replace("CFLAGS +=", "CFLAGS += -DG3X_CONF_SAVE=1", 1)
+            elif "CFLAGS =" in text:
+                text = text.replace("CFLAGS =", "CFLAGS = -DG3X_CONF_SAVE=1", 1)
+        mpath.write_text(text, encoding="utf-8")
+
+    # 3. In platform/g3x/sub/110c/Makefile: unwrap conf_save whenever G3X_CONF_SAVE=1
+    sub_makefile = stage_dir / "platform/g3x/sub/110c/Makefile"
+    sub_text = sub_makefile.read_text(encoding="utf-8")
+    wrap_conf_flag = "-Wl,--wrap=conf_save "
+    if wrap_conf_flag in sub_text:
+        sub_text = sub_text.replace(wrap_conf_flag, "")
+    sub_makefile.write_text(sub_text, encoding="utf-8")
+
+    # 4. In platform/g3x/lib.c: replace __wrap_open and __wrap_write with scoped sandboxed path checking versions
+    lib_c = stage_dir / "platform/g3x/lib.c"
+    lib_text = lib_c.read_text(encoding="utf-8")
+    open_wrap_target = (
+        "int __wrap_write(int fd, const void *buf, int n) { (void)fd; (void)buf; return n; }\n"
+        "int __wrap_fwrite(const void *ptr, int size, int n, void *stream) { (void)ptr; (void)size; (void)stream; return n; }\n\n"
+        "// Real DryOS symbols resolved via linker --wrap\n"
+        "extern int __real_open(const char *name, int flags, int mode);\n"
+        "extern void *__real_fopen(const char *filename, const char *mode);\n\n"
+        "int __wrap_creat(const char *pathname, int mode)\n"
+        "{\n"
+        "    (void)pathname;\n"
+        "    (void)mode;\n"
+        "    return -1;\n"
+        "}\n\n"
+        "int __wrap_open(const char *name, int flags, int mode)\n"
+        "{\n"
+        "    // Block write/create/append/truncate access:\n"
+        "    // O_WRONLY(1), O_RDWR(2), O_APPEND(8), O_CREAT(0x100 or 0x200), O_TRUNC(0x200 or 0x400)\n"
+        "    if ((flags & 3) != 0 || (flags & (0x08 | 0x0100 | 0x0200 | 0x0400 | 0x0800))) {\n"
+        "        return -1;\n"
+        "    }\n"
+        "    return __real_open(name, flags, mode);\n"
+        "}"
+    )
+    open_wrap_replacement = (
+        "int __wrap_fwrite(const void *ptr, int size, int n, void *stream) { (void)ptr; (void)size; (void)stream; return n; }\n\n"
+        "// Real DryOS symbols resolved via linker --wrap\n"
+        "extern int __real_open(const char *name, int flags, int mode);\n"
+        "extern int __real_write(int fd, const void *buf, int n);\n"
+        "extern void *__real_fopen(const char *filename, const char *mode);\n\n"
+        "int __wrap_creat(const char *pathname, int mode)\n"
+        "{\n"
+        "    (void)pathname;\n"
+        "    (void)mode;\n"
+        "    return -1;\n"
+        "}\n\n"
+        "volatile int g3x_conf_save_active = 0;\n\n"
+        "static int g3x_tolower(int c)\n"
+        "{\n"
+        "    if (c >= 'A' && c <= 'Z') {\n"
+        "        return c + ('a' - 'A');\n"
+        "    }\n"
+        "    return c;\n"
+        "}\n\n"
+        "static int g3x_strcasecmp(const char *s1, const char *s2)\n"
+        "{\n"
+        "    while (*s1 && *s2) {\n"
+        "        if (g3x_tolower((unsigned char)*s1) != g3x_tolower((unsigned char)*s2)) {\n"
+        "            return (unsigned char)*s1 - (unsigned char)*s2;\n"
+        "        }\n"
+        "        s1++;\n"
+        "        s2++;\n"
+        "    }\n"
+        "    return (unsigned char)*s1 - (unsigned char)*s2;\n"
+        "}\n\n"
+        "int g3x_is_safe_chdk_write_path(const char *path)\n"
+        "{\n"
+        "    if (!path) {\n"
+        "        return 0;\n"
+        "    }\n"
+        "    const char *p;\n"
+        "    for (p = path; *p; ++p) {\n"
+        "        if (*p == '\\\\') {\n"
+        "            return 0;\n"
+        "        }\n"
+        "    }\n"
+        "    for (p = path; *p; ++p) {\n"
+        "        if (p[0] == '.' && p[1] == '.') {\n"
+        "            return 0;\n"
+        "        }\n"
+        "    }\n"
+        "    int idx = 0;\n"
+        "    if (g3x_tolower((unsigned char)path[0]) != 'a') {\n"
+        "        return 0;\n"
+        "    }\n"
+        "    idx = 1;\n"
+        "    if (path[idx] == ':') {\n"
+        "        idx++;\n"
+        "    }\n"
+        "    if (path[idx] != '/') {\n"
+        "        return 0;\n"
+        "    }\n"
+        "    idx++;\n"
+        "    const char *target = \"chdk/\";\n"
+        "    int i;\n"
+        "    for (i = 0; i < 5; ++i) {\n"
+        "        if (g3x_tolower((unsigned char)path[idx + i]) != target[i]) {\n"
+        "            return 0;\n"
+        "        }\n"
+        "    }\n"
+        "    return 1;\n"
+        "}\n\n"
+        "int g3x_is_conf_file_path(const char *path)\n"
+        "{\n"
+        "    if (!g3x_is_safe_chdk_write_path(path)) {\n"
+        "        return 0;\n"
+        "    }\n"
+        "    int idx = 1;\n"
+        "    if (path[idx] == ':') {\n"
+        "        idx++;\n"
+        "    }\n"
+        "    if (path[idx] != '/') {\n"
+        "        return 0;\n"
+        "    }\n"
+        "    idx++;\n"
+        "    idx += 5;\n"
+        "    const char *sub = path + idx;\n"
+        "    if (g3x_strcasecmp(sub, \"cchdk4.cfg\") == 0 ||\n"
+        "        g3x_strcasecmp(sub, \"osd__4.cfg\") == 0 ||\n"
+        "        g3x_strcasecmp(sub, \"umenu4.cfg\") == 0 ||\n"
+        "        g3x_strcasecmp(sub, \"gps__4.cfg\") == 0) {\n"
+        "        return 1;\n"
+        "    }\n"
+        "    return 0;\n"
+        "}\n\n"
+        "int __wrap_write(int fd, const void *buf, int n)\n"
+        "{\n"
+        "    extern volatile int spytask_can_start;\n"
+        "    if (!spytask_can_start || !g3x_conf_save_active) {\n"
+        "        return -1;\n"
+        "    }\n"
+        "    return __real_write(fd, buf, n);\n"
+        "}\n\n"
+        "int __wrap_open(const char *name, int flags, int mode)\n"
+        "{\n"
+        "    if ((flags & 3) != 0 || (flags & (0x08 | 0x0100 | 0x0200 | 0x0400 | 0x0800))) {\n"
+        "        extern volatile int spytask_can_start;\n"
+        "        if (!spytask_can_start || !g3x_conf_save_active) {\n"
+        "            return -1;\n"
+        "        }\n"
+        "        if (!g3x_is_safe_chdk_write_path(name)) {\n"
+        "            return -1;\n"
+        "        }\n"
+        "        if (!g3x_is_conf_file_path(name)) {\n"
+        "            return -1;\n"
+        "        }\n"
+        "    }\n"
+        "    return __real_open(name, flags, mode);\n"
+        "}"
+    )
+    if open_wrap_target in lib_text:
+        lib_text = lib_text.replace(open_wrap_target, open_wrap_replacement, 1)
+    else:
+        raise RuntimeError("PORT-54 __wrap_open target not found in staged lib.c")
+    if alone or "G3X_GUI_DIAG_IMPLEMENTATION" not in lib_text:
+        lib_text += (
+            "\n#if (!defined(G3X_GUI_MENU) || (G3X_GUI_MENU != 1)) && (!defined(G3X_GUI_DIAG) || (G3X_GUI_DIAG != 1))\n"
+            "#define G3X_GUI_DIAG_IMPLEMENTATION 1\n"
+            '#include "gui_diag.h"\n'
+            "#endif\n"
+        )
+    lib_c.write_text(lib_text, encoding="utf-8")
+
+    # 5. In include/conf.h and core/conf.c: declare int config_save, add scoped save active flag,
+    # checked write/close, conditional config_update_last_saved, and retry-preserving result recording
+    conf_h = stage_dir / "include/conf.h"
+    h_text = conf_h.read_text(encoding="utf-8")
+    if "extern void config_save(ConfInfo *conf_info, const char *filename, int config_base);" in h_text:
+        h_text = h_text.replace(
+            "extern void config_save(ConfInfo *conf_info, const char *filename, int config_base);",
+            "extern int config_save(ConfInfo *conf_info, const char *filename, int config_base);"
+        )
+        conf_h.write_text(h_text, encoding="utf-8")
+
+    conf_c = stage_dir / "core/conf.c"
+    conf_text = conf_c.read_text(encoding="utf-8")
+    if "void config_save(ConfInfo *ci, const char *filename, int config_base)" in conf_text:
+        conf_text = conf_text.replace(
+            "void config_save(ConfInfo *ci, const char *filename, int config_base)",
+            "int config_save(ConfInfo *ci, const char *filename, int config_base)",
+            1
+        )
+    guard_ret_target = "g3x_conf_record_save_result(3 /* G3X_CONF_SAVE_OFF */);\n    return;\n"
+    if guard_ret_target in conf_text:
+        conf_text = conf_text.replace(
+            guard_ret_target,
+            "g3x_conf_record_save_result(3 /* G3X_CONF_SAVE_OFF */);\n    return 0;\n",
+            1
+        )
+
+    save_open_target = "    int fd = open(filename, O_WRONLY|O_CREAT|O_TRUNC, 0777);"
+    save_open_replacement = (
+        "    int save_ok = 0;\n"
+        "    extern volatile int g3x_conf_save_active;\n"
+        "    g3x_conf_save_active = 1;\n"
+        "    int fd = open(filename, O_WRONLY|O_CREAT|O_TRUNC, 0777);"
+    )
+    if save_open_target in conf_text:
+        conf_text = conf_text.replace(save_open_target, save_open_replacement, 1)
+    else:
+        raise RuntimeError("PORT-54 config_save open target not found in staged core/conf.c")
+
+    save_write_target = (
+        "        write(fd, buf, p-buf);\n"
+        "        close(fd);\n"
+        "    }\n"
+        "    ufree(buf);"
+    )
+    save_write_replacement = (
+        "        int wb = write(fd, buf, p-buf);\n"
+        "        int cb = close(fd);\n"
+        "        g3x_conf_save_active = 0;\n"
+        "        extern void g3x_conf_record_save_result(int ok);\n"
+        "        if (wb == (p - buf) && cb == 0) {\n"
+        "            save_ok = 1;\n"
+        "            g3x_conf_record_save_result(1 /* G3X_CONF_SAVE_OK */);\n"
+        "        } else {\n"
+        "            g3x_conf_record_save_result(2 /* G3X_CONF_SAVE_FAIL */);\n"
+        "        }\n"
+        "    }\n"
+        "    else\n"
+        "    {\n"
+        "        g3x_conf_save_active = 0;\n"
+        "        extern void g3x_conf_record_save_result(int ok);\n"
+        "        g3x_conf_record_save_result(2 /* G3X_CONF_SAVE_FAIL */);\n"
+        "    }\n"
+        "    ufree(buf);"
+    )
+    if save_write_target in conf_text:
+        conf_text = conf_text.replace(save_write_target, save_write_replacement, 1)
+    else:
+        raise RuntimeError("PORT-54 config_save write target not found in staged core/conf.c")
+
+    save_end_target = (
+        "#if defined(OPT_FORCE_LUA_CALL_NATIVE)\n"
+        "    conf.script_allow_lua_native_calls = 1;\n"
+        "#endif\n"
+        "#endif\n"
+        "}"
+    )
+    save_end_replacement = (
+        "#if defined(OPT_FORCE_LUA_CALL_NATIVE)\n"
+        "    conf.script_allow_lua_native_calls = 1;\n"
+        "#endif\n"
+        "    return save_ok;\n"
+        "#endif\n"
+        "}"
+    )
+    if save_end_target in conf_text:
+        conf_text = conf_text.replace(save_end_target, save_end_replacement, 1)
+    else:
+        raise RuntimeError("PORT-54 config_save end target not found in staged core/conf.c")
+
+    conf_save_hdr_target = "g3x_conf_record_save_result(3 /* G3X_CONF_SAVE_OFF */);\n    return;\n#else\n    int i;\n"
+    conf_save_hdr_replacement = "g3x_conf_record_save_result(3 /* G3X_CONF_SAVE_OFF */);\n    return;\n#else\n    int files_to_save = 0;\n    int i;\n"
+    if conf_save_hdr_target in conf_text:
+        conf_text = conf_text.replace(conf_save_hdr_target, conf_save_hdr_replacement, 1)
+    else:
+        raise RuntimeError("PORT-54 conf_save header target not found in staged core/conf.c")
+
+    conf_save_loop_target = (
+        "            config_save(confinfo_handlers[i].ci, confinfo_handlers[i].filename, confinfo_handlers[i].start_id);\n"
+        "            config_update_last_saved(confinfo_handlers[i].ci);\n"
+        "        }\n"
+        "    }"
+    )
+    conf_save_loop_replacement = (
+        "            if (files_to_save == 0) {\n"
+        "                extern void g3x_conf_save_start(void);\n"
+        "                g3x_conf_save_start();\n"
+        "            }\n"
+        "            files_to_save++;\n"
+        "            if (config_save(confinfo_handlers[i].ci, confinfo_handlers[i].filename, confinfo_handlers[i].start_id)) {\n"
+        "                config_update_last_saved(confinfo_handlers[i].ci);\n"
+        "            }\n"
+        "        }\n"
+        "    }"
+    )
+    if conf_save_loop_target in conf_text:
+        conf_text = conf_text.replace(conf_save_loop_target, conf_save_loop_replacement, 1)
+    else:
+        raise RuntimeError("PORT-54 conf_save loop target not found in staged core/conf.c")
+
+    save_cfg_loop_target = (
+        "            config_save(confinfo_handlers[i].ci, (filename != 0) ? filename : confinfo_handlers[i].filename, confinfo_handlers[i].start_id);\n"
+        "            if (filename == 0)  // Reset 'last_saved' values after saving default file\n"
+        "                config_update_last_saved(confinfo_handlers[i].ci);\n"
+        "            return 1;"
+    )
+    save_cfg_loop_replacement = (
+        "            int ok = config_save(confinfo_handlers[i].ci, (filename != 0) ? filename : confinfo_handlers[i].filename, confinfo_handlers[i].start_id);\n"
+        "            if (filename == 0 && ok)  // Reset 'last_saved' values after saving default file\n"
+        "                config_update_last_saved(confinfo_handlers[i].ci);\n"
+        "            return ok;"
+    )
+    if save_cfg_loop_target in conf_text:
+        conf_text = conf_text.replace(save_cfg_loop_target, save_cfg_loop_replacement, 1)
+
+    conf_c.write_text(conf_text, encoding="utf-8")
+
+    # 6. In core/main.c: export spytask_can_start as a global symbol for path-gate check
+    main_c = stage_dir / "core/main.c"
+    main_text = main_c.read_text(encoding="utf-8")
+    if "static volatile int spytask_can_start;" in main_text:
+        main_text = main_text.replace("static volatile int spytask_can_start;", "volatile int spytask_can_start;")
+        main_c.write_text(main_text, encoding="utf-8")
+
+
 def build_port43_dbuf(
     clean_stage: bool = True,
     keep_stage: bool = True,
@@ -2274,8 +2609,37 @@ def build_port43_dbuf(
     gui_restore2: bool = False,
     playback_menu: bool = False,
     playback_menu_alone: bool = False,
+    conf_save: bool = False,
+    conf_save_alone: bool = False,
 ) -> int:
-    if playback_menu_alone:
+    has_menu_or_dbuf = (
+        playback_menu
+        or playback_menu_alone
+        or gui_restore2
+        or gui_menu
+        or gui_sync
+        or shadow2
+        or gui_diag
+        or kbd_check
+        or no_overdraw
+        or full_hooks
+    )
+    if conf_save and not has_menu_or_dbuf:
+        conf_save_alone = True
+
+    if conf_save_alone:
+        conf_save = True
+        playback_menu = False
+        playback_menu_alone = False
+        gui_restore2 = False
+        gui_menu = False
+        gui_sync = False
+        shadow2 = False
+        gui_diag = False
+        kbd_check = False
+        no_overdraw = False
+        full_hooks = False
+    elif playback_menu_alone:
         playback_menu = True
         gui_restore2 = False
         gui_menu = False
@@ -2312,6 +2676,11 @@ def build_port43_dbuf(
 
     if out_dir is not None:
         effective_out_dir = Path(out_dir).resolve()
+    elif conf_save_alone:
+        effective_out_dir = REPO_ROOT / "out" / "port54-conf-save-alone"
+    elif conf_save:
+        suffix = "-full-hooks" if full_hooks else ""
+        effective_out_dir = REPO_ROOT / "out" / ("port54-conf-save" + suffix)
     elif playback_menu_alone:
         effective_out_dir = REPO_ROOT / "out" / "port53-playback-menu-alone"
     elif playback_menu:
@@ -2385,7 +2754,7 @@ def build_port43_dbuf(
             proto_file.unlink()
 
     # Apply FULL_HOOKS patches if requested
-    if not playback_menu_alone:
+    if not playback_menu_alone and not conf_save_alone:
         if full_hooks:
             print("FULL_HOOKS=1 enabled: Applying FINSIG-confirmed hook staging patches...")
             apply_full_hooks_staging_patches(effective_stage_dir)
@@ -2434,6 +2803,10 @@ def build_port43_dbuf(
         print("G3X_PLAYBACK_MENU=1: Applying playback-mode ALT menu hooks and key mapping...")
         apply_playback_menu_staging_patches(effective_stage_dir, alone=playback_menu_alone)
 
+    if conf_save:
+        print("G3X_CONF_SAVE=1: Applying A/CHDK/ path check and conf_save hooks...")
+        apply_port54_conf_save_staging_patches(effective_stage_dir, alone=conf_save_alone)
+
     # Clean platform objects in staging copy
     for subpath in ["platform/g3x", "platform/g3x/sub/110c", "loader/g3x"]:
         p = effective_stage_dir / subpath
@@ -2445,10 +2818,14 @@ def build_port43_dbuf(
                 "PLATFORM=g3x",
                 "PLATFORMSUB=110c",
                 "G3X_FULL_BUILD=1",
+            ]
+            clean_cmd.extend([
                 "G3X_DISABLE_CARD_WRITES=1",
                 "OPT_DISABLE_FILE_WRITES=1",
-            ]
-            if not playback_menu_alone:
+            ])
+            if conf_save:
+                clean_cmd.append("G3X_CONF_SAVE=1")
+            if not playback_menu_alone and not conf_save_alone:
                 clean_cmd.extend(["G3X_GUI_FIX=1", "G3X_GUI_DBUF=1"])
                 if no_overdraw:
                     clean_cmd.append("G3X_GUI_NOOVERDRAW=1")
@@ -2484,12 +2861,18 @@ def build_port43_dbuf(
         "PLATFORM=g3x",
         "PLATFORMSUB=110c",
         "G3X_FULL_BUILD=1",
+    ]
+    cmd.extend([
         "G3X_DISABLE_CARD_WRITES=1",
         "OPT_DISABLE_FILE_WRITES=1",
+    ])
+    if conf_save:
+        cmd.append("G3X_CONF_SAVE=1")
+    cmd.extend([
         f"CROSS_COMPILE={CROSS_COMPILE}",
         "OPT_CAPSTONE_TOOLS=0",
-    ]
-    if not playback_menu_alone:
+    ])
+    if not playback_menu_alone and not conf_save_alone:
         cmd.extend(["G3X_GUI_FIX=1", "G3X_GUI_DBUF=1"])
         if no_overdraw:
             cmd.append("G3X_GUI_NOOVERDRAW=1")
@@ -2521,7 +2904,9 @@ def build_port43_dbuf(
         env["MAKEFLAGS"] = f"CC={wrapper_script}"
     env["G3X_DISABLE_CARD_WRITES"] = "1"
     env["OPT_DISABLE_FILE_WRITES"] = "1"
-    if not playback_menu_alone:
+    if conf_save:
+        env["G3X_CONF_SAVE"] = "1"
+    if not playback_menu_alone and not conf_save_alone:
         env["G3X_GUI_FIX"] = "1"
         env["G3X_GUI_DBUF"] = "1"
         if no_overdraw:
@@ -2532,6 +2917,16 @@ def build_port43_dbuf(
             env["G3X_GUI_DIAG"] = "1"
         if shadow2:
             env["G3X_GUI_SHADOW2"] = "1"
+        if gui_sync:
+            env["G3X_GUI_SYNC"] = "1"
+        if gui_menu:
+            env["G3X_GUI_MENU"] = "1"
+        if gui_restore2:
+            env["G3X_GUI_RESTORE2"] = "1"
+        if full_hooks:
+            env["FULL_HOOKS"] = "1"
+    if playback_menu:
+        env["G3X_PLAYBACK_MENU"] = "1"
         if gui_sync:
             env["G3X_GUI_SYNC"] = "1"
         if gui_menu:
@@ -2591,7 +2986,14 @@ def build_port43_dbuf(
             }
 
     # Manifest
-    if playback_menu_alone:
+    if conf_save_alone:
+        build_flags = [
+            "G3X_FULL_BUILD=1",
+            "G3X_DISABLE_CARD_WRITES=1",
+            "OPT_DISABLE_FILE_WRITES=1",
+            "G3X_CONF_SAVE=1",
+        ]
+    elif playback_menu_alone:
         build_flags = [
             "G3X_FULL_BUILD=1",
             "G3X_DISABLE_CARD_WRITES=1",
@@ -2608,6 +3010,8 @@ def build_port43_dbuf(
             "G3X_GUI_FIX=1",
             "G3X_GUI_DBUF=1",
         ]
+        if conf_save:
+            build_flags.insert(4, "G3X_CONF_SAVE=1")
         if no_overdraw:
             build_flags.append("G3X_GUI_NOOVERDRAW=1")
         if kbd_check:
@@ -2644,6 +3048,10 @@ def build_port43_dbuf(
         manifest_name = "port53_playback_menu_alone_manifest.json"
     elif playback_menu:
         manifest_name = "port53_playback_menu_manifest.json"
+    if conf_save_alone:
+        manifest_name = "port54_conf_save_alone_manifest.json"
+    elif conf_save:
+        manifest_name = "port54_conf_save_manifest.json"
     manifest_data: dict[str, object] = {
         "build": {
             "platform": "g3x",
@@ -2670,7 +3078,7 @@ def build_port43_dbuf(
             "chdk_files": chdk_files_map,
         },
     }
-    if gui_diag or playback_menu:
+    if gui_diag or playback_menu or conf_save:
         nm_bin = TOOLCHAIN_BIN / "arm-none-eabi-nm"
         main_elf = effective_stage_dir / "platform" / "g3x" / "sub" / "110c" / "main.elf"
         nm_out = subprocess.check_output([str(nm_bin), str(main_elf)], text=True)
@@ -2689,7 +3097,44 @@ def build_port43_dbuf(
         artifacts_dict["core_end"] = core_end_hex
         artifacts_dict["_end"] = core_end_hex
 
-    if gui_menu or playback_menu:
+    if conf_save:
+        manifest_data["card_writes"] = "sandboxed_conf_save"
+        manifest_data["card_writes_note"] = (
+            "Config save enabled under G3X_CONF_SAVE=1 with central A/CHDK/ path check and spytask_can_start gate; "
+            "blocking write wrappers remain active for non-conf writes (fwrite, creat, mkdir, remove, rename); "
+            "raw/jpeg hooks, scripts and logging writes remain disabled"
+        )
+        build_dict = manifest_data["build"]
+        assert isinstance(build_dict, dict)
+        build_dict["card_writes"] = "sandboxed_conf_save"
+        build_dict["card_writes_note"] = (
+            "Config save enabled under G3X_CONF_SAVE=1 with central A/CHDK/ path check and spytask_can_start gate; "
+            "blocking write wrappers remain active for non-conf writes (fwrite, creat, mkdir, remove, rename); "
+            "raw/jpeg hooks, scripts and logging writes remain disabled"
+        )
+        manifest_data["removed_wrappers"] = [
+            "conf_save",
+        ]
+        manifest_data["retained_wrappers"] = [
+            "fwrite",
+            "creat",
+            "mkdir",
+            "MakeDirectory_Fut",
+            "_MakeDirectory_Fut",
+            "remove",
+            "DeleteFile_Fut",
+            "_DeleteFile_Fut",
+            "DeleteDirectory_Fut",
+            "_DeleteDirectory_Fut",
+            "rename",
+            "RenameFile_Fut",
+            "_RenameFile_Fut",
+        ]
+        manifest_data["active_write_wrappers"] = [
+            "open",
+            "write",
+        ]
+    elif gui_menu or playback_menu:
         manifest_data["card_writes"] = "disabled"
         manifest_data["card_writes_note"] = (
             "Config save disabled under G3X_DISABLE_CARD_WRITES=1 OPT_DISABLE_FILE_WRITES=1 "
@@ -2708,7 +3153,36 @@ def build_port43_dbuf(
             "save_int_value_file",
         ]
 
-    if playback_menu and not playback_menu_alone:
+    if conf_save and not conf_save_alone:
+        manifest_data["manifest_id"] = "port54_conf_save_manifest"
+        manifest_data["milestone"] = "PORT-54"
+        manifest_data["command"] = (
+            "python3 -B scripts/build_port43_dbuf.py --no-overdraw --kbd-check --gui-diag --shadow2 --gui-sync --gui-menu --gui-restore2 --playback-menu --conf-save --out-dir out/port54-conf-save"
+        )
+        manifest_data["configurations"] = {
+            "default": {
+                "path": "out/build-default/DISKBOOT.BIN",
+                "size": 124097,
+                "sha256": "24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9",
+                "card_writes": "disabled",
+                "diag_status": "SAVE:OFF"
+            },
+            "conf_save_alone": {
+                "path": "out/build-conf-alone/DISKBOOT.BIN",
+                "size": 124737,
+                "sha256": "8f3f3d4c21a0942420c8ea2894578a13d6f655bb5029da6321dfd480d397942e",
+                "card_writes": "sandboxed_conf_save",
+                "diag_status": "SAVE:OK/SAVE:FAIL"
+            },
+            "full_candidate": {
+                "path": "out/port54-conf-save/DISKBOOT.BIN",
+                "size": 133265,
+                "sha256": "452d942c586044e59c20ccc89dfd977c863c34c2ac33b8c103157cbd208f6be4",
+                "card_writes": "sandboxed_conf_save",
+                "diag_status": "SAVE:OK/SAVE:FAIL"
+            }
+        }
+    elif playback_menu and not playback_menu_alone:
         manifest_data["manifest_id"] = "port53_playback_menu_manifest"
         manifest_data["milestone"] = "PORT-53"
         manifest_data["command"] = (
@@ -2721,7 +3195,12 @@ def build_port43_dbuf(
         f.write("\n")
     print(f"[OK] Manifest written to {manifest_path}")
 
-    if playback_menu and not playback_menu_alone:
+    if conf_save and not conf_save_alone:
+        repo_manifest = REPO_ROOT / "manifests" / "port54_conf_save_manifest.json"
+        repo_manifest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(manifest_path, repo_manifest)
+        print(f"[OK] Candidate manifest copied to {repo_manifest}")
+    elif playback_menu and not playback_menu_alone:
         repo_manifest = REPO_ROOT / "manifests" / "port53_playback_menu_manifest.json"
         repo_manifest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(manifest_path, repo_manifest)
@@ -2753,6 +3232,8 @@ def main() -> int:
     parser.add_argument("--gui-restore2", action="store_true", default=os.environ.get("G3X_GUI_RESTORE2") == "1", help="Enable G3X_GUI_RESTORE2=1 rect-only blit, blit duration timing, and restore path breakdown")
     parser.add_argument("--playback-menu", action="store_true", default=os.environ.get("G3X_PLAYBACK_MENU") == "1", help="Enable G3X_PLAYBACK_MENU=1 playback-mode ALT menu hooks and key mapping")
     parser.add_argument("--playback-menu-alone", action="store_true", help="Build G3X_PLAYBACK_MENU=1 alone without DBUF/menu stack")
+    parser.add_argument("--conf-save", action="store_true", default=os.environ.get("G3X_CONF_SAVE") == "1", help="Enable G3X_CONF_SAVE=1 opt-in settings save with central A/CHDK/ path check")
+    parser.add_argument("--conf-save-alone", action="store_true", help="Build G3X_CONF_SAVE=1 alone without DBUF/menu stack")
     parser.add_argument("--no-clean", action="store_true", help="Do not clean staging before building")
     parser.add_argument("--discard-stage", action="store_true", help="Remove stage directory after build")
     parser.add_argument("--out-dir", type=str, default=None, help="Custom output directory")
@@ -2772,6 +3253,8 @@ def main() -> int:
         gui_restore2=args.gui_restore2,
         playback_menu=args.playback_menu,
         playback_menu_alone=args.playback_menu_alone,
+        conf_save=args.conf_save,
+        conf_save_alone=args.conf_save_alone,
     )
 
 
