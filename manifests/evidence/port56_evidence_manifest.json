@@ -1,0 +1,225 @@
+{
+  "manifest_id": "port56_evidence_manifest",
+  "milestone": "PORT-56",
+  "task": "PORT56-LIMIT-RESEARCH",
+  "date": "2026-11-15",
+  "target": "PowerShot G3 X GM1.10C",
+  "deliverables": {
+    "doc": "docs/PORT56_MOVIE_TIMELIMIT.md"
+  },
+  "rom_reads": {
+    "rom_read_needed": true,
+    "full_rom_scan": false,
+    "ranges_read": [
+      {
+        "id": "PORT56-ROM-SETUP-WARNSEC-BASE-LOAD",
+        "start_address": "0xFC097DA0",
+        "end_address": "0xFC097DB0",
+        "start_offset": "0x00097DA0",
+        "length_bytes": 16,
+        "sha256": "0fd46b0cb1932d5267c2266513fe8f0e2dac93d8fa57c541731c103700a8ec03",
+        "target_function": "MovieRecorder_SetupModeAndLimits (0xFC097D72)",
+        "purpose": "Verifies base register r7 setup instruction at 0xFC097DA4: ldr r7, [pc, #744] (targets literal pool at 0xFC098090 containing 0x0000C078)."
+      },
+      {
+        "id": "PORT56-ROM-POOL-SETUP-WARNSEC-BASE",
+        "start_address": "0xFC098090",
+        "end_address": "0xFC0980A0",
+        "start_offset": "0x00098090",
+        "length_bytes": 16,
+        "sha256": "184e1814b6440be66ba0760c0445ccf21d78a15f889970cb6d9f29e9fa7e7ce6",
+        "target_function": "MovieRecorder_SetupModeAndLimits (0xFC097D72)",
+        "purpose": "Verifies literal pool word at 0xFC098090 containing base address 0x0000C078, which with offset +0x6C (108) derives mr_warn_sec at 0x0000C0E4."
+      },
+      {
+        "id": "PORT56-ROM-SETUP-MAXFRAMES-BASE-LOAD",
+        "start_address": "0xFC098280",
+        "end_address": "0xFC098290",
+        "start_offset": "0x00098280",
+        "length_bytes": 16,
+        "sha256": "d5102bae0b5adc5508a064984120e191eb8d9abc04324e7482178a17b9addd55",
+        "target_function": "MovieRecorder_SetupModeAndLimits (0xFC097D72)",
+        "purpose": "Verifies base register sl setup instruction at 0xFC098286: ldr.w sl, [pc, #556] (targets literal pool at 0xFC0984B4 containing 0x0000C1F8)."
+      },
+      {
+        "id": "PORT56-ROM-POOL-SETUP-MAXFRAMES-BASE",
+        "start_address": "0xFC0984B0",
+        "end_address": "0xFC0984C0",
+        "start_offset": "0x000984B0",
+        "length_bytes": 16,
+        "sha256": "43ddd0793a2dbd86b03c191b1985141c43c7db54bc2bc84ea20be77618eac60f",
+        "target_function": "MovieRecorder_SetupModeAndLimits (0xFC097D72)",
+        "purpose": "Verifies literal pool word at 0xFC0984B4 containing base address 0x0000C1F8, which with offset +0x7C (124) derives mr_max_frames at 0x0000C274."
+      },
+      {
+        "id": "PORT56-ROM-SETUP-DURATION-LIMITS",
+        "start_address": "0xFC098530",
+        "end_address": "0xFC0985B0",
+        "start_offset": "0x00098530",
+        "length_bytes": 128,
+        "sha256": "37300b420dfee7fb5d914bd218054fee9b1cf3e6b63150aa1be219e4b912d533",
+        "target_function": "MovieRecorder_SetupModeAndLimits (0xFC097D72)",
+        "purpose": "Verifies duration limit literals: 1799 s (movw r0, #0x707 at 0xFC09853E for FHD/HD) and 3599 s (movw r0, #0xE0F at 0xFC09859A for VGA)."
+      },
+      {
+        "id": "PORT56-ROM-SETUP-MAX-FRAMES-STORE",
+        "start_address": "0xFC098688",
+        "end_address": "0xFC0986B0",
+        "start_offset": "0x00098688",
+        "length_bytes": 40,
+        "sha256": "c5bd8f9f22319a041c89fac44d2a6fa3bcdec09fe49368ecbbe0c1285e806e00",
+        "target_function": "MovieRecorder_SetupModeAndLimits (0xFC097D72)",
+        "purpose": "Verifies calculation and store of mr_max_frames into 0x0000C274 at 0xFC098692 and mr_warn_sec into 0x0000C0E4 at 0xFC09869C."
+      },
+      {
+        "id": "PORT56-ROM-CHECK-FRAMELIMIT-BASE-LOAD",
+        "start_address": "0xFC098AE0",
+        "end_address": "0xFC098AF0",
+        "start_offset": "0x00098AE0",
+        "length_bytes": 16,
+        "sha256": "ecbb4e9224366a90c4d66f99dd75b5440ffc788dac1e737bc5482c4eddf96c5d",
+        "target_function": "MovieRecorder_CheckFrameCountLimit (0xFC098AE0)",
+        "purpose": "Verifies base register r8 setup instruction at 0xFC098AE4: ldr.w r8, [pc, #668] (targets literal pool at 0xFC098D84 containing 0x0000C078)."
+      },
+      {
+        "id": "PORT56-ROM-CHECK-FRAME-LIMIT",
+        "start_address": "0xFC098B10",
+        "end_address": "0xFC098B38",
+        "start_offset": "0x00098B10",
+        "length_bytes": 40,
+        "sha256": "3ecb33c05ba76b458c8f1f99374fe844d78db763d30086cc614d84c787d07a9a",
+        "target_function": "MovieRecorder_CheckFrameCountLimit (0xFC098AE0)",
+        "purpose": "Verifies duration limit check: loads mr_cur_frames from 0x0000C278 and mr_max_frames from 0x0000C274; executes cmp r0, r1 at 0xFC098B22 followed by blo 0xFC098B30 (04 d3, unsigned lower); if not lower, falls through to set stop reason *(0x0000C0C0) = 4 at 0xFC098B28 and call stop."
+      },
+      {
+        "id": "PORT56-ROM-CHECK-SIZELIMIT-BASE-LOAD",
+        "start_address": "0xFC098BB0",
+        "end_address": "0xFC098BC0",
+        "start_offset": "0x00098BB0",
+        "length_bytes": 16,
+        "sha256": "fe76c98d15a010a9ff0ae4942cdea3b5afbc6df05e70d2e37eb1f1fc280b55a3",
+        "target_function": "MovieRecorder_CheckSizeAndSpaceLimits (0xFC098BAA)",
+        "purpose": "Verifies base register r7 setup instruction at 0xFC098BB4: ldr r7, [pc, #460] (targets literal pool at 0xFC098D84 containing 0x0000C078)."
+      },
+      {
+        "id": "PORT56-ROM-CHECK-SIZE-LIMIT",
+        "start_address": "0xFC098C40",
+        "end_address": "0xFC098C70",
+        "start_offset": "0x00098C40",
+        "length_bytes": 48,
+        "sha256": "2ea7dfc06e0c7804cff20565e5048b4312a53e6a269866af417a873b0e53db4e",
+        "target_function": "MovieRecorder_CheckSizeAndSpaceLimits (0xFC098BAA)",
+        "purpose": "Verifies 4 GiB single-file limit check: 64-bit comparison against segment * 0xFFFFFFFF; if exceeded, sets stop reason *(0x0000C0C0) = 3 at 0xFC098C5C and triggers stop."
+      },
+      {
+        "id": "PORT56-ROM-POOL-CHECK-LIMITS-BASES",
+        "start_address": "0xFC098D80",
+        "end_address": "0xFC098D90",
+        "start_offset": "0x00098D80",
+        "length_bytes": 16,
+        "sha256": "29f5a7657870a618761710dc8c33d03e28c39f58f19f390c7242b23ad5338e0a",
+        "target_function": "MovieRecorder literal pools for limit checking",
+        "purpose": "Verifies literal pool words at 0xFC098D84 (0x0000C078, base for stop reason 0x0000C0C0 via offset +0x48) and 0xFC098D88 (0x0000C278, base for mr_cur_frames at +0x0 and mr_max_frames at -0x80+0x7C=0x0000C274)."
+      },
+      {
+        "id": "PORT56-ROM-WARN-SEC-BASE-LOAD",
+        "start_address": "0xFC099068",
+        "end_address": "0xFC099078",
+        "start_offset": "0x00099068",
+        "length_bytes": 16,
+        "sha256": "369203e95037706c657e6dea1a40a1561fb82a83736a677fb28815cbe5b1f6bc",
+        "target_function": "MovieRecorder_ProcessEncodedFrame (0xFC098E9E)",
+        "purpose": "Verifies base register fp setup instruction at 0xFC09906C: ldr.w fp, [pc, #312] (targets literal pool at 0xFC0991A8 containing 0x0000C078)."
+      },
+      {
+        "id": "PORT56-ROM-POOL-WARN-SEC-BASE",
+        "start_address": "0xFC0991A0",
+        "end_address": "0xFC0991B0",
+        "start_offset": "0x000991A0",
+        "length_bytes": 16,
+        "sha256": "597fc12fec4f5720e51a19bae5ef43d9bd51f9533a826bd26a4c9b0741fb95a9",
+        "target_function": "MovieRecorder_ProcessEncodedFrame (0xFC098E9E)",
+        "purpose": "Verifies literal pool word at 0xFC0991A8 containing base address 0x0000C078, which with offset +0x6C (108) derives mr_warn_sec at 0x0000C0E4."
+      },
+      {
+        "id": "PORT56-ROM-WARN-SEC-CHECK",
+        "start_address": "0xFC0992F0",
+        "end_address": "0xFC099310",
+        "start_offset": "0x000992F0",
+        "length_bytes": 32,
+        "sha256": "1f7597700d045a3e15d5d536971ce18ebc21ac9fbb2ce684a1a1b6b1b79b7597",
+        "target_function": "MovieRecorder_ProcessEncodedFrame (0xFC098E9E)",
+        "purpose": "Verifies mr_warn_sec usage: loads 0x0000C0E4 at 0xFC0992FA, compares elapsed seconds; if reached, posts UI Warning event 0x3149 (10-second warning), proving warn_sec controls UI notification rather than recording termination."
+      },
+      {
+        "id": "PORT56-ROM-CMD0-SETUP-CALL",
+        "start_address": "0xFC09A968",
+        "end_address": "0xFC09A988",
+        "start_offset": "0x0009A968",
+        "length_bytes": 32,
+        "sha256": "172905742f575ad2286fb1fd6ac6006d42edb47b07ac23581f29fac00f84094c",
+        "target_function": "MovieRecorder_CmdStartPipeline (0xFC09A956)",
+        "purpose": "Verifies call to MovieRecorder_SetupModeAndLimits (BL 0xFC097D72 at 0xFC09A97C) occurs during Command 0 dispatch upon recording start, proving setup runs on every recording start."
+      }
+    ],
+    "reason": "Bounded ROM reads were performed in firmware/dumps/GM1.10C/PRIMARY.BIN around MovieRecorder routines because reference/finsig_gm110c does not extract internal movie recording helper functions (only task_MovieRecord at 0xFC09AC19). Total bytes read across 15 ranges is 464 bytes."
+  },
+  "reference_files": [
+    {
+      "path": "chdk-port/platform/sx280hs/sub/102b/movie_rec.c",
+      "sha256": "34a8c5d4edbc08b6575b478d76bdc1065261678f351108d5eb33a7ad1415188d"
+    },
+    {
+      "path": "chdk-port/platform/sx280hs/sub/102b/boot.c",
+      "sha256": "ae9c9977a965a135fa40788b8789a165381daeb8f12b82ef2125cfa94f346dbc"
+    },
+    {
+      "path": "chdk-port/platform/g7x/platform_camera.h",
+      "sha256": "6a69fae74f8e8f6cf79550a40c9d12a1e4cc86f2274fa48b8667a6aec6405b8e"
+    },
+    {
+      "path": "chdk-port/platform/g7x/sub/100d/boot.c",
+      "sha256": "88835fbf02358c4b5c2b7237aafddf453dbbc2f7347f26571e60b36459e7fc28"
+    },
+    {
+      "path": "chdk-port/platform/g5x/platform_camera.h",
+      "sha256": "7859061820b1ffe8c84db07b9dcdf1a932d077a58b41661e15b9635a9957094c"
+    },
+    {
+      "path": "chdk-port/platform/g5x/sub/100c/movie_rec.c",
+      "sha256": "2a65cbf9e5773078e5cf21e6535795aff5f3780c999b9fbbea3f96de504f6f67"
+    },
+    {
+      "path": "chdk-port/platform/g5x/sub/100c/boot.c",
+      "sha256": "21a4579bf3c5a09f850704fb4a4df4c01b7a640154a54358d3e1c88e65aae330"
+    },
+    {
+      "path": "chdk-port/platform/sx60hs/platform_camera.h",
+      "sha256": "c3e9d98b70660f7ac6d65c9220aa1bad66e48a6ab10ed62466a0c51d5090d4ae"
+    },
+    {
+      "path": "chdk-port/platform/sx60hs/sub/100f/movie_rec.c",
+      "sha256": "0d76cff5bef716fa9000e5c3fba8839effe2842b9aace2bd8e193b565f395001"
+    },
+    {
+      "path": "chdk-port/platform/sx60hs/sub/100h/boot.c",
+      "sha256": "ee4448804adfa7c75c3d763a94ceafa0b521f9403afc406d3611d25eb8bf46ee"
+    },
+    {
+      "path": "chdk-port/platform/g3x/platform_camera.h",
+      "sha256": "0fed491abe86c069166c4aadc50eceec81dd0da835943049e03b370fede9f6ac"
+    },
+    {
+      "path": "chdk-port/platform/g3x/sub/110c/stubs_min.S",
+      "sha256": "0e367f607b7d8f4af456fc7b59d082bf39af5740140ad8188ba1a2cb7f57c1b2"
+    },
+    {
+      "path": "reference/finsig_gm110c/stubs_entry.S",
+      "sha256": "f8a4697cb42b48560d430b7f502ff2f6ce5f12a8980fe8c272aba5de18d05166"
+    },
+    {
+      "path": "reference/finsig_gm110c/funcs_by_name.csv",
+      "sha256": "e837aab3a20b54ba3937570f4e0b3371de4b1bb19ef35727e5795803db007118"
+    }
+  ]
+}
