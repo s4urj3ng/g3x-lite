@@ -46,6 +46,10 @@ OBJDUMP = TOOLCHAIN_BIN / "arm-none-eabi-objdump"
 BASE_PORT52_DEFAULT_SHA256 = "24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9"
 BASE_PORT52_DEFAULT_SIZE = 124097
 
+BASE_PORT51_RESTORE2_NO_FULLHOOKS_SHA256 = "f8df17f182289b4a100e8c348ecdca1ea7f2e9a8c1613058d9777dd832fed3cf"
+BASE_PORT51_RESTORE2_NO_FULLHOOKS_SIZE = 131865
+BASE_PORT51_RESTORE2_NO_FULLHOOKS_END = "0x0036a8e0"
+
 BASE_PORT53_CANDIDATE_SHA256 = "b054f24264084bd51fd50d90dfa9af9e54c9bef1e8afb318aa1bc6a6f2185fe6"
 BASE_PORT53_CANDIDATE_SIZE = 132145
 BASE_PORT53_CORE_END = "0x0036aa00"
@@ -177,8 +181,9 @@ class TestPort53BuildAndArtifacts(unittest.TestCase):
         cls.build_c = ROOT / "out/port53-playback-menu"
         cls.build_b = ROOT / "out/build-playback-alone"
         cls.build_a = ROOT / "out/build-default"
+        cls.build_p51_nofull = ROOT / "out/build-p51-nofull"
 
-        # Ensure all three builds are present
+        # Ensure all builds are present
         if not (cls.build_c / "DISKBOOT.BIN").is_file():
             subprocess.run(
                 [
@@ -228,11 +233,43 @@ class TestPort53BuildAndArtifacts(unittest.TestCase):
                 check=True,
             )
 
+        if not (cls.build_p51_nofull / "DISKBOOT.BIN").is_file():
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(ROOT / "scripts/build_port43_dbuf.py"),
+                    "--no-overdraw",
+                    "--kbd-check",
+                    "--gui-diag",
+                    "--shadow2",
+                    "--gui-sync",
+                    "--gui-menu",
+                    "--gui-restore2",
+                    "--out-dir",
+                    str(cls.build_p51_nofull),
+                ],
+                cwd=ROOT,
+                check=True,
+            )
+
     def test_default_build_is_byte_identical_to_port52_default(self):
         default_diskboot = self.build_a / "DISKBOOT.BIN"
         self.assertTrue(default_diskboot.is_file(), f"Missing {default_diskboot}")
         self.assertEqual(default_diskboot.stat().st_size, BASE_PORT52_DEFAULT_SIZE)
         self.assertEqual(sha256_file(default_diskboot), BASE_PORT52_DEFAULT_SHA256)
+
+    def test_earlier_candidates_preserved_port51_restore2_nofullhooks(self):
+        p51_diskboot = self.build_p51_nofull / "DISKBOOT.BIN"
+        self.assertTrue(p51_diskboot.is_file(), f"Missing {p51_diskboot}")
+        self.assertEqual(sha256_file(p51_diskboot), BASE_PORT51_RESTORE2_NO_FULLHOOKS_SHA256)
+        self.assertEqual(p51_diskboot.stat().st_size, BASE_PORT51_RESTORE2_NO_FULLHOOKS_SIZE)
+
+        manifest = json.loads((self.build_p51_nofull / "port51_restore2_core_manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["_end"], BASE_PORT51_RESTORE2_NO_FULLHOOKS_END)
+        self.assertEqual(manifest["core_end"], BASE_PORT51_RESTORE2_NO_FULLHOOKS_END)
+        self.assertNotIn("FULL_HOOKS=1", manifest["build"]["flags"])
+        self.assertNotIn("G3X_PLAYBACK_MENU=1", manifest["build"]["flags"])
 
     def test_playback_alone_build_artifacts(self):
         alone_diskboot = self.build_b / "DISKBOOT.BIN"

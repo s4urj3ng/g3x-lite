@@ -13,13 +13,14 @@ Short hardware trial protocol for the PORT-53 candidate build with playback-mode
 
 Before inserting the SD card into the camera, verify the candidate artifacts against `manifests/port53_playback_menu_manifest.json`:
 
-1. **Build command**:
+1. **Build command** (strictly **WITHOUT** `FULL_HOOKS`):
    ```sh
    python3 -B scripts/build_port43_dbuf.py --no-overdraw --kbd-check --gui-diag --shadow2 --gui-sync --gui-menu --gui-restore2 --playback-menu --out-dir out/port53-playback-menu
    ```
-2. **DISKBOOT.BIN SHA-256**: `b054f24264084bd51fd50d90dfa9af9e54c9bef1e8afb318aa1bc6a6f2185fe6`
+   *Confirmation*: Config (c) build command contains NO `--full-hooks` flag and operates strictly without `FULL_HOOKS=1`.
+2. **DISKBOOT.BIN SHA-256**: `b054f24264084bd51fd50d90dfa9af9e54c9bef1e8afb318aa1bc6a6f2185fe6` (confirmed matching fresh rebuild)
 3. **DISKBOOT.BIN Size**: `132,145` bytes
-4. **Core `_end`**: `0x0036aa00`
+4. **Core `_end`**: `0x0036aa00` (confirmed matching fresh rebuild)
 5. **CHDK Files Count**: `34` modules in `CHDK/MODULES/`, plus `FONTS` and `LANG` distributions matching manifest.
 
 Verify on host:
@@ -51,7 +52,20 @@ Execute the following 10 steps sequentially:
 | **9** | Close & Re-open Menu | Press `MENU` (`KEY_MENU`) to close menu, then press `MENU` again to re-open. | Menu closes cleanly. Upon re-opening (`MENU:0002`), the edited bool, enum, and int values remain at their changed values. | Pass / Fail; Diag line (`MENU:0002`), changed values confirmed |
 | **10** | Save Attempt & SAVE:OFF | Navigate to *Save Options* / trigger conf save, or exit ALT mode. | Save attempt is safely skipped. Diagnostic line displays `SAVE:OFF`. No disk I/O attempted, no camera hang. | Pass / Fail; `SAVE:OFF` confirmed on diag line |
 
-## 5. What to Record for Each Step
+## 5. Checklist Step-to-Code Mapping
+
+| Checklist Step | Code Handler & Location | Coverage Status |
+|---|---|---|
+| Step 1 (Enter Playback) | `core/shooting.c:1687-1715` (`mode_get()` sets `camera_info.state.mode_play = 1`) | Covered by Canon firmware & core `mode_get()` |
+| Step 2 (Enter ALT) | `core/kbd.c` via `KEY_WIFI` mapped in `platform/g3x/kbd.c:40` and `platform_camera.h:20-22` | Covered by existing PORT-46 ALT handling |
+| Step 3 (Open Menu) | `core/gui.c:3134` (`gui_set_mode(&menuGuiHandler)`); open counted by `g3x_playback_menu_record_open()` (`scripts/build_port43_dbuf.py:1787`) | Covered by existing PORT-50 menu handler; open count tracked by PORT-53 hook |
+| Step 4 (Navigate Up/Down) | `platform/g3x/gui_menu.c:658-672` (`gui_menu_kbd_process()`), using `KEY_UP` (`0x20`) and `KEY_DOWN` (`0x40`) from `platform/g3x/kbd.c:35-36` | Covered by existing PORT-50 navigation code |
+| Step 5 (Enter & Leave Submenu) | `platform/g3x/gui_menu.c:510,677,717` (`select_sub_menu()`, `KEY_RIGHT`, `KEY_SET`) and `gui_menu.c:337,635,656,720,770,1384` (`gui_menu_back()`) | Covered by existing PORT-50 submenu code |
+| Step 6-8 (Change Bool/Enum/Int Items) | `platform/g3x/gui_menu.c:368-490` (`update_int/bool/enum_value`); edits tracked by `g3x_playback_menu_record_item_edit()` (`gui_menu.c:438,454,480`). Mutates in-RAM `conf` struct (`core/conf.c:20`) | Covered by existing PORT-50 item update routines; edit count tracked by PORT-53 hook |
+| Step 9 (Close & Re-open Menu) | `gui_set_mode(&altGuiHandler)`. In-RAM `conf` struct (`core/conf.c:20`) retains mutated values. Re-opening re-reads `conf` | Covered by existing PORT-50 / CHDK core RAM state |
+| Step 10 (Save Attempt & SAVE:OFF) | `gui_menu.c:1388` calls `conf_save()`. Intercepted by write-protect guard staged at `core/conf.c:1159` (`scripts/build_port43_dbuf.py:1828`), calling `g3x_conf_record_save_result(G3X_CONF_SAVE_OFF)` and returning. `gui_diag_draw()` displays `"SAVE:OFF"` (`gui_diag.h:1317`) | Covered by existing PORT-50 write-protect skip and diagnostic line |
+
+## 6. What to Record for Each Step
 
 For every numbered step above, record:
 1. **Pass / Fail status**.
@@ -61,7 +75,7 @@ For every numbered step above, record:
 3. Any unexpected display artifacts, flicker, or key response delays.
 4. Record whether playback mode eliminated the Face+Tracking AF overlay flicker observed in record mode (see `chdk-port/platform/g3x/notes.txt`).
 
-## 6. Emergency Recovery & Rollback
+## 7. Emergency Recovery & Rollback
 
 - **Battery-pull recovery**: If the camera locks up, fails to respond to key presses, or exhibits display distortion, immediately open the battery door and remove the battery. Wait at least 10 seconds. Close door, reinsert battery, and power on. Camera will boot cleanly into stock Canon firmware from read-only internal ROM.
 - **Card rollback to PORT-52**: Remove SD card, place in host card reader, and replace `DISKBOOT.BIN` and `CHDK/` with the PORT-52 verified build (`manifests/port52_shortpress_manifest.json`, `DISKBOOT.BIN` SHA-256 `93f18eec00c2837bc2fd17b0d0dc08709cf906ee6225b68e9ee263b6b158fcda`, `131,985` bytes). Ensure SD card physical lock switch is engaged before returning card to camera.

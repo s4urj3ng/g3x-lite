@@ -4,32 +4,31 @@ Issues:
 
 - Movie features are not supported. Movie_status is wrong.
 - Not all features have been tested fully, expect issues and crashes.
-- If the 'AF Method' is set to 'Face+Tracking' (Canon SHOOT3 menu), then the CHDK UI and OSD will flicker a lot more when in record mode.
-  When AF Method is set to Face+Tracking, Canon firmware issues continuous background display redraws and overlay transfers, causing increased CHDK UI and OSD flickering in record mode.
-  To minimise flickering, the workarounds are:
-  1. Use '1-point AF' instead of Face+Tracking AF.
-  2. Open the CHDK menu in playback mode (where continuous Face+Tracking AF transfers are inactive).
-  3. Open the Canon menu first before using the CHDK menu (suspends background AF tracking loop).
-  If using Face+Tracking AF it is probably best to turn off non-essential CHDK OSD elements (battery, clock, etc).
+- If the 'AF Method' is set to 'Face+Tracking' (Canon SHOOT3 menu), then the CHDK UI and OSD will flicker a lot more when in record mode (modelled on chdk-port/platform/g5x/notes.txt:6-9).
+  To minimise flickering, use '1-point AF', or open the CHDK menu in playback mode, or open the Canon menu first before using the CHDK menu.
+  If using Face+Tracking AF it is probably best to turn off the CHDK OSD elements (battery, clock, etc).
+  [INFERRED: Face+Tracking AF triggers continuous background overlay transfers in record mode; opening the Canon menu or operating in playback mode avoids these background tracking transfers.]
 
-Working and mostly tested:
+Working (confirmed by owner trial):
 
-- Short-press boot mechanism (PORT-52)
-- Double-buffered overlay and fast fills (PORT-43)
-- Multi-point boundary sentinels (PORT-45)
-- ALT key check and diagnostic line (PORT-46/47)
-- Ordered shadow allocation (exmem/rect/idx) (PORT-48)
-- Synchronous display-flip hook and both-buffer sync restore (PORT-49/51)
-- Standard CHDK menu in-session navigation and item edits (PORT-50)
-- Playback-mode CHDK ALT menu (PORT-53)
-- Conf save gating (SAVE:OFF) when SD card writes are disabled
-- Edge detection, zebra, OSD elements
-- PTP, scripts, overrides functional
+- Held-press boot (PORT-24)
+- Short-press boot (PORT-52)
+- ALT mode (PORT-46/47)
+- PORT-50 menu (in-session navigation, item edits, conf save skip)
+- PORT-51 RESTORE2 overlay restore (flicker much reduced but still present in record mode)
+
+Untested:
+
+- Edge detection
+- Zebra
+- OSD elements
+- PTP, scripts, overrides
+- Playback menu (pending the PORT-53 trial)
 
 Development notes:
 
-- Digic 6 / DryOS 57 architecture (Cortex-A9).
-- Mode 12 LCD resolution 900x600 with stride 928.
-- Bitmap buffers in DRAM at 0x5FE80000, 0x5FD00000; opacity buffers at 0x5FC40000, 0x5FB80000.
-- Synchronous transfer_src_overlay hook at 0xFC380635 / return check 0xFC380675 via RAM callback pointer at 0x0000E26C.
+- Display hardware & buffers:
+  - Mode 12 LCD display resolution 900x600 with stride 928 (chdk-port/platform/g3x/gui_diag.h:176-177, chdk-port/platform/g3x/gui_menu.c:48; 880x576 ALT/menu layout centered with 10-px margins at [10, 889] x [12, 587] per chdk-port/platform/g3x/gui_diag.h:159-164).
+  - DRAM bitmap buffers: bitmap_buffer[0] = 0x5FE80000, bitmap_buffer[1] = 0x5FD00000; opacity_buffer[0] = 0x5FC40000, opacity_buffer[1] = 0x5FB80000 (docs/PORT49_GUI_SYNC.md:32-34).
+  - Synchronous transfer_src_overlay hook at ROM 0xFC380635 / return check 0xFC380675 via RAM callback pointer at *(0x0000E26C) (docs/PORT49_GUI_SYNC.md:11,17,45).
 - Safe read-only trial mode: G3X_DISABLE_CARD_WRITES=1 and OPT_DISABLE_FILE_WRITES=1 enforce SAVE:OFF across all trial candidates.

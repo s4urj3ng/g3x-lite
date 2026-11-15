@@ -2064,7 +2064,20 @@ def apply_playback_menu_staging_patches(stage_dir: Path, alone: bool = False) ->
             "#endif\n"
         )
         kbd_text += kbd_hook
-        kbd_c.write_text(kbd_text, encoding="utf-8")
+    kbd_read_anchor = "void my_kbd_read_keys()\n{"
+    if kbd_read_anchor in kbd_text and "g3x_playback_menu_kbd_process" not in kbd_text.split(kbd_read_anchor)[1]:
+        kbd_read_call = (
+            "void my_kbd_read_keys()\n{\n"
+            "#if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)\n"
+            "    extern int g3x_playback_menu_kbd_process(void);\n"
+            "    if (g3x_playback_menu_kbd_process())\n"
+            "    {\n"
+            "        /* Playback menu active: keyboard input consumed */\n"
+            "    }\n"
+            "#endif\n"
+        )
+        kbd_text = kbd_text.replace(kbd_read_anchor, kbd_read_call, 1)
+    kbd_c.write_text(kbd_text, encoding="utf-8")
 
     # 3. Patch stage_chdk/platform/g3x/lib.c
     lib_c = stage_dir / "platform/g3x/lib.c"
@@ -2083,6 +2096,29 @@ def apply_playback_menu_staging_patches(stage_dir: Path, alone: bool = False) ->
             "#endif\n"
         )
         lib_text += lib_hook
+    vp_anchor = "int vid_get_viewport_width()\n{"
+    if vp_anchor in lib_text and "g3x_playback_menu_get_viewport_mode" not in lib_text.split(vp_anchor)[1]:
+        vp_call = (
+            "int vid_get_viewport_width()\n{\n"
+            "#if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)\n"
+            "    extern int g3x_playback_menu_get_viewport_mode(void);\n"
+            "    if (g3x_playback_menu_get_viewport_mode())\n"
+            "        return 720;\n"
+            "#endif\n"
+        )
+        lib_text = lib_text.replace(vp_anchor, vp_call, 1)
+    redraw_anchor = "int check_gui_needs_redraw()\n{"
+    if redraw_anchor in lib_text and "g3x_playback_menu_gui_mode_active" not in lib_text.split(redraw_anchor)[1]:
+        redraw_call = (
+            "int check_gui_needs_redraw()\n{\n"
+            "#if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)\n"
+            "    extern int g3x_playback_menu_gui_mode_active(void);\n"
+            "    extern int g3x_playback_menu_redraw_needed(void);\n"
+            "    if (g3x_playback_menu_gui_mode_active() && g3x_playback_menu_redraw_needed())\n"
+            "        return 1;\n"
+            "#endif\n"
+        )
+        lib_text = lib_text.replace(redraw_anchor, redraw_call, 1)
     if alone:
         wrap_conf_anchor = "void __wrap_conf_save(void) { }"
         if wrap_conf_anchor in lib_text:
