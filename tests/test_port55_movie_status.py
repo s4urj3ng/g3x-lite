@@ -53,6 +53,12 @@ PORT55_COMBINED_END = "0036aa90"
 ROM_GET_ELAPSED_SECONDS_STATE_CHECK_SHA256 = "98059580827fa784767b303c82c2f71a734ccfa3f1846aea13ff2069d70b03b4"
 ROM_COMMAND12_TEARDOWN_STORE_SHA256 = "66128d3d7295bf83d1ea2c27d1b708dda8edecee2cf4b5ddc535a43dcb18fa7f"
 
+_BUILD_CACHE = {
+    "default": False,
+    "alone": False,
+    "combined": False,
+}
+
 
 def sha256_file(path: Path) -> str:
     h = hashlib.sha256()
@@ -60,6 +66,120 @@ def sha256_file(path: Path) -> str:
         while chunk := f.read(65536):
             h.update(chunk)
     return h.hexdigest()
+
+
+def ensure_build_default() -> None:
+    bin_path = ROOT / "out/build-default/DISKBOOT.BIN"
+    elf_path = ROOT / "out/build-default/stage_chdk/platform/g3x/sub/110c/main.elf"
+    if _BUILD_CACHE["default"] and bin_path.is_file() and elf_path.is_file():
+        return
+    if not (bin_path.is_file() and elf_path.is_file()):
+        subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(ROOT / "tools/build_port41_full.py"),
+                "--keep-stage",
+                "--out-dir",
+                str(ROOT / "out/build-default"),
+            ],
+            cwd=str(ROOT),
+            check=True,
+        )
+    _BUILD_CACHE["default"] = True
+
+
+def ensure_build_alone() -> None:
+    bin_path = ROOT / "out/build-movie-alone/DISKBOOT.BIN"
+    elf_path = ROOT / "out/build-movie-alone/stage_chdk/platform/g3x/sub/110c/main.elf"
+    obj_path = ROOT / "out/build-movie-alone/stage_chdk/platform/g3x/sub/110c/movie_rec.o"
+    if _BUILD_CACHE["alone"] and bin_path.is_file() and elf_path.is_file() and obj_path.is_file():
+        return
+    if not (bin_path.is_file() and elf_path.is_file() and obj_path.is_file()):
+        subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(ROOT / "scripts/build_port43_dbuf.py"),
+                "--movie-status-alone",
+                "--out-dir",
+                str(ROOT / "out/build-movie-alone"),
+            ],
+            cwd=str(ROOT),
+            check=True,
+        )
+    _BUILD_CACHE["alone"] = True
+
+
+def ensure_build_combined() -> None:
+    bin_path = ROOT / "out/port55-movie-status/DISKBOOT.BIN"
+    elf_path = ROOT / "out/port55-movie-status/stage_chdk/platform/g3x/sub/110c/main.elf"
+    if _BUILD_CACHE["combined"] and bin_path.is_file() and elf_path.is_file():
+        return
+    if not (bin_path.is_file() and elf_path.is_file()):
+        subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(ROOT / "scripts/build_port43_dbuf.py"),
+                "--no-overdraw",
+                "--kbd-check",
+                "--gui-diag",
+                "--shadow2",
+                "--gui-sync",
+                "--gui-menu",
+                "--gui-restore2",
+                "--playback-menu",
+                "--movie-status",
+                "--out-dir",
+                str(ROOT / "out/port55-movie-status"),
+            ],
+            cwd=str(ROOT),
+            check=True,
+        )
+    _BUILD_CACHE["combined"] = True
+
+
+def setUpModule() -> None:
+    """Shared module-level fixture: builds default, alone, and combined configurations at most once."""
+    ensure_build_default()
+    ensure_build_alone()
+    ensure_build_combined()
+
+
+def parse_function_instructions(disasm: str, symbol_name: str) -> list[dict[str, str]]:
+    """Extract and parse instruction records for a given symbol from objdump output."""
+    marker = f"<{symbol_name}>:"
+    start_pos = disasm.find(marker)
+    if start_pos == -1:
+        return []
+    lines = disasm[start_pos:].splitlines()
+    instrs: list[dict[str, str]] = []
+    # Skip the symbol marker header line
+    for line in lines[1:]:
+        line_s = line.strip()
+        if not line_s:
+            continue
+        # Stop at the next symbol boundary
+        if re.match(r"^[0-9a-f]+\s+<[^>]+>:", line):
+            break
+        # objdump alignment padding dots
+        if line_s == "...":
+            continue
+        m = re.match(r"^\s*([0-9a-f]+):\s+([0-9a-f\s]+?)\t([a-z0-9\._]+)\s*(.*)$", line)
+        if m:
+            addr, raw_bytes, mnemonic, rest = m.groups()
+            operands = rest.split(";")[0].strip()
+            comment = rest.split(";")[1].strip() if ";" in rest else ""
+            instrs.append({
+                "addr": addr,
+                "raw_bytes": raw_bytes.strip(),
+                "mnemonic": mnemonic.lower(),
+                "operands": operands,
+                "comment": comment,
+                "line": line.strip(),
+            })
+    return instrs
 
 
 class TestPort55FlagPlumbing(unittest.TestCase):
@@ -110,118 +230,141 @@ class TestPort55FlagPlumbing(unittest.TestCase):
 class TestPort55DefaultBuildIdentity(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        default_bin = ROOT / "out/build-default/DISKBOOT.BIN"
-        default_elf = ROOT / "out/build-default/stage_chdk/platform/g3x/sub/110c/main.elf"
-        if not default_bin.is_file() or not default_elf.is_file():
-            subprocess.run(
-                [
-                    sys.executable,
-                    "-B",
-                    str(ROOT / "tools/build_port41_full.py"),
-                    "--keep-stage",
-                    "--out-dir",
-                    str(ROOT / "out/build-default"),
-                ],
-                cwd=str(ROOT),
-                check=True,
-            )
+        ensure_build_default()
+        cls.default_bin = ROOT / "out/build-default/DISKBOOT.BIN"
+        cls.default_elf = ROOT / "out/build-default/stage_chdk/platform/g3x/sub/110c/main.elf"
 
     def test_default_diskboot_byte_identical(self):
-        default_bin = ROOT / "out/build-default/DISKBOOT.BIN"
-        self.assertTrue(default_bin.is_file())
-        self.assertEqual(sha256_file(default_bin), BASE_DEFAULT_SHA256)
-        self.assertEqual(default_bin.stat().st_size, BASE_DEFAULT_SIZE)
+        self.assertTrue(self.default_bin.is_file())
+        self.assertEqual(sha256_file(self.default_bin), BASE_DEFAULT_SHA256)
+        self.assertEqual(self.default_bin.stat().st_size, BASE_DEFAULT_SIZE)
 
     def test_default_main_elf_end_symbol(self):
-        default_elf = ROOT / "out/build-default/stage_chdk/platform/g3x/sub/110c/main.elf"
-        self.assertTrue(default_elf.is_file())
-        res = subprocess.run([str(NM), str(default_elf)], capture_output=True, text=True, check=True)
+        self.assertTrue(self.default_elf.is_file())
+        res = subprocess.run([str(NM), str(self.default_elf)], capture_output=True, text=True, check=True)
         self.assertIn(f"{BASE_DEFAULT_END} B _end", res.stdout)
 
 
 class TestPort55ReadOnlySafety(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        ensure_build_alone()
+        ensure_build_combined()
         cls.combined_elf = ROOT / "out/port55-movie-status/stage_chdk/platform/g3x/sub/110c/main.elf"
         cls.alone_elf = ROOT / "out/build-movie-alone/stage_chdk/platform/g3x/sub/110c/main.elf"
+        cls.alone_obj = ROOT / "out/build-movie-alone/stage_chdk/platform/g3x/sub/110c/movie_rec.o"
 
-        if not cls.combined_elf.is_file():
-            subprocess.run(
-                [
-                    sys.executable,
-                    "-B",
-                    str(ROOT / "scripts/build_port43_dbuf.py"),
-                    "--no-overdraw",
-                    "--kbd-check",
-                    "--gui-diag",
-                    "--shadow2",
-                    "--gui-sync",
-                    "--gui-menu",
-                    "--gui-restore2",
-                    "--playback-menu",
-                    "--movie-status",
-                    "--out-dir",
-                    str(ROOT / "out/port55-movie-status"),
-                ],
-                cwd=str(ROOT),
-                check=True,
-            )
-
-        if not cls.alone_elf.is_file():
-            subprocess.run(
-                [
-                    sys.executable,
-                    "-B",
-                    str(ROOT / "scripts/build_port43_dbuf.py"),
-                    "--movie-status-alone",
-                    "--out-dir",
-                    str(ROOT / "out/build-movie-alone"),
-                ],
-                cwd=str(ROOT),
-                check=True,
-            )
-
-    def test_accessor_disassembly_has_no_stores(self):
+    def test_g3x_get_movie_status_disassembly(self):
+        """Verify g3x_get_movie_status contains instructions, zero stores, and loads 0x0000C0C8 as load base."""
         targets = [
             (self.combined_elf, "combined main.elf"),
-            (ROOT / "out/build-movie-alone/stage_chdk/platform/g3x/sub/110c/movie_rec.o", "alone movie_rec.o"),
+            (self.alone_obj, "alone movie_rec.o"),
         ]
-        for obj_path, desc in targets:
-            self.assertTrue(obj_path.is_file(), f"Target not found: {obj_path}")
+        for target_path, desc in targets:
+            self.assertTrue(target_path.is_file(), f"Target not found: {target_path}")
             res = subprocess.run(
-                [str(OBJDUMP), "-d", str(obj_path)],
+                [str(OBJDUMP), "-d", str(target_path)],
                 capture_output=True,
                 text=True,
                 check=True,
             )
             disasm = res.stdout
 
-            # Locate g3x_get_movie_status function
-            self.assertIn("<g3x_get_movie_status>:", disasm, f"Missing g3x_get_movie_status in {desc}")
-            fn_start = disasm.index("<g3x_get_movie_status>:")
-            fn_text = disasm[fn_start : fn_start + 300]
-            fn_lines = [line.strip() for line in fn_text.splitlines() if line.strip()]
-
-            # Must contain load instruction
-            self.assertTrue(
-                any("ldr" in line for line in fn_lines[:6]),
-                f"Missing ldr in g3x_get_movie_status ({desc}): {fn_lines[:6]}",
+            instrs = parse_function_instructions(disasm, "g3x_get_movie_status")
+            # (b) Assert at least one instruction was parsed
+            self.assertGreater(
+                len(instrs),
+                0,
+                f"Expected parsed instructions for g3x_get_movie_status in {desc}, found none",
             )
-            # Must NOT contain store instructions
-            store_mnemonics = ["str", "strb", "strh", "strd", "stm", "stmia", "push"]
-            for line in fn_lines[:6]:
-                tokens = line.split("\t")
-                if len(tokens) >= 3:
-                    instr = tokens[2].split()[0]
-                    self.assertNotIn(
-                        instr,
-                        store_mnemonics,
-                        f"Found forbidden store instruction in g3x_get_movie_status ({desc}): {line}",
-                    )
 
-    def test_no_stores_to_movie_state_address(self):
-        """Verify across entire main.elf that no instruction writes to 0x0000C0C8."""
-        for elf_path in [self.combined_elf, self.alone_elf]:
+            # (c) Assert function contains no store mnemonics, apart from normal prologue/epilogue stack pushes on sp
+            base_reg = None
+            for instr in instrs:
+                mnem = instr["mnemonic"]
+                operands = instr["operands"]
+                # No store mnemonics (str*, stm*)
+                for store_pfx in ("str", "stm"):
+                    self.assertFalse(
+                        mnem == store_pfx or mnem.startswith(store_pfx),
+                        f"Forbidden store instruction '{mnem}' in g3x_get_movie_status ({desc}): {instr['line']}",
+                    )
+                # No push mnemonics (g3x_get_movie_status has no stack push)
+                self.assertNotEqual(
+                    mnem,
+                    "push",
+                    f"Unexpected push instruction in g3x_get_movie_status ({desc}): {instr['line']}",
+                )
+
+                # (d) Assert literal pool or movw/movt loads 0x0000C0C8 and value is used only as load base
+                if mnem in ("movw", "mov") and ("49352" in operands or "0xc0c8" in operands or "c0c8" in instr["comment"]):
+                    base_reg = operands.split(",")[0].strip()
+                elif mnem == "ldr" and ("c0c8" in instr["comment"] or "0x0000c0c8" in instr["comment"]):
+                    base_reg = operands.split(",")[0].strip()
+
+            self.assertIsNotNone(
+                base_reg,
+                f"Failed to find instruction loading 0x0000C0C8 in g3x_get_movie_status ({desc}): {instrs}",
+            )
+
+            # Assert base_reg is used ONLY as a load base (ldr ..., [base_reg, ...])
+            found_load_with_base = False
+            for instr in instrs:
+                mnem = instr["mnemonic"]
+                operands = instr["operands"]
+                if f"[{base_reg}" in operands:
+                    self.assertTrue(
+                        mnem.startswith("ldr"),
+                        f"Register {base_reg} (0x0000C0C8) used in non-load instruction ({desc}): {instr['line']}",
+                    )
+                    found_load_with_base = True
+
+            self.assertTrue(
+                found_load_with_base,
+                f"Did not find ldr instruction using base register {base_reg} in g3x_get_movie_status ({desc})",
+            )
+
+    def test_g3x_movie_status_str_disassembly(self):
+        """Verify g3x_movie_status_str in combined main.elf contains instructions, no stores, and only stack sp pushes."""
+        res = subprocess.run(
+            [str(OBJDUMP), "-d", str(self.combined_elf)],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        disasm = res.stdout
+
+        instrs = parse_function_instructions(disasm, "g3x_movie_status_str")
+        self.assertGreater(
+            len(instrs),
+            0,
+            "Expected parsed instructions for g3x_movie_status_str in combined main.elf, found none",
+        )
+
+        found_call_to_accessor = False
+        for instr in instrs:
+            mnem = instr["mnemonic"]
+            operands = instr["operands"]
+            # No store instructions
+            for store_pfx in ("str", "stm"):
+                self.assertFalse(
+                    mnem == store_pfx or mnem.startswith(store_pfx),
+                    f"Forbidden store instruction '{mnem}' in g3x_movie_status_str: {instr['line']}",
+                )
+            # Push instructions: only prologue push on stack pointer
+            if mnem == "push":
+                self.assertIn("lr", operands, f"Push instruction not standard prologue: {instr['line']}")
+            if mnem == "bl" and "g3x_get_movie_status" in instr["line"]:
+                found_call_to_accessor = True
+
+        self.assertTrue(
+            found_call_to_accessor,
+            f"g3x_movie_status_str does not call g3x_get_movie_status: {instrs}",
+        )
+
+    def test_core_movie_status_accessors_disassembly(self):
+        """Verify CHDK core get_movie_status and is_video_recording in main.elf are read-only and load 0x0000C0C8."""
+        for elf_path, desc in [(self.combined_elf, "combined"), (self.alone_elf, "alone")]:
             res = subprocess.run(
                 [str(OBJDUMP), "-d", str(elf_path)],
                 capture_output=True,
@@ -230,14 +373,49 @@ class TestPort55ReadOnlySafety(unittest.TestCase):
             )
             disasm = res.stdout
 
-            # Any reference to 0xc0c8 in instructions or literal pools
-            for match in re.finditer(r"^([0-9a-f]+):\s+([0-9a-f\s]+)\t([a-z0-9\._]+)\s+([^;\n]+)", disasm, re.M):
-                line = match.group(0)
-                if "c0c8" in line.lower():
-                    mnemonic = match.group(3)
+            for fn_name in ("get_movie_status", "is_video_recording"):
+                instrs = parse_function_instructions(disasm, fn_name)
+                self.assertGreater(
+                    len(instrs),
+                    0,
+                    f"No instructions parsed for {fn_name} in {desc} main.elf",
+                )
+                for instr in instrs:
+                    mnem = instr["mnemonic"]
+                    for store_pfx in ("str", "stm"):
+                        self.assertFalse(
+                            mnem == store_pfx or mnem.startswith(store_pfx),
+                            f"Forbidden store instruction '{mnem}' in {fn_name} ({desc}): {instr['line']}",
+                        )
+
+    def test_whole_image_no_stores_targeting_movie_state_literal(self):
+        """Heuristic scan of disassembled image: verifies that no instruction line in main.elf
+        containing literal address 0x0000C0C8 uses a store mnemonic (movw/ldr literal references only;
+        no direct pc-relative or literal store mnemonics)."""
+        for elf_path, desc in [(self.combined_elf, "combined"), (self.alone_elf, "alone")]:
+            res = subprocess.run(
+                [str(OBJDUMP), "-d", str(elf_path)],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            disasm = res.stdout
+
+            matches = list(re.finditer(r"^\s*([0-9a-f]+):\s+([0-9a-f\s]+?)\t([a-z0-9\._]+)\s*([^;\n]*)", disasm, re.M))
+            self.assertGreater(
+                len(matches),
+                10000,
+                f"Expected >10000 parsed instructions in {desc} main.elf, got {len(matches)}",
+            )
+
+            for m in matches:
+                mnemonic = m.group(3).lower()
+                operands = m.group(4).lower()
+                full_line = m.group(0).lower()
+                if "c0c8" in operands or "49352" in operands or "c0c8" in full_line:
                     self.assertFalse(
                         mnemonic.startswith("str") or mnemonic.startswith("stm"),
-                        f"Forbidden store instruction targeting 0x0000C0C8: {line}",
+                        f"Forbidden store instruction referencing 0x0000C0C8 in {desc} main.elf: {m.group(0)}",
                     )
 
     def test_no_movie_rec_task_hooks_or_card_writes(self):
@@ -279,7 +457,6 @@ class TestPort55AddressEvidence(unittest.TestCase):
 class TestPort55DiagMarkerFormatting(unittest.TestCase):
     def test_status_string_encoding(self):
         """Verify string mapping for 0 (IDLE), 1 (REC), and unexpected states."""
-        # Emulate logic from movie_status.h
         def movie_status_str(status: int) -> str:
             if status == 0:
                 return "IDLE"
@@ -297,7 +474,6 @@ class TestPort55DiagMarkerFormatting(unittest.TestCase):
 
     def test_diag_line_length_fits_screen(self):
         """Verify formatted secondary diag line does not exceed G3X_DIAG_LINE_MAX_CHARS (55)."""
-        # Format string from gui_diag.h with standard SAVE:OFF and clamped maximum values
         line = "MENU:%04u SAVE:%s MOV:%s Rs:%04u Rp:%04u B:%u/%ums" % (
             9999,
             "OFF",
@@ -336,26 +512,31 @@ class TestPort55DiagMarkerFormatting(unittest.TestCase):
 
 
 class TestPort55BuildArtifacts(unittest.TestCase):
-    def test_alone_configuration_artifacts(self):
-        alone_bin = ROOT / "out/build-movie-alone/DISKBOOT.BIN"
-        alone_elf = ROOT / "out/build-movie-alone/stage_chdk/platform/g3x/sub/110c/main.elf"
-        self.assertTrue(alone_bin.is_file())
-        self.assertTrue(alone_elf.is_file())
-        self.assertEqual(sha256_file(alone_bin), MOVIE_STATUS_ALONE_SHA256)
-        self.assertEqual(alone_bin.stat().st_size, MOVIE_STATUS_ALONE_SIZE)
+    @classmethod
+    def setUpClass(cls):
+        ensure_build_alone()
+        ensure_build_combined()
+        cls.alone_bin = ROOT / "out/build-movie-alone/DISKBOOT.BIN"
+        cls.alone_elf = ROOT / "out/build-movie-alone/stage_chdk/platform/g3x/sub/110c/main.elf"
+        cls.comb_bin = ROOT / "out/port55-movie-status/DISKBOOT.BIN"
+        cls.comb_elf = ROOT / "out/port55-movie-status/stage_chdk/platform/g3x/sub/110c/main.elf"
 
-        res = subprocess.run([str(NM), str(alone_elf)], capture_output=True, text=True, check=True)
+    def test_alone_configuration_artifacts(self):
+        self.assertTrue(self.alone_bin.is_file())
+        self.assertTrue(self.alone_elf.is_file())
+        self.assertEqual(sha256_file(self.alone_bin), MOVIE_STATUS_ALONE_SHA256)
+        self.assertEqual(self.alone_bin.stat().st_size, MOVIE_STATUS_ALONE_SIZE)
+
+        res = subprocess.run([str(NM), str(self.alone_elf)], capture_output=True, text=True, check=True)
         self.assertIn(f"{MOVIE_STATUS_ALONE_END} B _end", res.stdout)
 
     def test_combined_configuration_artifacts(self):
-        comb_bin = ROOT / "out/port55-movie-status/DISKBOOT.BIN"
-        comb_elf = ROOT / "out/port55-movie-status/stage_chdk/platform/g3x/sub/110c/main.elf"
-        self.assertTrue(comb_bin.is_file())
-        self.assertTrue(comb_elf.is_file())
-        self.assertEqual(sha256_file(comb_bin), PORT55_COMBINED_SHA256)
-        self.assertEqual(comb_bin.stat().st_size, PORT55_COMBINED_SIZE)
+        self.assertTrue(self.comb_bin.is_file())
+        self.assertTrue(self.comb_elf.is_file())
+        self.assertEqual(sha256_file(self.comb_bin), PORT55_COMBINED_SHA256)
+        self.assertEqual(self.comb_bin.stat().st_size, PORT55_COMBINED_SIZE)
 
-        res = subprocess.run([str(NM), str(comb_elf)], capture_output=True, text=True, check=True)
+        res = subprocess.run([str(NM), str(self.comb_elf)], capture_output=True, text=True, check=True)
         self.assertIn(f"{PORT55_COMBINED_END} B _end", res.stdout)
 
     def test_manifest_metadata(self):
