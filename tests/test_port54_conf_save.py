@@ -43,11 +43,11 @@ OBJDUMP = TOOLCHAIN_BIN / "arm-none-eabi-objdump"
 BASE_DEFAULT_SHA256 = "24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9"
 BASE_DEFAULT_SIZE = 124097
 
-BASE_ALONE_SHA256 = "62f421a2c1e5934b9e095d74c6ea792746b615b61eeca12fea242eb58fa98f47"
-BASE_ALONE_SIZE = 124721
+BASE_ALONE_SHA256 = "8f3f3d4c21a0942420c8ea2894578a13d6f655bb5029da6321dfd480d397942e"
+BASE_ALONE_SIZE = 124737
 
-BASE_CANDIDATE_SHA256 = "d2106b34560142c37401d038c6360d8d4e5e6a8ffd70859faab59b8dcf4dfca6"
-BASE_CANDIDATE_SIZE = 133241
+BASE_CANDIDATE_SHA256 = "452d942c586044e59c20ccc89dfd977c863c34c2ac33b8c103157cbd208f6be4"
+BASE_CANDIDATE_SIZE = 133265
 
 
 def sha256_file(path: Path) -> str:
@@ -62,6 +62,13 @@ def extract_staged_guard_source(lib_c_path: Path) -> str:
     text = lib_c_path.read_text(encoding="utf-8")
     start = text.index("volatile int g3x_conf_save_active = 0;")
     end = text.index("void *__wrap_fopen", start)
+    return text[start:end]
+
+
+def extract_staged_conf_save_source(conf_c_path: Path) -> str:
+    text = conf_c_path.read_text(encoding="utf-8")
+    start = text.index("static void config_update_last_saved(ConfInfo *ci)")
+    end = text.index("int save_config_file(", start)
     return text[start:end]
 
 
@@ -588,6 +595,292 @@ int main(int argc, char **argv)
         self.assertEqual(out, "SAVE:OK", "Reset at the start of each conf_save operation must allow recovery to SAVE:OK")
 
 
+class TestPort54RetryOnFailure(unittest.TestCase):
+    """Compiles the REAL staged conf_save and config_save source to verify:
+    1. Open failure: does not update last_saved, latches SAVE:FAIL; next conf_save retries and succeeds (SAVE:OK).
+    2. Short write: does not update last_saved, latches SAVE:FAIL; next conf_save retries and succeeds (SAVE:OK).
+    3. Persistent failure: both calls report SAVE:FAIL and the retry still attempts a write.
+    4. Mutation check: unconditional config_update_last_saved() causes the retry to be skipped.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        stage_conf = ROOT / "out/port54-conf-save/stage_chdk/core/conf.c"
+        if not stage_conf.is_file():
+            # Build candidate to ensure stage is populated
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(ROOT / "scripts/build_port43_dbuf.py"),
+                    "--no-overdraw",
+                    "--kbd-check",
+                    "--gui-diag",
+                    "--shadow2",
+                    "--gui-sync",
+                    "--gui-menu",
+                    "--gui-restore2",
+                    "--playback-menu",
+                    "--conf-save",
+                    "--out-dir",
+                    str(ROOT / "out/port54-conf-save"),
+                ],
+                cwd=ROOT,
+                check=True,
+            )
+
+        cls.conf_code = extract_staged_conf_save_source(stage_conf)
+
+        def make_harness(src_block: str) -> str:
+            return f"""
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <fcntl.h>
+
+#define G3X_CONF_SAVE 1
+#define G3X_GUI_DIAG_IMPLEMENTATION 1
+#include "{DIAG_HEADER}"
+
+volatile int g3x_conf_save_active = 0;
+
+#define CONF_MAGICK_VALUE 0x4B444843
+#define CONF_DEF_VALUE 1
+#define CONF_OSD_POS 2
+#define CONF_FUNC_PTR 3
+#define CONF_INT_PTR 4
+#define CONF_CHAR_PTR 5
+#define CONF_STRUCT_PTR 8
+#define CONF_STR_LEN 30
+#define CONF_USER 3000
+
+typedef struct {{
+    unsigned short id;
+    unsigned char size;
+    char type;
+    void *var;
+    union {{
+        void *ptr;
+        int i;
+        long (*func)(void);
+    }};
+    unsigned int last_saved;
+}} ConfInfo;
+
+typedef struct {{
+    int num_items;
+    int item_size;
+    int (*saved_size)();
+    char* (*save)(char *dst);
+    int (*load)(char *src);
+}} tVarArrayConfig;
+
+typedef struct {{
+    int start_id, end_id;
+    ConfInfo *ci;
+    char *filename;
+    void (*info_func)(unsigned short id);
+}} confinfo_handler;
+
+static const confinfo_handler confinfo_handlers[];
+
+struct {{
+    struct {{
+        int user_menu_has_changed;
+    }} state;
+}} camera_info;
+
+static unsigned int memhash31(unsigned char *buf, int len) {{ (void)buf; (void)len; return 0; }}
+static unsigned int lang_strhash31(intptr_t id) {{ (void)id; return 0; }}
+static void* umalloc(size_t s) {{ return malloc(s); }}
+static void ufree(void *p) {{ free(p); }}
+static void user_menu_save(void) {{}}
+static void save_params_values(int enforce) {{ (void)enforce; }}
+
+static int mock_open_ret = 10;
+static int mock_open_calls = 0;
+static int mock_write_mode = 0; // 0: full, 1: short write, 2: fail
+static int mock_write_calls = 0;
+static int mock_close_ret = 0;
+static int mock_close_calls = 0;
+
+int open(const char *name, int flags, ...)
+{{
+    (void)name; (void)flags;
+    mock_open_calls++;
+    return mock_open_ret;
+}}
+
+ssize_t write(int fd, const void *buf, size_t count)
+{{
+    (void)fd; (void)buf;
+    mock_write_calls++;
+    if (mock_write_mode == 1) return count > 1 ? count - 1 : 0; // short write
+    if (mock_write_mode == 2) return -1;
+    return count;
+}}
+
+int close(int fd)
+{{
+    (void)fd;
+    mock_close_calls++;
+    return mock_close_ret;
+}}
+
+/* Real staged code */
+{src_block}
+
+static int setting1 = 100;
+static ConfInfo test_ci[] = {{
+    {{ 1, sizeof(int), CONF_DEF_VALUE, &setting1, {{ .i = 0 }}, 0 }},
+    {{ 0, 0, 0, NULL, {{ .i = 0 }}, 0 }}
+}};
+
+static const confinfo_handler confinfo_handlers[] = {{
+    {{ 1, 999, test_ci, "A/CHDK/CCHDK4.CFG", NULL }},
+    {{ 0, 0, NULL, NULL, NULL }}
+}};
+
+int main(int argc, char **argv)
+{{
+    if (argc < 2) return 99;
+    const char *test = argv[1];
+
+    if (strcmp(test, "open_fail_then_retry") == 0) {{
+        setting1 = 100;
+        test_ci[0].last_saved = 0; // changed
+
+        // Step 1: Open fails
+        mock_open_ret = -1;
+        mock_open_calls = 0;
+        mock_write_calls = 0;
+        conf_save();
+
+        if (mock_open_calls != 1) return 1;
+        if (mock_write_calls != 0) return 2;
+        if (test_ci[0].last_saved != 0) return 3; // must NOT update last_saved
+        if (strcmp(g3x_conf_save_get_diag_str(), "SAVE:FAIL") != 0) return 4;
+
+        // Step 2: Retry with working mock (no edits made)
+        mock_open_ret = 10;
+        mock_write_mode = 0;
+        mock_open_calls = 0;
+        mock_write_calls = 0;
+        conf_save();
+
+        if (mock_open_calls != 1) return 5; // must attempt retry
+        if (mock_write_calls != 1) return 6;
+        if (test_ci[0].last_saved != 100) return 7; // now updated
+        if (strcmp(g3x_conf_save_get_diag_str(), "SAVE:OK") != 0) return 8;
+
+        // Step 3: No edits -> no write call reachable, remains SAVE:OK
+        mock_open_calls = 0;
+        mock_write_calls = 0;
+        conf_save();
+        if (mock_open_calls != 0) return 9;
+        if (strcmp(g3x_conf_save_get_diag_str(), "SAVE:OK") != 0) return 10;
+
+        return 0;
+    }}
+
+    if (strcmp(test, "short_write_then_retry") == 0) {{
+        setting1 = 200;
+        test_ci[0].last_saved = 0; // changed
+
+        // Step 1: Short write
+        mock_open_ret = 10;
+        mock_write_mode = 1; // short write
+        mock_open_calls = 0;
+        mock_write_calls = 0;
+        conf_save();
+
+        if (mock_open_calls != 1) return 21;
+        if (mock_write_calls != 1) return 22;
+        if (test_ci[0].last_saved != 0) return 23; // must NOT update last_saved
+        if (strcmp(g3x_conf_save_get_diag_str(), "SAVE:FAIL") != 0) return 24;
+
+        // Step 2: Retry with working mock
+        mock_write_mode = 0;
+        mock_open_calls = 0;
+        mock_write_calls = 0;
+        conf_save();
+
+        if (mock_open_calls != 1) return 25; // must retry
+        if (mock_write_calls != 1) return 26;
+        if (test_ci[0].last_saved != 200) return 27; // now updated
+        if (strcmp(g3x_conf_save_get_diag_str(), "SAVE:OK") != 0) return 28;
+
+        return 0;
+    }}
+
+    if (strcmp(test, "persistent_failure") == 0) {{
+        setting1 = 300;
+        test_ci[0].last_saved = 0;
+
+        // Call 1: fails
+        mock_open_ret = -1;
+        mock_open_calls = 0;
+        conf_save();
+        if (mock_open_calls != 1) return 31;
+        if (test_ci[0].last_saved != 0) return 32;
+        if (strcmp(g3x_conf_save_get_diag_str(), "SAVE:FAIL") != 0) return 33;
+
+        // Call 2: still failing
+        mock_open_calls = 0;
+        conf_save();
+        if (mock_open_calls != 1) return 34; // still attempts write
+        if (test_ci[0].last_saved != 0) return 35;
+        if (strcmp(g3x_conf_save_get_diag_str(), "SAVE:FAIL") != 0) return 36;
+
+        return 0;
+    }}
+
+    return 99;
+}}
+"""
+        cls.temp_dir = tempfile.TemporaryDirectory()
+
+        # Compile real harness
+        src_path = Path(cls.temp_dir.name) / "test_retry.c"
+        src_path.write_text(make_harness(cls.conf_code), encoding="utf-8")
+        cls.bin_path = Path(cls.temp_dir.name) / "test_retry"
+        subprocess.run(["gcc", "-Wno-pointer-to-int-cast", "-O2", str(src_path), "-o", str(cls.bin_path)], check=True)
+
+        # Compile mutated harness (unconditional config_update_last_saved restored)
+        mut_code = cls.conf_code.replace(
+            "if (config_save(confinfo_handlers[i].ci, confinfo_handlers[i].filename, confinfo_handlers[i].start_id)) {\n                config_update_last_saved(confinfo_handlers[i].ci);\n            }",
+            "config_save(confinfo_handlers[i].ci, confinfo_handlers[i].filename, confinfo_handlers[i].start_id);\n            config_update_last_saved(confinfo_handlers[i].ci);"
+        )
+        mut_path = Path(cls.temp_dir.name) / "test_mutated_retry.c"
+        mut_path.write_text(make_harness(mut_code), encoding="utf-8")
+        cls.mut_bin_path = Path(cls.temp_dir.name) / "test_mutated_retry"
+        subprocess.run(["gcc", "-Wno-pointer-to-int-cast", "-O2", str(mut_path), "-o", str(cls.mut_bin_path)], check=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temp_dir.cleanup()
+
+    def test_open_failure_then_retry_with_working_mock_succeeds_and_updates_last_saved(self):
+        res = subprocess.run([str(self.bin_path), "open_fail_then_retry"])
+        self.assertEqual(res.returncode, 0, "Open failure followed by retry must attempt write again and succeed with SAVE:OK")
+
+    def test_short_write_then_retry_with_working_mock_succeeds(self):
+        res = subprocess.run([str(self.bin_path), "short_write_then_retry"])
+        self.assertEqual(res.returncode, 0, "Short write failure followed by retry must attempt write again and succeed with SAVE:OK")
+
+    def test_persistent_failure_both_calls_report_fail_and_retry_attempts_write(self):
+        res = subprocess.run([str(self.bin_path), "persistent_failure"])
+        self.assertEqual(res.returncode, 0, "Persistent failure must keep reporting SAVE:FAIL and retry must still attempt write")
+
+    def test_mutation_check_unconditional_update_fails_retry(self):
+        # With mutated source (unconditional config_update_last_saved restored),
+        # last_saved is incorrectly updated on failure, so retry does NOT attempt write.
+        # This test verifies that the mutated code fails the open_fail_then_retry contract.
+        res = subprocess.run([str(self.mut_bin_path), "open_fail_then_retry"])
+        self.assertNotEqual(res.returncode, 0, "Unconditional config_update_last_saved must fail the retry contract")
+
+
 class TestPort54DisabledWritesAndHooks(unittest.TestCase):
     def test_filewrite_hooks_disabled(self):
         for fw_path in [
@@ -910,7 +1203,7 @@ class TestPort54ConfSaveReachability(unittest.TestCase):
         # 1. Combined configuration (+ G3X_CONF_SAVE=1)
         cmd_cand = base_cmd + ["-DG3X_CONF_SAVE=1", str(self.staged_conf_c)]
         out_cand = subprocess.check_output(cmd_cand, text=True)
-        m_cand = re.search(r"void config_save\([^)]*\)\s*\{(.*?)\n\}", out_cand, re.DOTALL)
+        m_cand = re.search(r"(?:void|int)\s+config_save\([^)]*\)\s*\{(.*?)\n\}", out_cand, re.DOTALL)
         self.assertIsNotNone(m_cand, "config_save not found in preprocessed candidate output")
         cfg_cand_body = m_cand.group(1)
         self.assertIn("open(filename,", cfg_cand_body)
@@ -922,7 +1215,7 @@ class TestPort54ConfSaveReachability(unittest.TestCase):
         # 2. PLAYBACK_MENU-without-CONF_SAVE (no G3X_CONF_SAVE)
         cmd_p53 = base_cmd + [str(self.staged_conf_c)]
         out_p53 = subprocess.check_output(cmd_p53, text=True)
-        m_p53 = re.search(r"void config_save\([^)]*\)\s*\{(.*?)\n\}", out_p53, re.DOTALL)
+        m_p53 = re.search(r"(?:void|int)\s+config_save\([^)]*\)\s*\{(.*?)\n\}", out_p53, re.DOTALL)
         self.assertIsNotNone(m_p53, "config_save not found in preprocessed PORT-53 output")
         cfg_p53_body = m_p53.group(1)
         self.assertIn("g3x_conf_record_save_result(3", cfg_p53_body)

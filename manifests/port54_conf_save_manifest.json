@@ -28,8 +28,8 @@
   "artifacts": {
     "DISKBOOT.BIN": {
       "path": "DISKBOOT.BIN",
-      "size": 133241,
-      "sha256": "d2106b34560142c37401d038c6360d8d4e5e6a8ffd70859faab59b8dcf4dfca6"
+      "size": 133265,
+      "sha256": "452d942c586044e59c20ccc89dfd977c863c34c2ac33b8c103157cbd208f6be4"
     },
     "modules_count": 34,
     "modules": {
@@ -1141,11 +1141,11 @@
         "sha256": "3ffbe9b6390041f1ed9da96b6b0d43e1c43fb2ca2cb31d92d8970174d985a2f3"
       }
     },
-    "core_end": "0x0036ae50",
-    "_end": "0x0036ae50"
+    "core_end": "0x0036ae60",
+    "_end": "0x0036ae60"
   },
-  "core_end": "0x0036ae50",
-  "_end": "0x0036ae50",
+  "core_end": "0x0036ae60",
+  "_end": "0x0036ae60",
   "card_writes": "sandboxed_conf_save",
   "card_writes_note": "Config save enabled under G3X_CONF_SAVE=1 with central A/CHDK/ path check and spytask_can_start gate; blocking write wrappers remain active for non-conf writes (fwrite, creat, mkdir, remove, rename); raw/jpeg hooks, scripts and logging writes remain disabled",
   "removed_wrappers": [
@@ -1183,15 +1183,15 @@
     },
     "conf_save_alone": {
       "path": "out/build-conf-alone/DISKBOOT.BIN",
-      "size": 124721,
-      "sha256": "62f421a2c1e5934b9e095d74c6ea792746b615b61eeca12fea242eb58fa98f47",
+      "size": 124737,
+      "sha256": "8f3f3d4c21a0942420c8ea2894578a13d6f655bb5029da6321dfd480d397942e",
       "card_writes": "sandboxed_conf_save",
       "diag_status": "SAVE:OK/SAVE:FAIL"
     },
     "full_candidate": {
       "path": "out/port54-conf-save/DISKBOOT.BIN",
-      "size": 133241,
-      "sha256": "d2106b34560142c37401d038c6360d8d4e5e6a8ffd70859faab59b8dcf4dfca6",
+      "size": 133265,
+      "sha256": "452d942c586044e59c20ccc89dfd977c863c34c2ac33b8c103157cbd208f6be4",
       "card_writes": "sandboxed_conf_save",
       "diag_status": "SAVE:OK/SAVE:FAIL"
     }

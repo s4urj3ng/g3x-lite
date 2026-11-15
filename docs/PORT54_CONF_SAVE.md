@@ -42,7 +42,7 @@
 | Configuration | Output Path | Size (bytes) | SHA-256 | Description |
 |---|---|---|---|---|
 | Default | `out/build-default/DISKBOOT.BIN` | 124097 | `24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9` | Byte-identical to PORT-53 default (`SAVE:OFF`, all card writes disabled) |
-| G3X_CONF_SAVE=1 alone | `out/build-conf-alone/DISKBOOT.BIN` | 124721 | `62f421a2c1e5934b9e095d74c6ea792746b615b61eeca12fea242eb58fa98f47` | Opt-in standalone settings save with central `A/CHDK/` path check |
-| Full Candidate (G3X_CONF_SAVE=1 + G3X_PLAYBACK_MENU=1 + PORT-50 menu + PORT-51 RESTORE2) | `out/port54-conf-save/DISKBOOT.BIN` | 133241 | `d2106b34560142c37401d038c6360d8d4e5e6a8ffd70859faab59b8dcf4dfca6` | Opt-in candidate with sandboxed conf save, playback ALT menu, and DBUF restore |
+| G3X_CONF_SAVE=1 alone | `out/build-conf-alone/DISKBOOT.BIN` | 124737 | `8f3f3d4c21a0942420c8ea2894578a13d6f655bb5029da6321dfd480d397942e` | Opt-in standalone settings save with central `A/CHDK/` path check |
+| Full Candidate (G3X_CONF_SAVE=1 + G3X_PLAYBACK_MENU=1 + PORT-50 menu + PORT-51 RESTORE2) | `out/port54-conf-save/DISKBOOT.BIN` | 133265 | `452d942c586044e59c20ccc89dfd977c863c34c2ac33b8c103157cbd208f6be4` | Opt-in candidate with sandboxed conf save, playback ALT menu, and DBUF restore |
 
 

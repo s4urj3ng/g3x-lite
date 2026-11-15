@@ -1712,10 +1712,6 @@ def apply_conf_save_staging_patches(stage_dir: Path) -> None:
         "    g3x_conf_record_save_result(3 /* G3X_CONF_SAVE_OFF */);\n"
         "    return;\n"
         "#else\n"
-        "#if defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1)\n"
-        "    extern void g3x_conf_save_start(void);\n"
-        "    g3x_conf_save_start();\n"
-        "#endif\n"
     )
     if "void conf_save()\n{\n#if" not in conf_text:
         if conf_text.count(conf_save_anchor) != 1:
@@ -2454,11 +2450,36 @@ def apply_port54_conf_save_staging_patches(stage_dir: Path, alone: bool = False)
         )
     lib_c.write_text(lib_text, encoding="utf-8")
 
-    # 5. In core/conf.c: add scoped save active flag and save result recording in config_save() and conf_save()
+    # 5. In include/conf.h and core/conf.c: declare int config_save, add scoped save active flag,
+    # checked write/close, conditional config_update_last_saved, and retry-preserving result recording
+    conf_h = stage_dir / "include/conf.h"
+    h_text = conf_h.read_text(encoding="utf-8")
+    if "extern void config_save(ConfInfo *conf_info, const char *filename, int config_base);" in h_text:
+        h_text = h_text.replace(
+            "extern void config_save(ConfInfo *conf_info, const char *filename, int config_base);",
+            "extern int config_save(ConfInfo *conf_info, const char *filename, int config_base);"
+        )
+        conf_h.write_text(h_text, encoding="utf-8")
+
     conf_c = stage_dir / "core/conf.c"
     conf_text = conf_c.read_text(encoding="utf-8")
+    if "void config_save(ConfInfo *ci, const char *filename, int config_base)" in conf_text:
+        conf_text = conf_text.replace(
+            "void config_save(ConfInfo *ci, const char *filename, int config_base)",
+            "int config_save(ConfInfo *ci, const char *filename, int config_base)",
+            1
+        )
+    guard_ret_target = "g3x_conf_record_save_result(3 /* G3X_CONF_SAVE_OFF */);\n    return;\n"
+    if guard_ret_target in conf_text:
+        conf_text = conf_text.replace(
+            guard_ret_target,
+            "g3x_conf_record_save_result(3 /* G3X_CONF_SAVE_OFF */);\n    return 0;\n",
+            1
+        )
+
     save_open_target = "    int fd = open(filename, O_WRONLY|O_CREAT|O_TRUNC, 0777);"
     save_open_replacement = (
+        "    int save_ok = 0;\n"
         "    extern volatile int g3x_conf_save_active;\n"
         "    g3x_conf_save_active = 1;\n"
         "    int fd = open(filename, O_WRONLY|O_CREAT|O_TRUNC, 0777);"
@@ -2476,10 +2497,11 @@ def apply_port54_conf_save_staging_patches(stage_dir: Path, alone: bool = False)
     )
     save_write_replacement = (
         "        int wb = write(fd, buf, p-buf);\n"
-        "        close(fd);\n"
+        "        int cb = close(fd);\n"
         "        g3x_conf_save_active = 0;\n"
         "        extern void g3x_conf_record_save_result(int ok);\n"
-        "        if (wb == (p - buf)) {\n"
+        "        if (wb == (p - buf) && cb == 0) {\n"
+        "            save_ok = 1;\n"
         "            g3x_conf_record_save_result(1 /* G3X_CONF_SAVE_OK */);\n"
         "        } else {\n"
         "            g3x_conf_record_save_result(2 /* G3X_CONF_SAVE_FAIL */);\n"
@@ -2498,6 +2520,33 @@ def apply_port54_conf_save_staging_patches(stage_dir: Path, alone: bool = False)
     else:
         raise RuntimeError("PORT-54 config_save write target not found in staged core/conf.c")
 
+    save_end_target = (
+        "#if defined(OPT_FORCE_LUA_CALL_NATIVE)\n"
+        "    conf.script_allow_lua_native_calls = 1;\n"
+        "#endif\n"
+        "#endif\n"
+        "}"
+    )
+    save_end_replacement = (
+        "#if defined(OPT_FORCE_LUA_CALL_NATIVE)\n"
+        "    conf.script_allow_lua_native_calls = 1;\n"
+        "#endif\n"
+        "    return save_ok;\n"
+        "#endif\n"
+        "}"
+    )
+    if save_end_target in conf_text:
+        conf_text = conf_text.replace(save_end_target, save_end_replacement, 1)
+    else:
+        raise RuntimeError("PORT-54 config_save end target not found in staged core/conf.c")
+
+    conf_save_hdr_target = "g3x_conf_record_save_result(3 /* G3X_CONF_SAVE_OFF */);\n    return;\n#else\n    int i;\n"
+    conf_save_hdr_replacement = "g3x_conf_record_save_result(3 /* G3X_CONF_SAVE_OFF */);\n    return;\n#else\n    int files_to_save = 0;\n    int i;\n"
+    if conf_save_hdr_target in conf_text:
+        conf_text = conf_text.replace(conf_save_hdr_target, conf_save_hdr_replacement, 1)
+    else:
+        raise RuntimeError("PORT-54 conf_save header target not found in staged core/conf.c")
+
     conf_save_loop_target = (
         "            config_save(confinfo_handlers[i].ci, confinfo_handlers[i].filename, confinfo_handlers[i].start_id);\n"
         "            config_update_last_saved(confinfo_handlers[i].ci);\n"
@@ -2505,18 +2554,36 @@ def apply_port54_conf_save_staging_patches(stage_dir: Path, alone: bool = False)
         "    }"
     )
     conf_save_loop_replacement = (
-        "            config_save(confinfo_handlers[i].ci, confinfo_handlers[i].filename, confinfo_handlers[i].start_id);\n"
-        "            config_update_last_saved(confinfo_handlers[i].ci);\n"
+        "            if (files_to_save == 0) {\n"
+        "                extern void g3x_conf_save_start(void);\n"
+        "                g3x_conf_save_start();\n"
+        "            }\n"
+        "            files_to_save++;\n"
+        "            if (config_save(confinfo_handlers[i].ci, confinfo_handlers[i].filename, confinfo_handlers[i].start_id)) {\n"
+        "                config_update_last_saved(confinfo_handlers[i].ci);\n"
+        "            }\n"
         "        }\n"
-        "    }\n"
-        "    extern void g3x_conf_record_save_result(int ok);\n"
-        "    extern int g3x_conf_save_status;\n"
-        "    if (g3x_conf_save_status == 0 /* G3X_CONF_SAVE_NONE */) {\n"
-        "        g3x_conf_record_save_result(1 /* G3X_CONF_SAVE_OK */);\n"
         "    }"
     )
     if conf_save_loop_target in conf_text:
         conf_text = conf_text.replace(conf_save_loop_target, conf_save_loop_replacement, 1)
+    else:
+        raise RuntimeError("PORT-54 conf_save loop target not found in staged core/conf.c")
+
+    save_cfg_loop_target = (
+        "            config_save(confinfo_handlers[i].ci, (filename != 0) ? filename : confinfo_handlers[i].filename, confinfo_handlers[i].start_id);\n"
+        "            if (filename == 0)  // Reset 'last_saved' values after saving default file\n"
+        "                config_update_last_saved(confinfo_handlers[i].ci);\n"
+        "            return 1;"
+    )
+    save_cfg_loop_replacement = (
+        "            int ok = config_save(confinfo_handlers[i].ci, (filename != 0) ? filename : confinfo_handlers[i].filename, confinfo_handlers[i].start_id);\n"
+        "            if (filename == 0 && ok)  // Reset 'last_saved' values after saving default file\n"
+        "                config_update_last_saved(confinfo_handlers[i].ci);\n"
+        "            return ok;"
+    )
+    if save_cfg_loop_target in conf_text:
+        conf_text = conf_text.replace(save_cfg_loop_target, save_cfg_loop_replacement, 1)
 
     conf_c.write_text(conf_text, encoding="utf-8")
 
@@ -3102,15 +3169,15 @@ def build_port43_dbuf(
             },
             "conf_save_alone": {
                 "path": "out/build-conf-alone/DISKBOOT.BIN",
-                "size": 124721,
-                "sha256": "62f421a2c1e5934b9e095d74c6ea792746b615b61eeca12fea242eb58fa98f47",
+                "size": 124737,
+                "sha256": "8f3f3d4c21a0942420c8ea2894578a13d6f655bb5029da6321dfd480d397942e",
                 "card_writes": "sandboxed_conf_save",
                 "diag_status": "SAVE:OK/SAVE:FAIL"
             },
             "full_candidate": {
                 "path": "out/port54-conf-save/DISKBOOT.BIN",
-                "size": 133241,
-                "sha256": "d2106b34560142c37401d038c6360d8d4e5e6a8ffd70859faab59b8dcf4dfca6",
+                "size": 133265,
+                "sha256": "452d942c586044e59c20ccc89dfd977c863c34c2ac33b8c103157cbd208f6be4",
                 "card_writes": "sandboxed_conf_save",
                 "diag_status": "SAVE:OK/SAVE:FAIL"
             }
