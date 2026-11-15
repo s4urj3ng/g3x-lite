@@ -3,12 +3,13 @@
 Verifies:
 1. Flag gating: G3X_CONF_SAVE=1 plumbing in makefiles and headers.
 2. Default build byte-identity: Matches PORT-53 default SHA-256 and size.
-3. Central path check: g3x_is_safe_chdk_write_path accepts A/CHDK/ paths and rejects outside paths, traversals ('..'), backslashes, and other drives.
-4. Filesystem-ready gate: No write is reachable before spytask_can_start != 0.
-5. Diag marker: SAVE:OK on success, SAVE:FAIL on failure, SAVE:OFF when disabled.
+3. Central path check: Real staged g3x_is_safe_chdk_write_path accepts A/CHDK/ paths and rejects outside paths, traversals ('..'), backslashes, and other drives.
+4. Filesystem-ready gate: Real staged __wrap_write and __wrap_open refuse writes before spytask_can_start != 0.
+5. Diag marker: Real gui_diag.h SAVE:OK on success, SAVE:FAIL on failure, SAVE:OFF when disabled; failure aggregated per-save and unlatched on next save.
 6. Write restrictions: filewrite.c hooks, scripts, and logging remain disabled.
-7. Stub verification: Every file I/O stub address matches reference/finsig_gm110c/stubs_entry.S.
-8. Manifest verification: Candidate manifest contains expected artifacts, hashes, and wrappers.
+7. Stub verification: Platform stubs entry parsed and compared against reference/finsig_gm110c/stubs_entry.S and main.elf symbols.
+8. Manifest verification: Candidate manifest contains expected artifacts, hashes, configurations, and wrappers.
+9. Env-flag invocation: G3X_CONF_SAVE=1 alone builds cleanly without --conf-save-alone, conf_save unwrapped, no undefined symbols, and SAVE:OK/SAVE:FAIL present.
 """
 
 from __future__ import annotations
@@ -31,6 +32,8 @@ SUB_MAKEFILE = ROOT / "chdk-port/platform/g3x/sub/110c/Makefile"
 LIB_C = ROOT / "chdk-port/platform/g3x/lib.c"
 FILEWRITE_C = ROOT / "chdk-port/platform/g3x/sub/110c/filewrite.c"
 FINSIG_STUBS = ROOT / "reference/finsig_gm110c/stubs_entry.S"
+PLATFORM_STUBS_1 = ROOT / "chdk-port/platform/g3x/sub/110c/stubs_entry.S"
+PLATFORM_STUBS_2 = ROOT / "chdk-port/platform/g3x/sub/110c/stubs_entry_2.S"
 MANIFEST_P54 = ROOT / "manifests/port54_conf_save_manifest.json"
 
 TOOLCHAIN_BIN = ROOT / "toolchains/gcc-arm-none-eabi-5_4-2016q3/bin"
@@ -40,11 +43,11 @@ OBJDUMP = TOOLCHAIN_BIN / "arm-none-eabi-objdump"
 BASE_DEFAULT_SHA256 = "24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9"
 BASE_DEFAULT_SIZE = 124097
 
-BASE_ALONE_SHA256 = "9182ff256ea72e71bd81e35f321e68ee2865f036f197898b1cf78eb9ff87a114"
-BASE_ALONE_SIZE = 124625
+BASE_ALONE_SHA256 = "62f421a2c1e5934b9e095d74c6ea792746b615b61eeca12fea242eb58fa98f47"
+BASE_ALONE_SIZE = 124721
 
-BASE_CANDIDATE_SHA256 = "c5ef5bcf4962459d45d92b2f0dcf1f8f0b7db169a63f9bff6efd438e116d237f"
-BASE_CANDIDATE_SIZE = 133153
+BASE_CANDIDATE_SHA256 = "d2106b34560142c37401d038c6360d8d4e5e6a8ffd70859faab59b8dcf4dfca6"
+BASE_CANDIDATE_SIZE = 133241
 
 
 def sha256_file(path: Path) -> str:
@@ -53,6 +56,21 @@ def sha256_file(path: Path) -> str:
         while chunk := f.read(65536):
             h.update(chunk)
     return h.hexdigest()
+
+
+def extract_staged_guard_source(lib_c_path: Path) -> str:
+    text = lib_c_path.read_text(encoding="utf-8")
+    start = text.index("volatile int g3x_conf_save_active = 0;")
+    end = text.index("void *__wrap_fopen", start)
+    return text[start:end]
+
+
+def parse_asm_stubs(path: Path) -> dict[str, int]:
+    text = path.read_text(encoding="utf-8")
+    stubs: dict[str, int] = {}
+    for m in re.finditer(r"(?:NHSTUB|DEF)\s*\(\s*([A-Za-z0-9_]+)\s*,\s*(0x[0-9a-fA-F]+)\)", text):
+        stubs[m.group(1)] = int(m.group(2), 16)
+    return stubs
 
 
 class TestPort54FlagPlumbing(unittest.TestCase):
@@ -80,8 +98,10 @@ class TestPort54FlagPlumbing(unittest.TestCase):
 
         self.assertIn("G3X_CONF_SAVE", text)
         self.assertIn("g3x_is_safe_chdk_write_path", text)
+        self.assertIn("g3x_conf_save_start", text)
         self.assertIn("g3x_conf_record_save_result", text)
         self.assertIn("g3x_conf_record_save_skipped", text)
+        self.assertIn("g3x_conf_save_get_diag_str", text)
 
 
 class TestPort54DefaultBuildIdentity(unittest.TestCase):
@@ -111,71 +131,75 @@ class TestPort54DefaultBuildIdentity(unittest.TestCase):
 
 
 class TestPort54CentralPathCheck(unittest.TestCase):
+    """Compiles the REAL shipped guard source extracted from staged lib.c against mocked firmware calls."""
+
     @classmethod
     def setUpClass(cls):
-        # Compile a native C test harness for g3x_is_safe_chdk_write_path
-        c_code = """
+        stage_lib = ROOT / "out/port54-conf-save/stage_chdk/platform/g3x/lib.c"
+        if not stage_lib.is_file():
+            # Build candidate to ensure stage is populated
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(ROOT / "scripts/build_port43_dbuf.py"),
+                    "--no-overdraw",
+                    "--kbd-check",
+                    "--gui-diag",
+                    "--shadow2",
+                    "--gui-sync",
+                    "--gui-menu",
+                    "--gui-restore2",
+                    "--playback-menu",
+                    "--conf-save",
+                    "--out-dir",
+                    str(ROOT / "out/port54-conf-save"),
+                ],
+                cwd=ROOT,
+                check=True,
+            )
+
+        guard_code = extract_staged_guard_source(stage_lib)
+
+        harness_code = f"""
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
-static int g3x_tolower(int c)
-{
-    if (c >= 'A' && c <= 'Z') {
-        return c + ('a' - 'A');
-    }
-    return c;
-}
+volatile int spytask_can_start = 1;
+static int mock_real_open_calls = 0;
+static int mock_real_write_calls = 0;
 
-int g3x_is_safe_chdk_write_path(const char *path)
-{
-    if (!path) {
-        return 0;
-    }
-    const char *p;
-    for (p = path; *p; ++p) {
-        if (*p == '\\\\') {
-            return 0;
-        }
-    }
-    for (p = path; *p; ++p) {
-        if (p[0] == '.' && p[1] == '.') {
-            return 0;
-        }
-    }
-    int idx = 0;
-    if (g3x_tolower((unsigned char)path[0]) != 'a') {
-        return 0;
-    }
-    idx = 1;
-    if (path[idx] == ':') {
-        idx++;
-    }
-    if (path[idx] != '/') {
-        return 0;
-    }
-    idx++;
-    const char *target = "chdk/";
-    int i;
-    for (i = 0; i < 5; ++i) {
-        if (g3x_tolower((unsigned char)path[idx + i]) != target[i]) {
-            return 0;
-        }
-    }
-    return 1;
-}
+int __real_open(const char *name, int flags, int mode)
+{{
+    (void)name; (void)flags; (void)mode;
+    mock_real_open_calls++;
+    return 42;
+}}
+
+int __real_write(int fd, const void *buf, int n)
+{{
+    (void)fd; (void)buf;
+    mock_real_write_calls++;
+    return n;
+}}
+
+/* Real guard source code extracted from staged lib.c */
+{guard_code}
 
 int main(int argc, char **argv)
-{
+{{
     if (argc < 2) return 2;
-    if (strcmp(argv[1], "__NULL__") == 0) {
+    const char *arg = argv[1];
+    if (strcmp(arg, "__NULL__") == 0) {{
         return g3x_is_safe_chdk_write_path(NULL) ? 0 : 1;
-    }
-    return g3x_is_safe_chdk_write_path(argv[1]) ? 0 : 1;
-}
+    }}
+    return g3x_is_safe_chdk_write_path(arg) ? 0 : 1;
+}}
 """
         cls.temp_dir = tempfile.TemporaryDirectory()
         src_path = Path(cls.temp_dir.name) / "test_path.c"
-        src_path.write_text(c_code, encoding="utf-8")
+        src_path.write_text(harness_code, encoding="utf-8")
         cls.bin_path = Path(cls.temp_dir.name) / "test_path"
         subprocess.run(["gcc", "-O2", str(src_path), "-o", str(cls.bin_path)], check=True)
 
@@ -232,128 +256,62 @@ int main(int argc, char **argv)
 
 
 class TestPort54FilesystemReadyGate(unittest.TestCase):
+    """Compiles the REAL shipped guard source to prove no write call is reachable before the filesystem-ready gate."""
+
     @classmethod
     def setUpClass(cls):
-        c_code = """
+        stage_lib = ROOT / "out/port54-conf-save/stage_chdk/platform/g3x/lib.c"
+        guard_code = extract_staged_guard_source(stage_lib)
+
+        harness_code = f"""
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 volatile int spytask_can_start = 0;
-volatile int g3x_conf_save_active = 1;
-
-static int g3x_tolower(int c)
-{
-    if (c >= 'A' && c <= 'Z') return c + ('a' - 'A');
-    return c;
-}
-
-static int g3x_strcasecmp(const char *s1, const char *s2)
-{
-    while (*s1 && *s2) {
-        if (g3x_tolower((unsigned char)*s1) != g3x_tolower((unsigned char)*s2)) {
-            return (unsigned char)*s1 - (unsigned char)*s2;
-        }
-        s1++;
-        s2++;
-    }
-    return (unsigned char)*s1 - (unsigned char)*s2;
-}
-
-int g3x_is_safe_chdk_write_path(const char *path)
-{
-    if (!path) return 0;
-    const char *p;
-    for (p = path; *p; ++p) if (*p == '\\\\') return 0;
-    for (p = path; *p; ++p) if (p[0] == '.' && p[1] == '.') return 0;
-    if (g3x_tolower((unsigned char)path[0]) != 'a') return 0;
-    int idx = 1;
-    if (path[idx] == ':') idx++;
-    if (path[idx] != '/') return 0;
-    idx++;
-    const char *target = "chdk/";
-    int i;
-    for (i = 0; i < 5; ++i) {
-        if (g3x_tolower((unsigned char)path[idx + i]) != target[i]) return 0;
-    }
-    return 1;
-}
-
-int g3x_is_conf_file_path(const char *path)
-{
-    if (!g3x_is_safe_chdk_write_path(path)) return 0;
-    int idx = 1;
-    if (path[idx] == ':') idx++;
-    if (path[idx] != '/') return 0;
-    idx++;
-    idx += 5;
-    const char *sub = path + idx;
-    if (g3x_strcasecmp(sub, "cchdk4.cfg") == 0 ||
-        g3x_strcasecmp(sub, "osd__4.cfg") == 0 ||
-        g3x_strcasecmp(sub, "umenu4.cfg") == 0 ||
-        g3x_strcasecmp(sub, "gps__4.cfg") == 0) {
-        return 1;
-    }
-    return 0;
-}
-
 static int mock_real_write_calls = 0;
 static int mock_real_open_calls = 0;
 
 int __real_write(int fd, const void *buf, int n)
-{
+{{
+    (void)fd; (void)buf;
     mock_real_write_calls++;
     return n;
-}
+}}
 
 int __real_open(const char *name, int flags, int mode)
-{
+{{
+    (void)name; (void)flags; (void)mode;
     mock_real_open_calls++;
     return 42; // mock fd
-}
+}}
 
-int __wrap_write(int fd, const void *buf, int n)
-{
-    if (!spytask_can_start || !g3x_conf_save_active) {
-        return -1;
-    }
-    return __real_write(fd, buf, n);
-}
-
-int __wrap_open(const char *name, int flags, int mode)
-{
-    if ((flags & 3) != 0 || (flags & (0x08 | 0x0100 | 0x0200 | 0x0400 | 0x0800))) {
-        if (!spytask_can_start || !g3x_conf_save_active) {
-            return -1;
-        }
-        if (!g3x_is_safe_chdk_write_path(name)) {
-            return -1;
-        }
-        if (!g3x_is_conf_file_path(name)) {
-            return -1;
-        }
-    }
-    return __real_open(name, flags, mode);
-}
+/* Real guard source code extracted from staged lib.c */
+{guard_code}
 
 int main(int argc, char **argv)
-{
+{{
     if (argc < 4) return 99;
     spytask_can_start = argv[1][0] - '0';
+    g3x_conf_save_active = 1;
     int is_write = strcmp(argv[2], "write") == 0;
     const char *path = argv[3];
 
-    if (is_write) {
+    mock_real_write_calls = 0;
+    mock_real_open_calls = 0;
+
+    if (is_write) {{
         int res = __wrap_write(1, "test", 4);
-        return (res == 4) ? 0 : 1;
-    } else {
+        return (res == 4 && mock_real_write_calls == 1) ? 0 : 1;
+    }} else {{
         int res = __wrap_open(path, 0x0201 /* O_WRONLY|O_CREAT */, 0666);
-        return (res == 42) ? 0 : 1;
-    }
-}
+        return (res == 42 && mock_real_open_calls == 1) ? 0 : 1;
+    }}
+}}
 """
         cls.temp_dir = tempfile.TemporaryDirectory()
         src_path = Path(cls.temp_dir.name) / "test_gate.c"
-        src_path.write_text(c_code, encoding="utf-8")
+        src_path.write_text(harness_code, encoding="utf-8")
         cls.bin_path = Path(cls.temp_dir.name) / "test_gate"
         subprocess.run(["gcc", "-O2", str(src_path), "-o", str(cls.bin_path)], check=True)
 
@@ -362,7 +320,7 @@ int main(int argc, char **argv)
         cls.temp_dir.cleanup()
 
     def test_writes_blocked_before_filesystem_ready(self):
-        # spytask_can_start = 0 -> must return -1 (exit code 1)
+        # spytask_can_start = 0 -> must return 1 (write/open refused, real call = 0)
         res = subprocess.run([str(self.bin_path), "0", "write", "ignored"])
         self.assertEqual(res.returncode, 1, "write should be blocked before fs ready")
 
@@ -370,7 +328,7 @@ int main(int argc, char **argv)
         self.assertEqual(res.returncode, 1, "open for write should be blocked before fs ready")
 
     def test_writes_permitted_after_filesystem_ready_for_chdk(self):
-        # spytask_can_start = 1 -> should succeed (exit code 0)
+        # spytask_can_start = 1 -> should succeed
         res = subprocess.run([str(self.bin_path), "1", "write", "ignored"])
         self.assertEqual(res.returncode, 0, "write should succeed when fs is ready")
 
@@ -384,180 +342,96 @@ int main(int argc, char **argv)
 
 
 class TestPort54SettingsSaveScopedPermission(unittest.TestCase):
-    """Verifies that write permissions are scoped strictly to settings save operations."""
+    """Verifies that write permissions are scoped strictly to settings save operations,
+    and validates mutation testing on the real guard source."""
 
     @classmethod
     def setUpClass(cls):
-        c_code = """
+        stage_lib = ROOT / "out/port54-conf-save/stage_chdk/platform/g3x/lib.c"
+        cls.guard_code = extract_staged_guard_source(stage_lib)
+
+        def make_harness(src: str) -> str:
+            return f"""
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 volatile int spytask_can_start = 1;
-volatile int g3x_conf_save_active = 0;
-
-static int g3x_tolower(int c)
-{
-    if (c >= 'A' && c <= 'Z') return c + ('a' - 'A');
-    return c;
-}
-
-static int g3x_strcasecmp(const char *s1, const char *s2)
-{
-    while (*s1 && *s2) {
-        if (g3x_tolower((unsigned char)*s1) != g3x_tolower((unsigned char)*s2)) {
-            return (unsigned char)*s1 - (unsigned char)*s2;
-        }
-        s1++;
-        s2++;
-    }
-    return (unsigned char)*s1 - (unsigned char)*s2;
-}
-
-int g3x_is_safe_chdk_write_path(const char *path)
-{
-    if (!path) return 0;
-    const char *p;
-    for (p = path; *p; ++p) if (*p == '\\\\') return 0;
-    for (p = path; *p; ++p) if (p[0] == '.' && p[1] == '.') return 0;
-    if (g3x_tolower((unsigned char)path[0]) != 'a') return 0;
-    int idx = 1;
-    if (path[idx] == ':') idx++;
-    if (path[idx] != '/') return 0;
-    idx++;
-    const char *target = "chdk/";
-    int i;
-    for (i = 0; i < 5; ++i) {
-        if (g3x_tolower((unsigned char)path[idx + i]) != target[i]) return 0;
-    }
-    return 1;
-}
-
-int g3x_is_conf_file_path(const char *path)
-{
-    if (!g3x_is_safe_chdk_write_path(path)) return 0;
-    int idx = 1;
-    if (path[idx] == ':') idx++;
-    if (path[idx] != '/') return 0;
-    idx++;
-    idx += 5;
-    const char *sub = path + idx;
-    if (g3x_strcasecmp(sub, "cchdk4.cfg") == 0 ||
-        g3x_strcasecmp(sub, "osd__4.cfg") == 0 ||
-        g3x_strcasecmp(sub, "umenu4.cfg") == 0 ||
-        g3x_strcasecmp(sub, "gps__4.cfg") == 0) {
-        return 1;
-    }
-    return 0;
-}
-
 static int mock_real_write_calls = 0;
 static int mock_real_open_calls = 0;
 
 int __real_write(int fd, const void *buf, int n)
-{
+{{
+    (void)fd; (void)buf;
     mock_real_write_calls++;
     return n;
-}
+}}
 
 int __real_open(const char *name, int flags, int mode)
-{
+{{
+    (void)name; (void)flags; (void)mode;
     mock_real_open_calls++;
     return 42;
-}
+}}
 
-int __wrap_write(int fd, const void *buf, int n)
-{
-    if (!spytask_can_start || !g3x_conf_save_active) {
-        return -1;
-    }
-    return __real_write(fd, buf, n);
-}
-
-int __wrap_open(const char *name, int flags, int mode)
-{
-    if ((flags & 3) != 0 || (flags & (0x08 | 0x0100 | 0x0200 | 0x0400 | 0x0800))) {
-        if (!spytask_can_start || !g3x_conf_save_active) {
-            return -1;
-        }
-        if (!g3x_is_safe_chdk_write_path(name)) {
-            return -1;
-        }
-        if (!g3x_is_conf_file_path(name)) {
-            return -1;
-        }
-    }
-    return __real_open(name, flags, mode);
-}
-
-int test_script_print_screen_open(int val)
-{
-    char print_screen_file[100];
-    sprintf(print_screen_file, "A/CHDK/LOGS/LOG_%04d.TXT", val);
-    return __wrap_open(print_screen_file, 0x0201 /* O_WRONLY|O_CREAT|O_TRUNC */, 0777);
-}
-
-int test_script_console_write(int fd, const char *msg)
-{
-    return __wrap_write(fd, msg, strlen(msg));
-}
+{src}
 
 int main(int argc, char **argv)
-{
+{{
     if (argc < 3) return 99;
     const char *cmd = argv[1];
     const char *arg = argv[2];
 
-    if (strcmp(cmd, "script_open") == 0) {
-        int fd = test_script_print_screen_open(1);
-        return (fd < 0 && mock_real_open_calls == 0) ? 0 : 1;
-    }
-    if (strcmp(cmd, "script_write") == 0) {
-        int wb = test_script_console_write(42, "log line");
-        return (wb < 0 && mock_real_write_calls == 0) ? 0 : 1;
-    }
-    if (strcmp(cmd, "open_inactive") == 0) {
+    mock_real_write_calls = 0;
+    mock_real_open_calls = 0;
+
+    if (strcmp(cmd, "open_inactive") == 0) {{
         g3x_conf_save_active = 0;
         int fd = __wrap_open(arg, 0x0201, 0666);
         return (fd < 0 && mock_real_open_calls == 0) ? 0 : 1;
-    }
-    if (strcmp(cmd, "write_inactive") == 0) {
+    }}
+    if (strcmp(cmd, "write_inactive") == 0) {{
         g3x_conf_save_active = 0;
         int wb = __wrap_write(1, "data", 4);
         return (wb < 0 && mock_real_write_calls == 0) ? 0 : 1;
-    }
-    if (strcmp(cmd, "open_active") == 0) {
+    }}
+    if (strcmp(cmd, "open_active") == 0) {{
         g3x_conf_save_active = 1;
         int fd = __wrap_open(arg, 0x0201, 0666);
         return (fd == 42 && mock_real_open_calls == 1) ? 0 : 1;
-    }
-    if (strcmp(cmd, "write_active") == 0) {
+    }}
+    if (strcmp(cmd, "write_active") == 0) {{
         g3x_conf_save_active = 1;
         int wb = __wrap_write(1, "data", 4);
         return (wb == 4 && mock_real_write_calls == 1) ? 0 : 1;
-    }
+    }}
     return 99;
-}
+}}
 """
         cls.temp_dir = tempfile.TemporaryDirectory()
+
+        # Real harness
         src_path = Path(cls.temp_dir.name) / "test_scope.c"
-        src_path.write_text(c_code, encoding="utf-8")
+        src_path.write_text(make_harness(cls.guard_code), encoding="utf-8")
         cls.bin_path = Path(cls.temp_dir.name) / "test_scope"
         subprocess.run(["gcc", "-O2", str(src_path), "-o", str(cls.bin_path)], check=True)
+
+        # Mutated harness: guard stubbed out in __wrap_open
+        mutated_code = cls.guard_code.replace(
+            "if ((flags & 3) != 0 || (flags & (0x08 | 0x0100 | 0x0200 | 0x0400 | 0x0800)))",
+            "if (0 && (flags & 3) != 0)"
+        )
+        mut_path = Path(cls.temp_dir.name) / "test_mutated.c"
+        mut_path.write_text(make_harness(mutated_code), encoding="utf-8")
+        cls.mut_bin_path = Path(cls.temp_dir.name) / "test_mutated"
+        subprocess.run(["gcc", "-O2", str(mut_path), "-o", str(cls.mut_bin_path)], check=True)
 
     @classmethod
     def tearDownClass(cls):
         cls.temp_dir.cleanup()
 
-    def test_script_logging_blocked(self):
-        # (a) script logging cannot reach __real_open or __real_write
-        res = subprocess.run([str(self.bin_path), "script_open", "1"])
-        self.assertEqual(res.returncode, 0, "script print screen open should return -1 and never reach __real_open")
-
-        res = subprocess.run([str(self.bin_path), "script_write", "msg"])
-        self.assertEqual(res.returncode, 0, "script console write should return -1 and never reach __real_write")
-
     def test_outside_conf_save_scope_rejected(self):
-        # (b) write to an A/CHDK/ path outside the conf-save scope is rejected
+        # All writes rejected when g3x_conf_save_active == 0
         outside_paths = [
             "A/CHDK/LOGS/LOG_0001.TXT",
             "A/CHDK/CCHDK4.CFG",
@@ -574,7 +448,7 @@ int main(int argc, char **argv)
         self.assertEqual(res.returncode, 0, "write outside scope should be rejected")
 
     def test_conf_file_inside_scope_accepted(self):
-        # (c) The conf file path inside the scope is accepted
+        # Conf files accepted when g3x_conf_save_active == 1
         conf_paths = [
             "A/CHDK/CCHDK4.CFG",
             "a/chdk/cchdk4.cfg",
@@ -595,7 +469,7 @@ int main(int argc, char **argv)
         self.assertEqual(res.returncode, 0, "write inside scope should succeed")
 
     def test_non_conf_paths_inside_scope_rejected(self):
-        # Non-conf paths must still be rejected even inside conf-save scope
+        # Non-conf paths refused even when g3x_conf_save_active == 1
         non_conf = [
             "A/CHDK/LOGS/LOG_0001.TXT",
             "A/CHDK/SCRIPTS/test.lua",
@@ -610,66 +484,80 @@ int main(int argc, char **argv)
             res = subprocess.run([str(self.bin_path), "open_active", p])
             self.assertEqual(res.returncode, 1, f"non-conf path '{p}' inside scope must be rejected")
 
+    def test_mutation_guard_removal_fails(self):
+        # With real guard: writing to A/DCIM/100CANON/IMG_0001.JPG is rejected (exit code 1)
+        res_real = subprocess.run([str(self.bin_path), "open_active", "A/DCIM/100CANON/IMG_0001.JPG"])
+        self.assertEqual(res_real.returncode, 1, "Real guard must refuse write to outside path")
+
+        # With mutated guard (guard removed/stubbed): write is mistakenly permitted (exit code 0)
+        res_mut = subprocess.run([str(self.mut_bin_path), "open_active", "A/DCIM/100CANON/IMG_0001.JPG"])
+        self.assertEqual(res_mut.returncode, 0, "Mutated guard without path check erroneously permits outside write")
+
 
 class TestPort54DiagMarker(unittest.TestCase):
+    """Compiles the REAL shipped gui_diag.h to verify:
+    1. SAVE:OFF, SAVE:OK, SAVE:FAIL marker states
+    2. Failure aggregation across files within one save operation
+    3. Unlatching: a failed save followed by a successful save shows SAVE:OK
+    """
+
     @classmethod
     def setUpClass(cls):
-        c_code = """
+        c_code = f"""
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
-#define G3X_CONF_SAVE_NONE 0
-#define G3X_CONF_SAVE_OK   1
-#define G3X_CONF_SAVE_FAIL 2
-#define G3X_CONF_SAVE_ERR  2
-#define G3X_CONF_SAVE_OFF  3
-
-static int g3x_conf_save_status = G3X_CONF_SAVE_NONE;
-
-void g3x_conf_record_save_skipped(void)
-{
-    g3x_conf_save_status = G3X_CONF_SAVE_OFF;
-}
-
-void g3x_conf_record_save_result(int ok)
-{
-    if (ok == G3X_CONF_SAVE_OFF || ok == 3 || ok == -1)
-    {
-        g3x_conf_save_status = G3X_CONF_SAVE_OFF;
-    }
-    else if (ok == G3X_CONF_SAVE_OK || ok == 1)
-    {
-        if (g3x_conf_save_status != G3X_CONF_SAVE_FAIL)
-        {
-            g3x_conf_save_status = G3X_CONF_SAVE_OK;
-        }
-    }
-    else
-    {
-        g3x_conf_save_status = G3X_CONF_SAVE_FAIL;
-    }
-}
-
-const char *get_diag_marker(void)
-{
-    return (g3x_conf_save_status == G3X_CONF_SAVE_OFF) ? "SAVE:OFF" :
-           (g3x_conf_save_status == G3X_CONF_SAVE_OK)  ? "SAVE:OK" :
-           (g3x_conf_save_status == G3X_CONF_SAVE_FAIL || g3x_conf_save_status == G3X_CONF_SAVE_ERR) ? "SAVE:FAIL" : "SAVE:-";
-}
+#define G3X_CONF_SAVE 1
+#define G3X_GUI_DIAG_IMPLEMENTATION 1
+#include "{DIAG_HEADER}"
 
 int main(int argc, char **argv)
-{
+{{
     if (argc < 2) return 99;
-    if (strcmp(argv[1], "skipped") == 0) {
+    const char *cmd = argv[1];
+
+    if (strcmp(cmd, "skipped") == 0) {{
         g3x_conf_record_save_skipped();
-    } else if (strcmp(argv[1], "ok") == 0) {
+        printf("%s", g3x_conf_save_get_diag_str());
+        return 0;
+    }}
+    if (strcmp(cmd, "ok") == 0) {{
+        g3x_conf_save_start();
         g3x_conf_record_save_result(1);
-    } else if (strcmp(argv[1], "fail") == 0) {
-        g3x_conf_record_save_result(0);
-    }
-    printf("%s", get_diag_marker());
-    return 0;
-}
+        printf("%s", g3x_conf_save_get_diag_str());
+        return 0;
+    }}
+    if (strcmp(cmd, "fail") == 0) {{
+        g3x_conf_save_start();
+        g3x_conf_record_save_result(2);
+        printf("%s", g3x_conf_save_get_diag_str());
+        return 0;
+    }}
+    if (strcmp(cmd, "aggregate_fail") == 0) {{
+        // Inside one save operation: file 1 ok, file 2 fail, file 3 ok -> FAIL
+        g3x_conf_save_start();
+        g3x_conf_record_save_result(1);
+        g3x_conf_record_save_result(2);
+        g3x_conf_record_save_result(1);
+        printf("%s", g3x_conf_save_get_diag_str());
+        return 0;
+    }}
+    if (strcmp(cmd, "unlatched_recovery") == 0) {{
+        // Save 1 fails
+        g3x_conf_save_start();
+        g3x_conf_record_save_result(2);
+        if (strcmp(g3x_conf_save_get_diag_str(), "SAVE:FAIL") != 0) return 1;
+
+        // Save 2 starts and succeeds
+        g3x_conf_save_start();
+        g3x_conf_record_save_result(1);
+        g3x_conf_record_save_result(1);
+        printf("%s", g3x_conf_save_get_diag_str());
+        return 0;
+    }}
+    return 99;
+}}
 """
         cls.temp_dir = tempfile.TemporaryDirectory()
         src_path = Path(cls.temp_dir.name) / "test_diag.c"
@@ -691,6 +579,14 @@ int main(int argc, char **argv)
         out = subprocess.check_output([str(self.bin_path), "fail"], text=True)
         self.assertEqual(out, "SAVE:FAIL")
 
+    def test_failure_aggregation_across_files_within_one_save(self):
+        out = subprocess.check_output([str(self.bin_path), "aggregate_fail"], text=True)
+        self.assertEqual(out, "SAVE:FAIL", "A failure on any file in an operation must latch SAVE:FAIL for that operation")
+
+    def test_failed_save_followed_by_successful_save_shows_save_ok(self):
+        out = subprocess.check_output([str(self.bin_path), "unlatched_recovery"], text=True)
+        self.assertEqual(out, "SAVE:OK", "Reset at the start of each conf_save operation must allow recovery to SAVE:OK")
+
 
 class TestPort54DisabledWritesAndHooks(unittest.TestCase):
     def test_filewrite_hooks_disabled(self):
@@ -705,33 +601,59 @@ class TestPort54DisabledWritesAndHooks(unittest.TestCase):
 
     def test_non_conf_write_wrappers_retained(self):
         script_text = (ROOT / "scripts/build_port43_dbuf.py").read_text(encoding="utf-8")
-        # Ensure retained wrappers list contains blocking symbols
         for sym in ["fwrite", "creat", "mkdir", "remove", "rename"]:
             self.assertIn(f'"{sym}"', script_text)
 
 
 class TestPort54FinsigStubs(unittest.TestCase):
+    """Parses platform stubs actually used by the build (stubs_entry*.S and main.elf)
+    and verifies each one matches reference/finsig_gm110c/stubs_entry.S."""
+
     def test_stubs_match_finsig(self):
         self.assertTrue(FINSIG_STUBS.is_file(), f"Missing {FINSIG_STUBS}")
-        finsig_text = FINSIG_STUBS.read_text(encoding="utf-8")
+        self.assertTrue(PLATFORM_STUBS_1.is_file(), f"Missing {PLATFORM_STUBS_1}")
+        self.assertTrue(PLATFORM_STUBS_2.is_file(), f"Missing {PLATFORM_STUBS_2}")
 
-        expected_stubs = {
-            "Open": "0xfc37b3b5",
-            "Close": "0xfc37b439",
-            "Read": "0xfc418d61",
-            "Write": "0xfc37b471",
-            "stat": "0xfc37b5cd",
-            "TakeSemaphore": "0xbfe153e1",
-            "GiveSemaphore": "0xbfe15459",
-            "fileio_semaphore": "0x000149c0",
-            "task_InitFileModules": "0xfc0bd071",
-            "task_FileWrite": "0xfc25f3a7",
-        }
+        finsig_stubs = parse_asm_stubs(FINSIG_STUBS)
+        platform_stubs = parse_asm_stubs(PLATFORM_STUBS_1)
+        platform_stubs.update(parse_asm_stubs(PLATFORM_STUBS_2))
 
-        for name, addr in expected_stubs.items():
-            pattern = rf"(NHSTUB|DEF)\(\s*{name}\s*,\s*{addr}\)"
-            match = re.search(pattern, finsig_text, re.IGNORECASE)
-            self.assertIsNotNone(match, f"Stub {name} @ {addr} not found in FINSIG stubs")
+        required_symbols = [
+            "Open",
+            "Close",
+            "Read",
+            "Write",
+            "stat",
+            "fileio_semaphore",
+            "TakeSemaphore",
+            "GiveSemaphore",
+            "task_InitFileModules",
+            "task_FileWrite",
+        ]
+
+        for name in required_symbols:
+            self.assertIn(name, finsig_stubs, f"Stub {name} missing from FINSIG")
+            self.assertIn(name, platform_stubs, f"Stub {name} missing from platform stubs")
+            self.assertEqual(
+                platform_stubs[name],
+                finsig_stubs[name],
+                f"Stub {name} address mismatch: platform={hex(platform_stubs[name])} finsig={hex(finsig_stubs[name])}",
+            )
+
+        # Cross-check absolute symbols against built main.elf symbol table
+        candidate_elf = ROOT / "out/port54-conf-save/stage_chdk/platform/g3x/sub/110c/main.elf"
+        self.assertTrue(candidate_elf.is_file(), f"Missing {candidate_elf}")
+        nm_out = subprocess.check_output([str(NM), str(candidate_elf)], text=True)
+        elf_symbols: dict[str, int] = {}
+        for line in nm_out.splitlines():
+            parts = line.split()
+            if len(parts) == 3:
+                addr, _, sym_name = parts
+                elf_symbols[sym_name] = int(addr, 16)
+
+        for abs_sym in ["fileio_semaphore", "task_InitFileModules", "task_FileWrite"]:
+            self.assertIn(abs_sym, elf_symbols)
+            self.assertEqual(elf_symbols[abs_sym], finsig_stubs[abs_sym])
 
 
 class TestPort54UnreachableWithoutFlag(unittest.TestCase):
@@ -858,8 +780,9 @@ class TestPort54BuildsAndSymbols(unittest.TestCase):
         self.assertNotIn("g3x_is_safe_chdk_write_path", default_nm)
         self.assertNotIn("g3x_conf_save_status", default_nm)
 
-        # Alone and Candidate must have g3x_is_safe_chdk_write_path
+        # Alone and Candidate must have g3x_is_safe_chdk_write_path and g3x_conf_save_status
         self.assertIn("g3x_is_safe_chdk_write_path", alone_nm)
+        self.assertIn("g3x_conf_save_status", alone_nm)
         self.assertIn("g3x_is_safe_chdk_write_path", candidate_nm)
         self.assertIn("g3x_conf_save_status", candidate_nm)
 
@@ -883,12 +806,53 @@ class TestPort54BuildsAndSymbols(unittest.TestCase):
         for wrap in ["<__wrap__MakeDirectory_Fut>:", "<__wrap__DeleteFile_Fut>:", "<__wrap_remove>:", "<__wrap_mkdir>:"]:
             self.assertIn(wrap, dump)
 
+    def test_env_flag_invocation_conf_save_only(self):
+        """Tests the advertised env-flag invocation (G3X_CONF_SAVE=1 only, no --conf-save-alone).
+        Verifies conf_save is unwrapped, no undefined g3x_conf_* symbols, and SAVE:OK/SAVE:FAIL present."""
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = Path(td)
+            env = os.environ.copy()
+            env["G3X_CONF_SAVE"] = "1"
+            for k in list(env.keys()):
+                if k.startswith("G3X_") and k != "G3X_CONF_SAVE":
+                    del env[k]
+
+            res = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(ROOT / "scripts/build_port43_dbuf.py"),
+                    "--out-dir",
+                    str(out_dir),
+                ],
+                cwd=ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(res.returncode, 0, f"Env build failed: {res.stderr}")
+
+            # 1. Verify conf_save is not wrapped in sub makefile
+            sub_mf = out_dir / "stage_chdk/platform/g3x/sub/110c/Makefile"
+            self.assertTrue(sub_mf.is_file())
+            self.assertNotIn("-Wl,--wrap=conf_save", sub_mf.read_text(encoding="utf-8"))
+
+            # 2. Verify no undefined g3x_conf_* symbols in main.elf
+            main_elf = out_dir / "stage_chdk/platform/g3x/sub/110c/main.elf"
+            self.assertTrue(main_elf.is_file())
+            nm_u = subprocess.check_output([str(NM), "-u", str(main_elf)], text=True)
+            undef_conf = [line for line in nm_u.splitlines() if "g3x_conf" in line]
+            self.assertEqual(undef_conf, [], f"Found undefined g3x_conf symbols: {undef_conf}")
+
+            # 3. Verify SAVE:OK and SAVE:FAIL strings are present in binary
+            main_bin = out_dir / "stage_chdk/platform/g3x/sub/110c/main.bin"
+            self.assertTrue(main_bin.is_file())
+            strings_out = subprocess.check_output(["strings", str(main_bin)], text=True)
+            self.assertIn("SAVE:OK", strings_out)
+            self.assertIn("SAVE:FAIL", strings_out)
+
 
 class TestPort54ConfSaveReachability(unittest.TestCase):
-    """Verifies that conf_save/config_save reach the real open/write path in the combined
-    configuration rather than the SAVE:OFF early return, while default and PLAYBACK_MENU-without-CONF_SAVE
-    builds retain the SAVE:OFF early return / empty stub."""
-
     @classmethod
     def setUpClass(cls):
         cls.candidate_elf = ROOT / "out/port54-conf-save/stage_chdk/platform/g3x/sub/110c/main.elf"
@@ -901,24 +865,15 @@ class TestPort54ConfSaveReachability(unittest.TestCase):
         self.assertTrue(self.candidate_elf.is_file(), f"Missing {self.candidate_elf}")
         dump = subprocess.check_output([str(OBJDUMP), "-d", str(self.candidate_elf)], text=True)
 
-        # Extract config_save disassembly
         m = re.search(r"<config_save>:\s*\n((?:\s+[0-9a-f]+:.*\n)+)", dump)
         self.assertIsNotNone(m, "config_save symbol not found in candidate disassembly")
         config_save_asm = m.group(1)
 
-        # Must call __wrap_open and __wrap_write and close and umalloc
         self.assertIn("<__wrap_open>", config_save_asm)
         self.assertIn("<__wrap_write>", config_save_asm)
         self.assertIn("<close>", config_save_asm)
         self.assertIn("<umalloc>", config_save_asm)
 
-        # Must NOT be the 2-instruction early return stub: movs r0, #3; b.w g3x_conf_record_save_result
-        self.assertNotRegex(
-            config_save_asm.strip(),
-            r"^[0-9a-f]+:\s+2003\s+movs\s+r0,\s+#3\s*\n\s*[0-9a-f]+:\s+f7fd\s+bd[0-9a-f]{2}\s+b\.w\s+[0-9a-f]+\s+<g3x_conf_record_save_result>$",
-        )
-
-        # Extract conf_save disassembly
         m2 = re.search(r"<conf_save>:\s*\n((?:\s+[0-9a-f]+:.*\n)+)", dump)
         self.assertIsNotNone(m2, "conf_save symbol not found in candidate disassembly")
         conf_save_asm = m2.group(1)
@@ -955,7 +910,6 @@ class TestPort54ConfSaveReachability(unittest.TestCase):
         # 1. Combined configuration (+ G3X_CONF_SAVE=1)
         cmd_cand = base_cmd + ["-DG3X_CONF_SAVE=1", str(self.staged_conf_c)]
         out_cand = subprocess.check_output(cmd_cand, text=True)
-        # In config_save: reaches open and write, sets g3x_conf_save_active
         m_cand = re.search(r"void config_save\([^)]*\)\s*\{(.*?)\n\}", out_cand, re.DOTALL)
         self.assertIsNotNone(m_cand, "config_save not found in preprocessed candidate output")
         cfg_cand_body = m_cand.group(1)
@@ -979,15 +933,11 @@ class TestPort54ConfSaveReachability(unittest.TestCase):
         self.assertTrue(self.default_elf.is_file(), f"Missing {self.default_elf}")
         dump = subprocess.check_output([str(OBJDUMP), "-d", str(self.default_elf)], text=True)
 
-        # Default build wraps conf_save to __wrap_conf_save
         self.assertIn("<__wrap_conf_save>:", dump)
-        # __wrap_conf_save is an empty stub (just bx lr)
         m = re.search(r"<__wrap_conf_save>:\s*\n\s*[0-9a-f]+:\s+4770\s+bx\s+lr", dump)
         self.assertIsNotNone(m, "__wrap_conf_save must be an empty bx lr stub in default build")
 
-        # __wrap_open in default build blocks all write flags unconditionally
         self.assertIn("<__wrap_open>:", dump)
-        # g3x_is_safe_chdk_write_path is not in default build
         self.assertNotIn("<g3x_is_safe_chdk_write_path>", dump)
 
 
@@ -1008,6 +958,16 @@ class TestPort54Manifest(unittest.TestCase):
         self.assertTrue(bin_path.is_file(), f"Missing built binary at {bin_path}")
         self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["sha256"], sha256_file(bin_path))
         self.assertEqual(data["artifacts"]["DISKBOOT.BIN"]["size"], bin_path.stat().st_size)
+
+        # Check all three configurations recorded in manifest
+        self.assertIn("configurations", data)
+        configs = data["configurations"]
+        for c in ["default", "conf_save_alone", "full_candidate"]:
+            self.assertIn(c, configs)
+            c_bin = ROOT / configs[c]["path"]
+            self.assertTrue(c_bin.is_file(), f"Missing configuration binary at {c_bin}")
+            self.assertEqual(configs[c]["sha256"], sha256_file(c_bin))
+            self.assertEqual(configs[c]["size"], c_bin.stat().st_size)
 
 
 if __name__ == "__main__":

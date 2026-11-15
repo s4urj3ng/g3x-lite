@@ -52,6 +52,11 @@ extern int g3x_conf_save_status;
 void g3x_menu_record_open(void);
 void g3x_conf_record_save_result(int ok);
 void g3x_conf_record_save_skipped(void);
+#if defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1)
+#define G3X_CONF_SAVE_FAIL 2
+void g3x_conf_save_start(void);
+const char *g3x_conf_save_get_diag_str(void);
+#endif
 #endif
 
 #if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)
@@ -65,6 +70,11 @@ extern int g3x_conf_save_status;
 void g3x_menu_record_open(void);
 void g3x_conf_record_save_result(int ok);
 void g3x_conf_record_save_skipped(void);
+#if defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1)
+#define G3X_CONF_SAVE_FAIL 2
+void g3x_conf_save_start(void);
+const char *g3x_conf_save_get_diag_str(void);
+#endif
 #endif
 extern unsigned int g3x_playback_menu_open_count;
 extern unsigned int g3x_playback_menu_item_edit_count;
@@ -98,8 +108,10 @@ int g3x_is_conf_file_path(const char *path);
 extern unsigned int g3x_menu_open_count;
 extern int g3x_conf_save_status;
 void g3x_menu_record_open(void);
+void g3x_conf_save_start(void);
 void g3x_conf_record_save_result(int ok);
 void g3x_conf_record_save_skipped(void);
+const char *g3x_conf_save_get_diag_str(void);
 #endif
 #endif /* G3X_CONF_SAVE */
 
@@ -320,6 +332,13 @@ void g3x_menu_record_open(void)
 {
     g3x_menu_open_count++;
 }
+
+#if defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1)
+void g3x_conf_save_start(void)
+{
+    g3x_conf_save_status = G3X_CONF_SAVE_NONE;
+}
+#endif
 
 void g3x_conf_record_save_skipped(void)
 {
@@ -1462,6 +1481,13 @@ void g3x_menu_record_open(void)
     g3x_menu_open_count++;
 }
 
+#if defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1)
+void g3x_conf_save_start(void)
+{
+    g3x_conf_save_status = G3X_CONF_SAVE_NONE;
+}
+#endif
+
 void g3x_conf_record_save_skipped(void)
 {
     g3x_conf_save_status = G3X_CONF_SAVE_OFF;
@@ -1574,6 +1600,13 @@ void g3x_menu_record_open(void)
     g3x_menu_open_count++;
 }
 
+#if defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1)
+void g3x_conf_save_start(void)
+{
+    g3x_conf_save_status = G3X_CONF_SAVE_NONE;
+}
+#endif
+
 void g3x_conf_record_save_skipped(void)
 {
     g3x_conf_save_status = G3X_CONF_SAVE_OFF;
@@ -1598,6 +1631,17 @@ void g3x_conf_record_save_result(int ok)
     }
 }
 #endif /* !G3X_GUI_MENU && !G3X_PLAYBACK_MENU */
+#endif /* G3X_GUI_DIAG_IMPLEMENTATION */
+#endif /* G3X_CONF_SAVE */
+
+#if defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1)
+#if defined(G3X_GUI_DIAG_IMPLEMENTATION) && (G3X_GUI_DIAG_IMPLEMENTATION == 1)
+const char *g3x_conf_save_get_diag_str(void)
+{
+    return (g3x_conf_save_status == G3X_CONF_SAVE_OFF) ? "SAVE:OFF" :
+           (g3x_conf_save_status == G3X_CONF_SAVE_OK)  ? "SAVE:OK" :
+           (g3x_conf_save_status == G3X_CONF_SAVE_FAIL || g3x_conf_save_status == G3X_CONF_SAVE_ERR) ? "SAVE:FAIL" : "SAVE:-";
+}
 #endif /* G3X_GUI_DIAG_IMPLEMENTATION */
 #endif /* G3X_CONF_SAVE */
 

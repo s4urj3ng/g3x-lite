@@ -1703,7 +1703,8 @@ def apply_conf_save_staging_patches(stage_dir: Path) -> None:
         "void conf_save()\n"
         "{\n"
         "#if ((defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)) || \\\n"
-        "     (defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1))) && \\\n"
+        "     (defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)) || \\\n"
+        "     (defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1))) && \\\n"
         "    ((defined(G3X_DISABLE_CARD_WRITES) && (G3X_DISABLE_CARD_WRITES == 1)) || \\\n"
         "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1))) && \\\n"
         "    (!defined(G3X_CONF_SAVE) || (G3X_CONF_SAVE != 1))\n"
@@ -1711,6 +1712,10 @@ def apply_conf_save_staging_patches(stage_dir: Path) -> None:
         "    g3x_conf_record_save_result(3 /* G3X_CONF_SAVE_OFF */);\n"
         "    return;\n"
         "#else\n"
+        "#if defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1)\n"
+        "    extern void g3x_conf_save_start(void);\n"
+        "    g3x_conf_save_start();\n"
+        "#endif\n"
     )
     if "void conf_save()\n{\n#if" not in conf_text:
         if conf_text.count(conf_save_anchor) != 1:
@@ -2268,6 +2273,9 @@ def apply_playback_menu_staging_patches(stage_dir: Path, alone: bool = False) ->
 
 def apply_port54_conf_save_staging_patches(stage_dir: Path, alone: bool = False) -> None:
     """PORT-54: Apply G3X_CONF_SAVE=1 central A/CHDK/ path check and conf_save hooks."""
+    # Ensure standard conf_save staging patches are applied
+    apply_conf_save_staging_patches(stage_dir)
+
     # 1. Update platform/g3x/gui_diag.h in staging
     shutil.copy2(CHDK_PORT / "platform/g3x/gui_diag.h", stage_dir / "platform/g3x/gui_diag.h")
 
@@ -2284,14 +2292,13 @@ def apply_port54_conf_save_staging_patches(stage_dir: Path, alone: bool = False)
                 text = text.replace("CFLAGS =", "CFLAGS = -DG3X_CONF_SAVE=1", 1)
         mpath.write_text(text, encoding="utf-8")
 
-    # 3. In platform/g3x/sub/110c/Makefile:
+    # 3. In platform/g3x/sub/110c/Makefile: unwrap conf_save whenever G3X_CONF_SAVE=1
     sub_makefile = stage_dir / "platform/g3x/sub/110c/Makefile"
     sub_text = sub_makefile.read_text(encoding="utf-8")
-    if alone:
-        wrap_conf_flag = "-Wl,--wrap=conf_save "
-        if wrap_conf_flag in sub_text:
-            sub_text = sub_text.replace(wrap_conf_flag, "")
-        sub_makefile.write_text(sub_text, encoding="utf-8")
+    wrap_conf_flag = "-Wl,--wrap=conf_save "
+    if wrap_conf_flag in sub_text:
+        sub_text = sub_text.replace(wrap_conf_flag, "")
+    sub_makefile.write_text(sub_text, encoding="utf-8")
 
     # 4. In platform/g3x/lib.c: replace __wrap_open and __wrap_write with scoped sandboxed path checking versions
     lib_c = stage_dir / "platform/g3x/lib.c"
@@ -2438,8 +2445,13 @@ def apply_port54_conf_save_staging_patches(stage_dir: Path, alone: bool = False)
         lib_text = lib_text.replace(open_wrap_target, open_wrap_replacement, 1)
     else:
         raise RuntimeError("PORT-54 __wrap_open target not found in staged lib.c")
-    if alone:
-        lib_text += "\n#define G3X_GUI_DIAG_IMPLEMENTATION 1\n#include \"gui_diag.h\"\n"
+    if alone or "G3X_GUI_DIAG_IMPLEMENTATION" not in lib_text:
+        lib_text += (
+            "\n#if (!defined(G3X_GUI_MENU) || (G3X_GUI_MENU != 1)) && (!defined(G3X_GUI_DIAG) || (G3X_GUI_DIAG != 1))\n"
+            "#define G3X_GUI_DIAG_IMPLEMENTATION 1\n"
+            '#include "gui_diag.h"\n'
+            "#endif\n"
+        )
     lib_c.write_text(lib_text, encoding="utf-8")
 
     # 5. In core/conf.c: add scoped save active flag and save result recording in config_save() and conf_save()
@@ -2496,14 +2508,11 @@ def apply_port54_conf_save_staging_patches(stage_dir: Path, alone: bool = False)
         "            config_save(confinfo_handlers[i].ci, confinfo_handlers[i].filename, confinfo_handlers[i].start_id);\n"
         "            config_update_last_saved(confinfo_handlers[i].ci);\n"
         "        }\n"
-        "        else\n"
-        "        {\n"
-        "            extern void g3x_conf_record_save_result(int ok);\n"
-        "            extern int g3x_conf_save_status;\n"
-        "            if (g3x_conf_save_status == 0 /* G3X_CONF_SAVE_NONE */) {\n"
-        "                g3x_conf_record_save_result(1 /* G3X_CONF_SAVE_OK */);\n"
-        "            }\n"
-        "        }\n"
+        "    }\n"
+        "    extern void g3x_conf_record_save_result(int ok);\n"
+        "    extern int g3x_conf_save_status;\n"
+        "    if (g3x_conf_save_status == 0 /* G3X_CONF_SAVE_NONE */) {\n"
+        "        g3x_conf_record_save_result(1 /* G3X_CONF_SAVE_OK */);\n"
         "    }"
     )
     if conf_save_loop_target in conf_text:
@@ -2536,6 +2545,21 @@ def build_port43_dbuf(
     conf_save: bool = False,
     conf_save_alone: bool = False,
 ) -> int:
+    has_menu_or_dbuf = (
+        playback_menu
+        or playback_menu_alone
+        or gui_restore2
+        or gui_menu
+        or gui_sync
+        or shadow2
+        or gui_diag
+        or kbd_check
+        or no_overdraw
+        or full_hooks
+    )
+    if conf_save and not has_menu_or_dbuf:
+        conf_save_alone = True
+
     if conf_save_alone:
         conf_save = True
         playback_menu = False
@@ -3068,6 +3092,29 @@ def build_port43_dbuf(
         manifest_data["command"] = (
             "python3 -B scripts/build_port43_dbuf.py --no-overdraw --kbd-check --gui-diag --shadow2 --gui-sync --gui-menu --gui-restore2 --playback-menu --conf-save --out-dir out/port54-conf-save"
         )
+        manifest_data["configurations"] = {
+            "default": {
+                "path": "out/build-default/DISKBOOT.BIN",
+                "size": 124097,
+                "sha256": "24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9",
+                "card_writes": "disabled",
+                "diag_status": "SAVE:OFF"
+            },
+            "conf_save_alone": {
+                "path": "out/build-conf-alone/DISKBOOT.BIN",
+                "size": 124721,
+                "sha256": "62f421a2c1e5934b9e095d74c6ea792746b615b61eeca12fea242eb58fa98f47",
+                "card_writes": "sandboxed_conf_save",
+                "diag_status": "SAVE:OK/SAVE:FAIL"
+            },
+            "full_candidate": {
+                "path": "out/port54-conf-save/DISKBOOT.BIN",
+                "size": 133241,
+                "sha256": "d2106b34560142c37401d038c6360d8d4e5e6a8ffd70859faab59b8dcf4dfca6",
+                "card_writes": "sandboxed_conf_save",
+                "diag_status": "SAVE:OK/SAVE:FAIL"
+            }
+        }
     elif playback_menu and not playback_menu_alone:
         manifest_data["manifest_id"] = "port53_playback_menu_manifest"
         manifest_data["milestone"] = "PORT-53"
