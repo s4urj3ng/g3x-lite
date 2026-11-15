@@ -42,3 +42,44 @@
 | **(a) Default Build** | `out/build-default/DISKBOOT.BIN` | 124,097 | `24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9` | `0x003686b0` | `python3 -B tools/build_port41_full.py --keep-stage --out-dir out/build-default` | Byte-identical to default build of stacked base (`0593f5b` / `7602d46`); 100% byte-identical to `origin/main` default (0 differences). |
 | **(b) G3X_MOVIE_STATUS=1 alone** | `out/build-movie-alone/DISKBOOT.BIN` | 124,081 | `be2a0839e4f74a78d4770c12d28ea3775229b88ad02801746908aa1a32787f9f` | `0x003686a0` | `python3 -B scripts/build_port43_dbuf.py --movie-status-alone --out-dir out/build-movie-alone` | Read-only movie state accessor `g3x_get_movie_status()`, `stubs_min.S` `simple_movie_status = 0x0000C0C8`, card writes disabled (`G3X_DISABLE_CARD_WRITES=1`, `OPT_DISABLE_FILE_WRITES=1`). |
 | **(c) Combined Configuration** (`G3X_MOVIE_STATUS=1` + `G3X_PLAYBACK_MENU=1` + PORT-50 menu flags + PORT-51 RESTORE2 flags) | `out/port55-movie-status/DISKBOOT.BIN` | 132,297 | `1f3d46569f95efa06a2acb0dabe0b11639bbcea6b147fd10e3ec31718944184f` | `0x0036aa90` | `python3 -B scripts/build_port43_dbuf.py --no-overdraw --kbd-check --gui-diag --shadow2 --gui-sync --gui-menu --gui-restore2 --playback-menu --movie-status --out-dir out/port55-movie-status` | Full non-invasive feature stack (GUI fix + DBUF + NOOVERDRAW + KBD_CHECK + GUI_DIAG + SHADOW2 + GUI_SYNC + GUI_MENU + RESTORE2 + PLAYBACK_MENU + MOVIE_STATUS), without `FULL_HOOKS` and without `G3X_CONF_SAVE`. Telemetry line formats `MOV:IDLE` (state=0), `MOV:REC` (state=1), or `MOV:?` (fallback/stopping). |
+
+## Owner Trial Checklist & Recovery Plan (Configuration c)
+
+See [docs/PORT55_TRIAL_PLAN.md](PORT55_TRIAL_PLAN.md) for full standalone protocol.
+
+### Checklist Steps
+
+| Step # | Action | Details & Controls | Expected Outcome | What to Record |
+|---|---|---|---|---|
+| **0** | **Hash Check** | Verify host SHA-256 of candidate `DISKBOOT.BIN` (`out/port55-movie-status/DISKBOOT.BIN`). Card switch **LOCKED**. | SHA-256 matches `1f3d4656...` (`132,297` B). | `[ ] PASS  [ ] FAIL`<br>Recorded SHA-256 |
+| **1** | **Short-Press Boot** | Insert locked SD card; tap `POWER` button briefly (< 500 ms). | Camera powers on cleanly into live view without holding power button. | `[ ] PASS  [ ] FAIL`<br>Boot mode (Rec/Play) |
+| **2** | **Diag Line Idle Check** | Press `WIFI` (`KEY_WIFI`) to enter `<ALT>`. Inspect diag line in **shooting mode**, then switch to **playback mode** and check `<ALT>`. | Telemetry displays `MOV:IDLE` in shooting mode and `MOV:IDLE` in playback mode (`st = 0`). | `[ ] PASS  [ ] FAIL`<br>Shooting: `MOV:____`<br>Playback: `MOV:____` |
+| **3** | **Start Movie Recording** | In shooting mode, press stock Movie button to record a short clip (~5 s). | Diag line changes from `MOV:IDLE` to `MOV:REC` (`st = 1`) while recording. | `[ ] PASS  [ ] FAIL`<br>Recording: `MOV:____` |
+| **4** | **Stop Movie Recording** | Press Movie button again to stop recording. Observe diag line as clip ends. | Diag line cleanly transitions back from `MOV:REC` to `MOV:IDLE`. | `[ ] PASS  [ ] FAIL`<br>Post-stop: `MOV:____` |
+| **5** | **Playback Menu Check** | In playback mode `<ALT>`, press `MENU` (`KEY_MENU`). | CHDK ALT menu opens cleanly, navigates via d-pad (`UP`/`DOWN`), and closes cleanly with `MENU`. | `[ ] PASS  [ ] FAIL`<br>Menu open & nav verified |
+| **6** | *(Optional) Repeat with (b)* | Copy standalone build (b) (`124,081` B, `be2a0839...`) to SD card; repeat Steps 0–4. | `MOV:IDLE` -> `MOV:REC` -> `MOV:IDLE` transitions identical to combined candidate. | `[ ] PASS  [ ] FAIL  [ ] SKIPPED` |
+
+### Outcome Analysis & Failure Mapping
+
+- **`MOV:IDLE` -> `MOV:REC` -> `MOV:IDLE`**: SUCCESS. Address `0x0000C0C8` and state encoding verified.
+- **`MOV:?` throughout**: Address or encoding is wrong (`0x0000C0C8` does not point to `mr_rec_state` or returns value $> 1$).
+- **`REC` never showing** (stuck `MOV:IDLE`): Encoding is wrong (recording value is not `1`), or reading wrong struct offset.
+- **Stuck `REC`** (`MOV:REC` persists after stop): Value is not cleared after stop (latch or teardown variable rather than active recording state).
+
+### What the Owner Should Record
+
+1. Shooting mode idle marker (`MOV:____`)
+2. Active recording marker (`MOV:____`)
+3. Post-stop marker (`MOV:____`)
+4. Playback mode marker (`MOV:____`)
+5. Any raw value or unexpected string shown (especially if `MOV:?`)
+6. CHDK menu operation in playback (`PASS / FAIL`)
+7. Confirmation of short-press boot (< 500 ms)
+
+### Recovery Plan
+
+1. **Battery pull**: If camera freezes or hangs, immediately open battery door and remove the NB-10L battery. Wait $\ge 10\text{ s}$ to fully discharge DRAM before reinserting.
+2. **RAM-only candidate**: The candidate executes strictly from volatile SDRAM (`DISKBOOT.BIN`). Camera flash ROM is never modified; pulling battery or powering off completely purges all code.
+3. **Return to default build or stock firmware**:
+   - **Default build**: Copy known-good default build (`out/build-default/DISKBOOT.BIN`, SHA-256 `24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9`, `124,097` B) to the SD card.
+   - **Stock Canon firmware**: Slide SD card write-protect switch to **UNLOCKED** (or remove card / delete `DISKBOOT.BIN`). An unlocked card bypasses DISKBOOT autoboot and boots factory Canon firmware directly.
