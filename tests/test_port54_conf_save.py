@@ -35,9 +35,16 @@ MANIFEST_P54 = ROOT / "manifests/port54_conf_save_manifest.json"
 
 TOOLCHAIN_BIN = ROOT / "toolchains/gcc-arm-none-eabi-5_4-2016q3/bin"
 NM = TOOLCHAIN_BIN / "arm-none-eabi-nm"
+OBJDUMP = TOOLCHAIN_BIN / "arm-none-eabi-objdump"
 
 BASE_DEFAULT_SHA256 = "24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9"
 BASE_DEFAULT_SIZE = 124097
+
+BASE_ALONE_SHA256 = "0cc196f81126e8983b7b3921ecb220cb0f206d1375830cc15f07a56da2abd93b"
+BASE_ALONE_SIZE = 124369
+
+BASE_CANDIDATE_SHA256 = "220a9d7af1037638443c5f380932834c3760dce3bd997cdb1ff37b1eea64c783"
+BASE_CANDIDATE_SIZE = 132401
 
 
 def sha256_file(path: Path) -> str:
@@ -78,6 +85,24 @@ class TestPort54FlagPlumbing(unittest.TestCase):
 
 
 class TestPort54DefaultBuildIdentity(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        default_bin = ROOT / "out/build-default/DISKBOOT.BIN"
+        default_elf = ROOT / "out/build-default/stage_chdk/platform/g3x/sub/110c/main.elf"
+        if not default_bin.is_file() or not default_elf.is_file():
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(ROOT / "tools/build_port41_full.py"),
+                    "--keep-stage",
+                    "--out-dir",
+                    str(ROOT / "out/build-default"),
+                ],
+                cwd=ROOT,
+                check=True,
+            )
+
     def test_default_build_byte_identity(self):
         default_bin = ROOT / "out/build-default/DISKBOOT.BIN"
         self.assertTrue(default_bin.is_file(), f"Missing default build at {default_bin}")
@@ -467,6 +492,129 @@ class TestPort54UnreachableWithoutFlag(unittest.TestCase):
                 d = json.load(f)
             self.assertIn("G3X_DISABLE_CARD_WRITES=1", d["build"]["flags"])
             self.assertIn("OPT_DISABLE_FILE_WRITES=1", d["build"]["flags"])
+
+
+class TestPort54BuildsAndSymbols(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.build_candidate = ROOT / "out/port54-conf-save"
+        cls.build_alone = ROOT / "out/build-conf-alone"
+        cls.build_default = ROOT / "out/build-default"
+
+        if (
+            not (cls.build_candidate / "DISKBOOT.BIN").is_file()
+            or sha256_file(cls.build_candidate / "DISKBOOT.BIN") != BASE_CANDIDATE_SHA256
+        ):
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(ROOT / "scripts/build_port43_dbuf.py"),
+                    "--no-overdraw",
+                    "--kbd-check",
+                    "--gui-diag",
+                    "--shadow2",
+                    "--gui-sync",
+                    "--gui-menu",
+                    "--gui-restore2",
+                    "--playback-menu",
+                    "--conf-save",
+                    "--out-dir",
+                    str(cls.build_candidate),
+                ],
+                cwd=ROOT,
+                check=True,
+            )
+
+        if (
+            not (cls.build_alone / "DISKBOOT.BIN").is_file()
+            or sha256_file(cls.build_alone / "DISKBOOT.BIN") != BASE_ALONE_SHA256
+        ):
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(ROOT / "scripts/build_port43_dbuf.py"),
+                    "--conf-save-alone",
+                    "--out-dir",
+                    str(cls.build_alone),
+                ],
+                cwd=ROOT,
+                check=True,
+            )
+
+        if (
+            not (cls.build_default / "DISKBOOT.BIN").is_file()
+            or not (cls.build_default / "stage_chdk/platform/g3x/sub/110c/main.elf").is_file()
+        ):
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(ROOT / "tools/build_port41_full.py"),
+                    "--keep-stage",
+                    "--out-dir",
+                    str(cls.build_default),
+                ],
+                cwd=ROOT,
+                check=True,
+            )
+
+    def test_three_build_configurations_artifacts_and_hashes(self):
+        # 1. Default
+        def_bin = self.build_default / "DISKBOOT.BIN"
+        self.assertTrue(def_bin.is_file())
+        self.assertEqual(def_bin.stat().st_size, BASE_DEFAULT_SIZE)
+        self.assertEqual(sha256_file(def_bin), BASE_DEFAULT_SHA256)
+
+        # 2. Conf save alone
+        alone_bin = self.build_alone / "DISKBOOT.BIN"
+        self.assertTrue(alone_bin.is_file())
+        self.assertEqual(alone_bin.stat().st_size, BASE_ALONE_SIZE)
+        self.assertEqual(sha256_file(alone_bin), BASE_ALONE_SHA256)
+
+        # 3. Candidate
+        cand_bin = self.build_candidate / "DISKBOOT.BIN"
+        self.assertTrue(cand_bin.is_file())
+        self.assertEqual(cand_bin.stat().st_size, BASE_CANDIDATE_SIZE)
+        self.assertEqual(sha256_file(cand_bin), BASE_CANDIDATE_SHA256)
+
+    def test_flag_gating_symbol_presence_and_absence(self):
+        default_elf = self.build_default / "stage_chdk/platform/g3x/sub/110c/main.elf"
+        alone_elf = self.build_alone / "stage_chdk/platform/g3x/sub/110c/main.elf"
+        candidate_elf = self.build_candidate / "stage_chdk/platform/g3x/sub/110c/main.elf"
+
+        self.assertTrue(default_elf.is_file())
+        self.assertTrue(alone_elf.is_file())
+        self.assertTrue(candidate_elf.is_file())
+
+        default_nm = subprocess.check_output([str(NM), str(default_elf)], text=True)
+        alone_nm = subprocess.check_output([str(NM), str(alone_elf)], text=True)
+        candidate_nm = subprocess.check_output([str(NM), str(candidate_elf)], text=True)
+
+        # Default build must NOT have g3x_is_safe_chdk_write_path or g3x_conf_save_status
+        self.assertNotIn("g3x_is_safe_chdk_write_path", default_nm)
+        self.assertNotIn("g3x_conf_save_status", default_nm)
+
+        # Alone and Candidate must have g3x_is_safe_chdk_write_path
+        self.assertIn("g3x_is_safe_chdk_write_path", alone_nm)
+        self.assertIn("g3x_is_safe_chdk_write_path", candidate_nm)
+        self.assertIn("g3x_conf_save_status", candidate_nm)
+
+    def test_candidate_write_wrappers_asm(self):
+        candidate_elf = self.build_candidate / "stage_chdk/platform/g3x/sub/110c/main.elf"
+        dump = subprocess.check_output([str(OBJDUMP), "-d", str(candidate_elf)], text=True)
+
+        # __wrap_open calls g3x_is_safe_chdk_write_path
+        self.assertIn("<__wrap_open>:", dump)
+        self.assertIn("<g3x_is_safe_chdk_write_path>", dump)
+
+        # __wrap_write is present
+        self.assertIn("<__wrap_write>:", dump)
+
+        # non-conf blocking wrappers are present and return without write
+        for wrap in ["<__wrap__MakeDirectory_Fut>:", "<__wrap__DeleteFile_Fut>:", "<__wrap_remove>:", "<__wrap_mkdir>:"]:
+            self.assertIn(wrap, dump)
 
 
 class TestPort54Manifest(unittest.TestCase):
