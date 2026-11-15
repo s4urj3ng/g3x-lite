@@ -1777,11 +1777,15 @@ def apply_gui_menu_staging_patches(stage_dir: Path) -> None:
     gui_replacement = (
         "    gui_handler *old_mode = gui_mode;\n"
         "    gui_mode = mode;\n"
-        "#if defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)\n"
+        "#if (defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)) || (defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1))\n"
         "    if (mode == &menuGuiHandler && old_mode != &menuGuiHandler)\n"
         "    {\n"
         "        extern void g3x_menu_record_open(void);\n"
         "        g3x_menu_record_open();\n"
+        "#if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)\n"
+        "        extern void g3x_playback_menu_record_open(void);\n"
+        "        g3x_playback_menu_record_open();\n"
+        "#endif\n"
         "    }\n"
         "#endif\n"
     )
@@ -1799,7 +1803,8 @@ def apply_gui_menu_staging_patches(stage_dir: Path) -> None:
         guard_code = (
             "void config_save(ConfInfo *ci, const char *filename, int config_base)\n"
             "{\n"
-            "#if defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1) && \\\n"
+            "#if ((defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)) || \\\n"
+            "     (defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1))) && \\\n"
             "    ((defined(G3X_DISABLE_CARD_WRITES) && (G3X_DISABLE_CARD_WRITES == 1)) || \\\n"
             "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1)))\n"
             "    (void)ci;\n"
@@ -1823,7 +1828,8 @@ def apply_gui_menu_staging_patches(stage_dir: Path) -> None:
         conf_save_code = (
             "void conf_save()\n"
             "{\n"
-            "#if defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1) && \\\n"
+            "#if ((defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)) || \\\n"
+            "     (defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1))) && \\\n"
             "    ((defined(G3X_DISABLE_CARD_WRITES) && (G3X_DISABLE_CARD_WRITES == 1)) || \\\n"
             "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1)))\n"
             "    extern void g3x_conf_record_save_result(int ok);\n"
@@ -1848,7 +1854,8 @@ def apply_gui_menu_staging_patches(stage_dir: Path) -> None:
     do_save_code = (
         "static void do_save_param_file()\n"
         "{\n"
-        "#if defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1) && \\\n"
+        "#if ((defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)) || \\\n"
+        "     (defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1))) && \\\n"
         "    ((defined(G3X_DISABLE_CARD_WRITES) && (G3X_DISABLE_CARD_WRITES == 1)) || \\\n"
         "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1)))\n"
         "    return;\n"
@@ -1866,7 +1873,8 @@ def apply_gui_menu_staging_patches(stage_dir: Path) -> None:
     save_params_code = (
         "void save_params_values( int enforce )\n"
         "{\n"
-        "#if defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1) && \\\n"
+        "#if ((defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)) || \\\n"
+        "     (defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1))) && \\\n"
         "    ((defined(G3X_DISABLE_CARD_WRITES) && (G3X_DISABLE_CARD_WRITES == 1)) || \\\n"
         "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1)))\n"
         "    (void)enforce;\n"
@@ -1889,7 +1897,8 @@ def apply_gui_menu_staging_patches(stage_dir: Path) -> None:
     save_int_code = (
         "void save_int_value_file( const char* filename, int value )\n"
         "{\n"
-        "#if defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1) && \\\n"
+        "#if ((defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)) || \\\n"
+        "     (defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1))) && \\\n"
         "    ((defined(G3X_DISABLE_CARD_WRITES) && (G3X_DISABLE_CARD_WRITES == 1)) || \\\n"
         "     (defined(OPT_DISABLE_FILE_WRITES) && (OPT_DISABLE_FILE_WRITES == 1)))\n"
         "    (void)filename;\n"
@@ -2006,6 +2015,108 @@ def apply_gui_restore2_staging_patches(stage_dir: Path) -> None:
     draw_c.write_text(draw_text, encoding="utf-8")
 
 
+def apply_playback_menu_staging_patches(stage_dir: Path, alone: bool = False) -> None:
+    """Apply G3X_PLAYBACK_MENU=1 compile flags, playback mode kbd/gui handlers, and menu redraw hooks."""
+    shutil.copy2(CHDK_PORT / "platform/g3x/gui_diag.h", stage_dir / "platform/g3x/gui_diag.h")
+    shutil.copy2(CHDK_PORT / "platform/g3x/gui_menu.c", stage_dir / "platform/g3x/gui_menu.c")
+
+    # 1. Update makefiles with -DG3X_PLAYBACK_MENU=1
+    for rel in ["platform/g3x/Makefile", "platform/g3x/sub/110c/Makefile"]:
+        mpath = stage_dir / rel
+        text = mpath.read_text(encoding="utf-8")
+        if alone:
+            if "-DG3X_PLAYBACK_MENU=1" not in text:
+                anchor = "CFLAGS += -DG3X_FULL_BUILD=1"
+                if anchor in text:
+                    text = text.replace(anchor, anchor + " -DG3X_PLAYBACK_MENU=1", 1)
+                else:
+                    text += "\nCFLAGS += -DG3X_PLAYBACK_MENU=1\n"
+        else:
+            anchor = "-DG3X_GUI_RESTORE2=1"
+            if anchor in text and "-DG3X_PLAYBACK_MENU=1" not in text:
+                text = text.replace(anchor, anchor + " -DG3X_PLAYBACK_MENU=1", 1)
+            elif "-DG3X_PLAYBACK_MENU=1" not in text:
+                anchor = "CFLAGS += -DG3X_FULL_BUILD=1"
+                if anchor in text:
+                    text = text.replace(anchor, anchor + " -DG3X_PLAYBACK_MENU=1", 1)
+                else:
+                    text += "\nCFLAGS += -DG3X_PLAYBACK_MENU=1\n"
+        mpath.write_text(text, encoding="utf-8")
+
+    # 2. Patch stage_chdk/platform/g3x/kbd.c
+    kbd_c = stage_dir / "platform/g3x/kbd.c"
+    kbd_text = kbd_c.read_text(encoding="utf-8")
+    if "g3x_playback_menu_is_active" not in kbd_text:
+        kbd_hook = (
+            "\n#if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)\n"
+            "int g3x_playback_menu_is_active(void)\n"
+            "{\n"
+            "    return camera_info.state.mode_play && !camera_info.state.gui_mode_none;\n"
+            "}\n\n"
+            "int g3x_playback_menu_kbd_process(void)\n"
+            "{\n"
+            "    if (g3x_playback_menu_is_active())\n"
+            "    {\n"
+            "        return 1;\n"
+            "    }\n"
+            "    return 0;\n"
+            "}\n"
+            "#endif\n"
+        )
+        kbd_text += kbd_hook
+        kbd_c.write_text(kbd_text, encoding="utf-8")
+
+    # 3. Patch stage_chdk/platform/g3x/lib.c
+    lib_c = stage_dir / "platform/g3x/lib.c"
+    lib_text = lib_c.read_text(encoding="utf-8")
+    if "g3x_playback_menu_gui_mode_active" not in lib_text:
+        lib_hook = (
+            "\n#if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)\n"
+            "int g3x_playback_menu_gui_mode_active(void)\n"
+            "{\n"
+            "    return camera_info.state.mode_play && (camera_info.state.gui_mode_alt || !camera_info.state.gui_mode_none);\n"
+            "}\n\n"
+            "int g3x_playback_menu_get_viewport_mode(void)\n"
+            "{\n"
+            "    return camera_info.state.mode_play ? 1 : 0;\n"
+            "}\n"
+            "#endif\n"
+        )
+        lib_text += lib_hook
+    if alone:
+        wrap_conf_anchor = "void __wrap_conf_save(void) { }"
+        if wrap_conf_anchor in lib_text:
+            wrap_conf_rep = (
+                "#if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)\n"
+                "#define G3X_GUI_DIAG_IMPLEMENTATION 1\n"
+                '#include "gui_diag.h"\n'
+                "#endif\n"
+                "void __wrap_conf_save(void) {\n"
+                "#if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)\n"
+                "    g3x_conf_record_save_result(3 /* G3X_CONF_SAVE_OFF */);\n"
+                "#endif\n"
+                "}"
+            )
+            lib_text = lib_text.replace(wrap_conf_anchor, wrap_conf_rep, 1)
+    lib_c.write_text(lib_text, encoding="utf-8")
+
+    # 4. Patch stage_chdk/platform/g3x/main.c
+    main_c = stage_dir / "platform/g3x/main.c"
+    main_text = main_c.read_text(encoding="utf-8")
+    if "g3x_playback_menu_mode_check" not in main_text:
+        main_hook = (
+            "\n#if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)\n"
+            "int g3x_playback_menu_mode_check(void)\n"
+            "{\n"
+            "    extern int g3x_playback_menu_gui_mode_active(void);\n"
+            "    return g3x_playback_menu_gui_mode_active();\n"
+            "}\n"
+            "#endif\n"
+        )
+        main_text += main_hook
+        main_c.write_text(main_text, encoding="utf-8")
+
+
 def build_port43_dbuf(
     clean_stage: bool = True,
     keep_stage: bool = True,
@@ -2018,8 +2129,20 @@ def build_port43_dbuf(
     gui_sync: bool = False,
     gui_menu: bool = False,
     gui_restore2: bool = False,
+    playback_menu: bool = False,
+    playback_menu_alone: bool = False,
 ) -> int:
-    if gui_restore2:
+    if playback_menu_alone:
+        playback_menu = True
+        gui_restore2 = False
+        gui_menu = False
+        gui_sync = False
+        shadow2 = False
+        gui_diag = False
+        kbd_check = False
+        no_overdraw = False
+        full_hooks = False
+    elif gui_restore2:
         gui_menu = True
     if gui_menu:
         gui_sync = True
@@ -2046,6 +2169,11 @@ def build_port43_dbuf(
 
     if out_dir is not None:
         effective_out_dir = Path(out_dir).resolve()
+    elif playback_menu_alone:
+        effective_out_dir = REPO_ROOT / "out" / "port53-playback-menu-alone"
+    elif playback_menu:
+        suffix = "-full-hooks" if full_hooks else ""
+        effective_out_dir = REPO_ROOT / "out" / ("port53-playback-menu" + suffix)
     elif gui_restore2:
         suffix = "-full-hooks" if full_hooks else ""
         effective_out_dir = REPO_ROOT / "out" / ("port51-restore2-core" + suffix)
@@ -2114,49 +2242,54 @@ def build_port43_dbuf(
             proto_file.unlink()
 
     # Apply FULL_HOOKS patches if requested
-    if full_hooks:
-        print("FULL_HOOKS=1 enabled: Applying FINSIG-confirmed hook staging patches...")
-        apply_full_hooks_staging_patches(effective_stage_dir)
+    if not playback_menu_alone:
+        if full_hooks:
+            print("FULL_HOOKS=1 enabled: Applying FINSIG-confirmed hook staging patches...")
+            apply_full_hooks_staging_patches(effective_stage_dir)
 
-    # Apply GUI fix patches
-    print("G3X_GUI_FIX=1: Applying GUI flicker, colour and 2x font staging patches...")
-    if kbd_check:
-        apply_gui_fix_staging_patches(effective_stage_dir, legacy_dbuf_snapshot=False)
-    else:
-        apply_gui_fix_staging_patches(effective_stage_dir)
+        # Apply GUI fix patches
+        print("G3X_GUI_FIX=1: Applying GUI flicker, colour and 2x font staging patches...")
+        if kbd_check:
+            apply_gui_fix_staging_patches(effective_stage_dir, legacy_dbuf_snapshot=False)
+        else:
+            apply_gui_fix_staging_patches(effective_stage_dir)
 
-    # Apply DBUF compile flag patches
-    print("G3X_GUI_DBUF=1: Applying double-buffered overlay staging patches...")
-    apply_dbuf_staging_patches(effective_stage_dir)
+        # Apply DBUF compile flag patches
+        print("G3X_GUI_DBUF=1: Applying double-buffered overlay staging patches...")
+        apply_dbuf_staging_patches(effective_stage_dir)
 
-    # Apply NOOVERDRAW compile flag and scheduler/sentinel patches if requested
-    if no_overdraw:
-        print("G3X_GUI_NOOVERDRAW=1: Applying opt-in overlay protection staging patches...")
-        apply_no_overdraw_staging_patches(effective_stage_dir)
+        # Apply NOOVERDRAW compile flag and scheduler/sentinel patches if requested
+        if no_overdraw:
+            print("G3X_GUI_NOOVERDRAW=1: Applying opt-in overlay protection staging patches...")
+            apply_no_overdraw_staging_patches(effective_stage_dir)
 
-    if kbd_check:
-        print("G3X_KBD_CHECK=1: Applying ALT key-check draw hooks...")
-        apply_kbd_check_staging_patches(effective_stage_dir)
+        if kbd_check:
+            print("G3X_KBD_CHECK=1: Applying ALT key-check draw hooks...")
+            apply_kbd_check_staging_patches(effective_stage_dir)
 
-    if gui_diag:
-        print("G3X_GUI_DIAG=1: Applying overdraw/restore counters, shadow-blit-only restore, and sibling suppression...")
-        apply_gui_diag_staging_patches(effective_stage_dir)
+        if gui_diag:
+            print("G3X_GUI_DIAG=1: Applying overdraw/restore counters, shadow-blit-only restore, and sibling suppression...")
+            apply_gui_diag_staging_patches(effective_stage_dir)
 
-    if shadow2:
-        print("G3X_GUI_SHADOW2=1: Applying ordered shadow fallback chain (exmem -> rect -> idx) and GetMemInfo diagnostic...")
-        apply_shadow2_staging_patches(effective_stage_dir)
+        if shadow2:
+            print("G3X_GUI_SHADOW2=1: Applying ordered shadow fallback chain (exmem -> rect -> idx) and GetMemInfo diagnostic...")
+            apply_shadow2_staging_patches(effective_stage_dir)
 
-    if gui_sync:
-        print("G3X_GUI_SYNC=1: Applying synchronous display-flip hook at 0x0000E26C and target-buffer shadow restore...")
-        apply_gui_sync_staging_patches(effective_stage_dir)
+        if gui_sync:
+            print("G3X_GUI_SYNC=1: Applying synchronous display-flip hook at 0x0000E26C and target-buffer shadow restore...")
+            apply_gui_sync_staging_patches(effective_stage_dir)
 
-    if gui_menu:
-        print("G3X_GUI_MENU=1: Applying standard CHDK menu hooks and unwrapping file I/O stubs...")
-        apply_gui_menu_staging_patches(effective_stage_dir)
+        if gui_menu:
+            print("G3X_GUI_MENU=1: Applying standard CHDK menu hooks and unwrapping file I/O stubs...")
+            apply_gui_menu_staging_patches(effective_stage_dir)
 
-    if gui_restore2:
-        print("G3X_GUI_RESTORE2=1: Applying rect-only shadow blit, duration timing, and restore path counters...")
-        apply_gui_restore2_staging_patches(effective_stage_dir)
+        if gui_restore2:
+            print("G3X_GUI_RESTORE2=1: Applying rect-only shadow blit, duration timing, and restore path counters...")
+            apply_gui_restore2_staging_patches(effective_stage_dir)
+
+    if playback_menu:
+        print("G3X_PLAYBACK_MENU=1: Applying playback-mode ALT menu hooks and key mapping...")
+        apply_playback_menu_staging_patches(effective_stage_dir, alone=playback_menu_alone)
 
     # Clean platform objects in staging copy
     for subpath in ["platform/g3x", "platform/g3x/sub/110c", "loader/g3x"]:
@@ -2171,25 +2304,27 @@ def build_port43_dbuf(
                 "G3X_FULL_BUILD=1",
                 "G3X_DISABLE_CARD_WRITES=1",
                 "OPT_DISABLE_FILE_WRITES=1",
-                "G3X_GUI_FIX=1",
-                "G3X_GUI_DBUF=1",
             ]
-            if no_overdraw:
-                clean_cmd.append("G3X_GUI_NOOVERDRAW=1")
-            if kbd_check:
-                clean_cmd.append("G3X_KBD_CHECK=1")
-            if gui_diag:
-                clean_cmd.append("G3X_GUI_DIAG=1")
-            if shadow2:
-                clean_cmd.append("G3X_GUI_SHADOW2=1")
-            if gui_sync:
-                clean_cmd.append("G3X_GUI_SYNC=1")
-            if gui_menu:
-                clean_cmd.append("G3X_GUI_MENU=1")
-            if gui_restore2:
-                clean_cmd.append("G3X_GUI_RESTORE2=1")
-            if full_hooks:
-                clean_cmd.append("FULL_HOOKS=1")
+            if not playback_menu_alone:
+                clean_cmd.extend(["G3X_GUI_FIX=1", "G3X_GUI_DBUF=1"])
+                if no_overdraw:
+                    clean_cmd.append("G3X_GUI_NOOVERDRAW=1")
+                if kbd_check:
+                    clean_cmd.append("G3X_KBD_CHECK=1")
+                if gui_diag:
+                    clean_cmd.append("G3X_GUI_DIAG=1")
+                if shadow2:
+                    clean_cmd.append("G3X_GUI_SHADOW2=1")
+                if gui_sync:
+                    clean_cmd.append("G3X_GUI_SYNC=1")
+                if gui_menu:
+                    clean_cmd.append("G3X_GUI_MENU=1")
+                if gui_restore2:
+                    clean_cmd.append("G3X_GUI_RESTORE2=1")
+                if full_hooks:
+                    clean_cmd.append("FULL_HOOKS=1")
+            if playback_menu:
+                clean_cmd.append("G3X_PLAYBACK_MENU=1")
             clean_cmd.append("clean")
             subprocess.run(
                 clean_cmd,
@@ -2210,25 +2345,27 @@ def build_port43_dbuf(
         "OPT_DISABLE_FILE_WRITES=1",
         f"CROSS_COMPILE={CROSS_COMPILE}",
         "OPT_CAPSTONE_TOOLS=0",
-        "G3X_GUI_FIX=1",
-        "G3X_GUI_DBUF=1",
     ]
-    if no_overdraw:
-        cmd.append("G3X_GUI_NOOVERDRAW=1")
-    if kbd_check:
-        cmd.append("G3X_KBD_CHECK=1")
-    if gui_diag:
-        cmd.append("G3X_GUI_DIAG=1")
-    if shadow2:
-        cmd.append("G3X_GUI_SHADOW2=1")
-    if gui_sync:
-        cmd.append("G3X_GUI_SYNC=1")
-    if gui_menu:
-        cmd.append("G3X_GUI_MENU=1")
-    if gui_restore2:
-        cmd.append("G3X_GUI_RESTORE2=1")
-    if full_hooks:
-        cmd.append("FULL_HOOKS=1")
+    if not playback_menu_alone:
+        cmd.extend(["G3X_GUI_FIX=1", "G3X_GUI_DBUF=1"])
+        if no_overdraw:
+            cmd.append("G3X_GUI_NOOVERDRAW=1")
+        if kbd_check:
+            cmd.append("G3X_KBD_CHECK=1")
+        if gui_diag:
+            cmd.append("G3X_GUI_DIAG=1")
+        if shadow2:
+            cmd.append("G3X_GUI_SHADOW2=1")
+        if gui_sync:
+            cmd.append("G3X_GUI_SYNC=1")
+        if gui_menu:
+            cmd.append("G3X_GUI_MENU=1")
+        if gui_restore2:
+            cmd.append("G3X_GUI_RESTORE2=1")
+        if full_hooks:
+            cmd.append("FULL_HOOKS=1")
+    if playback_menu:
+        cmd.append("G3X_PLAYBACK_MENU=1")
     cmd.extend(["SKIP_TOOLS=1", "SKIP_MODULES=1", "SKIP_CHDK=1", "fir"])
 
     print(f"Running build: {' '.join(cmd)}")
@@ -2239,26 +2376,29 @@ def build_port43_dbuf(
     wrapper_script = REPO_ROOT / "scripts" / "gcc_deterministic_wrapper.sh"
     if "MAKEFLAGS" not in env and wrapper_script.is_file() and os.access(wrapper_script, os.X_OK):
         env["MAKEFLAGS"] = f"CC={wrapper_script}"
-    env["G3X_GUI_FIX"] = "1"
-    env["G3X_GUI_DBUF"] = "1"
     env["G3X_DISABLE_CARD_WRITES"] = "1"
     env["OPT_DISABLE_FILE_WRITES"] = "1"
-    if no_overdraw:
-        env["G3X_GUI_NOOVERDRAW"] = "1"
-    if kbd_check:
-        env["G3X_KBD_CHECK"] = "1"
-    if gui_diag:
-        env["G3X_GUI_DIAG"] = "1"
-    if shadow2:
-        env["G3X_GUI_SHADOW2"] = "1"
-    if gui_sync:
-        env["G3X_GUI_SYNC"] = "1"
-    if gui_menu:
-        env["G3X_GUI_MENU"] = "1"
-    if gui_restore2:
-        env["G3X_GUI_RESTORE2"] = "1"
-    if full_hooks:
-        env["FULL_HOOKS"] = "1"
+    if not playback_menu_alone:
+        env["G3X_GUI_FIX"] = "1"
+        env["G3X_GUI_DBUF"] = "1"
+        if no_overdraw:
+            env["G3X_GUI_NOOVERDRAW"] = "1"
+        if kbd_check:
+            env["G3X_KBD_CHECK"] = "1"
+        if gui_diag:
+            env["G3X_GUI_DIAG"] = "1"
+        if shadow2:
+            env["G3X_GUI_SHADOW2"] = "1"
+        if gui_sync:
+            env["G3X_GUI_SYNC"] = "1"
+        if gui_menu:
+            env["G3X_GUI_MENU"] = "1"
+        if gui_restore2:
+            env["G3X_GUI_RESTORE2"] = "1"
+        if full_hooks:
+            env["FULL_HOOKS"] = "1"
+    if playback_menu:
+        env["G3X_PLAYBACK_MENU"] = "1"
 
     res = subprocess.run(cmd, cwd=str(effective_stage_dir), env=env)
     shutil.rmtree(gcc_tmp, ignore_errors=True)
@@ -2308,31 +2448,41 @@ def build_port43_dbuf(
             }
 
     # Manifest
-    build_flags = [
-        "G3X_FULL_BUILD=1",
-        "G3X_DISABLE_CARD_WRITES=1",
-        "CAM_SUPPORT_BITMAP_RES_CHANGE=1",
-        "OPT_DISABLE_FILE_WRITES=1",
-        "G3X_GUI5=1",
-        "G3X_GUI_FIX=1",
-        "G3X_GUI_DBUF=1",
-    ]
-    if no_overdraw:
-        build_flags.append("G3X_GUI_NOOVERDRAW=1")
-    if kbd_check:
-        build_flags.append("G3X_KBD_CHECK=1")
-    if gui_diag:
-        build_flags.append("G3X_GUI_DIAG=1")
-    if shadow2:
-        build_flags.append("G3X_GUI_SHADOW2=1")
-    if gui_sync:
-        build_flags.append("G3X_GUI_SYNC=1")
-    if gui_menu:
-        build_flags.append("G3X_GUI_MENU=1")
-    if gui_restore2:
-        build_flags.append("G3X_GUI_RESTORE2=1")
-    if full_hooks:
-        build_flags.insert(1, "FULL_HOOKS=1")
+    if playback_menu_alone:
+        build_flags = [
+            "G3X_FULL_BUILD=1",
+            "G3X_DISABLE_CARD_WRITES=1",
+            "OPT_DISABLE_FILE_WRITES=1",
+            "G3X_PLAYBACK_MENU=1",
+        ]
+    else:
+        build_flags = [
+            "G3X_FULL_BUILD=1",
+            "G3X_DISABLE_CARD_WRITES=1",
+            "CAM_SUPPORT_BITMAP_RES_CHANGE=1",
+            "OPT_DISABLE_FILE_WRITES=1",
+            "G3X_GUI5=1",
+            "G3X_GUI_FIX=1",
+            "G3X_GUI_DBUF=1",
+        ]
+        if no_overdraw:
+            build_flags.append("G3X_GUI_NOOVERDRAW=1")
+        if kbd_check:
+            build_flags.append("G3X_KBD_CHECK=1")
+        if gui_diag:
+            build_flags.append("G3X_GUI_DIAG=1")
+        if shadow2:
+            build_flags.append("G3X_GUI_SHADOW2=1")
+        if gui_sync:
+            build_flags.append("G3X_GUI_SYNC=1")
+        if gui_menu:
+            build_flags.append("G3X_GUI_MENU=1")
+        if gui_restore2:
+            build_flags.append("G3X_GUI_RESTORE2=1")
+        if playback_menu:
+            build_flags.append("G3X_PLAYBACK_MENU=1")
+        if full_hooks:
+            build_flags.insert(1, "FULL_HOOKS=1")
 
     manifest_name = "port45_no_overdraw_manifest.json" if no_overdraw else "port43_dbuf_manifest.json"
     if kbd_check:
@@ -2347,6 +2497,10 @@ def build_port43_dbuf(
         manifest_name = "port50_gui_menu_manifest.json"
     if gui_restore2:
         manifest_name = "port51_restore2_core_manifest.json"
+    if playback_menu_alone:
+        manifest_name = "port53_playback_menu_alone_manifest.json"
+    elif playback_menu:
+        manifest_name = "port53_playback_menu_manifest.json"
     manifest_data: dict[str, object] = {
         "build": {
             "platform": "g3x",
@@ -2373,7 +2527,7 @@ def build_port43_dbuf(
             "chdk_files": chdk_files_map,
         },
     }
-    if gui_diag:
+    if gui_diag or playback_menu:
         nm_bin = TOOLCHAIN_BIN / "arm-none-eabi-nm"
         main_elf = effective_stage_dir / "platform" / "g3x" / "sub" / "110c" / "main.elf"
         nm_out = subprocess.check_output([str(nm_bin), str(main_elf)], text=True)
@@ -2392,7 +2546,7 @@ def build_port43_dbuf(
         artifacts_dict["core_end"] = core_end_hex
         artifacts_dict["_end"] = core_end_hex
 
-    if gui_menu:
+    if gui_menu or playback_menu:
         manifest_data["card_writes"] = "disabled"
         manifest_data["card_writes_note"] = (
             "Config save disabled under G3X_DISABLE_CARD_WRITES=1 OPT_DISABLE_FILE_WRITES=1 "
@@ -2411,11 +2565,24 @@ def build_port43_dbuf(
             "save_int_value_file",
         ]
 
+    if playback_menu and not playback_menu_alone:
+        manifest_data["manifest_id"] = "port53_playback_menu_manifest"
+        manifest_data["milestone"] = "PORT-53"
+        manifest_data["command"] = (
+            "python3 -B scripts/build_port43_dbuf.py --no-overdraw --kbd-check --gui-diag --shadow2 --gui-sync --gui-menu --gui-restore2 --playback-menu --out-dir out/port53-playback-menu"
+        )
+
     manifest_path = effective_out_dir / manifest_name
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest_data, f, indent=2)
         f.write("\n")
     print(f"[OK] Manifest written to {manifest_path}")
+
+    if playback_menu and not playback_menu_alone:
+        repo_manifest = REPO_ROOT / "manifests" / "port53_playback_menu_manifest.json"
+        repo_manifest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(manifest_path, repo_manifest)
+        print(f"[OK] Candidate manifest copied to {repo_manifest}")
 
     # Convenience aliases
     with open(effective_out_dir / "manifest.json", "w", encoding="utf-8") as f:
@@ -2441,6 +2608,8 @@ def main() -> int:
     parser.add_argument("--gui-sync", action="store_true", default=os.environ.get("G3X_GUI_SYNC") == "1", help="Enable G3X_GUI_SYNC=1 synchronous display-flip restore hook at 0x0000E26C")
     parser.add_argument("--gui-menu", action="store_true", default=os.environ.get("G3X_GUI_MENU") == "1", help="Enable G3X_GUI_MENU=1 standard CHDK menu and FINSIG file I/O stubs")
     parser.add_argument("--gui-restore2", action="store_true", default=os.environ.get("G3X_GUI_RESTORE2") == "1", help="Enable G3X_GUI_RESTORE2=1 rect-only blit, blit duration timing, and restore path breakdown")
+    parser.add_argument("--playback-menu", action="store_true", default=os.environ.get("G3X_PLAYBACK_MENU") == "1", help="Enable G3X_PLAYBACK_MENU=1 playback-mode ALT menu hooks and key mapping")
+    parser.add_argument("--playback-menu-alone", action="store_true", help="Build G3X_PLAYBACK_MENU=1 alone without DBUF/menu stack")
     parser.add_argument("--no-clean", action="store_true", help="Do not clean staging before building")
     parser.add_argument("--discard-stage", action="store_true", help="Remove stage directory after build")
     parser.add_argument("--out-dir", type=str, default=None, help="Custom output directory")
@@ -2458,6 +2627,8 @@ def main() -> int:
         gui_sync=args.gui_sync,
         gui_menu=args.gui_menu,
         gui_restore2=args.gui_restore2,
+        playback_menu=args.playback_menu,
+        playback_menu_alone=args.playback_menu_alone,
     )
 
 

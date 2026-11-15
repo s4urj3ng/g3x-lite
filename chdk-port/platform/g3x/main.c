@@ -65,3 +65,14 @@ int screen_opened(void) {
 int screen_rotated(void) {
     return !(physw_status[0] & 0x10000000);
 }
+
+#if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)
+/*
+ * PORT-53: Playback mode status hook
+ */
+int g3x_playback_menu_mode_check(void)
+{
+    extern int g3x_playback_menu_gui_mode_active(void);
+    return g3x_playback_menu_gui_mode_active();
+}
+#endif

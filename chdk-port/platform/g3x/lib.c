@@ -143,3 +143,18 @@ int check_gui_needs_redraw()
     }
     return 0;
 }
+
+#if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)
+/*
+ * PORT-53: Playback mode GUI and viewport handling
+ */
+int g3x_playback_menu_gui_mode_active(void)
+{
+    return camera_info.state.mode_play && (camera_info.state.gui_mode_alt || !camera_info.state.gui_mode_none);
+}
+
+int g3x_playback_menu_get_viewport_mode(void)
+{
+    return camera_info.state.mode_play ? 1 : 0;
+}
+#endif
