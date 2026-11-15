@@ -27,8 +27,8 @@
   "artifacts": {
     "DISKBOOT.BIN": {
       "path": "DISKBOOT.BIN",
-      "size": 132145,
-      "sha256": "b054f24264084bd51fd50d90dfa9af9e54c9bef1e8afb318aa1bc6a6f2185fe6"
+      "size": 132185,
+      "sha256": "9c12c7f8e7a9af51169b5022e9f8760e6d164efae9eeead026ce55f4df93bb6b"
     },
     "modules_count": 34,
     "modules": {
@@ -1140,11 +1140,11 @@
         "sha256": "3ffbe9b6390041f1ed9da96b6b0d43e1c43fb2ca2cb31d92d8970174d985a2f3"
       }
     },
-    "core_end": "0x0036aa00",
-    "_end": "0x0036aa00"
+    "core_end": "0x0036aa30",
+    "_end": "0x0036aa30"
   },
-  "core_end": "0x0036aa00",
-  "_end": "0x0036aa00",
+  "core_end": "0x0036aa30",
+  "_end": "0x0036aa30",
   "card_writes": "disabled",
   "card_writes_note": "Config save disabled under G3X_DISABLE_CARD_WRITES=1 OPT_DISABLE_FILE_WRITES=1 (SAVE:OFF); blocking write wrappers (write, fwrite, open, fopen, creat, mkdir, remove, rename) remain active in link; physical SD card remains write-protected (LOCK)",
   "removed_wrappers": [

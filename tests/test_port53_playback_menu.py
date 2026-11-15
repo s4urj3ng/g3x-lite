@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import unittest
@@ -50,9 +51,9 @@ BASE_PORT51_RESTORE2_NO_FULLHOOKS_SHA256 = "f8df17f182289b4a100e8c348ecdca1ea7f2
 BASE_PORT51_RESTORE2_NO_FULLHOOKS_SIZE = 131865
 BASE_PORT51_RESTORE2_NO_FULLHOOKS_END = "0x0036a8e0"
 
-BASE_PORT53_CANDIDATE_SHA256 = "b054f24264084bd51fd50d90dfa9af9e54c9bef1e8afb318aa1bc6a6f2185fe6"
-BASE_PORT53_CANDIDATE_SIZE = 132145
-BASE_PORT53_CORE_END = "0x0036aa00"
+BASE_PORT53_CANDIDATE_SHA256 = "9c12c7f8e7a9af51169b5022e9f8760e6d164efae9eeead026ce55f4df93bb6b"
+BASE_PORT53_CANDIDATE_SIZE = 132185
+BASE_PORT53_CORE_END = "0x0036aa30"
 
 
 def sha256_file(path: Path) -> str:
@@ -183,8 +184,11 @@ class TestPort53BuildAndArtifacts(unittest.TestCase):
         cls.build_a = ROOT / "out/build-default"
         cls.build_p51_nofull = ROOT / "out/build-p51-nofull"
 
-        # Ensure all builds are present
-        if not (cls.build_c / "DISKBOOT.BIN").is_file():
+        # Ensure all builds are present and fresh
+        if (
+            not (cls.build_c / "DISKBOOT.BIN").is_file()
+            or sha256_file(cls.build_c / "DISKBOOT.BIN") != BASE_PORT53_CANDIDATE_SHA256
+        ):
             subprocess.run(
                 [
                     sys.executable,
@@ -205,19 +209,22 @@ class TestPort53BuildAndArtifacts(unittest.TestCase):
                 check=True,
             )
 
-        if not (cls.build_b / "DISKBOOT.BIN").is_file():
-            subprocess.run(
-                [
-                    sys.executable,
-                    "-B",
-                    str(ROOT / "scripts/build_port43_dbuf.py"),
-                    "--playback-menu-alone",
-                    "--out-dir",
-                    str(cls.build_b),
-                ],
-                cwd=ROOT,
-                check=True,
-            )
+        # Ensure fresh build for build_b and build_c so cached artifacts do not mask link failures
+        if (cls.build_b / "DISKBOOT.BIN").is_file():
+            shutil.rmtree(cls.build_b, ignore_errors=True)
+
+        subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(ROOT / "scripts/build_port43_dbuf.py"),
+                "--playback-menu-alone",
+                "--out-dir",
+                str(cls.build_b),
+            ],
+            cwd=ROOT,
+            check=True,
+        )
 
         if not (cls.build_a / "DISKBOOT.BIN").is_file():
             subprocess.run(
@@ -356,15 +363,103 @@ class TestPort53BuildAndArtifacts(unittest.TestCase):
         for sym in playback_symbols:
             self.assertIn(sym, candidate_nm, f"Symbol {sym} missing from config (c) candidate build!")
 
-        # 3. Alone build (config b) MUST have the playback menu functions
+        # 3. Alone build (config b) MUST have the playback menu functions and definitions
         for sym in [
             "g3x_playback_menu_is_active",
             "g3x_playback_menu_kbd_process",
             "g3x_playback_menu_gui_mode_active",
+            "g3x_playback_menu_get_viewport_mode",
             "g3x_playback_menu_mode_check",
             "g3x_playback_menu_record_item_edit",
+            "g3x_conf_record_save_result",
+            "g3x_playback_menu_item_edit_count",
         ]:
             self.assertIn(sym, alone_nm, f"Symbol {sym} missing from config (b) alone build!")
+
+    def test_playback_menu_alone_clean_build_and_link(self):
+        """Verify that config (b) (G3X_PLAYBACK_MENU=1 alone) links cleanly without undefined symbols."""
+        alone_elf = self.build_b / "stage_chdk/platform/g3x/sub/110c/main.elf"
+        self.assertTrue(alone_elf.is_file(), f"Missing {alone_elf}")
+
+        alone_diskboot = self.build_b / "DISKBOOT.BIN"
+        self.assertTrue(alone_diskboot.is_file(), f"Missing {alone_diskboot}")
+        self.assertGreater(alone_diskboot.stat().st_size, 0)
+
+        nm_out = subprocess.check_output([str(NM), str(alone_elf)], text=True)
+        undefined_symbols = set()
+        defined_symbols = set()
+        for line in nm_out.splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[0] == "U":
+                undefined_symbols.add(parts[1])
+            elif len(parts) == 3 and parts[1] != "U":
+                defined_symbols.add(parts[2])
+
+        self.assertNotIn("g3x_conf_record_save_result", undefined_symbols)
+        self.assertNotIn("g3x_playback_menu_item_edit_count", undefined_symbols)
+        self.assertIn("g3x_conf_record_save_result", defined_symbols)
+        self.assertIn("g3x_playback_menu_item_edit_count", defined_symbols)
+
+        g3x_undefined = [s for s in undefined_symbols if s.startswith("g3x_")]
+        self.assertEqual(g3x_undefined, [], f"Unexpected undefined g3x symbols in config (b): {g3x_undefined}")
+
+    def test_call_sites_inside_target_function_bodies(self):
+        """Parse staged kbd.c and lib.c to assert each playback hook sits INSIDE the body of its target function."""
+        def extract_function_body(source: str, func_pattern: str) -> str:
+            m = re.search(rf"{func_pattern}\s*\{{", source)
+            self.assertIsNotNone(m, f"Function matching {func_pattern} not found")
+            open_pos = m.end() - 1
+            depth = 0
+            close_pos = -1
+            for i in range(open_pos, len(source)):
+                if source[i] == '{':
+                    depth += 1
+                elif source[i] == '}':
+                    depth -= 1
+                    if depth == 0:
+                        close_pos = i
+                        break
+            self.assertGreater(close_pos, open_pos, f"Could not find matching closing brace for {func_pattern}")
+            return source[open_pos + 1:close_pos]
+
+        # 1. Check staged kbd.c in config (c)
+        staged_kbd_c = self.build_c / "stage_chdk/platform/g3x/kbd.c"
+        self.assertTrue(staged_kbd_c.is_file(), f"Missing {staged_kbd_c}")
+        kbd_content = staged_kbd_c.read_text(encoding="utf-8")
+
+        my_kbd_body = extract_function_body(kbd_content, r"void\s+my_kbd_read_keys\s*\(\s*\)")
+        self.assertIn("g3x_playback_menu_kbd_process()", my_kbd_body,
+                      "g3x_playback_menu_kbd_process() call missing from body of my_kbd_read_keys() in staged kbd.c")
+
+        # 2. Check staged lib.c in config (c)
+        staged_lib_c = self.build_c / "stage_chdk/platform/g3x/lib.c"
+        self.assertTrue(staged_lib_c.is_file(), f"Missing {staged_lib_c}")
+        lib_content = staged_lib_c.read_text(encoding="utf-8")
+
+        vp_body = extract_function_body(lib_content, r"int\s+vid_get_viewport_width\s*\(\s*\)")
+        self.assertIn("g3x_playback_menu_get_viewport_mode()", vp_body,
+                      "g3x_playback_menu_get_viewport_mode() call missing from body of vid_get_viewport_width() in staged lib.c")
+
+        # Find all check_gui_needs_redraw definitions in staged lib.c and verify hooks inside
+        redraw_matches = list(re.finditer(r"int\s+check_gui_needs_redraw\s*\([^)]*\)\s*\{", lib_content))
+        self.assertGreater(len(redraw_matches), 0, "No check_gui_needs_redraw definition found in staged lib.c")
+        for match in redraw_matches:
+            open_pos = match.end() - 1
+            depth = 0
+            close_pos = -1
+            for i in range(open_pos, len(lib_content)):
+                if lib_content[i] == '{':
+                    depth += 1
+                elif lib_content[i] == '}':
+                    depth -= 1
+                    if depth == 0:
+                        close_pos = i
+                        break
+            body = lib_content[open_pos + 1:close_pos]
+            self.assertIn("g3x_playback_menu_gui_mode_active()", body,
+                          "g3x_playback_menu_gui_mode_active() call missing from check_gui_needs_redraw body in staged lib.c")
+            self.assertIn("g3x_playback_menu_redraw_needed()", body,
+                          "g3x_playback_menu_redraw_needed() call missing from check_gui_needs_redraw body in staged lib.c")
 
     def test_conf_save_unreachable_and_save_off(self):
         candidate_elf = self.build_c / "stage_chdk/platform/g3x/sub/110c/main.elf"

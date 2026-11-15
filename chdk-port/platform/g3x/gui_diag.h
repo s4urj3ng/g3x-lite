@@ -315,55 +315,6 @@ void g3x_conf_record_save_result(int ok)
 }
 #endif
 
-#if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)
-#if !defined(G3X_GUI_MENU) || (G3X_GUI_MENU != 1)
-unsigned int g3x_menu_open_count = 0;
-int g3x_conf_save_status = G3X_CONF_SAVE_NONE;
-
-void g3x_menu_record_open(void)
-{
-    g3x_menu_open_count++;
-}
-
-void g3x_conf_record_save_skipped(void)
-{
-    g3x_conf_save_status = G3X_CONF_SAVE_OFF;
-}
-
-void g3x_conf_record_save_result(int ok)
-{
-    if (ok == G3X_CONF_SAVE_OFF || ok == 3 || ok == -1)
-    {
-        g3x_conf_save_status = G3X_CONF_SAVE_OFF;
-    }
-    else
-    {
-        g3x_conf_save_status = ok ? G3X_CONF_SAVE_OK : G3X_CONF_SAVE_ERR;
-    }
-}
-#endif
-
-unsigned int g3x_playback_menu_open_count = 0;
-unsigned int g3x_playback_menu_item_edit_count = 0;
-
-void g3x_playback_menu_record_open(void)
-{
-    g3x_playback_menu_open_count++;
-}
-
-void g3x_playback_menu_diag_format(char *buf, unsigned int max_len)
-{
-    (void)max_len;
-    const char *save_str = (g3x_conf_save_status == G3X_CONF_SAVE_OFF) ? "OFF" :
-                           (g3x_conf_save_status == G3X_CONF_SAVE_OK)  ? "OK" :
-                           (g3x_conf_save_status == G3X_CONF_SAVE_ERR) ? "ERR" : "-";
-    sprintf(buf, "MENU:%04u SAVE:%s ED:%04u",
-             g3x_playback_menu_open_count,
-             save_str,
-             g3x_playback_menu_item_edit_count);
-}
-#endif
-
 #if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)
 #ifndef MEMINFO_H
 #include "meminfo.h"
@@ -1445,4 +1396,56 @@ void gui_diag_draw(void)
 
 #endif /* G3X_GUI_DIAG_IMPLEMENTATION */
 #endif /* G3X_GUI_DIAG == 1 */
+
+#if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)
+#if defined(G3X_GUI_DIAG_IMPLEMENTATION) && (G3X_GUI_DIAG_IMPLEMENTATION == 1)
+#if !defined(G3X_GUI_MENU) || (G3X_GUI_MENU != 1)
+unsigned int g3x_menu_open_count = 0;
+int g3x_conf_save_status = G3X_CONF_SAVE_NONE;
+
+void g3x_menu_record_open(void)
+{
+    g3x_menu_open_count++;
+}
+
+void g3x_conf_record_save_skipped(void)
+{
+    g3x_conf_save_status = G3X_CONF_SAVE_OFF;
+}
+
+void g3x_conf_record_save_result(int ok)
+{
+    if (ok == G3X_CONF_SAVE_OFF || ok == 3 || ok == -1)
+    {
+        g3x_conf_save_status = G3X_CONF_SAVE_OFF;
+    }
+    else
+    {
+        g3x_conf_save_status = ok ? G3X_CONF_SAVE_OK : G3X_CONF_SAVE_ERR;
+    }
+}
+#endif /* !G3X_GUI_MENU */
+
+unsigned int g3x_playback_menu_open_count = 0;
+unsigned int g3x_playback_menu_item_edit_count = 0;
+
+void g3x_playback_menu_record_open(void)
+{
+    g3x_playback_menu_open_count++;
+}
+
+void g3x_playback_menu_diag_format(char *buf, unsigned int max_len)
+{
+    (void)max_len;
+    const char *save_str = (g3x_conf_save_status == G3X_CONF_SAVE_OFF) ? "OFF" :
+                           (g3x_conf_save_status == G3X_CONF_SAVE_OK)  ? "OK" :
+                           (g3x_conf_save_status == G3X_CONF_SAVE_ERR) ? "ERR" : "-";
+    sprintf(buf, "MENU:%04u SAVE:%s ED:%04u",
+             g3x_playback_menu_open_count,
+             save_str,
+             g3x_playback_menu_item_edit_count);
+}
+#endif /* G3X_GUI_DIAG_IMPLEMENTATION */
+#endif /* G3X_PLAYBACK_MENU */
+
 #endif /* G3X_GUI_DIAG_H */
