@@ -47,22 +47,12 @@
 
 ## Owner Trial Plan and Recovery (PORT-54 Candidate)
 
-Hardware trial protocol for the flagged PORT-54 opt-in candidate build with sandboxed configuration save/load (`G3X_CONF_SAVE=1`), playback-mode ALT menu (`G3X_PLAYBACK_MENU=1`), and double-buffer sync restore (`G3X_GUI_RESTORE2=1`).
-
-### 1. Candidate Build and Manifest Verification
+### 1. Candidate Build and Artifact Hashes
 
 - **Exact build command**:
   ```sh
   python3 -B scripts/build_port43_dbuf.py --no-overdraw --kbd-check --gui-diag --shadow2 --gui-sync --gui-menu --gui-restore2 --playback-menu --conf-save --out-dir out/port54-conf-save
   ```
-- **Candidate output directory**: `out/port54-conf-save/`
-- **Candidate manifest**: `manifests/port54_conf_save_manifest.json`
-- **Build flags**: `G3X_FULL_BUILD=1 G3X_DISABLE_CARD_WRITES=1 CAM_SUPPORT_BITMAP_RES_CHANGE=1 OPT_DISABLE_FILE_WRITES=1 G3X_CONF_SAVE=1 G3X_GUI5=1 G3X_GUI_FIX=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1 G3X_GUI_SYNC=1 G3X_GUI_MENU=1 G3X_GUI_RESTORE2=1 G3X_PLAYBACK_MENU=1`
-- **DISKBOOT.BIN size**: `133265` bytes
-- **DISKBOOT.BIN SHA-256**: `452d942c586044e59c20ccc89dfd977c863c34c2ac33b8c103157cbd208f6be4`
-- **CHDK files count**: `242` files across all subdirectories (`MODULES/`: 34, `FONTS/`: 74, `LANG/`: 20, `SCRIPTS/`: 49, `LUALIB/`: 30, `GRIDS/`: 13, `DATA/`: 9, `HELP/`: 4, `SYMBOLS/`: 2, `BOOKS/`: 1, `CURVES/`: 1, `GAMES/`: 1, root: 4).
-
-#### Candidate Artifacts and Hashes Table
 
 | File Path | Size (bytes) | SHA-256 |
 |---|---|---|
@@ -310,58 +300,47 @@ Hardware trial protocol for the flagged PORT-54 opt-in candidate build with sand
 | `CHDK/logo_de.dat` | 2404 | `dcdeeffc0ec624d277c53b5b79fa4a597a9aab934921f8bbefcf652420fb517b` |
 | `CHDK/syscurves.CVF` | 8192 | `bc10cc014cbc7bfb72cea9ee1f66057edf543b97e9c9087368870aefde8023a6` |
 
-### 2. Pre-Trial SD Card Preparation and Backup
+### 2. Pre-Trial SD Card Preparation and Backup Checklist
 
-Before starting the trial, complete the following preparation checklist:
-
-- [ ] **Backup existing `CHDK/` folder**: On the host computer, create a complete backup copy of the existing `CHDK/` directory on the SD card before copying any new files:
+- [ ] **Backup existing `A/CHDK/` folder**: In the PC card reader, copy the entire existing `CHDK/` directory on the SD card to a host backup location before copying any new files:
   ```sh
   cp -a /Volumes/CANON_SD/CHDK /path/to/host/backup/CHDK_pre_port54
   ```
-- [ ] **Record baseline SD card file tree**: Record a recursive file listing of the entire SD card to verify against post-trial file creation:
+- [ ] **Record baseline SD card file tree**: Record a recursive file listing of all files on the SD card to compare against post-trial file creation:
   ```sh
   cd /Volumes/CANON_SD && find . -type f | sort > /path/to/host/pre_trial_files.txt
   ```
-- [ ] **Deploy candidate artifacts**: Copy `DISKBOOT.BIN` and `CHDK/` from `out/port54-conf-save/` onto the root of the SD card.
-- [ ] **Unlock SD card physical write switch**: Set the SD card physical write-protect switch to **UNLOCKED** (write enabled).
-  > [!NOTE]
-  > Unlike earlier read-only milestones that required the card to remain write-locked, config save requires writing `A/CHDK/CCHDK4.CFG`. Software sandboxing inside `__wrap_open()` strictly restricts all file write operations to `A/CHDK/`.
+- [ ] **Deploy candidate artifacts**: Copy `DISKBOOT.BIN` and `CHDK/` from `out/port54-conf-save/` onto the SD card root.
+- [ ] **Card lock state**: Keep SD card write-protect switch **LOCKED** for camera insertion and trial boot. (Autoboot requires a locked card per `docs/PORT41_FULL_BUILD.md:169`. CHDK clears the software read-only flag itself in `chdk-port/core/kbd_common.c:246`, so configuration writes still work on a locked card. Unlock the card only in the PC card reader, and only if the reader needs that for the backup or restore copy).
 
 ### 3. Step-by-Step Trial Protocol
 
-Execute the following ordered steps on camera:
-
 | Step # | Action | Details & Controls | Expected Outcome | What to Record |
 |---|---|---|---|---|
-| **1** | Short-press boot | Tap `POWER` briefly (< 500 ms) to turn on camera. | Camera powers on cleanly into live view or playback; stock Canon firmware initializes normally. | Pass / Fail; boot mode (Rec / Play) |
-| **2** | Check diag line | Press `WIFI` (`KEY_WIFI`) to enter `<ALT>` mode. Inspect diagnostic line at bottom of LCD. | `<ALT>` indicator appears; diagnostic Line 2/3 displays `SAVE:FAIL` or `SAVE:OK` (or initial `SAVE:NONE`; confirms `SAVE:OFF` is no longer active). | Pass / Fail; initial `SAVE` marker text |
-| **3** | Change ALT-menu setting | Press `MENU` (`KEY_MENU`) to open CHDK menu. Navigate to a visible setting (e.g., *OSD Parameters -> Show OSD* boolean toggle `[ ]` <-> `[*]`, or an integer/enum item) and change its value. | Highlight moves cleanly; setting updates visibly on screen and in memory (`conf` struct). | Pass / Fail; setting name, old value, new value |
-| **4** | Save configuration | Press `MENU` (`KEY_MENU`) to exit menu (invoking `conf_save()`), or select *Save Settings Now*. | Menu closes cleanly. Diagnostic line immediately displays `SAVE:OK` (or `SAVE:FAIL` if write failed). No freeze or lockup. | Pass / Fail; post-save `SAVE` marker (`SAVE:OK`/`SAVE:FAIL`) |
+| **1** | Short-press boot | Tap `POWER` briefly (< 500 ms) with card locked. | Camera powers on cleanly into live view or playback; stock Canon firmware initializes normally. | Pass / Fail; boot mode (Rec / Play) |
+| **2** | Check diag line | Press `WIFI` (`KEY_WIFI`) to enter `<ALT>` mode. | `<ALT>` indicator appears; diagnostic Line 2/3 displays `SAVE:FAIL` or `SAVE:OK` (confirms `SAVE:OFF` inactive). | Pass / Fail; initial `SAVE` marker text |
+| **3** | Change ALT-menu setting | Press `MENU` (`KEY_MENU`) to open CHDK menu. Navigate to a visible setting, e.g., *OSD Parameters -> Show OSD* boolean toggle `[ ]` <-> `[*]`, and toggle it. (Note: OSD settings land in `CHDK/OSD__4.CFG`; core settings land in `CHDK/CCHDK4.CFG`). | Highlight moves cleanly; setting updates visibly on screen and in memory (`conf` struct). | Pass / Fail; setting name (*Show OSD*), old value, new value |
+| **4** | Save configuration | Press `MENU` (`KEY_MENU`) to exit menu (invoking `conf_save()`), or select *Save Settings Now*. | Menu closes cleanly; diagnostic line immediately displays `SAVE:OK` (or `SAVE:FAIL` if write failed). No freeze or lockup. | Pass / Fail; post-save `SAVE` marker (`SAVE:OK` / `SAVE:FAIL`) |
 | **5** | Power off camera | Press `POWER` button to shut down camera. | Camera executes clean shutdown: lens retracts and power LED extinguishes. Wait >= 5 seconds. | Pass / Fail; shutdown clean |
-| **6** | Reboot & confirm load | Power on via short-press (< 500 ms). Press `WIFI` to enter `<ALT>`, press `MENU` to open menu, navigate to the modified setting. | The modified setting retains the new value set in Step 3 across cold power-cycle, confirming `conf_restore()` successfully loaded `A/CHDK/CCHDK4.CFG`. | Pass / Fail; persisted value confirmed |
-| **7** | Check files outside `A/CHDK/` | Power off, remove SD card, insert into host PC, and generate post-trial file list to compare with baseline: `diff -u pre_trial_files.txt post_trial_files.txt`. | Only `CHDK/CCHDK4.CFG` (and standard CHDK internal logs) modified or added. Confirmed strictly zero new or modified files outside `A/CHDK/` (e.g., `DCIM/`, `MISC/`, or root). | Pass / Fail; full file diff |
+| **6** | Reboot & confirm load | Power on via short-press (< 500 ms) with card locked. Press `WIFI` to enter `<ALT>`, press `MENU` to inspect setting. | Modified setting retains the value set in Step 3 across cold power-cycle, confirming `conf_restore()` successfully loaded `CHDK/OSD__4.CFG`. | Pass / Fail; persisted value confirmed |
+| **7** | Check files outside `A/CHDK/` | Power off, remove SD card, insert into host PC (unlock switch only if reader requires it), and generate post-trial file list to compare with baseline: `diff -u pre_trial_files.txt post_trial_files.txt`. | Only `CHDK/OSD__4.CFG` (and standard CHDK internal logs) modified or added. Confirmed strictly zero new or modified files outside `A/CHDK/` (e.g., `DCIM/`, `MISC/`, or root). | Pass / Fail; full file diff |
 
-### 4. What to Record (Trial Observation Template)
-
-Record the following observations during the trial:
+### 4. What to Record (Trial Observation Table)
 
 | Item | Recorded Observation | Target Verification |
 |---|---|---|
-| **SAVE marker (initial)** | `SAVE:____` | Diagnostic line shows `SAVE:FAIL` / `SAVE:OK` / `SAVE:NONE` (verifies `SAVE:OFF` disabled) |
-| **Edited setting** | Name: `____`, Old: `____`, New: `____` | Confirms in-RAM setting mutation via menu |
+| **SAVE marker (initial)** | `SAVE:____` | Diagnostic line shows `SAVE:FAIL` or `SAVE:OK` (verifies `SAVE:OFF` inactive) |
+| **Edited setting** | Name: `____`, Old: `____`, New: `____` | Confirms in-RAM setting mutation via menu (e.g., *Show OSD*, lands in `CHDK/OSD__4.CFG`) |
 | **SAVE marker (post-save)** | `SAVE:____` | Diagnostic line confirms `SAVE:OK` upon menu exit save |
-| **Setting persisted after reboot** | `Yes / No` (Observed value: `____`) | Confirms `conf_restore()` successfully reads saved configuration at boot |
-| **File list differences** | Exact file diff: `____` | Confirms file creation strictly confined to `A/CHDK/` (no files outside `A/CHDK/`) |
+| **Setting persisted after reboot** | `Yes / No` (Observed value: `____`) | Confirms `conf_restore()` successfully read back saved setting from `CHDK/OSD__4.CFG` |
+| **File list differences** | Exact file diff: `____` | Confirms file creation strictly confined to `A/CHDK/` (`CHDK/OSD__4.CFG`); zero files outside `A/CHDK/` |
 | **Display / key artifacts** | `None / Describe` | Confirms normal operation without freeze, lag, or graphical anomalies |
 
-### 5. Emergency Recovery and Rollback
+### 5. Recovery Procedures
 
-- **Battery-pull recovery**: If the camera freezes, hangs during boot, save, or shutdown, or displays corrupted graphics, immediately open the battery compartment door and remove the battery. Wait at least 10 seconds before reinserting. (Halts CPU and clears volatile DRAM state safely; internal ROM remains unmodified).
-- **Conf file removal (`CCHDK4.CFG`)**: If the camera misbehaves, crashes, or hangs on boot due to an invalid or corrupted configuration:
-  1. Remove the SD card from camera and insert into host card reader.
-  2. Delete `CHDK/CCHDK4.CFG` from the SD card.
-  3. Reinsert SD card into camera and power on; CHDK will boot cleanly with default in-memory configuration.
-- **Restoring backed-up `CHDK/` folder**: If deleting the conf file does not resolve the issue or if any `CHDK/` files were damaged:
-  1. Delete the `CHDK/` directory on the SD card.
-  2. Copy the pre-trial backup `CHDK_pre_port54/` back to the root of the SD card.
-- **Rollback to stock Canon firmware**: Remove `DISKBOOT.BIN` from the SD card, or slide the SD card write-protect switch to `LOCK` with a read-only candidate (e.g., PORT-53 baseline) to immediately return to factory Canon firmware boot.
+| Scenario | Action | Procedure |
+|---|---|---|
+| **Camera freeze / hang** | Battery pull | Open battery compartment door, remove battery, wait >= 10 seconds before reinserting. Safely halts CPU and clears volatile SDRAM. |
+| **Misbehavior / invalid config** | Conf file removal | In PC card reader (unlock switch only if reader requires it for write access), delete all configuration files written by CHDK (`chdk-port/core/conf.c:632-652`): `A/CHDK/CCHDK4.CFG` (core), `A/CHDK/OSD__4.CFG` (OSD, including *Show OSD*), `A/CHDK/UMENU4.CFG` (user menu), and `A/CHDK/GPS__4.CFG` (GPS). Deleting all of them returns CHDK to default settings. |
+| **Corrupted `CHDK/` folder** | Restore backup folder | In PC card reader: delete `A/CHDK/`, then copy the backup folder back and rename it to `A/CHDK/` (or copy the backup's contents into a fresh `A/CHDK/`). Do not leave it as `CHDK_pre_port54/`. |
+| **Bypass CHDK autoboot** | Unlock SD card switch | Slide the SD card write-protect switch to **UNLOCKED** (or delete `DISKBOOT.BIN`). An unlocked card bypasses DISKBOOT autoboot and boots factory Canon firmware directly; a locked card is required for autoboot. (Note: unlock the card only in the PC card reader, and only if the reader needs that for the backup or restore copy). |
