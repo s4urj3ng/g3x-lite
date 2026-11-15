@@ -6,7 +6,6 @@
 #include "platform.h"
 #include "keyboard.h"
 #include "kbd_common.h"
-#include "camera_info.h"
 
 long kbd_new_state[3] = { 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF };
 long kbd_prev_state[3] = { 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF };
@@ -103,24 +102,3 @@ void kbd_fetch_data(long *dst)
     _GetKbdState(dst);
     _kbd_read_keys_r2(dst);
 }
-
-#if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)
-/*
- * PORT-53: Playback-mode CHDK menu keyboard handling
- * Verifies navigation keys (UP/DOWN/LEFT/RIGHT/SET/MENU/DISP) match GM1.10C physw_bits.txt
- * and ensures ALT / menu events are unblocked during playback mode (camera_info.state.mode_play).
- */
-int g3x_playback_menu_is_active(void)
-{
-    return camera_info.state.mode_play && !camera_info.state.gui_mode_none;
-}
-
-int g3x_playback_menu_kbd_process(void)
-{
-    if (g3x_playback_menu_is_active())
-    {
-        return 1;
-    }
-    return 0;
-}
-#endif

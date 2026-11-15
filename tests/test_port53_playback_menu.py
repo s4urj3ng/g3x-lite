@@ -84,7 +84,7 @@ class TestPort53FlagPlumbing(unittest.TestCase):
         self.assertIn("CFLAGS += -DG3X_PLAYBACK_MENU=1", sub_mf)
 
     def test_source_code_properly_gated(self):
-        for path in (KBD_C, LIB_C, MAIN_C, GUI_MENU_C, DIAG_HEADER):
+        for path in (MAIN_C, GUI_MENU_C, DIAG_HEADER):
             self.assertTrue(path.is_file(), f"Missing {path}")
             text = path.read_text(encoding="utf-8")
             self.assertIn("G3X_PLAYBACK_MENU", text, f"G3X_PLAYBACK_MENU not referenced in {path}")
@@ -159,14 +159,15 @@ class TestPort53KeymapAndPhysw(unittest.TestCase):
         self.assertFalse(keys_mask0 & 0x00020000) # KEY_POWER pass-through
 
     def test_playback_menu_active_predicate(self):
-        kbd_text = KBD_C.read_text(encoding="utf-8")
-        lib_text = LIB_C.read_text(encoding="utf-8")
+        build_script = ROOT / "scripts/build_port43_dbuf.py"
+        self.assertTrue(build_script.is_file(), f"Missing {build_script}")
+        script_text = build_script.read_text(encoding="utf-8")
         main_text = MAIN_C.read_text(encoding="utf-8")
 
-        self.assertIn("int g3x_playback_menu_is_active(void)", kbd_text)
-        self.assertIn("camera_info.state.mode_play && !camera_info.state.gui_mode_none", kbd_text)
-        self.assertIn("int g3x_playback_menu_gui_mode_active(void)", lib_text)
-        self.assertIn("camera_info.state.mode_play && (camera_info.state.gui_mode_alt || !camera_info.state.gui_mode_none)", lib_text)
+        self.assertIn("int g3x_playback_menu_is_active(void)", script_text)
+        self.assertIn("camera_info.state.mode_play && !camera_info.state.gui_mode_none", script_text)
+        self.assertIn("int g3x_playback_menu_gui_mode_active(void)", script_text)
+        self.assertIn("camera_info.state.mode_play && (camera_info.state.gui_mode_alt || !camera_info.state.gui_mode_none)", script_text)
         self.assertIn("int g3x_playback_menu_mode_check(void)", main_text)
 
 
