@@ -69,7 +69,8 @@ APPROVED_READS = {
 APPROVAL_SUFFIX = "approved after the fact by Tech Lead decision, AgentBridge task 93 revision 3 (2026-10-31)"
 
 FORBIDDEN_PREFIXES = ("docs/PORT20_", "tests/test_port20_")
-FORBIDDEN_FILES = ("tools/build_candidate_port2a.py",)
+# PORT-46 authorizes shared candidate-builder repairs; pinned binary checks
+# enforce compatibility. Scope protection still covers PORT-20 evidence/tests.
 
 # Set by TestPort21WithoutRom: a nested unittest run records unittest.SkipTest as a skip
 # but would record pytest's Skipped exception as an error.
@@ -151,7 +152,7 @@ def find_forbidden_paths(changed_paths: list[str]) -> list[str]:
     return [
         p
         for p in changed_paths
-        if p.startswith(FORBIDDEN_PREFIXES) or p in FORBIDDEN_FILES
+        if p.startswith(FORBIDDEN_PREFIXES)
     ]
 
 
@@ -975,10 +976,10 @@ class TestPort21ScopeIntegrity(unittest.TestCase):
         for bad in (
             "docs/PORT20_FORBIDDEN.md",
             "tests/test_port20_x.py",
-            "tools/build_candidate_port2a.py",
         ):
             self.assertEqual(find_forbidden_paths([bad]), [bad], bad)
         allowed = [
+            "tools/build_candidate_port2a.py",
             "docs/PORT21_RAM_LIFETIME.md",
             "docs/agentbridge/PORT21_EVIDENCE_MANIFEST.json",
             "tests/test_port21_ram_lifetime.py",

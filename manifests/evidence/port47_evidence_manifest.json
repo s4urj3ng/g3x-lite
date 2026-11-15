@@ -1,0 +1,456 @@
+{
+  "task": "PORT47-SIBLING-SUPPRESS",
+  "retrieved_utc": "2026-11-14",
+  "repository_url": "https://github.com/s4urj3ng/g3x-lite",
+  "repository_head": "782e0c241e055fa3c1d004c885ca155d1e02d199",
+  "source_revision_note": "HEAD identifies tracked project state. Sibling CHDK files are local read-only snapshots; their content identity is the SHA-256 below, not an assertion that all are tracked by this repository commit. file URLs identify the exact inspected sources.",
+  "review_order": [
+    "g7x",
+    "g5x",
+    "sx60hs",
+    "g16",
+    "CHDK core/generic/include and current G3X"
+  ],
+  "rom_reads": [],
+  "rom_bytes_read": 0,
+  "full_rom_scan_performed": false,
+  "rom_read_note": "Existing FINSIG text sufficed for asserted native addresses. Missing VTMLock/VTMUnlock and stock-clear target remain UNKNOWN; no ROM opened, hashed, scanned or disassembled.",
+  "finsig_mappings": [
+    {
+      "function": "transfer_src_overlay",
+      "gm110c_address": "0xFC380635",
+      "label": "FINSIG",
+      "evidence": [
+        "reference/finsig_gm110c/stubs_entry.S:352",
+        "reference/finsig_gm110c/funcs_by_name.csv:2571"
+      ],
+      "proves": "Signature-finder name/address mapping only; does not prove all stock clears use this entry."
+    },
+    {
+      "symbol": "active_bitmap_buffer",
+      "gm110c_address": "0x0000D2A4",
+      "kind": "RAM variable",
+      "label": "FINSIG",
+      "evidence": [
+        "reference/finsig_gm110c/stubs_entry.S:186"
+      ],
+      "proves": "Address of active bitmap index, not a callable stock-clear function."
+    },
+    {
+      "function": "ScreenLock",
+      "gm110c_address": "0xFC3810F1",
+      "label": "FINSIG",
+      "evidence": [
+        "reference/finsig_gm110c/stubs_entry.S:268",
+        "reference/finsig_gm110c/funcs_by_name.csv:1866"
+      ],
+      "proves": "Named function exists in reference; ALT suppression semantics not established."
+    },
+    {
+      "function": "ScreenUnlock",
+      "gm110c_address": "0xFC381127",
+      "label": "FINSIG",
+      "evidence": [
+        "reference/finsig_gm110c/stubs_entry.S:269",
+        "reference/finsig_gm110c/funcs_by_name.csv:1868"
+      ],
+      "proves": "Named function exists in reference; no sibling C use to suppress ALT redraw found."
+    }
+  ],
+  "unmapped_native_functions": [
+    {
+      "functions": [
+        "VTMLock",
+        "VTMUnlock"
+      ],
+      "status": "UNKNOWN",
+      "reason": "No entry in reference FINSIG name list/stubs. G3X stubs_entry_2.S:40-41 uses NULL_SUB. No guessed GM1.10C address or equivalence to ScreenLock asserted."
+    }
+  ],
+  "chdk_functions_without_rom_address": [
+    "vid_bitmap_refresh",
+    "check_gui_needs_redraw",
+    "draw_set_guard",
+    "draw_test_guard",
+    "gui_redraw",
+    "vid_turn_off_updates",
+    "vid_turn_on_updates",
+    "g3x_dbuf_shadow_restore",
+    "g3x_dbuf_restore_if_sentinel_lost",
+    "g3x_dbuf_shadow_ensure_allocated",
+    "g3x_dbuf_shadow_is_allocated"
+  ],
+  "chosen_mechanism": "G5X CAM_DETECT_BITMAP_UPDATE buffer-switch detection and CHDK repaint",
+  "chosen_reason": "Closest evidenced sibling recovery method; inspected siblings provide no stock-clear suppressor to transplant.",
+  "findings": [
+    {
+      "status": "VERIFIED",
+      "claim": "G7X/SX60HS/G16 request both transfers; G5X wraps inactive/active transfers in VTM lock/unlock calls. These are refresh requests, not ALT disable hooks.",
+      "evidence": [
+        "chdk-port/platform/g7x/lib.c:7",
+        "chdk-port/platform/g5x/lib.c:9",
+        "chdk-port/platform/sx60hs/lib.c:14",
+        "chdk-port/platform/g16/lib.c:5"
+      ]
+    },
+    {
+      "status": "VERIFIED",
+      "claim": "G5X documents flicker reduction, not elimination, by checking active bitmap changes and forcing redraw.",
+      "evidence": [
+        "chdk-port/platform/g5x/lib.c:206",
+        "chdk-port/platform/g5x/platform_camera.h:85",
+        "chdk-port/core/main.c:316"
+      ]
+    },
+    {
+      "status": "VERIFIED",
+      "claim": "ALT update-off/on functions default to empty weak implementations, with no override in the four siblings. Draw guards detect sampled opacity loss and request repaint.",
+      "evidence": [
+        "chdk-port/core/gui.c:3126",
+        "chdk-port/platform/generic/wrappers.c:1656",
+        "chdk-port/core/gui_draw.c:927",
+        "chdk-port/core/gui.c:3014"
+      ]
+    },
+    {
+      "status": "INFERRED",
+      "claim": "A same-index interior clear preserving guard samples can evade the existing polling detector; repeated full redraw fallback can show banding. Not established as the runtime cause.",
+      "evidence": [
+        "chdk-port/platform/g3x/lib.c:136",
+        "chdk-port/core/gui_draw.c:921",
+        "scripts/build_port43_dbuf.py:211",
+        "chdk-port/core/gui.c:3005",
+        "chdk-port/core/gui_menu.c:1092"
+      ]
+    },
+    {
+      "status": "VERIFIED",
+      "claim": "NULL/invalid shadow or GUI_NONE rejects restore; allocation is attempted once; layer changes invalidate; failed recovery forces repaint.",
+      "evidence": [
+        "chdk-port/core/gui_draw.c:121",
+        "chdk-port/core/gui_draw.c:341",
+        "chdk-port/core/gui.c:2476",
+        "chdk-port/core/gui.c:2992",
+        "scripts/build_port43_dbuf.py:298"
+      ]
+    },
+    {
+      "status": "VERIFIED",
+      "claim": "Tracked G3X NOOVERDRAW Makefile flag does not itself install a Canon hook. Builder generates an asynchronous polling scheduler.",
+      "evidence": [
+        "chdk-port/platform/g3x/Makefile:7",
+        "chdk-port/platform/g3x/sub/110c/boot.c:1",
+        "scripts/build_port43_dbuf.py:283"
+      ]
+    },
+    {
+      "status": "UNKNOWN",
+      "claim": "GM1.10C native stock clear interception point and actual runtime cause of the reported bands; no wrong native function target verified.",
+      "evidence": [
+        "chdk-port/platform/g3x/lib.c:8",
+        "chdk-port/platform/g3x/lib.c:136"
+      ]
+    }
+  ],
+  "negative_search_scope": {
+    "paths": [
+      "chdk-port/platform/g7x",
+      "chdk-port/platform/g5x",
+      "chdk-port/platform/sx60hs",
+      "chdk-port/platform/g16",
+      "chdk-port/platform/g3x",
+      "chdk-port/core/gui*.c",
+      "chdk-port/core/main.c",
+      "chdk-port/platform/generic",
+      "chdk-port/include"
+    ],
+    "method": "Read lib.c, relevant platform_camera.h, task dispatchers and core draw/ALT paths; rg --no-ignore source searches for refresh/overlay/opacity/guard, stock/canon disable, ScreenLock/ScreenUnlock, VTM, vid_turn_off/on_updates and NOOVERDRAW. No firmware or binary search.",
+    "limit": "Absence claims apply to inspected local sources only; no claim that firmware lacks a separate clear path."
+  },
+  "source_file_snapshots": [
+    {
+      "path": "chdk-port/core/gui.c",
+      "url": "file:///var/lib/agentbridge/worktrees/g3x-lite/port-47-gui-overdraw-diag-port47-sibling-suppress/chdk-port/core/gui.c",
+      "retrieved_utc": "2026-11-14",
+      "sha256": "dba69172538594f759d098076e8d617f027dec8cc5c4d653bd9115759bb2d712",
+      "size_bytes": 130457,
+      "cited_lines": [
+        2476,
+        2992,
+        3005,
+        3014,
+        3111,
+        3126,
+        3146
+      ]
+    },
+    {
+      "path": "chdk-port/core/gui_draw.c",
+      "url": "file:///var/lib/agentbridge/worktrees/g3x-lite/port-47-gui-overdraw-diag-port47-sibling-suppress/chdk-port/core/gui_draw.c",
+      "retrieved_utc": "2026-11-14",
+      "sha256": "e42355d51371044b7b852f3070dca15caa239bdaa78ce3b14890bc124e91177b",
+      "size_bytes": 61743,
+      "cited_lines": [
+        121,
+        341,
+        350,
+        921,
+        927
+      ]
+    },
+    {
+      "path": "chdk-port/core/gui_menu.c",
+      "url": "file:///var/lib/agentbridge/worktrees/g3x-lite/port-47-gui-overdraw-diag-port47-sibling-suppress/chdk-port/core/gui_menu.c",
+      "retrieved_utc": "2026-11-14",
+      "sha256": "a9ec1f14a6b330a773aad473503ac013bba62c161b00c7244c9148e11e8f2cc3",
+      "size_bytes": 48080,
+      "cited_lines": [
+        1092,
+        1328
+      ]
+    },
+    {
+      "path": "chdk-port/core/main.c",
+      "url": "file:///var/lib/agentbridge/worktrees/g3x-lite/port-47-gui-overdraw-diag-port47-sibling-suppress/chdk-port/core/main.c",
+      "retrieved_utc": "2026-11-14",
+      "sha256": "4315b96c873adc2edaa88ef293d39f4be5d19354e6f145ed71c21f531b38e31e",
+      "size_bytes": 10494,
+      "cited_lines": [
+        316
+      ]
+    },
+    {
+      "path": "chdk-port/include/lolevel.h",
+      "url": "file:///var/lib/agentbridge/worktrees/g3x-lite/port-47-gui-overdraw-diag-port47-sibling-suppress/chdk-port/include/lolevel.h",
+      "retrieved_utc": "2026-11-14",
+      "sha256": "e6f9dba263f47de8f566228bb28b2aeb5aa8ee661ac65b9695789a680b8f0a04",
+      "size_bytes": 12782,
+      "cited_lines": [
+        310
+      ]
+    },
+    {
+      "path": "chdk-port/include/viewport.h",
+      "url": "file:///var/lib/agentbridge/worktrees/g3x-lite/port-47-gui-overdraw-diag-port47-sibling-suppress/chdk-port/include/viewport.h",
+      "retrieved_utc": "2026-11-14",
+      "sha256": "672c0410c4443bfe6f4b4cd8b2a4e05a9b0ec9f00c2481878ac24e1b3a852e86",
+      "size_bytes": 3575,
+      "cited_lines": [
+        18
+      ]
+    },
+    {
+      "path": "chdk-port/platform/g16/lib.c",
+      "url": "file:///var/lib/agentbridge/worktrees/g3x-lite/port-47-gui-overdraw-diag-port47-sibling-suppress/chdk-port/platform/g16/lib.c",
+      "retrieved_utc": "2026-11-14",
+      "sha256": "f6c34d5f075778af93297abc86cd025bae338c881aa2ab07438f10dc58b0f5cc",
+      "size_bytes": 6238,
+      "cited_lines": [
+        5,
+        215
+      ]
+    },
+    {
+      "path": "chdk-port/platform/g16/sub/101c/boot.c",
+      "url": "file:///var/lib/agentbridge/worktrees/g3x-lite/port-47-gui-overdraw-diag-port47-sibling-suppress/chdk-port/platform/g16/sub/101c/boot.c",
+      "retrieved_utc": "2026-11-14",
+      "sha256": "a85660af9a07db42516dd233f2bb74069c562753b75052fd41fb9e958c5b4006",
+      "size_bytes": 19516,
+      "cited_lines": [
+        183
+      ]
+    },
+    {
+      "path": "chdk-port/platform/g3x/Makefile",
+      "url": "file:///var/lib/agentbridge/worktrees/g3x-lite/port-47-gui-overdraw-diag-port47-sibling-suppress/chdk-port/platform/g3x/Makefile",
+      "retrieved_utc": "2026-11-14",
+      "sha256": "a9b8be5c0d5ef8492f719fd1aa8b8343d4e262bfef1c04a48e42be464f187e87",
+      "size_bytes": 366,
+      "cited_lines": [
+        7
+      ]
+    },
+    {
+      "path": "chdk-port/platform/g3x/lib.c",
+      "url": "file:///var/lib/agentbridge/worktrees/g3x-lite/port-47-gui-overdraw-diag-port47-sibling-suppress/chdk-port/platform/g3x/lib.c",
+      "retrieved_utc": "2026-11-14",
+      "sha256": "1036e3452e66274010b5da755b2740f0b01b80f918009abf82e52045a0f8a1da",
+      "size_bytes": 2997,
+      "cited_lines": [
+        8,
+        136
+      ]
+    },
+    {
+      "path": "chdk-port/platform/g3x/sub/110c/boot.c",
+      "url": "file:///var/lib/agentbridge/worktrees/g3x-lite/port-47-gui-overdraw-diag-port47-sibling-suppress/chdk-port/platform/g3x/sub/110c/boot.c",
+      "retrieved_utc": "2026-11-14",
+      "sha256": "13105e4cbc1dec6d997f15c2ff1b37305d309d83269239a8d2b0456f559e50b1",
+      "size_bytes": 759,
+      "cited_lines": [
+        1
+      ]
+    },
+    {
+      "path": "chdk-port/platform/g3x/sub/110c/stubs_entry_2.S",
+      "url": "file:///var/lib/agentbridge/worktrees/g3x-lite/port-47-gui-overdraw-diag-port47-sibling-suppress/chdk-port/platform/g3x/sub/110c/stubs_entry_2.S",
+      "retrieved_utc": "2026-11-14",
+      "sha256": "f84a98792ff764251978367e7baa1d3c4141b3b5bfe0b2ee2575e955f9380d0e",
+      "size_bytes": 2746,
+      "cited_lines": [
+        40
+      ]
+    },
+    {
+      "path": "chdk-port/platform/g5x/lib.c",
+      "url": "file:///var/lib/agentbridge/worktrees/g3x-lite/port-47-gui-overdraw-diag-port47-sibling-suppress/chdk-port/platform/g5x/lib.c",
+      "retrieved_utc": "2026-11-14",
+      "sha256": "cba9bc2e440c3f5d3cd70dc71707657e4ce03b0cb4b51117b7a5d60ebe1e46b6",
+      "size_bytes": 5365,
+      "cited_lines": [
+        9,
+        27,
+        206
+      ]
+    },
+    {
+      "path": "chdk-port/platform/g5x/platform_camera.h",
+      "url": "file:///var/lib/agentbridge/worktrees/g3x-lite/port-47-gui-overdraw-diag-port47-sibling-suppress/chdk-port/platform/g5x/platform_camera.h",
+      "retrieved_utc": "2026-11-14",
+      "sha256": "7859061820b1ffe8c84db07b9dcdf1a932d077a58b41661e15b9635a9957094c",
+      "size_bytes": 8411,
+      "cited_lines": [
+        85
+      ]
+    },
+    {
+      "path": "chdk-port/platform/g5x/sub/101a/boot.c",
+      "url": "file:///var/lib/agentbridge/worktrees/g3x-lite/port-47-gui-overdraw-diag-port47-sibling-suppress/chdk-port/platform/g5x/sub/101a/boot.c",
+      "retrieved_utc": "2026-11-14",
+      "sha256": "9801187031cc38df2955e154688a10147809ea09f7d46f10c9ff0e1da09f5abe",
+      "size_bytes": 28159,
+      "cited_lines": [
+        109
+      ]
+    },
+    {
+      "path": "chdk-port/platform/g5x/sub/101a/stubs_entry_2.S",
+      "url": "file:///var/lib/agentbridge/worktrees/g3x-lite/port-47-gui-overdraw-diag-port47-sibling-suppress/chdk-port/platform/g5x/sub/101a/stubs_entry_2.S",
+      "retrieved_utc": "2026-11-14",
+      "sha256": "bda2c19bc9ef679c62726d196a72e6d6d15e8fdba7bc3f4cb939c3ba7f1fc344",
+      "size_bytes": 3208,
+      "cited_lines": [
+        56
+      ]
+    },
+    {
+      "path": "chdk-port/platform/g7x/lib.c",
+      "url": "file:///var/lib/agentbridge/worktrees/g3x-lite/port-47-gui-overdraw-diag-port47-sibling-suppress/chdk-port/platform/g7x/lib.c",
+      "retrieved_utc": "2026-11-14",
+      "sha256": "94b3fe78a81a500291e32eeb61b18b5528da00eb591c7795433a7fee6d93c297",
+      "size_bytes": 10772,
+      "cited_lines": [
+        7,
+        18,
+        289
+      ]
+    },
+    {
+      "path": "chdk-port/platform/g7x/sub/100b/boot.c",
+      "url": "file:///var/lib/agentbridge/worktrees/g3x-lite/port-47-gui-overdraw-diag-port47-sibling-suppress/chdk-port/platform/g7x/sub/100b/boot.c",
+      "retrieved_utc": "2026-11-14",
+      "sha256": "96cdf439d8ad5023b749868c7821910eb2edb5557f8166545d5b6b05639c68ad",
+      "size_bytes": 17342,
+      "cited_lines": [
+        100
+      ]
+    },
+    {
+      "path": "chdk-port/platform/g7x/sub/100b/stubs_entry.S",
+      "url": "file:///var/lib/agentbridge/worktrees/g3x-lite/port-47-gui-overdraw-diag-port47-sibling-suppress/chdk-port/platform/g7x/sub/100b/stubs_entry.S",
+      "retrieved_utc": "2026-11-14",
+      "sha256": "468a3240d91520bde94f47c568708e0a69eb7609b8d85674c79d9ae2198ef207",
+      "size_bytes": 19681,
+      "cited_lines": [
+        247
+      ]
+    },
+    {
+      "path": "chdk-port/platform/generic/wrappers.c",
+      "url": "file:///var/lib/agentbridge/worktrees/g3x-lite/port-47-gui-overdraw-diag-port47-sibling-suppress/chdk-port/platform/generic/wrappers.c",
+      "retrieved_utc": "2026-11-14",
+      "sha256": "a1c5ec0b5b08dd26cad18eef7d57415a84e82abb4b2c86f344c2a1fa843617b2",
+      "size_bytes": 52944,
+      "cited_lines": [
+        1656
+      ]
+    },
+    {
+      "path": "chdk-port/platform/sx60hs/lib.c",
+      "url": "file:///var/lib/agentbridge/worktrees/g3x-lite/port-47-gui-overdraw-diag-port47-sibling-suppress/chdk-port/platform/sx60hs/lib.c",
+      "retrieved_utc": "2026-11-14",
+      "sha256": "0c5e075f7c8de728aaa7c5c7df25a8972bb86d82063e4c094ea829527f73d3ec",
+      "size_bytes": 10079,
+      "cited_lines": [
+        14,
+        269
+      ]
+    },
+    {
+      "path": "chdk-port/platform/sx60hs/sub/100b/boot.c",
+      "url": "file:///var/lib/agentbridge/worktrees/g3x-lite/port-47-gui-overdraw-diag-port47-sibling-suppress/chdk-port/platform/sx60hs/sub/100b/boot.c",
+      "retrieved_utc": "2026-11-14",
+      "sha256": "fd5632c785e03055ff128163d5b918b357c067cdd7a5b21119857331362b97b2",
+      "size_bytes": 19280,
+      "cited_lines": [
+        130
+      ]
+    },
+    {
+      "path": "reference/finsig_gm110c/funcs_by_name.csv",
+      "url": "file:///var/lib/agentbridge/worktrees/g3x-lite/port-47-gui-overdraw-diag-port47-sibling-suppress/reference/finsig_gm110c/funcs_by_name.csv",
+      "retrieved_utc": "2026-11-14",
+      "sha256": "e837aab3a20b54ba3937570f4e0b3371de4b1bb19ef35727e5795803db007118",
+      "size_bytes": 92041,
+      "cited_lines": [
+        1868,
+        2571
+      ]
+    },
+    {
+      "path": "reference/finsig_gm110c/stubs_entry.S",
+      "url": "file:///var/lib/agentbridge/worktrees/g3x-lite/port-47-gui-overdraw-diag-port47-sibling-suppress/reference/finsig_gm110c/stubs_entry.S",
+      "retrieved_utc": "2026-11-14",
+      "sha256": "f8a4697cb42b48560d430b7f502ff2f6ce5f12a8980fe8c272aba5de18d05166",
+      "size_bytes": 20095,
+      "cited_lines": [
+        186,
+        268,
+        352
+      ]
+    },
+    {
+      "path": "scripts/build_port43_dbuf.py",
+      "url": "file:///var/lib/agentbridge/worktrees/g3x-lite/port-47-gui-overdraw-diag-port47-sibling-suppress/scripts/build_port43_dbuf.py",
+      "retrieved_utc": "2026-11-14",
+      "sha256": "5fdc064fb41b2d5978adca1d2cf207aaba7928b69a20f18c4ecf282857bf59a3",
+      "size_bytes": 29837,
+      "cited_lines": [
+        211,
+        283,
+        298
+      ]
+    }
+  ],
+  "validation": {
+    "builds_run": false,
+    "hardware_operations": false,
+    "source_or_build_files_modified": false,
+    "checks": [
+      "All document path:line references exist",
+      "All claimed native addresses match FINSIG text",
+      "Exactly one table row chosen yes",
+      "Changes limited to docs/PORT47_OVERDRAW.md and manifests/"
+    ]
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "manifest_id": "port50_evidence_manifest",
+  "milestone": "PORT-50",
+  "task": "PORT50-MENU-RESEARCH",
+  "date": "2026-11-14",
+  "target": "PowerShot G3 X GM1.10C",
+  "deliverables": {
+    "doc": "docs/PORT50_ALT_MENU.md"
+  },
+  "rom_reads": {
+    "rom_read_needed": true,
+    "full_rom_scan": false,
+    "ranges_read": [
+      {
+        "evidence_id": "EVID-PORT50-01",
+        "firmware_revision": "GM1.10C",
+        "start_address": "0xFC37F100",
+        "end_address": "0xFC37F15F",
+        "expected_byte_count": 96,
+        "sha256": "0bb5e9952fdfddf54714d535f4013955cc34f1c8ba28667a70d69d2b913454f0",
+        "provenance_source": "ROM_VERIFIED:firmware/dumps/GM1.10C/PRIMARY.BIN@0xFC37F100..0xFC37F15F",
+        "classification": "STATIC_VERIFIED",
+        "notes": "Bounded ROM read verifying Feof_Fut (entry 0xFC37F111, push {r4-r6, lr} at 0xFC37F110) and Fflush_Fut (entry 0xFC37F139, push {r4-r6, lr} at 0xFC37F138) in file wrapper cluster immediately following Fseek_Fut (0xFC37F0DE). Both stubs were marked not found in reference/finsig_gm110c/stubs_entry.S:217-218."
+      }
+    ],
+    "reason": "All core conf file I/O stubs (Open, Read, Write, Close, lseek, stat, MakeDirectory_Fut, Fopen_Fut, Fclose_Fut, Fread_Fut, Fwrite_Fut, Fseek_Fut) are resolved in reference/finsig_gm110c/stubs_entry.S. Feof_Fut and Fflush_Fut were marked missing in FINSIG text; bounded ROM read of 96 bytes at 0xFC37F100..0xFC37F15F verifies both entry points and prologue instructions."
+  },
+  "reference_files": [
+    {
+      "path": "reference/finsig_gm110c/stubs_entry.S",
+      "sha256": "f8a4697cb42b48560d430b7f502ff2f6ce5f12a8980fe8c272aba5de18d05166"
+    },
+    {
+      "path": "reference/finsig_gm110c/physw_bits.txt",
+      "sha256": "b351ce88ff3860573b75086a314ae6ab2ef56dc13ff4a0fc51fd6118811ec78e"
+    },
+    {
+      "path": "reference/finsig_gm110c/funcs_by_name.csv",
+      "sha256": "e837aab3a20b54ba3937570f4e0b3371de4b1bb19ef35727e5795803db007118"
+    },
+    {
+      "path": "docs/PORT46_KEYMAP.md",
+      "sha256": "8064c57704df37f8eb222a76f23821033bbd4db2bfa8bc1a37c35fa6ffc1f010"
+    }
+  ]
+}

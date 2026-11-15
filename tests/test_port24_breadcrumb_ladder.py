@@ -193,6 +193,7 @@ class TestPort24BreadcrumbLadder(unittest.TestCase):
             "filewrite.c",
             "g3x_trace.c",
             "g3x_trace.h",
+            "gui_sync.h",
             "kbd_candidate.h",
             "led_breadcrumb.h",
             "loader_entry_breadcrumb.S",

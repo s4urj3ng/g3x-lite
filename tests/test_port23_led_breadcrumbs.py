@@ -36,7 +36,7 @@ Verifies:
 8. LED register and values match verified hardware facts:
    - MMIO register 0xD20B0884, ON value 0x004D0002, OFF value 0x004C0003.
 9. Scope integrity:
-   - tools/build_candidate_port2a.py is unchanged.
+   - The default candidate remains byte-identical; PORT-46 permits shared-builder repairs.
    - chdk-port/platform/g3x/sub/110c/loader_entry_led.S is unchanged.
    - Rebuilding PORT-20 LED candidate produces the exact verified hash
      (757dfb7f7824ba968951724416a058a6881ad99a7a7a6cf7cd6e6f0e44db5286).

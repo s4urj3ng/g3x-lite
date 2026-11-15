@@ -25,6 +25,8 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 CHDK_PORT = os.path.join(REPO_ROOT, "chdk-port")
@@ -176,6 +178,90 @@ def run_cmd(cmd, cwd=CHDK_PORT):
         print(res.stderr.decode(), file=sys.stderr)
         sys.exit(res.returncode)
     return res.stdout.decode()
+
+
+def build_fallback_libplatform_a(output_path: str | Path) -> Path:
+    """Rebuild the baseline platform archive into a private output path.
+
+    Never consume the ignored shared libplatform.a: AgentBridge may provision a
+    stale archive even when tracked sources match the pinned candidate baseline.
+
+    Reproduces the canonical libplatform.a recipe from chdk-port/build_rules.inc:48-51
+    (and full_build/g3x/Makefile:14-16):
+      Sources:
+        - platform/g3x/main.c
+        - platform/g3x/lib.c
+        - platform/g3x/wrappers.c
+        - platform/g3x/kbd.c
+        - platform/g3x/shooting.c
+        - platform/generic/palette.c
+      Toolchain: toolchains/gcc-arm-none-eabi-5_4-2016q3
+      Flags: ARM GNU-RM 5.4.1 CFLAGS with -march=armv7-r -mthumb -Os
+      Deterministic archive: ar rcsD
+    """
+    out_p = Path(output_path).resolve()
+    out_p.parent.mkdir(parents=True, exist_ok=True)
+    platform_cflags = [
+        CC,
+        "-fno-inline",
+        "-Os",
+        "-fno-strict-aliasing",
+        "-fno-schedule-insns2",
+        "-march=armv7-r",
+        "-mthumb",
+        "-DTHUMB_FW",
+        "-Iinclude",
+        "-Icore",
+        "-Imodules",
+        "-Iplatform/g3x",
+        "-Iplatform/g3x/sub/110c",
+        "-DMEMBASEADDR=0x8000",
+        "-DMEMISOSTART=0x3489b4",
+        "-DMEMISOSIZE=(&_end-&_start)",
+        "-DCAM_DIGIC=60",
+        "-DMAXRAMADDR=0x0fffffff",
+        "-DROMBASEADDR=0xFC000000",
+        "-DVER_CHDK",
+        '-DHDK_VERSION="CHDK"',
+        '-DBUILD_NUMBER="1.5.0"',
+        '-DBUILD_SVNREV="0"',
+        "-Wall",
+        "-Wno-unused",
+        "-Wno-format",
+        "-DOPT_CURVES",
+        "-DOPT_DEBUGGING",
+        "-DOPT_PTP",
+        "-DOPT_ARAM_MALLOC",
+        "-DARAM_HEAP_START=0x006ce000",
+        "-DARAM_HEAP_SIZE=0x00022000",
+        "-DOPT_DISABLE_CAM_ERROR=0",
+        "-DOPT_ARCHITECTURE=GCC_EABI_THUMB2",
+        "-mthumb-interwork",
+        "-DLOW_LEVEL",
+        '-DPLATFORM="g3x"',
+        '-DPLATFORMSUB="110c"',
+        "-DPLATFORMID=12968",
+        "-DCAMERA_g3x=1",
+        "-DCAM_DRYOS_REL=57",
+        "-nostdinc",
+    ]
+    with tempfile.TemporaryDirectory(dir=out_p.parent) as tmp_obj_dir:
+        objs = []
+        for obj_name, src_rel in [
+            ("main.o", "platform/g3x/main.c"),
+            ("lib.o", "platform/g3x/lib.c"),
+            ("wrappers.o", "platform/g3x/wrappers.c"),
+            ("kbd.o", "platform/g3x/kbd.c"),
+            ("shooting.o", "platform/g3x/shooting.c"),
+            ("platform_palette.o", "platform/generic/palette.c"),
+        ]:
+            obj_path = os.path.join(tmp_obj_dir, obj_name)
+            run_cmd(platform_cflags + ["-c", "-o", obj_path, src_rel], cwd=CHDK_PORT)
+            objs.append(obj_path)
+        if out_p.is_file():
+            out_p.unlink()
+        run_cmd([AR, "rcsD", str(out_p)] + objs, cwd=tmp_obj_dir)
+    return out_p
 
 
 def build_candidate_core(trace: bool = False, candidate_dir: str = CANDIDATE_DIR):
@@ -429,7 +515,7 @@ SECTIONS
         core_elf,
         "-Wl,--start-group",
         os.path.join(SUB_DIR, "entry.o"),
-        os.path.join(CHDK_PORT, "platform", "g3x", "libplatform.a"),
+        str(build_fallback_libplatform_a(os.path.join(candidate_dir, "libplatform_private.a"))),
         lib_proto_a,
         os.path.join(CHDK_PORT, "lib", "font", ".o2", "libfont.a"),
         os.path.join(CHDK_PORT, "lib", "math", ".o2", "libmath.a"),

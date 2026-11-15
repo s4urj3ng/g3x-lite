@@ -1,0 +1,210 @@
+{
+  "manifest_id": "port48_evidence_manifest",
+  "milestone": "PORT-48",
+  "task": "PORT48-ALLOC-RESEARCH",
+  "date": "2026-11-14",
+  "target": "PowerShot G3 X GM1.10C",
+  "deliverables": {
+    "doc": "docs/PORT48_SHADOW_ALLOC.md",
+    "doc_sha256": "f51dc0e1322fab17710ddc133e19ed6011e85946a212810b69cbb4d371225e05"
+  },
+  "rom_reads": {
+    "rom_read_needed": false,
+    "full_rom_scan": false,
+    "ranges_read": [],
+    "reason": "All GM1.10C allocator, EXMEM, and heap-info symbols required for PORT-48 (exmem_alloc, exmem_free, exmem_ualloc, exmem_ufree, exmem_alloc_table, exmem_types_table, exmem_type_count, AllocateUncacheableMemory, FreeUncacheableMemory, AllocateMemory_FW, FreeMemory_FW, malloc, free, malloc_strictly, AdditionAgentRAM_FW, ARAM_HEAP_START, ARAM_HEAP_SIZE, GetMemInfo, ExMem.View_FW, memShow_FW) are already resolved in reference/finsig_gm110c/stubs_entry.S and reference/finsig_gm110c/funcs_by_name.csv (label: FINSIG)."
+  },
+  "reference_files": [
+    {
+      "path": "reference/finsig_gm110c/stubs_entry.S",
+      "sha256": "f8a4697cb42b48560d430b7f502ff2f6ce5f12a8980fe8c272aba5de18d05166"
+    },
+    {
+      "path": "reference/finsig_gm110c/funcs_by_name.csv",
+      "sha256": "e837aab3a20b54ba3937570f4e0b3371de4b1bb19ef35727e5795803db007118"
+    }
+  ],
+  "finsig_symbols": [
+    {
+      "name": "exmem_alloc",
+      "address": "0xFC092537",
+      "source": "reference/finsig_gm110c/stubs_entry.S:298; reference/finsig_gm110c/funcs_by_name.csv:451",
+      "label": "FINSIG",
+      "chosen": "yes (primary allocator)",
+      "notes": "Used by exmem_alloc_cached(0, EXMEM_HEAP_SIZE, 0, 0) on pool 0 (EXMEM_RAMDISK, stubs_entry.S:132) with suba in chdk-port/core/memmgmt.c:150-188 (default EXMEM_BUFFER_SIZE = 2,097,152 B)."
+    },
+    {
+      "name": "exmem_free",
+      "address": "0xFC092577",
+      "source": "reference/finsig_gm110c/funcs_by_name.csv:452",
+      "label": "FINSIG",
+      "chosen": "no"
+    },
+    {
+      "name": "ExMem.AllocCacheable_FW",
+      "address": "0xFC09256F",
+      "source": "reference/finsig_gm110c/funcs_by_name.csv:446",
+      "label": "FINSIG",
+      "chosen": "no"
+    },
+    {
+      "name": "ExMem.FreeCacheable_FW",
+      "address": "0xFC0925C5",
+      "source": "reference/finsig_gm110c/funcs_by_name.csv:448",
+      "label": "FINSIG",
+      "chosen": "no"
+    },
+    {
+      "name": "exmem_ualloc",
+      "address": "0xFC092441",
+      "source": "reference/finsig_gm110c/stubs_entry.S:299; reference/finsig_gm110c/funcs_by_name.csv:454",
+      "label": "FINSIG",
+      "chosen": "no",
+      "notes": "Used by exmem_alloc_uncached(type, size, allocinf) in chdk-port/platform/generic/wrappers.c:1009-1012 and chdk-port/modules/file_shelter.c:631-648 (EXMEM_FIRMUP = 5, EXMEM_FAMODE = 4)."
+    },
+    {
+      "name": "exmem_ufree",
+      "address": "0xFC0924FB",
+      "source": "reference/finsig_gm110c/stubs_entry.S:300; reference/finsig_gm110c/funcs_by_name.csv:455",
+      "label": "FINSIG",
+      "chosen": "no"
+    },
+    {
+      "name": "ExMem.AllocUncacheable_FW",
+      "address": "0xFC09246F",
+      "source": "reference/finsig_gm110c/funcs_by_name.csv:447",
+      "label": "FINSIG",
+      "chosen": "no"
+    },
+    {
+      "name": "ExMem.FreeUncacheable_FW",
+      "address": "0xFC09252B",
+      "source": "reference/finsig_gm110c/funcs_by_name.csv:449",
+      "label": "FINSIG",
+      "chosen": "no"
+    },
+    {
+      "name": "exmem_alloc_table",
+      "address": "0x00049040",
+      "source": "reference/finsig_gm110c/stubs_entry.S:193",
+      "label": "FINSIG",
+      "chosen": "no"
+    },
+    {
+      "name": "exmem_types_table",
+      "address": "0xFCE955FC",
+      "source": "reference/finsig_gm110c/stubs_entry.S:194",
+      "label": "FINSIG",
+      "chosen": "no"
+    },
+    {
+      "name": "exmem_type_count",
+      "address": "0x00000024",
+      "source": "reference/finsig_gm110c/stubs_entry.S:195",
+      "label": "FINSIG",
+      "chosen": "no"
+    },
+    {
+      "name": "ARAM_HEAP_START / ARAM_HEAP_SIZE (AdditionAgentRAM_FW)",
+      "address": "0x006CE000 (size 0x00022000, AdditionAgentRAM_FW = 0xFC55884B)",
+      "source": "reference/finsig_gm110c/stubs_entry.S:14-15; reference/finsig_gm110c/funcs_by_name.csv:14",
+      "label": "FINSIG",
+      "chosen": "no"
+    },
+    {
+      "name": "AllocateUncacheableMemory",
+      "address": "0xFC144471",
+      "source": "reference/finsig_gm110c/stubs_entry.S:197; reference/finsig_gm110c/funcs_by_name.csv:28",
+      "label": "FINSIG",
+      "chosen": "no"
+    },
+    {
+      "name": "FreeUncacheableMemory",
+      "address": "0xFC14449D",
+      "source": "reference/finsig_gm110c/stubs_entry.S:218; reference/finsig_gm110c/funcs_by_name.csv:481",
+      "label": "FINSIG",
+      "chosen": "no"
+    },
+    {
+      "name": "malloc",
+      "address": "0xFC381525",
+      "source": "reference/finsig_gm110c/stubs_entry.S:308; reference/finsig_gm110c/funcs_by_name.csv:1546",
+      "label": "FINSIG",
+      "chosen": "no"
+    },
+    {
+      "name": "free",
+      "address": "0xFC38155B",
+      "source": "reference/finsig_gm110c/stubs_entry.S:301; reference/finsig_gm110c/funcs_by_name.csv:479",
+      "label": "FINSIG",
+      "chosen": "no"
+    },
+    {
+      "name": "AllocateMemory_FW",
+      "address": "0xFC60241B",
+      "source": "reference/finsig_gm110c/funcs_by_name.csv:27",
+      "label": "FINSIG",
+      "chosen": "no"
+    },
+    {
+      "name": "FreeMemory_FW",
+      "address": "0xFC602415",
+      "source": "reference/finsig_gm110c/funcs_by_name.csv:480",
+      "label": "FINSIG",
+      "chosen": "no"
+    },
+    {
+      "name": "malloc_strictly",
+      "address": "0xFC382C99",
+      "source": "reference/finsig_gm110c/funcs_by_name.csv:1547",
+      "label": "FINSIG",
+      "chosen": "no"
+    },
+    {
+      "name": "AddTransparentMemory_FW / AttachToTransparentMemory_FW / RemoveTransparentMemory_FW",
+      "address": "0xFC02125D / 0xFC02127B / 0xFC021299",
+      "source": "reference/finsig_gm110c/funcs_by_name.csv:15,37,1821",
+      "label": "FINSIG",
+      "chosen": "no"
+    },
+    {
+      "name": "GetMemInfo",
+      "address": "0xFC610AB9",
+      "source": "reference/finsig_gm110c/stubs_entry.S:235; reference/finsig_gm110c/funcs_by_name.csv:755",
+      "label": "FINSIG",
+      "chosen": "yes (query)",
+      "notes": "Wrapped by GetMemInfo(cam_meminfo*) in chdk-port/platform/generic/wrappers.c:1115-1133; reports system heap free_size (fw_info[6]) and free_block_max_size (fw_info[7])."
+    },
+    {
+      "name": "ExMem.View_FW / memShow_FW / GetTransparentMemorySize_FW",
+      "address": "0xFC091FD9 / 0xFC5F8A39 / 0xFC0212AB",
+      "source": "reference/finsig_gm110c/funcs_by_name.csv:450,806,1564",
+      "label": "FINSIG",
+      "chosen": "no"
+    }
+  ],
+  "shadow_sizing": {
+    "drawn_alt_menu_rect_px": {
+      "x0": 10,
+      "y0": 12,
+      "width": 880,
+      "height": 576,
+      "pixels": 506880,
+      "sources": [
+        "chdk-port/platform/g3x/gui_menu.c:279-281,791-801,1434-1476",
+        "full_build/g3x/lib.c:105-122",
+        "chdk-port/core/gui_draw.c:69-75,97-108",
+        "chdk-port/platform/g3x/gui_diag.h:24-39"
+      ]
+    },
+    "full_depth_bytes": {
+      "bitmap_uyvy_16bpp_bytes": 1013760,
+      "opacity_8bpp_bytes": 506880,
+      "total_3bpp_bytes": 1520640
+    },
+    "palette_index_1bpp_bytes": {
+      "bytes_per_pixel": 1,
+      "total_1bpp_bytes": 506880
+    }
+  }
+}
