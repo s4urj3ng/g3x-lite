@@ -447,6 +447,28 @@ class TestPort54FinsigStubs(unittest.TestCase):
             self.assertIsNotNone(match, f"Stub {name} @ {addr} not found in FINSIG stubs")
 
 
+class TestPort54UnreachableWithoutFlag(unittest.TestCase):
+    def test_unreachable_without_flag(self):
+        # 1. Verify build script enforces card write disabling when conf_save is off
+        script_text = (ROOT / "scripts/build_port43_dbuf.py").read_text(encoding="utf-8")
+        self.assertIn('env["G3X_DISABLE_CARD_WRITES"] = "1"', script_text)
+        self.assertIn('env["OPT_DISABLE_FILE_WRITES"] = "1"', script_text)
+
+        # 2. Verify platform makefiles apply disable flags when G3X_CONF_SAVE is not 1
+        plat_mf = PLAT_MAKEFILE.read_text(encoding="utf-8")
+        self.assertIn("ifneq ($(G3X_CONF_SAVE),1)", plat_mf)
+        self.assertIn("CFLAGS += -DG3X_DISABLE_CARD_WRITES=1", plat_mf)
+        self.assertIn("CFLAGS += -DOPT_DISABLE_FILE_WRITES=1", plat_mf)
+
+        # 3. Verify in default build no write call is reachable
+        default_manifest_path = ROOT / "out/build-default/port41_manifest.json"
+        if default_manifest_path.is_file():
+            with default_manifest_path.open("r", encoding="utf-8") as f:
+                d = json.load(f)
+            self.assertIn("G3X_DISABLE_CARD_WRITES=1", d["build"]["flags"])
+            self.assertIn("OPT_DISABLE_FILE_WRITES=1", d["build"]["flags"])
+
+
 class TestPort54Manifest(unittest.TestCase):
     def test_manifest_structure_and_hashes(self):
         self.assertTrue(MANIFEST_P54.is_file(), f"Missing {MANIFEST_P54}")

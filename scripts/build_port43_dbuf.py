@@ -2861,22 +2861,25 @@ def build_port43_dbuf(
             "G3X_PLAYBACK_MENU=1",
         ]
     else:
-        build_flags = [
-            "G3X_FULL_BUILD=1",
-        ]
         if not conf_save:
-            build_flags.extend([
+            build_flags = [
+                "G3X_FULL_BUILD=1",
                 "G3X_DISABLE_CARD_WRITES=1",
+                "CAM_SUPPORT_BITMAP_RES_CHANGE=1",
                 "OPT_DISABLE_FILE_WRITES=1",
-            ])
+                "G3X_GUI5=1",
+                "G3X_GUI_FIX=1",
+                "G3X_GUI_DBUF=1",
+            ]
         else:
-            build_flags.append("G3X_CONF_SAVE=1")
-        build_flags.extend([
-            "CAM_SUPPORT_BITMAP_RES_CHANGE=1",
-            "G3X_GUI5=1",
-            "G3X_GUI_FIX=1",
-            "G3X_GUI_DBUF=1",
-        ])
+            build_flags = [
+                "G3X_FULL_BUILD=1",
+                "G3X_CONF_SAVE=1",
+                "CAM_SUPPORT_BITMAP_RES_CHANGE=1",
+                "G3X_GUI5=1",
+                "G3X_GUI_FIX=1",
+                "G3X_GUI_DBUF=1",
+            ]
         if no_overdraw:
             build_flags.append("G3X_GUI_NOOVERDRAW=1")
         if kbd_check:

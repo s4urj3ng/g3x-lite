@@ -41,19 +41,12 @@
     !defined(G3X_GUI_SHADOW2) || (G3X_GUI_SHADOW2 != 1)
 #error G3X_GUI_MENU=1 requires G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1
 #endif
-#endif
 
-#ifndef G3X_CONF_SAVE_NONE
 #define G3X_CONF_SAVE_NONE 0
 #define G3X_CONF_SAVE_OK   1
-#define G3X_CONF_SAVE_FAIL 2
 #define G3X_CONF_SAVE_ERR  2
 #define G3X_CONF_SAVE_OFF  3
-#endif
 
-#if (defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)) || \
-    (defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)) || \
-    (defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1))
 extern unsigned int g3x_menu_open_count;
 extern int g3x_conf_save_status;
 void g3x_menu_record_open(void);
@@ -61,11 +54,18 @@ void g3x_conf_record_save_result(int ok);
 void g3x_conf_record_save_skipped(void);
 #endif
 
-#if defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1)
-int g3x_is_safe_chdk_write_path(const char *path);
-#endif
-
 #if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)
+#ifndef G3X_CONF_SAVE_NONE
+#define G3X_CONF_SAVE_NONE 0
+#define G3X_CONF_SAVE_OK   1
+#define G3X_CONF_SAVE_ERR  2
+#define G3X_CONF_SAVE_OFF  3
+extern unsigned int g3x_menu_open_count;
+extern int g3x_conf_save_status;
+void g3x_menu_record_open(void);
+void g3x_conf_record_save_result(int ok);
+void g3x_conf_record_save_skipped(void);
+#endif
 extern unsigned int g3x_playback_menu_open_count;
 extern unsigned int g3x_playback_menu_item_edit_count;
 void g3x_playback_menu_record_open(void);
@@ -79,6 +79,27 @@ int g3x_playback_menu_mode_check(void);
 void g3x_playback_menu_record_item_edit(int type);
 int g3x_playback_menu_redraw_needed(void);
 #endif
+
+#if defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1)
+#ifndef G3X_CONF_SAVE_NONE
+#define G3X_CONF_SAVE_NONE 0
+#define G3X_CONF_SAVE_OK   1
+#define G3X_CONF_SAVE_FAIL 2
+#define G3X_CONF_SAVE_ERR  2
+#define G3X_CONF_SAVE_OFF  3
+#endif
+#ifndef G3X_CONF_SAVE_FAIL
+#define G3X_CONF_SAVE_FAIL 2
+#endif
+int g3x_is_safe_chdk_write_path(const char *path);
+#if (!defined(G3X_GUI_MENU) || (G3X_GUI_MENU != 1)) && (!defined(G3X_PLAYBACK_MENU) || (G3X_PLAYBACK_MENU != 1))
+extern unsigned int g3x_menu_open_count;
+extern int g3x_conf_save_status;
+void g3x_menu_record_open(void);
+void g3x_conf_record_save_result(int ok);
+void g3x_conf_record_save_skipped(void);
+#endif
+#endif /* G3X_CONF_SAVE */
 
 #if defined(G3X_GUI_RESTORE2) && (G3X_GUI_RESTORE2 == 1)
 #if !defined(G3X_GUI_MENU) || (G3X_GUI_MENU != 1) || \
@@ -309,6 +330,7 @@ void g3x_conf_record_save_result(int ok)
     {
         g3x_conf_save_status = G3X_CONF_SAVE_OFF;
     }
+#if defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1)
     else if (ok == G3X_CONF_SAVE_OK || ok == 1)
     {
         if (g3x_conf_save_status != G3X_CONF_SAVE_FAIL)
@@ -320,6 +342,12 @@ void g3x_conf_record_save_result(int ok)
     {
         g3x_conf_save_status = G3X_CONF_SAVE_FAIL;
     }
+#else
+    else
+    {
+        g3x_conf_save_status = ok ? G3X_CONF_SAVE_OK : G3X_CONF_SAVE_ERR;
+    }
+#endif
 }
 #endif
 
@@ -1005,9 +1033,15 @@ static unsigned int g3x_diag_clamp999(unsigned int val)
 
 void g3x_diag_format_line2(char *line)
 {
+#if defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1)
     const char *save_str = (g3x_conf_save_status == G3X_CONF_SAVE_OFF) ? "OFF" :
                            (g3x_conf_save_status == G3X_CONF_SAVE_OK)  ? "OK" :
                            (g3x_conf_save_status == G3X_CONF_SAVE_FAIL || g3x_conf_save_status == G3X_CONF_SAVE_ERR) ? "FAIL" : "-";
+#else
+    const char *save_str = (g3x_conf_save_status == G3X_CONF_SAVE_OFF) ? "OFF" :
+                           (g3x_conf_save_status == G3X_CONF_SAVE_OK)  ? "OK" :
+                           (g3x_conf_save_status == G3X_CONF_SAVE_ERR) ? "ERR" : "-";
+#endif
     sprintf(line, "MENU:%04u SAVE:%s Rs:%04u Rp:%04u B:%u/%ums",
             g3x_diag_clamp9999(g3x_menu_open_count),
             save_str,
@@ -1347,9 +1381,15 @@ void gui_diag_draw(void)
                 menu_line, MAKE_COLOR(COLOR_BLACK, COLOR_WHITE));
 #else
     char menu_line[32];
+#if defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1)
     const char *save_str = (g3x_conf_save_status == G3X_CONF_SAVE_OFF) ? "OFF" :
                            (g3x_conf_save_status == G3X_CONF_SAVE_OK)  ? "OK" :
                            (g3x_conf_save_status == G3X_CONF_SAVE_FAIL || g3x_conf_save_status == G3X_CONF_SAVE_ERR) ? "FAIL" : "-";
+#else
+    const char *save_str = (g3x_conf_save_status == G3X_CONF_SAVE_OFF) ? "OFF" :
+                           (g3x_conf_save_status == G3X_CONF_SAVE_OK)  ? "OK" :
+                           (g3x_conf_save_status == G3X_CONF_SAVE_ERR) ? "ERR" : "-";
+#endif
     sprintf(menu_line, "MENU:%04u SAVE:%s",
             g3x_diag_clamp9999(g3x_menu_open_count),
             save_str);
@@ -1431,6 +1471,7 @@ void g3x_conf_record_save_result(int ok)
     {
         g3x_conf_save_status = G3X_CONF_SAVE_OFF;
     }
+#if defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1)
     else if (ok == G3X_CONF_SAVE_OK || ok == 1)
     {
         if (g3x_conf_save_status != G3X_CONF_SAVE_FAIL)
@@ -1442,6 +1483,12 @@ void g3x_conf_record_save_result(int ok)
     {
         g3x_conf_save_status = G3X_CONF_SAVE_FAIL;
     }
+#else
+    else
+    {
+        g3x_conf_save_status = ok ? G3X_CONF_SAVE_OK : G3X_CONF_SAVE_ERR;
+    }
+#endif
 }
 #endif /* !G3X_GUI_MENU */
 
@@ -1456,9 +1503,15 @@ void g3x_playback_menu_record_open(void)
 void g3x_playback_menu_diag_format(char *buf, unsigned int max_len)
 {
     (void)max_len;
+#if defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1)
     const char *save_str = (g3x_conf_save_status == G3X_CONF_SAVE_OFF) ? "OFF" :
                            (g3x_conf_save_status == G3X_CONF_SAVE_OK)  ? "OK" :
                            (g3x_conf_save_status == G3X_CONF_SAVE_FAIL || g3x_conf_save_status == G3X_CONF_SAVE_ERR) ? "FAIL" : "-";
+#else
+    const char *save_str = (g3x_conf_save_status == G3X_CONF_SAVE_OFF) ? "OFF" :
+                           (g3x_conf_save_status == G3X_CONF_SAVE_OK)  ? "OK" :
+                           (g3x_conf_save_status == G3X_CONF_SAVE_ERR) ? "ERR" : "-";
+#endif
     sprintf(buf, "MENU:%04u SAVE:%s ED:%04u",
              g3x_playback_menu_open_count,
              save_str,

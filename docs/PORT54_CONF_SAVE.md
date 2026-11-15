@@ -37,3 +37,12 @@
 | `task_InitFileModules` | `0xfc0bd071` | Line 338 | DEF | Filesystem init task hook | Signals `core_spytask_can_start()` |
 | `task_FileWrite` | `0xfc25f3a7` | Line 337 | DEF | Raw/JPEG image writer task | Stock pass-through (unhooked / disabled) |
 
+## PORT-54 Build Artifacts and Hashes
+
+| Configuration | Output Path | Size (bytes) | SHA-256 | Description |
+|---|---|---|---|---|
+| Default | `out/build-default/DISKBOOT.BIN` | 124097 | `24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9` | Byte-identical to PORT-53 default (`SAVE:OFF`, all card writes disabled) |
+| G3X_CONF_SAVE=1 alone | `out/build-conf-alone/DISKBOOT.BIN` | 124369 | `0cc196f81126e8983b7b3921ecb220cb0f206d1375830cc15f07a56da2abd93b` | Opt-in standalone settings save with central `A/CHDK/` path check |
+| Full Candidate (G3X_CONF_SAVE=1 + G3X_PLAYBACK_MENU=1 + PORT-50 menu + PORT-51 RESTORE2) | `out/port54-conf-save/DISKBOOT.BIN` | 132401 | `220a9d7af1037638443c5f380932834c3760dce3bd997cdb1ff37b1eea64c783` | Opt-in candidate with sandboxed conf save, playback ALT menu, and DBUF restore |
+
+
