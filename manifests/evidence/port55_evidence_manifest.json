@@ -1,0 +1,83 @@
+{
+  "manifest_id": "port55_evidence_manifest",
+  "milestone": "PORT-55",
+  "task": "PORT55-MOVIE-RESEARCH",
+  "date": "2026-11-15",
+  "target": "PowerShot G3 X GM1.10C",
+  "deliverables": {
+    "doc": "docs/PORT55_MOVIE_STATUS.md"
+  },
+  "rom_reads": {
+    "rom_read_needed": true,
+    "full_rom_scan": false,
+    "ranges_read": [
+      {
+        "id": "PORT55-ROM-COMMAND12-TEARDOWN-STORE",
+        "start_address": "0xFC09BD30",
+        "end_address": "0xFC09BD80",
+        "start_offset": "0x0009BD30",
+        "length_bytes": 80,
+        "sha256": "66128d3d7295bf83d1ea2c27d1b708dda8edecee2cf4b5ddc535a43dcb18fa7f",
+        "target_function": "MovieRecorder Command 12 handler (0xFC09BD36)",
+        "purpose": "Verify internal store instruction at 0xFC09BD60 cited by historical stubs_min.S:7. Confirms literal pool at 0xFC09BD78 supplies base 0x0000C078. adds r4, #0x80 gives 0x0000C0F8. add.w r1, r4, #0x80 gives 0x0000C178. str r0, [r1, #0x78] stores 1 into 0x0000C1F0. Confirms historical stubs_min.S comment (0x0000C078 + 0x80 + 0x78 = 0x0000C170) omitted the intermediate add.w r1, r4, #0x80."
+      },
+      {
+        "id": "PORT55-ROM-GET-ELAPSED-SECONDS-STATE-CHECK",
+        "start_address": "0xFC09B416",
+        "end_address": "0xFC09B436",
+        "start_offset": "0x0009B416",
+        "length_bytes": 32,
+        "sha256": "98059580827fa784767b303c82c2f71a734ccfa3f1846aea13ff2069d70b03b4",
+        "target_function": "MovieRecorder_GetElapsedSeconds (0xFC09B416)",
+        "purpose": "Verify true recording state variable. Confirms function loads 0x0000C0F8 from 0xFC09B7E8, subtracts 0x80 (0x0000C078), loads mr_rec_state from [r0, #0x50] (0x0000C0C8), and executes cmp r0, #1. If state == 1, returns elapsed seconds from [r0, #0x3C] (0x0000C1B4); if state != 1 (idle = 0), returns 0xFFFFFFFF."
+      }
+    ],
+    "reason": "reference/finsig_gm110c/stubs_entry.S does not contain simple_movie_status or movie_status. Bounded ROM reads of 80 bytes and 32 bytes (112 bytes total) were performed around the relevant MovieRecorder functions in firmware/dumps/GM1.10C/PRIMARY.BIN to resolve the true variable address and value encoding without scanning the ROM."
+  },
+  "reference_files": [
+    {
+      "path": "chdk-port/platform/g7x/platform_camera.h",
+      "sha256": "5bb379c6b7579da2297eb618fa90740a334860b2eb74f346bdf69a2fe14588cb"
+    },
+    {
+      "path": "chdk-port/platform/g7x/sub/100d/stubs_min.S",
+      "sha256": "098c471c6670e5b95b45c26b5275e6a92ef670560b45dd7e505299ccbf8a6042"
+    },
+    {
+      "path": "chdk-port/platform/g7x/lib.c",
+      "sha256": "4b971a8fce7650f9686035f2991e604f37fb3369a19c72e2cf3e387c14a4b1ea"
+    },
+    {
+      "path": "chdk-port/platform/g5x/platform_camera.h",
+      "sha256": "5961678564f0ea58a2d346ff0397573f324ec21360dd55a159938bfeea9921b0"
+    },
+    {
+      "path": "chdk-port/platform/g5x/sub/100c/stubs_min.S",
+      "sha256": "63f6ebec3f7a6a48f4a13d712215c2ec85ca1f54be24c47847be5c4f2bb730dc"
+    },
+    {
+      "path": "chdk-port/platform/g3x/platform_camera.h",
+      "sha256": "4c8f3a388b17b6294a5e3734620f4c947a16db130f14659b85c179cbfd4376c9"
+    },
+    {
+      "path": "chdk-port/platform/g3x/sub/110c/stubs_min.S",
+      "sha256": "54687d7f766e4a2d8a39a7385a49479b33a0058b8f36c535697669d675667ec0"
+    },
+    {
+      "path": "chdk-port/core/shooting.c",
+      "sha256": "f51ca9940aafe2ef9021666ff45e8f4fa2ec3c21c60144d8c6b4d32a9235d944"
+    },
+    {
+      "path": "chdk-port/platform/g3x/gui_diag.h",
+      "sha256": "e668cf60606cde2f96a51c41b58259618af9e39133807370d600fe5e79e19591"
+    },
+    {
+      "path": "chdk-port/platform/g3x/sub/110c/gui_sync.h",
+      "sha256": "c88283a0ca3737b6c507c3df94879b29cbdfc145e5cf3a77d1caaa87e5b3ee2d"
+    },
+    {
+      "path": "reference/finsig_gm110c/stubs_entry.S",
+      "sha256": "f8a4697cb42b48560d430b7f502ff2f6ce5f12a8980fe8c272aba5de18d05166"
+    }
+  ]
+}
