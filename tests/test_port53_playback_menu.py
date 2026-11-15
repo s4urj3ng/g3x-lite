@@ -51,9 +51,9 @@ BASE_PORT51_RESTORE2_NO_FULLHOOKS_SHA256 = "f8df17f182289b4a100e8c348ecdca1ea7f2
 BASE_PORT51_RESTORE2_NO_FULLHOOKS_SIZE = 131865
 BASE_PORT51_RESTORE2_NO_FULLHOOKS_END = "0x0036a8e0"
 
-BASE_PORT53_CANDIDATE_SHA256 = "9c12c7f8e7a9af51169b5022e9f8760e6d164efae9eeead026ce55f4df93bb6b"
-BASE_PORT53_CANDIDATE_SIZE = 132185
-BASE_PORT53_CORE_END = "0x0036aa30"
+BASE_PORT53_CANDIDATE_SHA256 = "435846477f3c55c4165e10f47e41997b4321d01aa6c5363f059d360a5ba36e0a"
+BASE_PORT53_CANDIDATE_SIZE = 132281
+BASE_PORT53_CORE_END = "0x0036aa90"
 
 
 def sha256_file(path: Path) -> str:
@@ -232,7 +232,7 @@ class TestPort53BuildAndArtifacts(unittest.TestCase):
                     sys.executable,
                     "-B",
                     str(ROOT / "tools/build_port41_full.py"),
-                    "--clean-stage",
+                    "--keep-stage",
                     "--out-dir",
                     str(cls.build_a),
                 ],
@@ -353,6 +353,7 @@ class TestPort53BuildAndArtifacts(unittest.TestCase):
             "g3x_playback_menu_open_count",
             "g3x_playback_menu_item_edit_count",
             "g3x_playback_menu_diag_format",
+            "g3x_playback_menu_diag_draw",
         ]
 
         # 1. Gating check: default build must NOT have any of the playback menu symbols
@@ -373,6 +374,8 @@ class TestPort53BuildAndArtifacts(unittest.TestCase):
             "g3x_playback_menu_record_item_edit",
             "g3x_conf_record_save_result",
             "g3x_playback_menu_item_edit_count",
+            "g3x_playback_menu_diag_draw",
+            "g3x_playback_menu_diag_format",
         ]:
             self.assertIn(sym, alone_nm, f"Symbol {sym} missing from config (b) alone build!")
 
@@ -515,6 +518,110 @@ class TestPort53BuildAndArtifacts(unittest.TestCase):
         self.assertIn('"OFF"', diag_text)
         self.assertIn('"MENU:%04u SAVE:%s ED:%04u"', diag_text)
 
+    def test_playback_menu_diag_reachable_from_gui_draw_path_config_b(self):
+        """In staged and linked config (b) build, find a caller of g3x_playback_menu_diag_format
+        (or equivalent draw function) reachable from the GUI draw path.
+        """
+        # 1. Staged source inspection
+        staged_lib_c = self.build_b / "stage_chdk/platform/g3x/lib.c"
+        self.assertTrue(staged_lib_c.is_file(), f"Missing {staged_lib_c}")
+        lib_text = staged_lib_c.read_text(encoding="utf-8")
+        self.assertIn("g3x_playback_menu_diag_draw()", lib_text)
+
+        # 2. Linked binary call-graph inspection in config (b) ELF
+        alone_elf = self.build_b / "stage_chdk/platform/g3x/sub/110c/main.elf"
+        self.assertTrue(alone_elf.is_file(), f"Missing {alone_elf}")
+        objdump_out = subprocess.check_output([str(OBJDUMP), "-d", str(alone_elf)], text=True)
+
+        def extract_asm_body(func_name: str) -> str:
+            m = re.search(rf"<{func_name}>:([\s\S]*?)(?:\n[0-9a-f]{{8}}\s+<|$)", objdump_out)
+            self.assertIsNotNone(m, f"Function <{func_name}> not found in disassembly")
+            return m.group(1)
+
+        # core_spytask (main CHDK scheduler loop) calls check_gui_needs_redraw
+        spytask_body = extract_asm_body("core_spytask")
+        self.assertIn("<check_gui_needs_redraw>", spytask_body,
+                      "core_spytask does not call check_gui_needs_redraw")
+
+        # check_gui_needs_redraw calls g3x_playback_menu_diag_draw
+        check_redraw_body = extract_asm_body("check_gui_needs_redraw")
+        self.assertIn("<g3x_playback_menu_diag_draw>", check_redraw_body,
+                      "check_gui_needs_redraw does not call g3x_playback_menu_diag_draw")
+
+        # g3x_playback_menu_diag_draw calls g3x_playback_menu_diag_format and draw_string
+        diag_draw_body = extract_asm_body("g3x_playback_menu_diag_draw")
+        self.assertIn("<g3x_playback_menu_diag_format>", diag_draw_body,
+                      "g3x_playback_menu_diag_draw does not call g3x_playback_menu_diag_format")
+        self.assertIn("<draw_string>", diag_draw_body,
+                      "g3x_playback_menu_diag_draw does not call draw_string")
+
+    def test_skipped_conf_save_sets_save_off_formatter(self):
+        """Host-compiled unit test: after a skipped save in config (b) and config (c),
+        the formatted string contains SAVE:OFF.
+        """
+        import tempfile
+        test_c = r"""
+#include <stdio.h>
+#include <string.h>
+#include <assert.h>
+
+#define G3X_PLAYBACK_MENU 1
+#define G3X_GUI_DIAG_IMPLEMENTATION 1
+#include "gui_diag.h"
+
+struct camera_screen_fallback camera_screen = {900, 600};
+
+int draw_string(short x, short y, const char *s, unsigned short cl) {
+    (void)x; (void)y; (void)s; (void)cl;
+    return 0;
+}
+
+// Simulated config (b) wrapper
+void __wrap_conf_save(void) {
+    g3x_conf_record_save_result(3 /* G3X_CONF_SAVE_OFF */);
+}
+
+// Simulated config (c) conf_save guard
+void conf_save_candidate(void) {
+    g3x_conf_record_save_result(3 /* G3X_CONF_SAVE_OFF */);
+}
+
+int main(void) {
+    char buf[64];
+
+    // Initial state: no save attempted
+    g3x_conf_save_status = G3X_CONF_SAVE_NONE;
+    g3x_playback_menu_diag_format(buf, sizeof(buf));
+    assert(strstr(buf, "SAVE:-") != NULL);
+
+    // Test Config (b): __wrap_conf_save() executes on save attempt
+    __wrap_conf_save();
+    g3x_playback_menu_diag_format(buf, sizeof(buf));
+    assert(strstr(buf, "SAVE:OFF") != NULL);
+    assert(strcmp(buf, "MENU:0000 SAVE:OFF ED:0000") == 0);
+
+    // Reset and test Config (c): conf_save_candidate() executes on save attempt
+    g3x_conf_save_status = G3X_CONF_SAVE_NONE;
+    conf_save_candidate();
+    g3x_playback_menu_diag_format(buf, sizeof(buf));
+    assert(strstr(buf, "SAVE:OFF") != NULL);
+    assert(strcmp(buf, "MENU:0000 SAVE:OFF ED:0000") == 0);
+
+    return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "test_save_off.c"
+            bin_path = Path(td) / "test_save_off"
+            src.write_text(test_c, encoding="utf-8")
+            inc = ROOT / "chdk-port/platform/g3x"
+            subprocess.run(
+                ["gcc", "-O2", "-I", str(inc), str(src), "-o", str(bin_path)],
+                check=True,
+            )
+            res = subprocess.run([str(bin_path)], capture_output=True, text=True, check=True)
+            self.assertEqual(res.returncode, 0)
+
 
 class TestPort53DeliverablesAndNotes(unittest.TestCase):
     def test_notes_txt_content_and_g5x_alignment(self):
@@ -551,6 +658,23 @@ class TestPort53DeliverablesAndNotes(unittest.TestCase):
         self.assertFalse(evidence["rom_reads"]["rom_read_needed"])
         self.assertEqual(len(evidence["rom_reads"]["ranges_read"]), 0)
         self.assertIn("finsig", evidence["rom_reads"]["reason"].lower())
+
+    def test_evidence_manifest_reference_files_match_disk(self):
+        self.assertTrue(MANIFEST_EVIDENCE.is_file(), f"Missing {MANIFEST_EVIDENCE}")
+        evidence = json.loads(MANIFEST_EVIDENCE.read_text(encoding="utf-8"))
+        reference_files = evidence.get("reference_files", [])
+        self.assertGreater(len(reference_files), 0, "No reference_files in evidence manifest")
+        for ref in reference_files:
+            rel_path = ref["path"]
+            expected_sha256 = ref["sha256"]
+            target_path = ROOT / rel_path
+            self.assertTrue(target_path.is_file(), f"Reference file missing on disk: {target_path}")
+            actual_sha256 = sha256_file(target_path)
+            self.assertEqual(
+                actual_sha256,
+                expected_sha256,
+                f"Reference file {rel_path} SHA-256 mismatch: manifest has {expected_sha256}, disk has {actual_sha256}",
+            )
 
 
 if __name__ == "__main__":

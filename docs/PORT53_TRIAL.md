@@ -18,15 +18,15 @@ Before inserting the SD card into the camera, verify the candidate artifacts aga
    python3 -B scripts/build_port43_dbuf.py --no-overdraw --kbd-check --gui-diag --shadow2 --gui-sync --gui-menu --gui-restore2 --playback-menu --out-dir out/port53-playback-menu
    ```
    *Confirmation*: Config (c) build command contains NO `--full-hooks` flag and operates strictly without `FULL_HOOKS=1`.
-2. **DISKBOOT.BIN SHA-256**: `9c12c7f8e7a9af51169b5022e9f8760e6d164efae9eeead026ce55f4df93bb6b` (confirmed matching fresh rebuild)
-3. **DISKBOOT.BIN Size**: `132,185` bytes
-4. **Core `_end`**: `0x0036aa30` (confirmed matching fresh rebuild)
+2. **DISKBOOT.BIN SHA-256**: `435846477f3c55c4165e10f47e41997b4321d01aa6c5363f059d360a5ba36e0a` (confirmed matching fresh rebuild)
+3. **DISKBOOT.BIN Size**: `132,281` bytes
+4. **Core `_end`**: `0x0036aa90` (confirmed matching fresh rebuild)
 5. **CHDK Files Count**: `34` modules in `CHDK/MODULES/`, plus `FONTS` and `LANG` distributions matching manifest.
 
 Verify on host:
 ```sh
 sha256sum out/port53-playback-menu/DISKBOOT.BIN
-# Must match: 9c12c7f8e7a9af51169b5022e9f8760e6d164efae9eeead026ce55f4df93bb6b
+# Must match: 435846477f3c55c4165e10f47e41997b4321d01aa6c5363f059d360a5ba36e0a
 ```
 
 ## 3. Boot Method
@@ -50,7 +50,7 @@ Execute the following 10 steps sequentially:
 | **7** | Change Enum Item | Navigate to an enum item (e.g., *Language* or mode selection), press `LEFT` / `RIGHT`. | Enum option cycles through available choices immediately on screen. | Pass / Fail; enum cycle observed |
 | **8** | Change Int Item | Navigate to an integer item (e.g., numeric threshold or delay), press `LEFT` / `RIGHT`. | Integer numeric value increments or decrements immediately on screen. | Pass / Fail; int adjust observed |
 | **9** | Close & Re-open Menu | Press `MENU` (`KEY_MENU`) to close menu, then press `MENU` again to re-open. | Menu closes cleanly. Upon re-opening (`MENU:0002`), the edited bool, enum, and int values remain at their changed values. | Pass / Fail; Diag line (`MENU:0002`), changed values confirmed |
-| **10** | Save Attempt & SAVE:OFF | Navigate to *Save Options* / trigger conf save, or exit ALT mode. | Save attempt is safely skipped. Diagnostic line displays `SAVE:OFF`. No disk I/O attempted, no camera hang. | Pass / Fail; `SAVE:OFF` confirmed on diag line |
+| **10** | Save Attempt & SAVE:OFF | Navigate to *Save Options* / trigger conf save, or exit ALT mode. | Save attempt is safely skipped. Diagnostic lines display `SAVE:OFF` (Line 2: `MENU:xxxx SAVE:OFF Rs:xxxx Rp:xxxx B:x/xms` and Line 3: `MENU:xxxx SAVE:OFF ED:xxxx`). No disk I/O attempted, no camera hang. | Pass / Fail; `SAVE:OFF` confirmed on diag lines (Line 2: `SAVE:OFF` and Line 3: `MENU:xxxx SAVE:OFF ED:xxxx`) |
 
 > [!NOTE]
 > **Submenu parent-return vs MENU key**: In CHDK menus (`gui_menu.c`), `KEY_DISPLAY`, `KEY_LEFT`, or activating the submenu's `[Back]` (`...`) entry invokes `gui_menu_back()` to return from a child submenu to its parent. Pressing `MENU` (`KEY_MENU`) executes `gui_menu_kbd_process_menu_btn()` (`chdk-port/platform/g3x/gui_menu.c:1407`), which closes the menu entirely back to `<ALT>` mode instead of returning to the parent submenu.
@@ -66,7 +66,7 @@ Execute the following 10 steps sequentially:
 | Step 5 (Enter & Leave Submenu) | `platform/g3x/gui_menu.c:535,683,739` (`select_sub_menu()`, `KEY_RIGHT`, `KEY_SET`); parent return via `gui_menu_back()` (`gui_menu.c:351,658,679,743,793`) via `KEY_DISPLAY`, `KEY_LEFT`, or `[Back]` item; `gui_menu_kbd_process_menu_btn()` (`gui_menu.c:1407`) on `KEY_MENU` exits directly to `altGuiHandler` (`<ALT>` mode) | Covered by existing PORT-50 submenu code |
 | Step 6-8 (Change Bool/Enum/Int Items) | `platform/g3x/gui_menu.c:368-490` (`update_int/bool/enum_value`); edits tracked by `g3x_playback_menu_record_item_edit()` (`gui_menu.c:438,454,480`). Mutates in-RAM `conf` struct (`core/conf.c:20`) | Covered by existing PORT-50 item update routines; edit count tracked by PORT-53 hook |
 | Step 9 (Close & Re-open Menu) | `gui_set_mode(&altGuiHandler)`. In-RAM `conf` struct (`core/conf.c:20`) retains mutated values. Re-opening re-reads `conf` | Covered by existing PORT-50 / CHDK core RAM state |
-| Step 10 (Save Attempt & SAVE:OFF) | `gui_menu.c:1388` calls `conf_save()`. Intercepted by write-protect guard staged at `core/conf.c:1159` (`scripts/build_port43_dbuf.py:1828`), calling `g3x_conf_record_save_result(G3X_CONF_SAVE_OFF)` and returning. `gui_diag_draw()` displays `"SAVE:OFF"` (`gui_diag.h:1317`) | Covered by existing PORT-50 write-protect skip and diagnostic line |
+| Step 10 (Save Attempt & SAVE:OFF) | `gui_menu.c:1388` calls `conf_save()`. Intercepted by write-protect guard staged at `core/conf.c:1828` in config (c) and `__wrap_conf_save` in config (b), calling `g3x_conf_record_save_result(G3X_CONF_SAVE_OFF)` and returning. Diagnostic banner displays `"SAVE:OFF"` on Line 2 (`MENU:xxxx SAVE:OFF Rs:xxxx Rp:xxxx B:x/xms`) and Line 3 (`MENU:xxxx SAVE:OFF ED:xxxx`), and config (b) renders `MENU:xxxx SAVE:OFF ED:xxxx` via `g3x_playback_menu_diag_draw()`. | Covered by existing PORT-50 write-protect skip, diagnostic line, and PORT-53 standalone rendering path |
 
 ## 6. What to Record for Each Step
 
@@ -75,6 +75,7 @@ For every numbered step above, record:
 2. **Diagnostic lines text**:
    - **Line 1**: `H:1/xxxx S:OK/<mode> L:xxxx R:xxxx F:xxxx M:xxxx Y:xxxx`
    - **Line 2**: `MENU:xxxx SAVE:OFF Rs:xxxx Rp:xxxx B:x/xms`
+   - **Line 3**: `MENU:xxxx SAVE:OFF ED:xxxx`
 3. Any unexpected display artifacts, flicker, or key response delays.
 4. Record whether playback mode eliminated the Face+Tracking AF overlay flicker observed in record mode (see `chdk-port/platform/g3x/notes.txt`).
 

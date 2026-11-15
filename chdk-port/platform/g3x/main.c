@@ -63,9 +63,6 @@ int screen_opened(void) {
 }
 
 int screen_rotated(void) {
-#if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)
-    g3x_playback_menu_mode_check();
-#endif
     return !(physw_status[0] & 0x10000000);
 }
 

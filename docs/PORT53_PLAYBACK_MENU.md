@@ -47,10 +47,10 @@ All playback functions sit strictly behind `#if defined(G3X_PLAYBACK_MENU) && (G
    - **Called by**: `vid_get_viewport_width()` in `stage_chdk/platform/g3x/lib.c` (staged by `scripts/build_port43_dbuf.py:2102-2105`).
 
 5. **`g3x_playback_menu_mode_check(void)`**:
-   - **Defined in**: `chdk-port/platform/g3x/main.c:73-77` (and staged by `scripts/build_port43_dbuf.py:2150-2158`).
+   - **Defined in**: `chdk-port/platform/g3x/main.c:72-81` (and staged by `scripts/build_port43_dbuf.py:2152-2166`).
    - **Definition**: Calls `g3x_playback_menu_gui_mode_active()`.
    - **Declared in**: `chdk-port/platform/g3x/gui_diag.h:77`.
-   - **Called by**: `screen_rotated()` in `chdk-port/platform/g3x/main.c:66-68`.
+   - **Purpose**: Exported platform helper hook for playback mode state verification.
 
 6. **`g3x_playback_menu_record_item_edit(int type)`**:
    - **Defined in**: `chdk-port/platform/g3x/gui_menu.c:69-74`.
@@ -63,14 +63,21 @@ All playback functions sit strictly behind `#if defined(G3X_PLAYBACK_MENU) && (G
    - **Called by**: `check_gui_needs_redraw()` in staged `stage_chdk/platform/g3x/lib.c`.
 
 8. **`g3x_playback_menu_record_open(void)`**:
-   - **Defined in**: `chdk-port/platform/g3x/gui_diag.h:349-352`.
+   - **Defined in**: `chdk-port/platform/g3x/gui_diag.h:1432-1435`.
    - **Declared in**: `chdk-port/platform/g3x/gui_diag.h:71`.
    - **Called by**: Staged `core/gui.c` (`scripts/build_port43_dbuf.py:1787`).
 
 9. **`g3x_playback_menu_diag_format(char *buf, unsigned int max_len)`**:
-   - **Defined in**: `chdk-port/platform/g3x/gui_diag.h:354-365`.
+   - **Defined in**: `chdk-port/platform/g3x/gui_diag.h:1437-1447`.
    - **Declared in**: `chdk-port/platform/g3x/gui_diag.h:72`.
-   - **Called by**: `g3x_diag_format_line2()` in `chdk-port/platform/g3x/gui_diag.h:982-985`.
+   - **Called by**: `g3x_playback_menu_diag_draw()` in `chdk-port/platform/g3x/gui_diag.h`.
+
+10. **`g3x_playback_menu_diag_draw(void)`**:
+    - **Defined in**: `chdk-port/platform/g3x/gui_diag.h`.
+    - **Declared in**: `chdk-port/platform/g3x/gui_diag.h:73`.
+    - **Called by**:
+      - Config (b) (`alone`): `check_gui_needs_redraw()` in staged `stage_chdk/platform/g3x/lib.c` (staged by `scripts/build_port43_dbuf.py:2097-2120`) when `g3x_playback_menu_gui_mode_active()` is active.
+      - Config (c) (candidate): `gui_diag_draw()` in `chdk-port/platform/g3x/gui_diag.h` when `G3X_PLAYBACK_MENU=1`.
 
 ### (b) Mapping of Trial Checklist Steps to Code
 
@@ -83,4 +90,4 @@ All playback functions sit strictly behind `#if defined(G3X_PLAYBACK_MENU) && (G
 | 5 | Enter & Leave Submenus | `chdk-port/platform/g3x/gui_menu.c:510,677,717` (`select_sub_menu()`, `KEY_RIGHT`, `KEY_SET`) and `gui_menu.c:337,635,656,720,770,1384` (`gui_menu_back()`, `KEY_LEFT`, `KEY_DISPLAY`, `KEY_MENU`) | Covered by existing PORT-50 submenu code |
 | 6 | Change Bool/Enum/Int Items | `chdk-port/platform/g3x/gui_menu.c:368-490` (`update_int_value`, `update_bool_value`, `update_enum_value`); edits tracked by `g3x_playback_menu_record_item_edit()` (`gui_menu.c:438,454,480`). Mutates in-RAM `conf` struct (`core/conf.c:20`) | Covered by existing PORT-50 item update routines; edit count tracked by PORT-53 hook |
 | 7 | Close & Re-open Menu | `gui_set_mode(&altGuiHandler)`. In-RAM `conf` struct (`chdk-port/core/conf.c:20`) persists values. Re-opening re-reads `conf` | Covered by existing PORT-50 / CHDK core RAM state |
-| 8 | Try Save & Confirm SAVE:OFF | `gui_menu.c:1388` calls `conf_save()`. Intercepted by write-protect guard staged at `core/conf.c:1159` (`scripts/build_port43_dbuf.py:1828`), which calls `g3x_conf_record_save_result(G3X_CONF_SAVE_OFF)` and returns. `gui_diag_draw()` displays `"SAVE:OFF"` banner (`gui_diag.h:1317`) | Covered by existing PORT-50 write-protect skip and diagnostic line |
+| 8 | Try Save & Confirm SAVE:OFF | `gui_menu.c:1388` calls `conf_save()`. Intercepted by write-protect guard staged at `core/conf.c:1828` in config (c) and `__wrap_conf_save` in config (b), which calls `g3x_conf_record_save_result(G3X_CONF_SAVE_OFF)` and returns. `gui_diag_draw()` displays `"SAVE:OFF"` banner on Line 2 (`MENU:xxxx SAVE:OFF Rs:xxxx Rp:xxxx B:x/xms`) and Line 3 (`MENU:xxxx SAVE:OFF ED:xxxx`), and config (b) renders `MENU:xxxx SAVE:OFF ED:xxxx` via `g3x_playback_menu_diag_draw()`. | Covered by existing PORT-50 write-protect skip, diagnostic line, and PORT-53 standalone rendering path |
