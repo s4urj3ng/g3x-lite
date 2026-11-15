@@ -20,6 +20,12 @@ CFLAGS += -DG3X_MOVIE_STATUS=1
 endif
 endif
 
+ifeq ($(G3X_MOVIE_NOLIMIT),1)
+ifeq ($(findstring -DG3X_MOVIE_NOLIMIT=1,$(CFLAGS)),)
+CFLAGS += -DG3X_MOVIE_NOLIMIT=1
+endif
+endif
+
 ifeq ($(G3X_CONF_SAVE),1)
 ifeq ($(findstring -DG3X_CONF_SAVE=1,$(CFLAGS)),)
 CFLAGS += -DG3X_CONF_SAVE=1

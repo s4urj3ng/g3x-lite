@@ -6,7 +6,7 @@
 - (c) The milestone therefore continues to PORT56-LIMIT-BUILD2.
 
 **Recommended Mechanism**:
-- **Write rule**: While `MOV:REC` holds (`g3x_get_movie_status() == 1`), check `mr_max_frames` (`0x0000C274`) on every GUI/kbd loop tick and rewrite it whenever it differs from the target value (`0xFFFFFFFF`). Do NOT treat `MOV:REC` as proof that setup has finished (`docs/VIDEO001_RECORDING_LIMITS.md:183`). Never rely on a single write. Never write while not recording. `LIM:ON` means 'value read back equals the target'; `LIM:?` means 'recording, but not yet confirmed'; `LIM:OFF` means 'not recording or disabled'. Re-enforced on each recording start because `SetupModeAndLimits` runs on each recording start (manifest `PORT56-ROM-CMD0-SETUP-CALL`).
+- **Write rule**: While `MOV:REC` holds (`g3x_get_movie_status() == 1`), check `mr_max_frames` (`0x0000C274`) on every GUI/kbd loop tick and overwrite it with `0xFFFFFFFF` whenever the value is nonzero and not already `0xFFFFFFFF`. Do NOT treat `MOV:REC` as proof that setup has finished (`docs/VIDEO001_RECORDING_LIMITS.md:183`). Never rely on a single write. Never write while not recording. Diag marker: `LIM:OFF` when the patched value (`0xFFFFFFFF`) is in place while recording (limit defeated); `LIM:ON` when the stock value is seen while recording (limit active); `LIM:?` otherwise. Re-enforced on each recording start because `SetupModeAndLimits` runs on each recording start (manifest `PORT56-ROM-CMD0-SETUP-CALL`).
 - **Target**: Write only `0x0000C274` (`mr_max_frames = 0xFFFFFFFF`). Do NOT write `0x0000C0E4` (UI warning only) or `0x0000C0C0` (stop reason).
 - **Cap**: Note that the 4 GiB size stop (reason 3, `0xFC098C5C`) stays active and is the real cap.
 
@@ -25,7 +25,7 @@
 | **3. Sibling platform definitions (`CAM_CHDK_HAS_EXT_VIDEO_MENU` / `CAM_VIDEO_CONTROL` / `CAM_MOVIEREC_NEWSTYLE`)** | `chdk-port/platform/g7x/platform_camera.h:65-66`; `chdk-port/platform/g5x/platform_camera.h:42-43`; `chdk-port/platform/sx60hs/platform_camera.h:20-21`; `chdk-port/platform/sx280hs/platform_camera.h:14,17` (`#define CAM_MOVIEREC_NEWSTYLE 1`) | `#undef CAM_CHDK_HAS_EXT_VIDEO_MENU`, `#undef CAM_VIDEO_CONTROL`, `CAM_MOVIEREC_NEWSTYLE` undefined (`chdk-port/platform/g3x/platform_camera.h:28-29`) | INFERRED | None; remain undefined in `platform_camera.h` to prevent invoking unimplemented movie_rec hooks. |
 | **4. Sibling stubs in `movie_rec.c`** | `chdk-port/platform/g5x/sub/100c/movie_rec.c:6-11`; `chdk-port/platform/sx60hs/sub/100f/movie_rec.c:6-11`; `chdk-port/platform/g7x/` (no `movie_rec.c`) | `chdk-port/platform/g3x/sub/110c/movie_rec.c:1-12` (`change_video_tables`, `set_quality` empty stubs) | HISTORICAL_CHDK | None; G5X/SX60HS `set_quality` is not empty (contains a conditional quality write), but their movie task hooks are disabled; G3X keeps empty stubs. |
 | **5. GM1.10C stock duration limit constants (`1799` s FHD/HD, `3599` s VGA)** | `chdk-port/platform/sx280hs/sub/102b/movie_rec.c:10-12,543-544` (`FW_SHORT_TIME_LIMIT 30`, `SHORT_TIME_LIMIT 300`, `LONG_TIME_LIMIT 10800`) | `0xFC09853E`: `movw r0, #0x707` (1799 s = 29:59 FHD/HD); `0xFC09859A`: `movw r0, #0xE0F` (3599 s = 59:59 VGA) in `MovieRecorder_SetupModeAndLimits` (`0xFC097D72`) | ROM_VERIFIED | None; hardcoded in ROM flash. |
-| **6. Setup function execution timing & reinitialization** | `chdk-port/platform/sx280hs/sub/102b/movie_rec.c:540-565` (runs on startup of replaced movie task) | `0xFC09A97C`: `BL 0xFC097D72` (`MovieRecorder_SetupModeAndLimits`) called unconditionally inside `MovieRecorder_CmdStartPipeline` (`0xFC09A956`) during Command 0 dispatch upon recording start. Does not run at idle mode switch. | ROM_VERIFIED | Writes must occur **after** record start. Any pre-recording write (boot/mode switch) is overwritten on record start. CHDK must poke from kbd/GUI loop after recording starts (`mr_rec_state == 1`). |
+| **6. Setup function execution timing & reinitialization** | `chdk-port/platform/sx280hs/sub/102b/movie_rec.c:540-565` (runs on startup of replaced movie task) | `0xFC09A97C`: `BL 0xFC097D72` (`MovieRecorder_SetupModeAndLimits`) called unconditionally inside `MovieRecorder_CmdStartPipeline` (`0xFC09A956`) during Command 0 dispatch upon recording start. Does not run at idle mode switch. | ROM_VERIFIED | Writes must occur **after** record start. Any pre-recording write (boot/mode switch) is overwritten on record start. Timing correction (`docs/VIDEO001_RECORDING_LIMITS.md:183`): `MOV:REC` does NOT mean limit setup has finished; recording state becomes 1 before limits are initialised, and setup runs again on every record start (`BL 0xFC09A97C`). On every loop tick while recording (`g3x_get_movie_status() == 1`), if the value at `0x0000C274` is nonzero and not already `0xFFFFFFFF`, overwrite it with `0xFFFFFFFF` (`blo` at `0xFC098B22`); do nothing when not recording. Late setup stores are overwritten on the next tick, long before the 1799 s limit. |
 | **7. GM1.10C max frames variable (`mr_max_frames`) store** | `chdk-port/platform/sx280hs/sub/102b/movie_rec.c:565` (`str r0, [r1, #0x6c]`) | `0x0000C274` (`mr_max_frames`, stored at `0xFC098692`: `str r1, [r0, #0x7C]` with `r0 = 0x0000C1F8`, `r1 = (max_sec * fps_num) / fps_den`) | ROM_VERIFIED | Opt-in runtime write `*(volatile uint32_t *)0x0000C274 = 0xFFFFFFFF` (or `0x7FFFFFFF`) from kbd/GUI loop while recording (`mr_rec_state == 1`). |
 | **8. Frame limit check & branch signedness (`MovieRecorder_CheckFrameCountLimit`)** | `chdk-port/platform/sx280hs/sub/102b/movie_rec.c:548-550` (defeated by overriding `r6` before frame calculation) | `0xFC098B10..38`: `0xFC098B22` `cmp r0, r1` (`cur_frames` @ `0x0000C278` vs `max_frames` @ `0x0000C274`) followed by `0xFC098B24: 04 d3` (`blo 0xFC098B30`). **Unsigned** lower branch. Falls through to stop reason `*(0x0000C0C0) = 4` at `0xFC098B28` only when `cur_frames >= max_frames`. | ROM_VERIFIED | Disabling value is `0xFFFFFFFF` (or `0x7FFFFFFF`). Setting `0x0000C274` to `0xFFFFFFFF` makes `cur_frames < max_frames` permanently True, bypassing Reason 4 stop. |
 | **9. UI warning threshold variable (`mr_warn_sec`) & effect if unchanged** | `chdk-port/platform/sx280hs/sub/102b/movie_rec.c:568` (`str.w r0, [sb, #0x50]`) | `0x0000C0E4` (`mr_warn_sec`, stored at `0xFC09869C`: `max_sec - 10`). Evaluated at `0xFC0992FE`: `cmp r1, r0` -> posts UI warning event `0x3149` (bit 1 of `0x0000C0C4`) at 29:49. | ROM_VERIFIED | Optional. Does **not** terminate recording. If left untouched, camera displays stock 10s warning at 29:49 while recording continues. Writing `0xFFFFFFFF` suppresses the warning icon. |
@@ -74,8 +74,8 @@ In stock Canon firmware, recording halts on whichever limit is encountered first
 1. **Reinitialization Timing**: `MovieRecorder_SetupModeAndLimits` (`0xFC097D72`) is called at `0xFC09A97C` inside Command 0 dispatch (`0xFC09A956`). It runs strictly upon recording start, unconditionally recalculating and writing `mr_max_frames` into `0x0000C274` and `mr_warn_sec` into `0x0000C0E4`. It does **not** run at idle mode switch. Note that `SetupModeAndLimits` runs on each recording start (manifest `PORT56-ROM-CMD0-SETUP-CALL`), so the value must be enforced again for every recording.
 2. **Safe Write Rule & Timing**:
    - Do NOT treat `MOV:REC` as proof that setup has finished. As cited in `docs/VIDEO001_RECORDING_LIMITS.md:183`: recording state becomes 1 before the limit setup finishes.
-   - **Required rule for the build**: While `MOV:REC` holds (`g3x_get_movie_status() == 1`), check `mr_max_frames` (`0x0000C274`) on every GUI/kbd loop tick and rewrite it whenever it differs from the target value (`0xFFFFFFFF`). Never rely on a single write. Never write while not recording.
-   - Status reporting: `LIM:ON` means 'value read back equals the target', `LIM:?` means 'recording, but not yet confirmed', and `LIM:OFF` means 'not recording or disabled'.
+   - **Required rule for the build**: While `MOV:REC` holds (`g3x_get_movie_status() == 1`), check `mr_max_frames` (`0x0000C274`) on every GUI/kbd loop tick and rewrite it whenever it is nonzero and not already `0xFFFFFFFF`. Never rely on a single write. Never write while not recording.
+   - Status reporting: `LIM:OFF` when the patched value (`0xFFFFFFFF`) is in place while recording (limit defeated); `LIM:ON` when the stock value is seen while recording (limit active); `LIM:?` otherwise (not recording or initial 0).
    - Note that `SetupModeAndLimits` runs on each recording start (manifest `PORT56-ROM-CMD0-SETUP-CALL`), so the value must be enforced again for every recording.
    - Target: Write only `0x0000C274` (`mr_max_frames = 0xFFFFFFFF`). Do NOT write `0x0000C0E4` (UI warning only) or `0x0000C0C0` (stop reason).
    - Cap: Note that the 4 GiB size stop (reason 3, `0xFC098C5C`) stays active and is the real cap.
@@ -83,14 +83,15 @@ In stock Canon firmware, recording halts on whichever limit is encountered first
 3. **Execution Context**: The existing non-invasive CHDK loop (`mykbd_task` / `gui_sync`) queries `g3x_get_movie_status()` (`mr_rec_state` @ `0x0000C0C8`, verified in PORT-55). Note that `is_video_recording()` (`chdk-port/core/shooting.c:1651`) is true for every non-zero state, including stopping states, so it must not gate the write. While active recording holds (`g3x_get_movie_status() == 1`), CHDK executes:
    ```c
    if (g3x_get_movie_status() == 1) { // mr_rec_state == 1 (MOV:REC)
-       if (*(volatile uint32_t *)0x0000C274 != 0xFFFFFFFF) {
-           *(volatile uint32_t *)0x0000C274 = 0xFFFFFFFF; // mr_max_frames (write only this address)
+       uint32_t val = *(volatile uint32_t *)0x0000C274;
+       if (val != 0 && val != 0xFFFFFFFFU) {
+           *(volatile uint32_t *)0x0000C274 = 0xFFFFFFFFU; // mr_max_frames (write only this address)
        }
    }
    ```
-   - While recording, if the readback value equals `0xFFFFFFFF`, the status is `LIM:ON` ('value read back equals the target').
-   - While recording, if the readback value is not yet `0xFFFFFFFF`, the status is `LIM:?` ('recording, but not yet confirmed').
-   - When not recording (`g3x_get_movie_status() != 1`), status is `LIM:OFF` and never write.
+   - While recording, if the readback value equals `0xFFFFFFFF`, the status is `LIM:OFF` (limit defeated / off).
+   - While recording, if the readback value is nonzero and not `0xFFFFFFFF`, the status is `LIM:ON` (stock limit active / on).
+   - When not recording or value is 0, status is `LIM:?` and never write.
 4. **Evaluation Logic**: At `0xFC098B22`, `cmp r0, r1` compares `mr_cur_frames` against `mr_max_frames`. The subsequent instruction `04 d3` is `blo 0xFC098B30` (unsigned lower). With `mr_max_frames = 0xFFFFFFFF`, `cur_frames < max_frames` is always True, permanently bypassing the Reason 4 stop sequence.
 
 ---
@@ -116,3 +117,16 @@ Bounded ROM reads recorded in `manifests/evidence/port56_evidence_manifest.json`
 | `PORT56-ROM-POOL-WARN-SEC-BASE` | `0xFC0991A0` | `0xFC0991B0` | `0x000991A0` | 16 | `597fc12fec4f5720e51a19bae5ef43d9bd51f9533a826bd26a4c9b0741fb95a9` | Literal pool at `0xFC0991A8`: confirms base word `0x0000C078` for `mr_warn_sec` load (`+0x6C` = `0x0000C0E4`). |
 | `PORT56-ROM-WARN-SEC-CHECK` | `0xFC0992F0` | `0xFC099310` | `0x000992F0` | 32 | `1f7597700d045a3e15d5d536971ce18ebc21ac9fbb2ce684a1a1b6b1b79b7597` | `MovieRecorder_ProcessEncodedFrame` (`0xFC098E9E`): confirms `warn_sec` loaded from `0x0000C0E4` at `0xFC0992FA` triggers UI warning event `0x3149` (10s warning), not recording termination. |
 | `PORT56-ROM-CMD0-SETUP-CALL` | `0xFC09A968` | `0xFC09A988` | `0x0009A968` | 32 | `172905742f575ad2286fb1fd6ac6006d42edb47b07ac23581f29fac00f84094c` | `MovieRecorder_CmdStartPipeline` (`0xFC09A956`): confirms `BL 0xFC097D72` at `0xFC09A97C` executes during Command 0 dispatch upon recording start, proving setup runs on every recording start. |
+
+---
+
+## 6. Candidate Build Configurations & Artifacts
+
+All three configurations built deterministically with pinned toolchain (`toolchains/gcc-arm-none-eabi-5_4-2016q3`):
+
+| Configuration | Flags | Output DISKBOOT.BIN | Size (B) | SHA-256 | `_end` | Diag Marker | Status |
+|---|---|---|---|---|---|---|---|
+| **(a) Default** | None (stock flags) | `out/build-default/DISKBOOT.BIN` | 124,097 | `24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9` | `0x003686b0` | `LIM:?` | Byte-identical to baseline default |
+| **(b) Nolimit alone** | `G3X_MOVIE_STATUS=1` `G3X_MOVIE_NOLIMIT=1` | `out/build-nolimit-alone/DISKBOOT.BIN` | 124,145 | `12c0635ffd11d2c6a1d158aaac436885a4a3b9b7830841a8c65410c193439b33` | `0x003686e0` | `LIM:OFF` / `LIM:ON` / `LIM:?` | Single-feature opt-in candidate |
+| **(c) Full combination** | `G3X_GUI_FIX=1` `G3X_GUI_DBUF=1` `G3X_GUI_NOOVERDRAW=1` `G3X_KBD_CHECK=1` `G3X_GUI_DIAG=1` `G3X_GUI_SHADOW2=1` `G3X_GUI_SYNC=1` `G3X_GUI_MENU=1` `G3X_GUI_RESTORE2=1` `G3X_PLAYBACK_MENU=1` `G3X_MOVIE_STATUS=1` `G3X_MOVIE_NOLIMIT=1` | `out/port56-movie-nolimit/DISKBOOT.BIN` | 132,385 | `c8709189c4508fd96f89aebed58641fbbc1e60b258699be642686e6387c58352` | `0x0036aaf0` | `LIM:OFF` / `LIM:ON` / `LIM:?` | Full interactive candidate without FULL_HOOKS |
+

@@ -88,6 +88,11 @@ void my_kbd_read_keys()
     else
         physw0_override = -1;
     kbd_update_physw_bits();
+
+#if defined(G3X_MOVIE_NOLIMIT) && (G3X_MOVIE_NOLIMIT == 1)
+    extern void g3x_movie_nolimit_poll(void);
+    g3x_movie_nolimit_poll();
+#endif
 }
 
 void __attribute__((naked,noinline)) kbd_p1_f_cont_my()

@@ -121,6 +121,11 @@ void my_kbd_read_keys()
         physw0_override = -1;
     kbd_update_physw_bits();
 
+#if defined(G3X_MOVIE_NOLIMIT) && (G3X_MOVIE_NOLIMIT == 1)
+    extern void g3x_movie_nolimit_poll(void);
+    g3x_movie_nolimit_poll();
+#endif
+
     if (g3x_full_shortpress_active) {
         if (g3x_full_shortpress_margin_polls > 0) {
             g3x_full_shortpress_margin_polls--;
