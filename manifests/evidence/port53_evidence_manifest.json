@@ -1,0 +1,40 @@
+{
+  "manifest_id": "port53_evidence_manifest",
+  "milestone": "PORT-53",
+  "task": "PORT53-MENU-BUILD",
+  "date": "2026-11-15",
+  "target": "PowerShot G3 X GM1.10C",
+  "deliverables": {
+    "doc": "docs/PORT53_PLAYBACK_MENU.md",
+    "trial": "docs/PORT53_TRIAL.md",
+    "notes": "chdk-port/platform/g3x/notes.txt"
+  },
+  "rom_reads": {
+    "rom_read_needed": false,
+    "full_rom_scan": false,
+    "ranges_read": [],
+    "reason": "All navigation keys, mode checks, and menu redraw paths use verified FINSIG addresses (reference/finsig_gm110c/stubs_entry.S, reference/finsig_gm110c/physw_bits.txt). No missing stubs were identified in docs/PORT53_PLAYBACK_MENU.md. Zero ROM reads were made."
+  },
+  "reference_files": [
+    {
+      "path": "reference/finsig_gm110c/stubs_entry.S",
+      "sha256": "f8a4697cb42b48560d430b7f502ff2f6ce5f12a8980fe8c272aba5de18d05166"
+    },
+    {
+      "path": "reference/finsig_gm110c/physw_bits.txt",
+      "sha256": "b351ce88ff3860573b75086a314ae6ab2ef56dc13ff4a0fc51fd6118811ec78e"
+    },
+    {
+      "path": "reference/finsig_gm110c/funcs_by_name.csv",
+      "sha256": "e837aab3a20b54ba3937570f4e0b3371de4b1bb19ef35727e5795803db007118"
+    },
+    {
+      "path": "docs/PORT46_KEYMAP.md",
+      "sha256": "c24a200488440757987d69ffdb5eb8539eff9c36c449b0eb66118e709b473574"
+    },
+    {
+      "path": "docs/PORT53_PLAYBACK_MENU.md",
+      "sha256": "e5289295cb71b77566c8d64814af5909b8108ac978cf441997f694da8bd19d24"
+    }
+  ]
+}

@@ -65,6 +65,20 @@ int gui_menu_get_curr_item(void)
 }
 #endif
 
+#if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)
+void g3x_playback_menu_record_item_edit(int type)
+{
+    extern unsigned int g3x_playback_menu_item_edit_count;
+    (void)type;
+    g3x_playback_menu_item_edit_count++;
+}
+
+int g3x_playback_menu_redraw_needed(void)
+{
+    return gui_menu_redraw != 0;
+}
+#endif
+
 static int          count;
 static int          x, y;
 static int          w, wplus, num_lines;
@@ -420,6 +434,9 @@ static void update_int_value(const CMenuItem *mi, int direction)
 
     // force menu redraw
     gui_menu_redraw=1;
+#if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)
+    g3x_playback_menu_record_item_edit(MENUITEM_INT);
+#endif
 }
 
 // Update a 'bool' value
@@ -433,6 +450,9 @@ static void update_bool_value(const CMenuItem *mi)
 
     // force menu redraw
     gui_menu_redraw=1;
+#if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)
+    g3x_playback_menu_record_item_edit(MENUITEM_BOOL);
+#endif
 }
 
 // Update an 'enum' value, direction = 1 for increment, -1 for decrement
@@ -456,6 +476,9 @@ static void update_enum_value(const CMenuItem *mi, int direction)
 
     // force menu redraw
     gui_menu_redraw=1;
+#if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)
+    g3x_playback_menu_record_item_edit(MENUITEM_ENUM);
+#endif
 }
 
 static int isText(int n)

@@ -15,3 +15,79 @@
 2. **In-session persistence & save skip**: Item edits directly mutate the `conf` struct in RAM (`chdk-port/core/conf.c:20`). Values persist across menu close and re-open within session without card writes. Under `G3X_GUI_MENU=1` and `G3X_DISABLE_CARD_WRITES=1` / `OPT_DISABLE_FILE_WRITES=1`, `conf_save()` entry is intercepted at `core/conf.c:1159`, calls `g3x_conf_record_save_result(3)` (`G3X_CONF_SAVE_OFF`), and immediately returns, safely displaying `"SAVE:OFF"` on the OSD banner (`chdk-port/platform/g3x/gui_diag.h:975,1317`).
 3. **Playback mode & FINSIG stubs**: In playback mode, `playrec_mode` (`0x0000C4D4`) evaluates to 0 or 1, causing `rec_mode_active()` to return 0 and `mode_get()` to assign `camera_info.state.mode_play = 1`, `mode_rec = 0`. Neither ALT mode entry nor the menu keyboard handler is gated off in playback mode. `task_MovieRecord` entry is `0xFC09AC19` (`reference/finsig_gm110c/stubs_entry.S:339`), while `0xFC09BD60` is the internal store instruction within `task_MovieRecord` used to identify `simple_movie_status` (`0x0000C170` in `chdk-port/platform/g3x/sub/110c/stubs_min.S:7`). All required stubs exist in FINSIG or `stubs_min.S`; proposed ROM read is not needed for the build task.
 4. **PORT-51 RESTORE2 integration**: Item edits set `gui_menu_redraw = 1`, updating the modified row in the DBUF shadow layer (`g3x_shadow_bitmap`/`opacity`) and marking the dirty rectangle (`chdk-port/platform/g3x/gui_menu.c:422,435,458,1133-1176`). The CHDK restore function `g3x_shadow2_blit_restore_target` (`chdk-port/platform/g3x/sub/110c/gui_sync.h:115,238-348`) is executed via the PORT-49/PORT-51 sync hook: the RAM callback pointer at `0x0000E26C` (`gui_sync.h:75,129,461`) invokes `g3x_gui_sync_pre_cb`, which checks the saved caller lr against return-address comparison value `0xFC380675` (`gui_sync.h:83,170-171,180,470-471`) inside `transfer_src_overlay` (entry `0xFC380635`, `gui_sync.h:82`) and redirects the `transfer_src_overlay` epilogue pop at `0xFC3806F8` (`gui_sync.h:498`) to `g3x_gui_sync_post_trampoline` (`gui_sync.h:502-511`). Under `G3X_GUI_RESTORE2=1`, this restores the shadow dirty rectangle into BOTH `bitmap_buffer[0..1]` (`0x5FE80000`, `0x5FD00000`) and `opacity_buffer[0..1]` (`0x5FC40000`, `0x5FB80000`). The restore mechanism is present in code; runtime behaviour in playback after edits is INFERRED, to be confirmed by the owner trial.
+
+## 5. Playback Logic: Function Definitions and Trial Checklist Code Mapping
+
+### (a) Definitions and Staging Locations of Playback Helper Functions
+
+All playback functions sit strictly behind `#if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)`:
+
+1. **`g3x_playback_menu_is_active(void)`**:
+   - **Staged by**: `scripts/build_port43_dbuf.py:2053-2056` into `stage_chdk/platform/g3x/kbd.c`.
+   - **Definition**: Returns `camera_info.state.mode_play && !camera_info.state.gui_mode_none`.
+   - **Declared in**: `chdk-port/platform/g3x/gui_diag.h:73`.
+   - **Called by**: `g3x_playback_menu_kbd_process()`.
+
+2. **`g3x_playback_menu_kbd_process(void)`**:
+   - **Staged by**: `scripts/build_port43_dbuf.py:2058-2066` into `stage_chdk/platform/g3x/kbd.c`.
+   - **Definition**: Returns `g3x_playback_menu_is_active() ? 1 : 0`.
+   - **Declared in**: `chdk-port/platform/g3x/gui_diag.h:74`.
+   - **Called by**: `my_kbd_read_keys()` in `stage_chdk/platform/g3x/kbd.c` (staged by `scripts/build_port43_dbuf.py:2070-2076`).
+
+3. **`g3x_playback_menu_gui_mode_active(void)`**:
+   - **Staged by**: `scripts/build_port43_dbuf.py:2088-2092` into `stage_chdk/platform/g3x/lib.c`.
+   - **Definition**: Returns `camera_info.state.mode_play && (camera_info.state.gui_mode_alt || !camera_info.state.gui_mode_none)`.
+   - **Declared in**: `chdk-port/platform/g3x/gui_diag.h:75`.
+   - **Called by**: `check_gui_needs_redraw()` in `stage_chdk/platform/g3x/lib.c` (staged by `scripts/build_port43_dbuf.py:2112-2118`) and `g3x_playback_menu_mode_check()` in `chdk-port/platform/g3x/main.c:75-76`.
+
+4. **`g3x_playback_menu_get_viewport_mode(void)`**:
+   - **Staged by**: `scripts/build_port43_dbuf.py:2094-2098` into `stage_chdk/platform/g3x/lib.c`.
+   - **Definition**: Returns `camera_info.state.mode_play ? 1 : 0`.
+   - **Declared in**: `chdk-port/platform/g3x/gui_diag.h:76`.
+   - **Called by**: `vid_get_viewport_width()` in `stage_chdk/platform/g3x/lib.c` (staged by `scripts/build_port43_dbuf.py:2102-2105`).
+
+5. **`g3x_playback_menu_mode_check(void)`**:
+   - **Defined in**: `chdk-port/platform/g3x/main.c:72-81` (and staged by `scripts/build_port43_dbuf.py:2152-2166`).
+   - **Definition**: Calls `g3x_playback_menu_gui_mode_active()`.
+   - **Declared in**: `chdk-port/platform/g3x/gui_diag.h:77`.
+   - **Purpose**: Exported platform helper hook for playback mode state verification.
+
+6. **`g3x_playback_menu_record_item_edit(int type)`**:
+   - **Defined in**: `chdk-port/platform/g3x/gui_menu.c:69-74`.
+   - **Declared in**: `chdk-port/platform/g3x/gui_diag.h:78`.
+   - **Called by**: `update_int_value()` (`gui_menu.c:438`), `update_bool_value()` (`gui_menu.c:454`), `update_enum_value()` (`gui_menu.c:480`).
+
+7. **`g3x_playback_menu_redraw_needed(void)`**:
+   - **Defined in**: `chdk-port/platform/g3x/gui_menu.c:76-81`.
+   - **Declared in**: `chdk-port/platform/g3x/gui_diag.h:79`.
+   - **Called by**: `check_gui_needs_redraw()` in staged `stage_chdk/platform/g3x/lib.c`.
+
+8. **`g3x_playback_menu_record_open(void)`**:
+   - **Defined in**: `chdk-port/platform/g3x/gui_diag.h:1432-1435`.
+   - **Declared in**: `chdk-port/platform/g3x/gui_diag.h:71`.
+   - **Called by**: Staged `core/gui.c` (`scripts/build_port43_dbuf.py:1787`).
+
+9. **`g3x_playback_menu_diag_format(char *buf, unsigned int max_len)`**:
+   - **Defined in**: `chdk-port/platform/g3x/gui_diag.h:1437-1447`.
+   - **Declared in**: `chdk-port/platform/g3x/gui_diag.h:72`.
+   - **Called by**: `g3x_playback_menu_diag_draw()` in `chdk-port/platform/g3x/gui_diag.h`.
+
+10. **`g3x_playback_menu_diag_draw(void)`**:
+    - **Defined in**: `chdk-port/platform/g3x/gui_diag.h`.
+    - **Declared in**: `chdk-port/platform/g3x/gui_diag.h:73`.
+    - **Called by**:
+      - Config (b) (`alone`): `check_gui_needs_redraw()` in staged `stage_chdk/platform/g3x/lib.c` (staged by `scripts/build_port43_dbuf.py:2097-2120`) when `g3x_playback_menu_gui_mode_active()` is active.
+      - Config (c) (candidate): `gui_diag_draw()` in `chdk-port/platform/g3x/gui_diag.h` when `G3X_PLAYBACK_MENU=1`.
+
+### (b) Mapping of Trial Checklist Steps to Code
+
+| Step | Action | Code Handler | Status / Coverage |
+|---|---|---|---|
+| 1 | Enter Playback | `chdk-port/core/shooting.c:1687-1715` (`mode_get()` sets `camera_info.state.mode_play = 1`) | Covered by Canon firmware & core `mode_get()` |
+| 2 | Enter ALT | `chdk-port/core/kbd.c` via `KEY_WIFI` mapped in `chdk-port/platform/g3x/kbd.c:40` and `platform_camera.h:20-22` | Covered by existing PORT-46 ALT handling |
+| 3 | Open Menu | `chdk-port/core/gui.c:3134` (`gui_set_mode(&menuGuiHandler)`); open counted by `g3x_playback_menu_record_open()` (`scripts/build_port43_dbuf.py:1787`) | Covered by existing PORT-50 menu handler; open count tracked by PORT-53 hook |
+| 4 | Navigate Up/Down | `chdk-port/platform/g3x/gui_menu.c:658-672` (`gui_menu_kbd_process()`), using `KEY_UP` (`0x00000020`, w0.b5) and `KEY_DOWN` (`0x00000040`, w0.b6) from `chdk-port/platform/g3x/kbd.c:35-36` | Covered by existing PORT-50 navigation code |
+| 5 | Enter & Leave Submenus | `chdk-port/platform/g3x/gui_menu.c:510,677,717` (`select_sub_menu()`, `KEY_RIGHT`, `KEY_SET`) and `gui_menu.c:337,635,656,720,770,1384` (`gui_menu_back()`, `KEY_LEFT`, `KEY_DISPLAY`, `KEY_MENU`) | Covered by existing PORT-50 submenu code |
+| 6 | Change Bool/Enum/Int Items | `chdk-port/platform/g3x/gui_menu.c:368-490` (`update_int_value`, `update_bool_value`, `update_enum_value`); edits tracked by `g3x_playback_menu_record_item_edit()` (`gui_menu.c:438,454,480`). Mutates in-RAM `conf` struct (`core/conf.c:20`) | Covered by existing PORT-50 item update routines; edit count tracked by PORT-53 hook |
+| 7 | Close & Re-open Menu | `gui_set_mode(&altGuiHandler)`. In-RAM `conf` struct (`chdk-port/core/conf.c:20`) persists values. Re-opening re-reads `conf` | Covered by existing PORT-50 / CHDK core RAM state |
+| 8 | Try Save & Confirm SAVE:OFF | `gui_menu.c:1388` calls `conf_save()`. Intercepted by write-protect source guards in `core/conf.c` (`conf_save`, `config_save`, `save_config_file`) in both config (b) and config (c) (and linker `__wrap_conf_save` in config b), which calls `g3x_conf_record_save_result(G3X_CONF_SAVE_OFF)` and returns. `gui_diag_draw()` displays `"SAVE:OFF"` banner on Line 2 (`MENU:xxxx SAVE:OFF Rs:xxxx Rp:xxxx B:x/xms`) and Line 3 (`MENU:xxxx SAVE:OFF ED:xxxx`), and config (b) renders `MENU:xxxx SAVE:OFF ED:xxxx` via `g3x_playback_menu_diag_draw()`. | Covered by write-protect source skip, diagnostic line, and PORT-53 standalone rendering path |

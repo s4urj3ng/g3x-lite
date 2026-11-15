@@ -54,6 +54,32 @@ void g3x_conf_record_save_result(int ok);
 void g3x_conf_record_save_skipped(void);
 #endif
 
+#if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)
+#ifndef G3X_CONF_SAVE_NONE
+#define G3X_CONF_SAVE_NONE 0
+#define G3X_CONF_SAVE_OK   1
+#define G3X_CONF_SAVE_ERR  2
+#define G3X_CONF_SAVE_OFF  3
+extern unsigned int g3x_menu_open_count;
+extern int g3x_conf_save_status;
+void g3x_menu_record_open(void);
+void g3x_conf_record_save_result(int ok);
+void g3x_conf_record_save_skipped(void);
+#endif
+extern unsigned int g3x_playback_menu_open_count;
+extern unsigned int g3x_playback_menu_item_edit_count;
+void g3x_playback_menu_record_open(void);
+void g3x_playback_menu_diag_format(char *buf, unsigned int max_len);
+void g3x_playback_menu_diag_draw(void);
+int g3x_playback_menu_is_active(void);
+int g3x_playback_menu_kbd_process(void);
+int g3x_playback_menu_gui_mode_active(void);
+int g3x_playback_menu_get_viewport_mode(void);
+int g3x_playback_menu_mode_check(void);
+void g3x_playback_menu_record_item_edit(int type);
+int g3x_playback_menu_redraw_needed(void);
+#endif
+
 #if defined(G3X_GUI_RESTORE2) && (G3X_GUI_RESTORE2 == 1)
 #if !defined(G3X_GUI_MENU) || (G3X_GUI_MENU != 1) || \
     !defined(G3X_GUI_SYNC) || (G3X_GUI_SYNC != 1) || \
@@ -1329,6 +1355,10 @@ void gui_diag_draw(void)
 #endif
 #endif
 
+#if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)
+    g3x_playback_menu_diag_draw();
+#endif
+
 #if defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)
     char line[64];
     g3x_diag_format_line(line);
@@ -1371,4 +1401,97 @@ void gui_diag_draw(void)
 
 #endif /* G3X_GUI_DIAG_IMPLEMENTATION */
 #endif /* G3X_GUI_DIAG == 1 */
+
+#if defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1)
+#if defined(G3X_GUI_DIAG_IMPLEMENTATION) && (G3X_GUI_DIAG_IMPLEMENTATION == 1)
+#if !defined(G3X_GUI_MENU) || (G3X_GUI_MENU != 1)
+unsigned int g3x_menu_open_count = 0;
+int g3x_conf_save_status = G3X_CONF_SAVE_NONE;
+
+void g3x_menu_record_open(void)
+{
+    g3x_menu_open_count++;
+}
+
+void g3x_conf_record_save_skipped(void)
+{
+    g3x_conf_save_status = G3X_CONF_SAVE_OFF;
+}
+
+void g3x_conf_record_save_result(int ok)
+{
+    if (ok == G3X_CONF_SAVE_OFF || ok == 3 || ok == -1)
+    {
+        g3x_conf_save_status = G3X_CONF_SAVE_OFF;
+    }
+    else
+    {
+        g3x_conf_save_status = ok ? G3X_CONF_SAVE_OK : G3X_CONF_SAVE_ERR;
+    }
+}
+#endif /* !G3X_GUI_MENU */
+
+unsigned int g3x_playback_menu_open_count = 0;
+unsigned int g3x_playback_menu_item_edit_count = 0;
+
+void g3x_playback_menu_record_open(void)
+{
+    g3x_playback_menu_open_count++;
+}
+
+void g3x_playback_menu_diag_format(char *buf, unsigned int max_len)
+{
+    (void)max_len;
+    const char *save_str = (g3x_conf_save_status == G3X_CONF_SAVE_OFF) ? "OFF" :
+                           (g3x_conf_save_status == G3X_CONF_SAVE_OK)  ? "OK" :
+                           (g3x_conf_save_status == G3X_CONF_SAVE_ERR) ? "ERR" : "-";
+    sprintf(buf, "MENU:%04u SAVE:%s ED:%04u",
+             g3x_playback_menu_open_count,
+             save_str,
+             g3x_playback_menu_item_edit_count);
+}
+
+#ifndef FONT_WIDTH
+#define FONT_WIDTH 16
+#endif
+#ifndef FONT_HEIGHT
+#define FONT_HEIGHT 32
+#endif
+#ifndef COLOR_BLACK
+#define COLOR_BLACK 0
+#endif
+#ifndef COLOR_WHITE
+#define COLOR_WHITE 1
+#endif
+#ifndef MAKE_COLOR
+#define MAKE_COLOR(bg, fg) (((bg)&0xFF) | (((fg)&0xFF)<<8))
+#endif
+
+#ifndef CAM_SCREEN_VERSION
+struct camera_screen_fallback {
+    int width;
+    int height;
+};
+extern struct camera_screen_fallback camera_screen;
+#endif
+
+void g3x_playback_menu_diag_draw(void)
+{
+#ifndef GUI_DRAW_H
+    extern int draw_string(short x, short y, const char *s, unsigned short cl);
+#endif
+    char buf[64];
+    g3x_playback_menu_diag_format(buf, sizeof(buf));
+    int len = (int)strlen(buf);
+    int y = camera_screen.height - 4 * FONT_HEIGHT;
+#if defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)
+    g3x_dbuf_fast_fill_rect(G3X_MENU_X0, y, G3X_MENU_X1, y + FONT_HEIGHT - 1, COLOR_BLACK);
+#endif
+    draw_string((camera_screen.width - len * FONT_WIDTH) / 2,
+                y,
+                buf, MAKE_COLOR(COLOR_BLACK, COLOR_WHITE));
+}
+#endif /* G3X_GUI_DIAG_IMPLEMENTATION */
+#endif /* G3X_PLAYBACK_MENU */
+
 #endif /* G3X_GUI_DIAG_H */
