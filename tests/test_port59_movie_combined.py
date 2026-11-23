@@ -63,11 +63,13 @@ NM = TOOLCHAIN_BIN / "arm-none-eabi-nm"
 OBJDUMP = TOOLCHAIN_BIN / "arm-none-eabi-objdump"
 
 ORIGIN_MAIN_COMMIT = "88ab9331363bff5c62cc7ac7ee3e75ee4d9768a5"
+PORT54_EXCLUDED_COMMIT = "af2578089a39e9a2143f83003e92ea5236d542bc"
 PORT55_BUILD_COMMIT = "dc915e6257981f48223fa2f38839bc28e31c73cf"
 PORT56_BUILD_COMMIT = "ded3832e4a6cc1cc8401f67cb454d5d420191844"
 PORT57_BUILD_COMMIT = "ed374e7d332bce36a9c76682074aa9516e15e3be"
 PORT58_BUILD_COMMIT = "6696c8390780043e0c5fc67c306143dacf0bcd7c"
 PORT59_COMPAT_COMMIT = "c38d6c66dba62ee7b048a0cf56f52cbd1f567adc"
+PORT59_INTEGRATION_PARENT = "732fe9a7190e4445d707dd68aae5b65badffc271"
 
 BASE_DEFAULT_SHA256 = "24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9"
 BASE_DEFAULT_SIZE = 124097
@@ -1169,6 +1171,9 @@ class TestPort59BuildArtifactsDisassemblyAndSafety(unittest.TestCase):
         self.assertEqual(m["manifest_id"], "port59_movie_combined_manifest")
         self.assertEqual(m["milestone"], "PORT-59")
         self.assertEqual(m["origin_main_baseline"], ORIGIN_MAIN_COMMIT)
+        self.assertEqual(m["candidate_source_base"], ORIGIN_MAIN_COMMIT)
+        self.assertEqual(m["integration_parent"], PORT59_INTEGRATION_PARENT)
+        self.assertEqual(m["excluded_commits"], {"port54_conf_save": PORT54_EXCLUDED_COMMIT})
         self.assertEqual(m["card_writes"], "disabled")
         self.assertEqual(sha256_file(self.comb_bin), PORT59_COMBINED_SHA256)
         self.assertEqual(self.comb_bin.stat().st_size, PORT59_COMBINED_SIZE)
@@ -1185,7 +1190,11 @@ class TestPort59BuildArtifactsDisassemblyAndSafety(unittest.TestCase):
             "port59_compat": PORT59_COMPAT_COMMIT,
         }
         self.assertEqual(m["reused_commits"], expected_commits)
-        for key, commit_hash in expected_commits.items():
+        for key, commit_hash in {
+            **expected_commits,
+            "integration_parent": PORT59_INTEGRATION_PARENT,
+            "port54_excluded": PORT54_EXCLUDED_COMMIT,
+        }.items():
             res = subprocess.run(
                 ["git", "rev-parse", "--verify", f"{commit_hash}^{{commit}}"],
                 cwd=str(ROOT),
@@ -1193,6 +1202,27 @@ class TestPort59BuildArtifactsDisassemblyAndSafety(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(res.returncode, 0, f"Unresolvable commit for {key}: {commit_hash}")
+
+        expected_delivered_paths = [
+            "Makefile",
+            "chdk-port/platform/g3x/Makefile",
+            "chdk-port/platform/g3x/gui_diag.h",
+            "chdk-port/platform/g3x/gui_menu.c",
+            "chdk-port/platform/g3x/movie_status.h",
+            "chdk-port/platform/g3x/sub/110c/makefile.inc",
+            "chdk-port/platform/g3x/sub/110c/movie_rec.c",
+            "chdk-port/platform/g3x/sub/110c/stubs_min.S",
+            "scripts/build_port43_dbuf.py",
+        ]
+        self.assertEqual(
+            m["source_delta_vs_origin_main"],
+            {
+                "base_commit": ORIGIN_MAIN_COMMIT,
+                "integration_parent": PORT59_INTEGRATION_PARENT,
+                "port54_conf_save_removed_from_source_delta": True,
+                "delivered_paths": expected_delivered_paths,
+            },
+        )
 
         flags = m["build"]["flags"]
         for req_flag in (
@@ -1359,10 +1389,77 @@ class TestPort59BuildArtifactsDisassemblyAndSafety(unittest.TestCase):
         )
         self.assertIn("Result: VALID (0 errors, 0 warnings)", res.stdout)
 
+    def test_concrete_source_delta_against_origin_main_excludes_port54_additions(self) -> None:
+        # 1. Verify git diff against origin/main on chdk-port/, scripts/, tools/, Makefile touches only the 9 movie paths
+        res = subprocess.run(
+            ["git", "diff", "--name-only", ORIGIN_MAIN_COMMIT, "--", "chdk-port/", "scripts/", "tools/", "Makefile"],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        changed_paths = sorted(line.strip() for line in res.stdout.splitlines() if line.strip())
+        expected_paths = [
+            "Makefile",
+            "chdk-port/platform/g3x/Makefile",
+            "chdk-port/platform/g3x/gui_diag.h",
+            "chdk-port/platform/g3x/gui_menu.c",
+            "chdk-port/platform/g3x/movie_status.h",
+            "chdk-port/platform/g3x/sub/110c/makefile.inc",
+            "chdk-port/platform/g3x/sub/110c/movie_rec.c",
+            "chdk-port/platform/g3x/sub/110c/stubs_min.S",
+            "scripts/build_port43_dbuf.py",
+        ]
+        self.assertEqual(changed_paths, expected_paths)
+
+        # 2. Verify PORT-54 test artifact and PORT-54 edit to test_port53_playback_menu.py are removed
+        self.assertFalse((ROOT / "tests/test_port54_conf_save.py").exists())
+        p53_diff = subprocess.run(
+            ["git", "diff", ORIGIN_MAIN_COMMIT, "--", "tests/test_port53_playback_menu.py"],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertEqual(p53_diff.stdout.strip(), "")
+
+        # 3. Verify zero PORT-54 configuration-saving implementation tokens exist in delivered source or staged candidate
+        forbidden_port54_tokens = (
+            "G3X_CONF_SAVE_FAIL",
+            "g3x_conf_save_start",
+            "g3x_conf_save_get_diag_str",
+            "g3x_conf_save_active",
+            "g3x_is_safe_chdk_write_path",
+            "g3x_is_conf_file_path",
+            "apply_port54_conf_save_staging_patches",
+            "sandboxed_conf_save",
+            "CFLAGS += -DG3X_CONF_SAVE=1",
+            "ifneq ($(G3X_CONF_SAVE),1)",
+            "(!defined(G3X_CONF_SAVE) || (G3X_CONF_SAVE != 1))",
+        )
+        checked_files = [
+            *(ROOT / p for p in expected_paths),
+            self.comb_stage / "platform/g3x/gui_diag.h",
+            self.comb_stage / "platform/g3x/Makefile",
+            self.comb_stage / "platform/g3x/sub/110c/Makefile",
+            self.comb_stage / "platform/g3x/sub/110c/makefile.inc",
+            self.comb_stage / "platform/g3x/lib.c",
+            self.comb_stage / "core/conf.c",
+            self.comb_stage / "core/gui.c",
+            self.comb_stage / "core/gui_script.c",
+            self.comb_stage / "lib/lang/fileutil.c",
+        ]
+        for fpath in checked_files:
+            text = fpath.read_text(encoding="utf-8")
+            for tok in forbidden_port54_tokens:
+                self.assertNotIn(tok, text, f"Inherited PORT-54 token '{tok}' must not appear in {fpath}")
+
     def test_doc_records_reused_commits_flags_and_artifact_hashes(self) -> None:
         doc_text = DOC_PORT59.read_text(encoding="utf-8")
         for token in (
             ORIGIN_MAIN_COMMIT,
+            PORT59_INTEGRATION_PARENT,
+            PORT54_EXCLUDED_COMMIT,
             PORT55_BUILD_COMMIT,
             PORT56_BUILD_COMMIT,
             PORT57_BUILD_COMMIT,

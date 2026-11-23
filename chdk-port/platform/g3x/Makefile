@@ -54,13 +54,11 @@ CFLAGS += -DG3X_MOVIE_AUTOCONT=1
 ifeq ($(findstring -DG3X_MOVIE_STATUS=1,$(CFLAGS)),)
 CFLAGS += -DG3X_MOVIE_STATUS=1
 endif
-ifneq ($(G3X_CONF_SAVE),1)
 ifeq ($(findstring -DG3X_DISABLE_CARD_WRITES=1,$(CFLAGS)),)
 CFLAGS += -DG3X_DISABLE_CARD_WRITES=1
 endif
 ifeq ($(findstring -DOPT_DISABLE_FILE_WRITES=1,$(CFLAGS)),)
 CFLAGS += -DOPT_DISABLE_FILE_WRITES=1
-endif
 endif
 endif
 
@@ -83,19 +81,13 @@ endif
 CFLAGS += -DG3X_MOVIE_NOLIMIT=1
 endif
 
-ifeq ($(G3X_CONF_SAVE),1)
-CFLAGS += -DG3X_CONF_SAVE=1
-endif
-
 ifeq ($(G3X_PLAYBACK_MENU),1)
 CFLAGS += -DG3X_PLAYBACK_MENU=1
-ifneq ($(G3X_CONF_SAVE),1)
 ifeq ($(findstring -DG3X_DISABLE_CARD_WRITES=1,$(CFLAGS)),)
 CFLAGS += -DG3X_DISABLE_CARD_WRITES=1
 endif
 ifeq ($(findstring -DOPT_DISABLE_FILE_WRITES=1,$(CFLAGS)),)
 CFLAGS += -DOPT_DISABLE_FILE_WRITES=1
-endif
 endif
 endif
 
