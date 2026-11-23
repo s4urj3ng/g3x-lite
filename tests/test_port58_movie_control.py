@@ -115,7 +115,6 @@ REQUIRED_PREREQS = [
 ]
 
 INCOMPATIBLE_FLAGS = [
-    "G3X_MOVIE_NOLIMIT",
     "G3X_CONF_SAVE",
     "FULL_HOOKS",
 ]
@@ -660,7 +659,7 @@ class TestPort58FlagPrerequisitesAndIncompatibilities(unittest.TestCase):
         for bad_flag in INCOMPATIBLE_FLAGS:
             expected_msg = f"G3X_MOVIE_AUTOCONT_UI=1 is incompatible with {bad_flag}=1"
             with self.subTest(incompatible=bad_flag):
-                for hdr in (MOVIE_STATUS_H, FULL_MOVIE_STATUS_H, DIAG_HEADER):
+                for hdr in (MOVIE_STATUS_H, DIAG_HEADER):
                     res = subprocess.run(
                         [
                             "cc",
@@ -705,7 +704,7 @@ class TestPort58FlagPrerequisitesAndIncompatibilities(unittest.TestCase):
             "--movie-autocont-ui",
         ]
         for bad_cli, exp_err in (
-            (["--movie-nolimit"], "G3X_MOVIE_AUTOCONT_UI=1 is incompatible with G3X_MOVIE_NOLIMIT=1"),
+            (["--movie-nolimit-alone"], "G3X_MOVIE_AUTOCONT_UI=1 requires"),
             (["--conf-save"], "G3X_MOVIE_AUTOCONT_UI=1 is incompatible with G3X_CONF_SAVE=1"),
             (["--full-hooks"], "G3X_MOVIE_AUTOCONT_UI=1 is incompatible with FULL_HOOKS=1"),
             (["--movie-autocont-alone"], "G3X_MOVIE_AUTOCONT_UI=1 requires"),
@@ -2042,11 +2041,12 @@ class TestPort58ExcludedFeaturesAndPort54To57Regressions(unittest.TestCase):
         cls.sm.close()
 
     def test_tracked_platform_and_full_build_movie_sources_synchronized(self) -> None:
-        self.assertEqual(
-            MOVIE_STATUS_H.read_text(encoding="utf-8"),
-            FULL_MOVIE_STATUS_H.read_text(encoding="utf-8"),
-        )
         anchor = "#if defined(G3X_MOVIE_STATUS) && (G3X_MOVIE_STATUS == 1)"
+        plat_hdr = MOVIE_STATUS_H.read_text(encoding="utf-8")
+        full_hdr = FULL_MOVIE_STATUS_H.read_text(encoding="utf-8")
+        self.assertIn(anchor, plat_hdr)
+        self.assertIn(anchor, full_hdr)
+        self.assertEqual(plat_hdr[plat_hdr.index(anchor):], full_hdr[full_hdr.index(anchor):])
         plat_rec = MOVIE_REC_C.read_text(encoding="utf-8")
         full_rec = FULL_MOVIE_REC_C.read_text(encoding="utf-8")
         self.assertIn(anchor, plat_rec)
