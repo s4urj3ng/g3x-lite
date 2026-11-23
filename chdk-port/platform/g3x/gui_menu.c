@@ -51,6 +51,24 @@ int gui_menu_needs_redraw(void)
 {
     if (camera_info.state.gui_mode != GUI_MODE_MENU)
         return 0;
+#if defined(G3X_MOVIE_AUTOCONT_UI) && (G3X_MOVIE_AUTOCONT_UI == 1)
+    {
+        extern int g3x_movie_autocont_is_enabled(void);
+        extern int g3x_movie_autocont_get_state(void);
+        extern int g3x_movie_autocont_get_disarm_reason(void);
+        static unsigned int last_ac_sig = 0xFFFFFFFFU;
+        unsigned int cur_ac_sig =
+            ((unsigned int)(g3x_movie_autocont_is_enabled() & 0xFF) << 16) |
+            ((unsigned int)(g3x_movie_autocont_get_state() & 0xFF) << 8) |
+            ((unsigned int)(g3x_movie_autocont_get_disarm_reason() & 0xFF));
+        if (cur_ac_sig != last_ac_sig)
+        {
+            last_ac_sig = cur_ac_sig;
+            if (gui_menu_redraw == 0)
+                gui_menu_redraw = 1;
+        }
+    }
+#endif
     return gui_menu_redraw != 0;
 }
 
