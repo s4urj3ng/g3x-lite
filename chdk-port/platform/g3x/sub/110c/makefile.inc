@@ -42,9 +42,6 @@ endif
 ifneq ($(G3X_GUI_SHADOW2),1)
 $(error G3X_MOVIE_AUTOCONT_UI=1 requires G3X_MOVIE_AUTOCONT=1 G3X_MOVIE_STATUS=1 G3X_GUI_MENU=1 G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)
 endif
-ifeq ($(G3X_MOVIE_NOLIMIT),1)
-$(error G3X_MOVIE_AUTOCONT_UI=1 is incompatible with G3X_MOVIE_NOLIMIT=1)
-endif
 ifeq ($(G3X_CONF_SAVE),1)
 $(error G3X_MOVIE_AUTOCONT_UI=1 is incompatible with G3X_CONF_SAVE=1)
 endif
@@ -57,6 +54,20 @@ endif
 endif
 
 ifeq ($(G3X_MOVIE_AUTOCONT),1)
+ifneq ($(G3X_MOVIE_STATUS),1)
+$(error G3X_MOVIE_AUTOCONT=1 requires G3X_MOVIE_STATUS=1)
+endif
+ifeq ($(G3X_MOVIE_NOLIMIT),1)
+ifneq ($(G3X_MOVIE_AUTOCONT_UI),1)
+$(error Combining G3X_MOVIE_NOLIMIT=1 and G3X_MOVIE_AUTOCONT=1 requires G3X_MOVIE_AUTOCONT_UI=1)
+endif
+endif
+ifeq ($(G3X_CONF_SAVE),1)
+$(error G3X_MOVIE_AUTOCONT=1 is incompatible with G3X_CONF_SAVE=1)
+endif
+ifeq ($(FULL_HOOKS),1)
+$(error G3X_MOVIE_AUTOCONT=1 is incompatible with FULL_HOOKS=1)
+endif
 ifeq ($(findstring -DG3X_MOVIE_AUTOCONT=1,$(CFLAGS)),)
 CFLAGS += -DG3X_MOVIE_AUTOCONT=1
 endif
@@ -80,6 +91,15 @@ endif
 endif
 
 ifeq ($(G3X_MOVIE_NOLIMIT),1)
+ifneq ($(G3X_MOVIE_STATUS),1)
+$(error G3X_MOVIE_NOLIMIT=1 requires G3X_MOVIE_STATUS=1)
+endif
+ifeq ($(G3X_CONF_SAVE),1)
+$(error G3X_MOVIE_NOLIMIT=1 is incompatible with G3X_CONF_SAVE=1)
+endif
+ifeq ($(FULL_HOOKS),1)
+$(error G3X_MOVIE_NOLIMIT=1 is incompatible with FULL_HOOKS=1)
+endif
 ifeq ($(findstring -DG3X_MOVIE_NOLIMIT=1,$(CFLAGS)),)
 CFLAGS += -DG3X_MOVIE_NOLIMIT=1
 endif

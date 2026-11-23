@@ -34,14 +34,40 @@
     !defined(G3X_GUI_SHADOW2) || (G3X_GUI_SHADOW2 != 1)
 #error G3X_MOVIE_AUTOCONT_UI=1 requires G3X_MOVIE_AUTOCONT=1 G3X_MOVIE_STATUS=1 G3X_GUI_MENU=1 G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1
 #endif
-#if defined(G3X_MOVIE_NOLIMIT) && (G3X_MOVIE_NOLIMIT == 1)
-#error G3X_MOVIE_AUTOCONT_UI=1 is incompatible with G3X_MOVIE_NOLIMIT=1
-#endif
 #if defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1)
 #error G3X_MOVIE_AUTOCONT_UI=1 is incompatible with G3X_CONF_SAVE=1
 #endif
 #if defined(FULL_HOOKS) && (FULL_HOOKS == 1)
 #error G3X_MOVIE_AUTOCONT_UI=1 is incompatible with FULL_HOOKS=1
+#endif
+#endif
+
+#if defined(G3X_MOVIE_AUTOCONT) && (G3X_MOVIE_AUTOCONT == 1)
+#if !defined(G3X_MOVIE_STATUS) || (G3X_MOVIE_STATUS != 1)
+#error G3X_MOVIE_AUTOCONT=1 requires G3X_MOVIE_STATUS=1
+#endif
+#if defined(G3X_MOVIE_NOLIMIT) && (G3X_MOVIE_NOLIMIT == 1)
+#if !defined(G3X_MOVIE_AUTOCONT_UI) || (G3X_MOVIE_AUTOCONT_UI != 1)
+#error Combining G3X_MOVIE_NOLIMIT=1 and G3X_MOVIE_AUTOCONT=1 requires G3X_MOVIE_AUTOCONT_UI=1
+#endif
+#endif
+#if defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1)
+#error G3X_MOVIE_AUTOCONT=1 is incompatible with G3X_CONF_SAVE=1
+#endif
+#if defined(FULL_HOOKS) && (FULL_HOOKS == 1)
+#error G3X_MOVIE_AUTOCONT=1 is incompatible with FULL_HOOKS=1
+#endif
+#endif
+
+#if defined(G3X_MOVIE_NOLIMIT) && (G3X_MOVIE_NOLIMIT == 1)
+#if !defined(G3X_MOVIE_STATUS) || (G3X_MOVIE_STATUS != 1)
+#error G3X_MOVIE_NOLIMIT=1 requires G3X_MOVIE_STATUS=1
+#endif
+#if defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1)
+#error G3X_MOVIE_NOLIMIT=1 is incompatible with G3X_CONF_SAVE=1
+#endif
+#if defined(FULL_HOOKS) && (FULL_HOOKS == 1)
+#error Movie time-limit defeat is incompatible with FULL_HOOKS=1
 #endif
 #endif
 
@@ -1094,6 +1120,16 @@ void g3x_diag_format_line2(char *line)
     const char *mov_str = g3x_movie_status_str();
 #if defined(G3X_MOVIE_AUTOCONT_UI) && (G3X_MOVIE_AUTOCONT_UI == 1)
     const char *ac_str = g3x_movie_autocont_ui_status_str();
+#if defined(G3X_MOVIE_NOLIMIT) && (G3X_MOVIE_NOLIMIT == 1)
+    const char *lim_str = g3x_movie_nolimit_status_str();
+    sprintf(line, "MENU:%04u SAVE:%s MOV:%s LIM:%s AC:%s Rs:%04u",
+            g3x_diag_clamp9999(g3x_menu_open_count),
+            save_str,
+            mov_str,
+            lim_str,
+            ac_str,
+            g3x_diag_clamp9999(g3x_diag_sync_restore_count));
+#else
     sprintf(line, "MENU:%04u SAVE:%s MOV:%s AC:%s Rs:%04u Rp:%04u",
             g3x_diag_clamp9999(g3x_menu_open_count),
             save_str,
@@ -1101,6 +1137,7 @@ void g3x_diag_format_line2(char *line)
             ac_str,
             g3x_diag_clamp9999(g3x_diag_sync_restore_count),
             g3x_diag_clamp9999(g3x_diag_poll_restore_count));
+#endif
 #elif defined(G3X_MOVIE_NOLIMIT) && (G3X_MOVIE_NOLIMIT == 1)
     const char *lim_str = g3x_movie_nolimit_status_str();
     sprintf(line, "MENU:%04u SAVE:%s MOV:%s LIM:%s Rs:%04u Rp:%04u",
@@ -1478,11 +1515,21 @@ void gui_diag_draw(void)
     const char *mov_str = g3x_movie_status_str();
 #if defined(G3X_MOVIE_AUTOCONT_UI) && (G3X_MOVIE_AUTOCONT_UI == 1)
     const char *ac_str = g3x_movie_autocont_ui_status_str();
+#if defined(G3X_MOVIE_NOLIMIT) && (G3X_MOVIE_NOLIMIT == 1)
+    const char *lim_str = g3x_movie_nolimit_status_str();
+    sprintf(menu_line, "MENU:%04u SAVE:%s MOV:%s LIM:%s AC:%s",
+            g3x_diag_clamp9999(g3x_menu_open_count),
+            save_str,
+            mov_str,
+            lim_str,
+            ac_str);
+#else
     sprintf(menu_line, "MENU:%04u SAVE:%s MOV:%s AC:%s",
             g3x_diag_clamp9999(g3x_menu_open_count),
             save_str,
             mov_str,
             ac_str);
+#endif
 #elif defined(G3X_MOVIE_NOLIMIT) && (G3X_MOVIE_NOLIMIT == 1)
     const char *lim_str = g3x_movie_nolimit_status_str();
     sprintf(menu_line, "MENU:%04u SAVE:%s MOV:%s LIM:%s",
@@ -1631,12 +1678,23 @@ void g3x_playback_menu_diag_format(char *buf, unsigned int max_len)
     const char *mov_str = g3x_movie_status_str();
 #if defined(G3X_MOVIE_AUTOCONT_UI) && (G3X_MOVIE_AUTOCONT_UI == 1)
     const char *ac_str = g3x_movie_autocont_ui_status_str();
+#if defined(G3X_MOVIE_NOLIMIT) && (G3X_MOVIE_NOLIMIT == 1)
+    const char *lim_str = g3x_movie_nolimit_status_str();
+    sprintf(buf, "MENU:%04u SAVE:%s MOV:%s LIM:%s AC:%s ED:%04u",
+             g3x_diag_clamp9999(g3x_playback_menu_open_count),
+             save_str,
+             mov_str,
+             lim_str,
+             ac_str,
+             g3x_diag_clamp9999(g3x_playback_menu_item_edit_count));
+#else
     sprintf(buf, "MENU:%04u SAVE:%s MOV:%s AC:%s ED:%04u",
              g3x_diag_clamp9999(g3x_playback_menu_open_count),
              save_str,
              mov_str,
              ac_str,
              g3x_diag_clamp9999(g3x_playback_menu_item_edit_count));
+#endif
 #elif defined(G3X_MOVIE_NOLIMIT) && (G3X_MOVIE_NOLIMIT == 1)
     const char *lim_str = g3x_movie_nolimit_status_str();
     sprintf(buf, "MENU:%04u SAVE:%s MOV:%s LIM:%s ED:%04u",
