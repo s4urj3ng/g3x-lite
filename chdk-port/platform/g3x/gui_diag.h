@@ -115,6 +115,10 @@ const char *g3x_conf_save_get_diag_str(void);
 #endif
 #endif /* G3X_CONF_SAVE */
 
+#if defined(G3X_MOVIE_STATUS) && (G3X_MOVIE_STATUS == 1)
+#include "movie_status.h"
+#endif
+
 #if defined(G3X_GUI_RESTORE2) && (G3X_GUI_RESTORE2 == 1)
 #if !defined(G3X_GUI_MENU) || (G3X_GUI_MENU != 1) || \
     !defined(G3X_GUI_SYNC) || (G3X_GUI_SYNC != 1) || \
@@ -1063,6 +1067,17 @@ void g3x_diag_format_line2(char *line)
                            (g3x_conf_save_status == G3X_CONF_SAVE_OK)  ? "OK" :
                            (g3x_conf_save_status == G3X_CONF_SAVE_ERR) ? "ERR" : "-";
 #endif
+#if defined(G3X_MOVIE_STATUS) && (G3X_MOVIE_STATUS == 1)
+    const char *mov_str = g3x_movie_status_str();
+    sprintf(line, "MENU:%04u SAVE:%s MOV:%s Rs:%04u Rp:%04u B:%u/%ums",
+            g3x_diag_clamp9999(g3x_menu_open_count),
+            save_str,
+            mov_str,
+            g3x_diag_clamp9999(g3x_diag_sync_restore_count),
+            g3x_diag_clamp9999(g3x_diag_poll_restore_count),
+            g3x_diag_clamp999(g3x_diag_blit_last_ms),
+            g3x_diag_clamp999(g3x_diag_blit_max_ms));
+#else
     sprintf(line, "MENU:%04u SAVE:%s Rs:%04u Rp:%04u B:%u/%ums",
             g3x_diag_clamp9999(g3x_menu_open_count),
             save_str,
@@ -1070,6 +1085,7 @@ void g3x_diag_format_line2(char *line)
             g3x_diag_clamp9999(g3x_diag_poll_restore_count),
             g3x_diag_clamp999(g3x_diag_blit_last_ms),
             g3x_diag_clamp999(g3x_diag_blit_max_ms));
+#endif
 }
 
 void g3x_diag_format_menu_line(char *line)
@@ -1411,9 +1427,17 @@ void gui_diag_draw(void)
                            (g3x_conf_save_status == G3X_CONF_SAVE_OK)  ? "OK" :
                            (g3x_conf_save_status == G3X_CONF_SAVE_ERR) ? "ERR" : "-";
 #endif
+#if defined(G3X_MOVIE_STATUS) && (G3X_MOVIE_STATUS == 1)
+    const char *mov_str = g3x_movie_status_str();
+    sprintf(menu_line, "MENU:%04u SAVE:%s MOV:%s",
+            g3x_diag_clamp9999(g3x_menu_open_count),
+            save_str,
+            mov_str);
+#else
     sprintf(menu_line, "MENU:%04u SAVE:%s",
             g3x_diag_clamp9999(g3x_menu_open_count),
             save_str);
+#endif
     int y_menu = camera_screen.height - 3 * FONT_HEIGHT;
     int mlen = (int)strlen(menu_line);
     g3x_dbuf_fast_fill_rect(G3X_MENU_X0, y_menu, G3X_MENU_X1, y_menu + FONT_HEIGHT - 1, COLOR_BLACK);
@@ -1540,10 +1564,19 @@ void g3x_playback_menu_diag_format(char *buf, unsigned int max_len)
                            (g3x_conf_save_status == G3X_CONF_SAVE_OK)  ? "OK" :
                            (g3x_conf_save_status == G3X_CONF_SAVE_ERR) ? "ERR" : "-";
 #endif
+#if defined(G3X_MOVIE_STATUS) && (G3X_MOVIE_STATUS == 1)
+    const char *mov_str = g3x_movie_status_str();
+    sprintf(buf, "MENU:%04u SAVE:%s MOV:%s ED:%04u",
+             g3x_playback_menu_open_count,
+             save_str,
+             mov_str,
+             g3x_playback_menu_item_edit_count);
+#else
     sprintf(buf, "MENU:%04u SAVE:%s ED:%04u",
              g3x_playback_menu_open_count,
              save_str,
              g3x_playback_menu_item_edit_count);
+#endif
 }
 
 #ifndef FONT_WIDTH

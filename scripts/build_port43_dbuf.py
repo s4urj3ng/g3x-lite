@@ -2595,6 +2595,31 @@ def apply_port54_conf_save_staging_patches(stage_dir: Path, alone: bool = False)
         main_c.write_text(main_text, encoding="utf-8")
 
 
+def apply_movie_status_staging_patches(stage_dir: Path, alone: bool = False) -> None:
+    """PORT-55: Apply G3X_MOVIE_STATUS=1 compile flags, movie status headers, and stubs."""
+    shutil.copy2(CHDK_PORT / "platform/g3x/gui_diag.h", stage_dir / "platform/g3x/gui_diag.h")
+    shutil.copy2(CHDK_PORT / "platform/g3x/movie_status.h", stage_dir / "platform/g3x/movie_status.h")
+    shutil.copy2(CHDK_PORT / "platform/g3x/sub/110c/movie_rec.c", stage_dir / "platform/g3x/sub/110c/movie_rec.c")
+    shutil.copy2(CHDK_PORT / "platform/g3x/sub/110c/stubs_min.S", stage_dir / "platform/g3x/sub/110c/stubs_min.S")
+
+    # Update makefiles with -DG3X_MOVIE_STATUS=1
+    for rel in ["platform/g3x/Makefile", "platform/g3x/sub/110c/Makefile"]:
+        mpath = stage_dir / rel
+        text = mpath.read_text(encoding="utf-8")
+        if "-DG3X_MOVIE_STATUS=1" not in text:
+            if "CFLAGS += -DG3X_PLAYBACK_MENU=1" in text:
+                text = text.replace("CFLAGS += -DG3X_PLAYBACK_MENU=1", "CFLAGS += -DG3X_PLAYBACK_MENU=1 -DG3X_MOVIE_STATUS=1")
+            elif "CFLAGS += -DG3X_FULL_BUILD=1" in text:
+                text = text.replace("CFLAGS += -DG3X_FULL_BUILD=1", "CFLAGS += -DG3X_FULL_BUILD=1 -DG3X_MOVIE_STATUS=1")
+            elif "CFLAGS +=" in text:
+                text = text.replace("CFLAGS +=", "CFLAGS += -DG3X_MOVIE_STATUS=1", 1)
+            elif "CFLAGS =" in text:
+                text = text.replace("CFLAGS =", "CFLAGS = -DG3X_MOVIE_STATUS=1", 1)
+            else:
+                text += "\nCFLAGS += -DG3X_MOVIE_STATUS=1\n"
+        mpath.write_text(text, encoding="utf-8")
+
+
 def build_port43_dbuf(
     clean_stage: bool = True,
     keep_stage: bool = True,
@@ -2611,6 +2636,8 @@ def build_port43_dbuf(
     playback_menu_alone: bool = False,
     conf_save: bool = False,
     conf_save_alone: bool = False,
+    movie_status: bool = False,
+    movie_status_alone: bool = False,
 ) -> int:
     has_menu_or_dbuf = (
         playback_menu
@@ -2626,9 +2653,27 @@ def build_port43_dbuf(
     )
     if conf_save and not has_menu_or_dbuf:
         conf_save_alone = True
+    if movie_status and not has_menu_or_dbuf and not conf_save:
+        movie_status_alone = True
 
-    if conf_save_alone:
+    if movie_status_alone:
+        movie_status = True
+        conf_save = False
+        conf_save_alone = False
+        playback_menu = False
+        playback_menu_alone = False
+        gui_restore2 = False
+        gui_menu = False
+        gui_sync = False
+        shadow2 = False
+        gui_diag = False
+        kbd_check = False
+        no_overdraw = False
+        full_hooks = False
+    elif conf_save_alone:
         conf_save = True
+        movie_status = False
+        movie_status_alone = False
         playback_menu = False
         playback_menu_alone = False
         gui_restore2 = False
@@ -2676,6 +2721,11 @@ def build_port43_dbuf(
 
     if out_dir is not None:
         effective_out_dir = Path(out_dir).resolve()
+    elif movie_status_alone:
+        effective_out_dir = REPO_ROOT / "out" / "build-movie-alone"
+    elif movie_status and not conf_save:
+        suffix = "-full-hooks" if full_hooks else ""
+        effective_out_dir = REPO_ROOT / "out" / ("port55-movie-status" + suffix)
     elif conf_save_alone:
         effective_out_dir = REPO_ROOT / "out" / "port54-conf-save-alone"
     elif conf_save:
@@ -2754,7 +2804,7 @@ def build_port43_dbuf(
             proto_file.unlink()
 
     # Apply FULL_HOOKS patches if requested
-    if not playback_menu_alone and not conf_save_alone:
+    if not playback_menu_alone and not conf_save_alone and not movie_status_alone:
         if full_hooks:
             print("FULL_HOOKS=1 enabled: Applying FINSIG-confirmed hook staging patches...")
             apply_full_hooks_staging_patches(effective_stage_dir)
@@ -2807,6 +2857,10 @@ def build_port43_dbuf(
         print("G3X_CONF_SAVE=1: Applying A/CHDK/ path check and conf_save hooks...")
         apply_port54_conf_save_staging_patches(effective_stage_dir, alone=conf_save_alone)
 
+    if movie_status:
+        print("G3X_MOVIE_STATUS=1: Applying read-only movie status accessor and MOV: diag marker...")
+        apply_movie_status_staging_patches(effective_stage_dir, alone=movie_status_alone)
+
     # Clean platform objects in staging copy
     for subpath in ["platform/g3x", "platform/g3x/sub/110c", "loader/g3x"]:
         p = effective_stage_dir / subpath
@@ -2825,7 +2879,9 @@ def build_port43_dbuf(
             ])
             if conf_save:
                 clean_cmd.append("G3X_CONF_SAVE=1")
-            if not playback_menu_alone and not conf_save_alone:
+            if movie_status:
+                clean_cmd.append("G3X_MOVIE_STATUS=1")
+            if not playback_menu_alone and not conf_save_alone and not movie_status_alone:
                 clean_cmd.extend(["G3X_GUI_FIX=1", "G3X_GUI_DBUF=1"])
                 if no_overdraw:
                     clean_cmd.append("G3X_GUI_NOOVERDRAW=1")
@@ -2868,11 +2924,13 @@ def build_port43_dbuf(
     ])
     if conf_save:
         cmd.append("G3X_CONF_SAVE=1")
+    if movie_status:
+        cmd.append("G3X_MOVIE_STATUS=1")
     cmd.extend([
         f"CROSS_COMPILE={CROSS_COMPILE}",
         "OPT_CAPSTONE_TOOLS=0",
     ])
-    if not playback_menu_alone and not conf_save_alone:
+    if not playback_menu_alone and not conf_save_alone and not movie_status_alone:
         cmd.extend(["G3X_GUI_FIX=1", "G3X_GUI_DBUF=1"])
         if no_overdraw:
             cmd.append("G3X_GUI_NOOVERDRAW=1")
@@ -2906,7 +2964,9 @@ def build_port43_dbuf(
     env["OPT_DISABLE_FILE_WRITES"] = "1"
     if conf_save:
         env["G3X_CONF_SAVE"] = "1"
-    if not playback_menu_alone and not conf_save_alone:
+    if movie_status:
+        env["G3X_MOVIE_STATUS"] = "1"
+    if not playback_menu_alone and not conf_save_alone and not movie_status_alone:
         env["G3X_GUI_FIX"] = "1"
         env["G3X_GUI_DBUF"] = "1"
         if no_overdraw:
@@ -2986,7 +3046,14 @@ def build_port43_dbuf(
             }
 
     # Manifest
-    if conf_save_alone:
+    if movie_status_alone:
+        build_flags = [
+            "G3X_FULL_BUILD=1",
+            "G3X_DISABLE_CARD_WRITES=1",
+            "OPT_DISABLE_FILE_WRITES=1",
+            "G3X_MOVIE_STATUS=1",
+        ]
+    elif conf_save_alone:
         build_flags = [
             "G3X_FULL_BUILD=1",
             "G3X_DISABLE_CARD_WRITES=1",
@@ -3028,6 +3095,8 @@ def build_port43_dbuf(
             build_flags.append("G3X_GUI_RESTORE2=1")
         if playback_menu:
             build_flags.append("G3X_PLAYBACK_MENU=1")
+        if movie_status:
+            build_flags.append("G3X_MOVIE_STATUS=1")
         if full_hooks:
             build_flags.insert(1, "FULL_HOOKS=1")
 
@@ -3052,6 +3121,10 @@ def build_port43_dbuf(
         manifest_name = "port54_conf_save_alone_manifest.json"
     elif conf_save:
         manifest_name = "port54_conf_save_manifest.json"
+    if movie_status_alone:
+        manifest_name = "port55_movie_status_alone_manifest.json"
+    elif movie_status and not conf_save:
+        manifest_name = "port55_movie_status_manifest.json"
     manifest_data: dict[str, object] = {
         "build": {
             "platform": "g3x",
@@ -3078,7 +3151,7 @@ def build_port43_dbuf(
             "chdk_files": chdk_files_map,
         },
     }
-    if gui_diag or playback_menu or conf_save:
+    if gui_diag or playback_menu or conf_save or movie_status:
         nm_bin = TOOLCHAIN_BIN / "arm-none-eabi-nm"
         main_elf = effective_stage_dir / "platform" / "g3x" / "sub" / "110c" / "main.elf"
         nm_out = subprocess.check_output([str(nm_bin), str(main_elf)], text=True)
@@ -3153,7 +3226,13 @@ def build_port43_dbuf(
             "save_int_value_file",
         ]
 
-    if conf_save and not conf_save_alone:
+    if movie_status and not movie_status_alone and not conf_save:
+        manifest_data["manifest_id"] = "port55_movie_status_manifest"
+        manifest_data["milestone"] = "PORT-55"
+        manifest_data["command"] = (
+            "python3 -B scripts/build_port43_dbuf.py --no-overdraw --kbd-check --gui-diag --shadow2 --gui-sync --gui-menu --gui-restore2 --playback-menu --movie-status --out-dir out/port55-movie-status"
+        )
+    elif conf_save and not conf_save_alone:
         manifest_data["manifest_id"] = "port54_conf_save_manifest"
         manifest_data["milestone"] = "PORT-54"
         manifest_data["command"] = (
@@ -3195,7 +3274,12 @@ def build_port43_dbuf(
         f.write("\n")
     print(f"[OK] Manifest written to {manifest_path}")
 
-    if conf_save and not conf_save_alone:
+    if movie_status and not movie_status_alone and not conf_save:
+        repo_manifest = REPO_ROOT / "manifests" / "port55_movie_status_manifest.json"
+        repo_manifest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(manifest_path, repo_manifest)
+        print(f"[OK] Candidate manifest copied to {repo_manifest}")
+    elif conf_save and not conf_save_alone:
         repo_manifest = REPO_ROOT / "manifests" / "port54_conf_save_manifest.json"
         repo_manifest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(manifest_path, repo_manifest)
@@ -3234,6 +3318,8 @@ def main() -> int:
     parser.add_argument("--playback-menu-alone", action="store_true", help="Build G3X_PLAYBACK_MENU=1 alone without DBUF/menu stack")
     parser.add_argument("--conf-save", action="store_true", default=os.environ.get("G3X_CONF_SAVE") == "1", help="Enable G3X_CONF_SAVE=1 opt-in settings save with central A/CHDK/ path check")
     parser.add_argument("--conf-save-alone", action="store_true", help="Build G3X_CONF_SAVE=1 alone without DBUF/menu stack")
+    parser.add_argument("--movie-status", action="store_true", default=os.environ.get("G3X_MOVIE_STATUS") == "1", help="Enable G3X_MOVIE_STATUS=1 read-only movie state accessor and MOV: diag marker")
+    parser.add_argument("--movie-status-alone", action="store_true", help="Build G3X_MOVIE_STATUS=1 alone without DBUF/menu stack")
     parser.add_argument("--no-clean", action="store_true", help="Do not clean staging before building")
     parser.add_argument("--discard-stage", action="store_true", help="Remove stage directory after build")
     parser.add_argument("--out-dir", type=str, default=None, help="Custom output directory")
@@ -3255,6 +3341,8 @@ def main() -> int:
         playback_menu_alone=args.playback_menu_alone,
         conf_save=args.conf_save,
         conf_save_alone=args.conf_save_alone,
+        movie_status=args.movie_status,
+        movie_status_alone=args.movie_status_alone,
     )
 
 

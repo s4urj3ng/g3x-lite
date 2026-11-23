@@ -1,3 +1,7 @@
+ifeq ($(G3X_MOVIE_STATUS),1)
+CFLAGS += -DG3X_MOVIE_STATUS=1
+endif
+
 ifeq ($(G3X_CONF_SAVE),1)
 CFLAGS += -DG3X_CONF_SAVE=1
 endif
