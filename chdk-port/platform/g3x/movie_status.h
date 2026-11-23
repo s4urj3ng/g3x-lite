@@ -1,6 +1,35 @@
 #ifndef G3X_MOVIE_STATUS_H
 #define G3X_MOVIE_STATUS_H
 
+#if defined(G3X_MOVIE_AUTOCONT_UI) && (G3X_MOVIE_AUTOCONT_UI == 1)
+#if !defined(G3X_MOVIE_AUTOCONT) || (G3X_MOVIE_AUTOCONT != 1) || \
+    !defined(G3X_MOVIE_STATUS) || (G3X_MOVIE_STATUS != 1) || \
+    !defined(G3X_GUI_MENU) || (G3X_GUI_MENU != 1) || \
+    !defined(G3X_GUI_SYNC) || (G3X_GUI_SYNC != 1) || \
+    !defined(G3X_GUI_DBUF) || (G3X_GUI_DBUF != 1) || \
+    !defined(G3X_GUI_NOOVERDRAW) || (G3X_GUI_NOOVERDRAW != 1) || \
+    !defined(G3X_KBD_CHECK) || (G3X_KBD_CHECK != 1) || \
+    !defined(G3X_GUI_DIAG) || (G3X_GUI_DIAG != 1) || \
+    !defined(G3X_GUI_SHADOW2) || (G3X_GUI_SHADOW2 != 1)
+#error G3X_MOVIE_AUTOCONT_UI=1 requires G3X_MOVIE_AUTOCONT=1 G3X_MOVIE_STATUS=1 G3X_GUI_MENU=1 G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1
+#endif
+#if defined(G3X_MOVIE_NOLIMIT) && (G3X_MOVIE_NOLIMIT == 1)
+#error G3X_MOVIE_AUTOCONT_UI=1 is incompatible with G3X_MOVIE_NOLIMIT=1
+#endif
+#if defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1)
+#error G3X_MOVIE_AUTOCONT_UI=1 is incompatible with G3X_CONF_SAVE=1
+#endif
+#if defined(FULL_HOOKS) && (FULL_HOOKS == 1)
+#error G3X_MOVIE_AUTOCONT_UI=1 is incompatible with FULL_HOOKS=1
+#endif
+#endif
+
+#if defined(G3X_MOVIE_AUTOCONT) && (G3X_MOVIE_AUTOCONT == 1)
+#if !defined(G3X_MOVIE_STATUS) || (G3X_MOVIE_STATUS != 1)
+#error G3X_MOVIE_AUTOCONT=1 requires G3X_MOVIE_STATUS=1
+#endif
+#endif
+
 #if defined(G3X_MOVIE_STATUS) && (G3X_MOVIE_STATUS == 1)
 
 /* Address of GM1.10C MovieRecorder recording state (mr_rec_state).
@@ -106,7 +135,7 @@ static inline const char *g3x_movie_nolimit_diag_str(void)
 
 #if defined(G3X_MOVIE_AUTOCONT) && (G3X_MOVIE_AUTOCONT == 1)
 
-/* PORT-57: Movie Auto-Continuation RAM addresses & evidence classifications:
+/* PORT-57 / PORT-58: Movie Auto-Continuation RAM addresses & evidence classifications:
  * -------------------------------------------------------------------------------------------------------------------
  * Address    | Variable              | Width    | Evidence Classification | Manifest / Source ID            | Access
  * -------------------------------------------------------------------------------------------------------------------
@@ -170,9 +199,22 @@ typedef enum {
     G3X_AUTOCONT_WAIT_CONFIRM = 6
 } g3x_movie_autocont_state_t;
 
+/* Explicit disarm / status reason metadata (PORT-58) */
+typedef enum {
+    G3X_AUTOCONT_REASON_NONE          = 0, /* Default at boot or active/ready without disarm event */
+    G3X_AUTOCONT_REASON_USER_OFF      = 1, /* Explicitly disabled by user */
+    G3X_AUTOCONT_REASON_PHYS_STOP     = 2, /* Terminal session stop/cancel via physical KEY_VIDEO */
+    G3X_AUTOCONT_REASON_PLAYBACK      = 3, /* Disarmed on entering playback mode (mode_play != 0) */
+    G3X_AUTOCONT_REASON_INVALID_STATE = 4, /* Disarmed on invalid or unexpected mr_rec_state */
+    G3X_AUTOCONT_REASON_STOP_FAULT    = 5, /* Disarmed on ineligible, stale, or error stop reason */
+    G3X_AUTOCONT_REASON_TIMEOUT       = 6  /* Disarmed on WAIT_IDLE or WAIT_CONFIRM timeout */
+} g3x_movie_autocont_reason_t;
+
 /* Read-only accessors for MovieRecorder limit and stop attribution fields */
+#if !defined(G3X_MOVIE_NOLIMIT) || (G3X_MOVIE_NOLIMIT != 1)
 unsigned int g3x_get_movie_max_frames(void);
 unsigned int g3x_get_movie_cur_frames(void);
+#endif
 unsigned int g3x_get_movie_stop_reason(void);
 unsigned int g3x_get_movie_segment_index(void);
 unsigned int g3x_get_movie_fs_reserve_size(void);
@@ -191,24 +233,26 @@ int g3x_movie_autocont_is_cancel_latched(void);
 unsigned int g3x_movie_autocont_get_last_stop_reason(void);
 unsigned int g3x_movie_autocont_get_restart_count(void);
 
+/* Volatile user control & status projections (PORT-58) */
+int g3x_movie_autocont_is_enabled(void);
+int g3x_movie_autocont_can_enable(void);
+int g3x_movie_autocont_set_enabled(int enable);
+int g3x_movie_autocont_get_disarm_reason(void);
+int g3x_movie_autocont_is_faulted(void);
+const char *g3x_movie_autocont_reason_str(void);
+const char *g3x_movie_autocont_ui_status_str(void);
+const char *g3x_movie_autocont_menu_str(void);
+const char *g3x_movie_autocont_menu_change(int change, int arg);
+void g3x_movie_autocont_menu_cb(void);
+int *g3x_movie_autocont_get_menu_bool_ptr(void);
+
 static inline const char *g3x_movie_autocont_status_str(void)
 {
-    int st = g3x_movie_autocont_get_state();
-    switch (st)
-    {
-        case G3X_AUTOCONT_DISARMED:     return "OFF";
-        case G3X_AUTOCONT_RECORDING:    return "ARM";
-        case G3X_AUTOCONT_WAIT_IDLE:    return "WAIT";
-        case G3X_AUTOCONT_SETTLE:       return "SETL";
-        case G3X_AUTOCONT_PRESSING:     return "PRS";
-        case G3X_AUTOCONT_RELEASING:    return "REL";
-        case G3X_AUTOCONT_WAIT_CONFIRM: return "CONF";
-        default:                        return "?";
-    }
+    return g3x_movie_autocont_ui_status_str();
 }
 
 #endif /* G3X_MOVIE_AUTOCONT == 1 */
 
-#endif /* G3X_MOVIE_STATUS == 1 || G3X_MOVIE_AUTOCONT == 1 */
+#endif /* G3X_MOVIE_STATUS == 1 */
 
 #endif /* G3X_MOVIE_STATUS_H */

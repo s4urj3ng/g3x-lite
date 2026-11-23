@@ -125,6 +125,10 @@ void my_kbd_read_keys()
     extern void g3x_movie_nolimit_poll(void);
     g3x_movie_nolimit_poll();
 #endif
+#if defined(G3X_MOVIE_AUTOCONT) && (G3X_MOVIE_AUTOCONT == 1)
+    extern void g3x_movie_autocont_poll(void);
+    g3x_movie_autocont_poll();
+#endif
 
     if (g3x_full_shortpress_active) {
         if (g3x_full_shortpress_margin_polls > 0) {
