@@ -1,0 +1,50 @@
+{
+  "manifest_id": "port54_evidence_manifest",
+  "milestone": "PORT-54",
+  "task": "PORT54-SAVE-RESEARCH",
+  "date": "2026-11-15",
+  "target": "PowerShot G3 X GM1.10C",
+  "deliverables": {
+    "doc": "docs/PORT54_CONF_SAVE.md"
+  },
+  "rom_reads": {
+    "rom_read_needed": false,
+    "full_rom_scan": false,
+    "ranges_read": [],
+    "reason": "All reached firmware file calls (Open, Close, Read, Write, stat, TakeSemaphore, GiveSemaphore, fileio_semaphore) use verified FINSIG addresses from reference/finsig_gm110c/stubs_entry.S. The only missing FINSIG stub among candidate file calls is RenameFile_Fut, which is not reached by conf save/load and is already covered by NULL_SUB and linker wrap; a bounded ROM range of 0xFC37B000..0xFC37F500 (length 0x4500) is proposed but no ROM read was performed."
+  },
+  "reference_files": [
+    {
+      "path": "reference/finsig_gm110c/stubs_entry.S",
+      "sha256": "f8a4697cb42b48560d430b7f502ff2f6ce5f12a8980fe8c272aba5de18d05166"
+    },
+    {
+      "path": "reference/finsig_gm110c/funcs_by_name.csv",
+      "sha256": "e837aab3a20b54ba3937570f4e0b3371de4b1bb19ef35727e5795803db007118"
+    },
+    {
+      "path": "chdk-port/core/conf.c",
+      "sha256": "b269d247060a325ddbc8932b610c831595dea084553735b65069b72467750677"
+    },
+    {
+      "path": "chdk-port/platform/generic/wrappers.c",
+      "sha256": "a1c5ec0b5b08dd26cad18eef7d57415a84e82abb4b2c86f344c2a1fa843617b2"
+    },
+    {
+      "path": "full_build/g3x/lib.c",
+      "sha256": "5777ab84d96bf9f68202d3194c7e042149aad805b1456616f5c7a3a6557ff808"
+    },
+    {
+      "path": "full_build/g3x/sub/110c/boot.c",
+      "sha256": "dc6d2565d2f6b3412f295004569576af6801a2a41199b2d7f67299302587dd39"
+    },
+    {
+      "path": "chdk-port/platform/g3x/gui_diag.h",
+      "sha256": "e668cf60606cde2f96a51c41b58259618af9e39133807370d600fe5e79e19591"
+    },
+    {
+      "path": "chdk-port/platform/g3x/sub/110c/filewrite.c",
+      "sha256": "315c7a896e434b14b6f5754158aa67ce2c0b7cf2ce4d35c03b979a7e8473ae62"
+    }
+  ]
+}

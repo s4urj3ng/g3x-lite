@@ -255,7 +255,10 @@ class TestPort53BuildAndArtifacts(unittest.TestCase):
             check=True,
         )
 
-        if not (cls.build_a / "DISKBOOT.BIN").is_file():
+        if (
+            not (cls.build_a / "DISKBOOT.BIN").is_file()
+            or not (cls.build_a / "stage_chdk/platform/g3x/sub/110c/main.elf").is_file()
+        ):
             subprocess.run(
                 [
                     sys.executable,
