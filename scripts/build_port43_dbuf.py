@@ -2620,6 +2620,43 @@ def apply_movie_status_staging_patches(stage_dir: Path, alone: bool = False) -> 
         mpath.write_text(text, encoding="utf-8")
 
 
+def apply_movie_nolimit_staging_patches(stage_dir: Path, alone: bool = False) -> None:
+    """PORT-56: Apply G3X_MOVIE_NOLIMIT=1 compile flags, headers, and stubs."""
+    apply_movie_status_staging_patches(stage_dir, alone=alone)
+
+    # Ensure kbd.c calls g3x_movie_nolimit_poll inside my_kbd_read_keys
+    kbd_c = stage_dir / "platform/g3x/kbd.c"
+    if kbd_c.is_file():
+        kbd_text = kbd_c.read_text(encoding="utf-8")
+        if "g3x_movie_nolimit_poll" not in kbd_text:
+            anchor = "kbd_update_physw_bits();\n"
+            if anchor in kbd_text:
+                replacement = (
+                    "kbd_update_physw_bits();\n"
+                    "#if defined(G3X_MOVIE_NOLIMIT) && (G3X_MOVIE_NOLIMIT == 1)\n"
+                    "    extern void g3x_movie_nolimit_poll(void);\n"
+                    "    g3x_movie_nolimit_poll();\n"
+                    "#endif\n"
+                )
+                kbd_text = kbd_text.replace(anchor, replacement, 1)
+                kbd_c.write_text(kbd_text, encoding="utf-8")
+
+    # Update makefiles with -DG3X_MOVIE_NOLIMIT=1
+    for rel in ["platform/g3x/Makefile", "platform/g3x/sub/110c/Makefile"]:
+        mpath = stage_dir / rel
+        text = mpath.read_text(encoding="utf-8")
+        if "-DG3X_MOVIE_NOLIMIT=1" not in text:
+            if "CFLAGS += -DG3X_MOVIE_STATUS=1" in text:
+                text = text.replace("CFLAGS += -DG3X_MOVIE_STATUS=1", "CFLAGS += -DG3X_MOVIE_STATUS=1 -DG3X_MOVIE_NOLIMIT=1")
+            elif "CFLAGS +=" in text:
+                text = text.replace("CFLAGS +=", "CFLAGS += -DG3X_MOVIE_NOLIMIT=1", 1)
+            elif "CFLAGS =" in text:
+                text = text.replace("CFLAGS =", "CFLAGS = -DG3X_MOVIE_NOLIMIT=1", 1)
+            else:
+                text += "\nCFLAGS += -DG3X_MOVIE_NOLIMIT=1\n"
+        mpath.write_text(text, encoding="utf-8")
+
+
 def build_port43_dbuf(
     clean_stage: bool = True,
     keep_stage: bool = True,
@@ -2638,6 +2675,8 @@ def build_port43_dbuf(
     conf_save_alone: bool = False,
     movie_status: bool = False,
     movie_status_alone: bool = False,
+    movie_nolimit: bool = False,
+    movie_nolimit_alone: bool = False,
 ) -> int:
     has_menu_or_dbuf = (
         playback_menu
@@ -2653,10 +2692,30 @@ def build_port43_dbuf(
     )
     if conf_save and not has_menu_or_dbuf:
         conf_save_alone = True
-    if movie_status and not has_menu_or_dbuf and not conf_save:
+    if movie_nolimit:
+        movie_status = True
+    if movie_nolimit and not has_menu_or_dbuf and not conf_save:
+        movie_nolimit_alone = True
+    if movie_status and not has_menu_or_dbuf and not conf_save and not movie_nolimit:
         movie_status_alone = True
 
-    if movie_status_alone:
+    if movie_nolimit_alone:
+        movie_nolimit = True
+        movie_status = True
+        movie_status_alone = False
+        conf_save = False
+        conf_save_alone = False
+        playback_menu = False
+        playback_menu_alone = False
+        gui_restore2 = False
+        gui_menu = False
+        gui_sync = False
+        shadow2 = False
+        gui_diag = False
+        kbd_check = False
+        no_overdraw = False
+        full_hooks = False
+    elif movie_status_alone:
         movie_status = True
         conf_save = False
         conf_save_alone = False
@@ -2721,6 +2780,11 @@ def build_port43_dbuf(
 
     if out_dir is not None:
         effective_out_dir = Path(out_dir).resolve()
+    elif movie_nolimit_alone:
+        effective_out_dir = REPO_ROOT / "out" / "build-nolimit-alone"
+    elif movie_nolimit and not conf_save:
+        suffix = "-full-hooks" if full_hooks else ""
+        effective_out_dir = REPO_ROOT / "out" / ("port56-movie-nolimit" + suffix)
     elif movie_status_alone:
         effective_out_dir = REPO_ROOT / "out" / "build-movie-alone"
     elif movie_status and not conf_save:
@@ -2804,7 +2868,7 @@ def build_port43_dbuf(
             proto_file.unlink()
 
     # Apply FULL_HOOKS patches if requested
-    if not playback_menu_alone and not conf_save_alone and not movie_status_alone:
+    if not playback_menu_alone and not conf_save_alone and not movie_status_alone and not movie_nolimit_alone:
         if full_hooks:
             print("FULL_HOOKS=1 enabled: Applying FINSIG-confirmed hook staging patches...")
             apply_full_hooks_staging_patches(effective_stage_dir)
@@ -2857,7 +2921,10 @@ def build_port43_dbuf(
         print("G3X_CONF_SAVE=1: Applying A/CHDK/ path check and conf_save hooks...")
         apply_port54_conf_save_staging_patches(effective_stage_dir, alone=conf_save_alone)
 
-    if movie_status:
+    if movie_nolimit:
+        print("G3X_MOVIE_NOLIMIT=1: Applying movie time-limit defeat and LIM: diag marker...")
+        apply_movie_nolimit_staging_patches(effective_stage_dir, alone=movie_nolimit_alone)
+    elif movie_status:
         print("G3X_MOVIE_STATUS=1: Applying read-only movie status accessor and MOV: diag marker...")
         apply_movie_status_staging_patches(effective_stage_dir, alone=movie_status_alone)
 
@@ -2881,7 +2948,9 @@ def build_port43_dbuf(
                 clean_cmd.append("G3X_CONF_SAVE=1")
             if movie_status:
                 clean_cmd.append("G3X_MOVIE_STATUS=1")
-            if not playback_menu_alone and not conf_save_alone and not movie_status_alone:
+            if movie_nolimit:
+                clean_cmd.append("G3X_MOVIE_NOLIMIT=1")
+            if not playback_menu_alone and not conf_save_alone and not movie_status_alone and not movie_nolimit_alone:
                 clean_cmd.extend(["G3X_GUI_FIX=1", "G3X_GUI_DBUF=1"])
                 if no_overdraw:
                     clean_cmd.append("G3X_GUI_NOOVERDRAW=1")
@@ -2926,11 +2995,13 @@ def build_port43_dbuf(
         cmd.append("G3X_CONF_SAVE=1")
     if movie_status:
         cmd.append("G3X_MOVIE_STATUS=1")
+    if movie_nolimit:
+        cmd.append("G3X_MOVIE_NOLIMIT=1")
     cmd.extend([
         f"CROSS_COMPILE={CROSS_COMPILE}",
         "OPT_CAPSTONE_TOOLS=0",
     ])
-    if not playback_menu_alone and not conf_save_alone and not movie_status_alone:
+    if not playback_menu_alone and not conf_save_alone and not movie_status_alone and not movie_nolimit_alone:
         cmd.extend(["G3X_GUI_FIX=1", "G3X_GUI_DBUF=1"])
         if no_overdraw:
             cmd.append("G3X_GUI_NOOVERDRAW=1")
@@ -2966,7 +3037,9 @@ def build_port43_dbuf(
         env["G3X_CONF_SAVE"] = "1"
     if movie_status:
         env["G3X_MOVIE_STATUS"] = "1"
-    if not playback_menu_alone and not conf_save_alone and not movie_status_alone:
+    if movie_nolimit:
+        env["G3X_MOVIE_NOLIMIT"] = "1"
+    if not playback_menu_alone and not conf_save_alone and not movie_status_alone and not movie_nolimit_alone:
         env["G3X_GUI_FIX"] = "1"
         env["G3X_GUI_DBUF"] = "1"
         if no_overdraw:
@@ -3046,7 +3119,15 @@ def build_port43_dbuf(
             }
 
     # Manifest
-    if movie_status_alone:
+    if movie_nolimit_alone:
+        build_flags = [
+            "G3X_FULL_BUILD=1",
+            "G3X_DISABLE_CARD_WRITES=1",
+            "OPT_DISABLE_FILE_WRITES=1",
+            "G3X_MOVIE_STATUS=1",
+            "G3X_MOVIE_NOLIMIT=1",
+        ]
+    elif movie_status_alone:
         build_flags = [
             "G3X_FULL_BUILD=1",
             "G3X_DISABLE_CARD_WRITES=1",
@@ -3097,6 +3178,8 @@ def build_port43_dbuf(
             build_flags.append("G3X_PLAYBACK_MENU=1")
         if movie_status:
             build_flags.append("G3X_MOVIE_STATUS=1")
+        if movie_nolimit:
+            build_flags.append("G3X_MOVIE_NOLIMIT=1")
         if full_hooks:
             build_flags.insert(1, "FULL_HOOKS=1")
 
@@ -3121,7 +3204,11 @@ def build_port43_dbuf(
         manifest_name = "port54_conf_save_alone_manifest.json"
     elif conf_save:
         manifest_name = "port54_conf_save_manifest.json"
-    if movie_status_alone:
+    if movie_nolimit_alone:
+        manifest_name = "port56_movie_nolimit_alone_manifest.json"
+    elif movie_nolimit and not conf_save:
+        manifest_name = "port56_movie_nolimit_manifest.json"
+    elif movie_status_alone:
         manifest_name = "port55_movie_status_alone_manifest.json"
     elif movie_status and not conf_save:
         manifest_name = "port55_movie_status_manifest.json"
@@ -3226,7 +3313,39 @@ def build_port43_dbuf(
             "save_int_value_file",
         ]
 
-    if movie_status and not movie_status_alone and not conf_save:
+    if movie_nolimit and not movie_nolimit_alone and not conf_save:
+        manifest_data["manifest_id"] = "port56_movie_nolimit_manifest"
+        manifest_data["milestone"] = "PORT-56"
+        manifest_data["command"] = (
+            "python3 -B scripts/build_port43_dbuf.py --no-overdraw --kbd-check --gui-diag --shadow2 --gui-sync --gui-menu --gui-restore2 --playback-menu --movie-status --movie-nolimit --out-dir out/port56-movie-nolimit"
+        )
+        manifest_data["configurations"] = {
+            "default": {
+                "path": "out/build-default/DISKBOOT.BIN",
+                "size": 124097,
+                "sha256": "24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9",
+                "_end": "0x003686b0",
+                "card_writes": "disabled",
+                "diag_status": "LIM:?"
+            },
+            "movie_nolimit_alone": {
+                "path": "out/build-nolimit-alone/DISKBOOT.BIN",
+                "size": 124145,
+                "sha256": "12c0635ffd11d2c6a1d158aaac436885a4a3b9b7830841a8c65410c193439b33",
+                "_end": "0x003686e0",
+                "card_writes": "disabled",
+                "diag_status": "LIM:OFF/LIM:ON/LIM:?"
+            },
+            "full_candidate": {
+                "path": "out/port56-movie-nolimit/DISKBOOT.BIN",
+                "size": 132385,
+                "sha256": "c8709189c4508fd96f89aebed58641fbbc1e60b258699be642686e6387c58352",
+                "_end": "0x0036aaf0",
+                "card_writes": "disabled",
+                "diag_status": "LIM:OFF/LIM:ON/LIM:?"
+            }
+        }
+    elif movie_status and not movie_status_alone and not conf_save and not movie_nolimit:
         manifest_data["manifest_id"] = "port55_movie_status_manifest"
         manifest_data["milestone"] = "PORT-55"
         manifest_data["command"] = (
@@ -3274,7 +3393,12 @@ def build_port43_dbuf(
         f.write("\n")
     print(f"[OK] Manifest written to {manifest_path}")
 
-    if movie_status and not movie_status_alone and not conf_save:
+    if movie_nolimit and not movie_nolimit_alone and not conf_save:
+        repo_manifest = REPO_ROOT / "manifests" / "port56_movie_nolimit_manifest.json"
+        repo_manifest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(manifest_path, repo_manifest)
+        print(f"[OK] Candidate manifest copied to {repo_manifest}")
+    elif movie_status and not movie_status_alone and not conf_save and not movie_nolimit:
         repo_manifest = REPO_ROOT / "manifests" / "port55_movie_status_manifest.json"
         repo_manifest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(manifest_path, repo_manifest)
@@ -3320,6 +3444,8 @@ def main() -> int:
     parser.add_argument("--conf-save-alone", action="store_true", help="Build G3X_CONF_SAVE=1 alone without DBUF/menu stack")
     parser.add_argument("--movie-status", action="store_true", default=os.environ.get("G3X_MOVIE_STATUS") == "1", help="Enable G3X_MOVIE_STATUS=1 read-only movie state accessor and MOV: diag marker")
     parser.add_argument("--movie-status-alone", action="store_true", help="Build G3X_MOVIE_STATUS=1 alone without DBUF/menu stack")
+    parser.add_argument("--movie-nolimit", action="store_true", default=os.environ.get("G3X_MOVIE_NOLIMIT") == "1", help="Enable G3X_MOVIE_NOLIMIT=1 runtime frame-limit defeat and LIM: diag marker")
+    parser.add_argument("--movie-nolimit-alone", action="store_true", help="Build G3X_MOVIE_NOLIMIT=1 alone without DBUF/menu stack")
     parser.add_argument("--no-clean", action="store_true", help="Do not clean staging before building")
     parser.add_argument("--discard-stage", action="store_true", help="Remove stage directory after build")
     parser.add_argument("--out-dir", type=str, default=None, help="Custom output directory")
@@ -3343,6 +3469,8 @@ def main() -> int:
         conf_save_alone=args.conf_save_alone,
         movie_status=args.movie_status,
         movie_status_alone=args.movie_status_alone,
+        movie_nolimit=args.movie_nolimit,
+        movie_nolimit_alone=args.movie_nolimit_alone,
     )
 
 

@@ -1069,6 +1069,16 @@ void g3x_diag_format_line2(char *line)
 #endif
 #if defined(G3X_MOVIE_STATUS) && (G3X_MOVIE_STATUS == 1)
     const char *mov_str = g3x_movie_status_str();
+#if defined(G3X_MOVIE_NOLIMIT) && (G3X_MOVIE_NOLIMIT == 1)
+    const char *lim_str = g3x_movie_nolimit_status_str();
+    sprintf(line, "MENU:%04u SAVE:%s MOV:%s LIM:%s Rs:%04u Rp:%04u",
+            g3x_diag_clamp9999(g3x_menu_open_count),
+            save_str,
+            mov_str,
+            lim_str,
+            g3x_diag_clamp9999(g3x_diag_sync_restore_count),
+            g3x_diag_clamp9999(g3x_diag_poll_restore_count));
+#else
     sprintf(line, "MENU:%04u SAVE:%s MOV:%s Rs:%04u Rp:%04u B:%u/%ums",
             g3x_diag_clamp9999(g3x_menu_open_count),
             save_str,
@@ -1077,6 +1087,7 @@ void g3x_diag_format_line2(char *line)
             g3x_diag_clamp9999(g3x_diag_poll_restore_count),
             g3x_diag_clamp999(g3x_diag_blit_last_ms),
             g3x_diag_clamp999(g3x_diag_blit_max_ms));
+#endif
 #else
     sprintf(line, "MENU:%04u SAVE:%s Rs:%04u Rp:%04u B:%u/%ums",
             g3x_diag_clamp9999(g3x_menu_open_count),
@@ -1417,7 +1428,11 @@ void gui_diag_draw(void)
                 y_menu,
                 menu_line, MAKE_COLOR(COLOR_BLACK, COLOR_WHITE));
 #else
+#if defined(G3X_MOVIE_NOLIMIT) && (G3X_MOVIE_NOLIMIT == 1)
+    char menu_line[64];
+#else
     char menu_line[32];
+#endif
 #if defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1)
     const char *save_str = (g3x_conf_save_status == G3X_CONF_SAVE_OFF) ? "OFF" :
                            (g3x_conf_save_status == G3X_CONF_SAVE_OK)  ? "OK" :
@@ -1429,10 +1444,19 @@ void gui_diag_draw(void)
 #endif
 #if defined(G3X_MOVIE_STATUS) && (G3X_MOVIE_STATUS == 1)
     const char *mov_str = g3x_movie_status_str();
+#if defined(G3X_MOVIE_NOLIMIT) && (G3X_MOVIE_NOLIMIT == 1)
+    const char *lim_str = g3x_movie_nolimit_status_str();
+    sprintf(menu_line, "MENU:%04u SAVE:%s MOV:%s LIM:%s",
+            g3x_diag_clamp9999(g3x_menu_open_count),
+            save_str,
+            mov_str,
+            lim_str);
+#else
     sprintf(menu_line, "MENU:%04u SAVE:%s MOV:%s",
             g3x_diag_clamp9999(g3x_menu_open_count),
             save_str,
             mov_str);
+#endif
 #else
     sprintf(menu_line, "MENU:%04u SAVE:%s",
             g3x_diag_clamp9999(g3x_menu_open_count),
@@ -1566,11 +1590,21 @@ void g3x_playback_menu_diag_format(char *buf, unsigned int max_len)
 #endif
 #if defined(G3X_MOVIE_STATUS) && (G3X_MOVIE_STATUS == 1)
     const char *mov_str = g3x_movie_status_str();
+#if defined(G3X_MOVIE_NOLIMIT) && (G3X_MOVIE_NOLIMIT == 1)
+    const char *lim_str = g3x_movie_nolimit_status_str();
+    sprintf(buf, "MENU:%04u SAVE:%s MOV:%s LIM:%s ED:%04u",
+             g3x_playback_menu_open_count,
+             save_str,
+             mov_str,
+             lim_str,
+             g3x_playback_menu_item_edit_count);
+#else
     sprintf(buf, "MENU:%04u SAVE:%s MOV:%s ED:%04u",
              g3x_playback_menu_open_count,
              save_str,
              mov_str,
              g3x_playback_menu_item_edit_count);
+#endif
 #else
     sprintf(buf, "MENU:%04u SAVE:%s ED:%04u",
              g3x_playback_menu_open_count,
