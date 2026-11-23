@@ -15,7 +15,7 @@
 #define G3X_MOVIE_STATE_SEGMENT_SPLIT     4
 
 /* Read-only accessor for the firmware movie-state variable (mr_rec_state).
- * Strictly read-only; performs no stores and no firmware writes.
+ * Strictly read-only; performs no stores and no firmware modifications.
  */
 int g3x_get_movie_status(void);
 
@@ -104,6 +104,111 @@ static inline const char *g3x_movie_nolimit_diag_str(void)
 
 #endif /* G3X_MOVIE_NOLIMIT == 1 */
 
-#endif /* G3X_MOVIE_STATUS == 1 */
+#if defined(G3X_MOVIE_AUTOCONT) && (G3X_MOVIE_AUTOCONT == 1)
+
+/* PORT-57: Movie Auto-Continuation RAM addresses & evidence classifications:
+ * -------------------------------------------------------------------------------------------------------------------
+ * Address    | Variable              | Width    | Evidence Classification | Manifest / Source ID            | Access
+ * -------------------------------------------------------------------------------------------------------------------
+ * 0x0000C0C8 | mr_rec_state          | uint32_t | ROM_VERIFIED            | PORT57-ROM-CHECK-LIMITS-WINDOW, | Read-Only
+ *            |                       |          |                         | PORT55-ROM-GET-ELAPSED-SECONDS  |
+ * 0x0000C0C0 | mr_stop_reason        | uint32_t | ROM_VERIFIED            | PORT57-ROM-CHECK-LIMITS-WINDOW  | Read-Only
+ * 0x0000C278 | mr_cur_frames         | uint32_t | ROM_VERIFIED            | PORT57-ROM-CHECK-LIMITS-WINDOW  | Read-Only
+ * 0x0000C274 | mr_max_frames         | uint32_t | ROM_VERIFIED            | PORT57-ROM-CHECK-LIMITS-WINDOW  | Read-Only
+ * 0x0000C078 | mr_segment_index      | uint8_t  | ROM_VERIFIED            | PORT57-ROM-CHECK-LIMITS-WINDOW  | Read-Only
+ * 0x0000C0D4 | mr_fs_cluster_size    | uint32_t | ROM_VERIFIED            | PORT57-ROM-CHECK-LIMITS-WINDOW  | Read-Only
+ * 0x0000C0D8 | mr_fs_reserve_size    | uint32_t | ROM_VERIFIED            | PORT57-ROM-CHECK-LIMITS-WINDOW  | Read-Only
+ * 0x0000C290 | mr_avail_space_bytes  | uint64_t | ROM_VERIFIED            | PORT57-ROM-CHECK-LIMITS-WINDOW  | Read-Only
+ * 0x0000C298 | mr_stream_bytes       | uint64_t | ROM_VERIFIED            | PORT57-ROM-CHECK-LIMITS-WINDOW  | Read-Only
+ * 0x0000C2A0 | mr_projected_size     | uint64_t | ROM_VERIFIED            | PORT57-ROM-CHECK-LIMITS-WINDOW  | Read-Only
+ * 0x0000C2A8 | mr_projected_base_off | uint64_t | ROM_VERIFIED            | PORT57-ROM-CHECK-LIMITS-WINDOW  | Read-Only
+ * 0x00040DAC | physw_status[0]       | uint32_t | FINSIG / ROM_VERIFIED   | stubs_entry.S:173 / PORT34-ROM  | R/W bit 3
+ * -------------------------------------------------------------------------------------------------------------------
+ */
+#ifndef G3X_MR_MAX_FRAMES_ADDR
+#define G3X_MR_MAX_FRAMES_ADDR         0x0000C274
+#define G3X_MR_CUR_FRAMES_ADDR         0x0000C278
+#define G3X_MR_WARN_SEC_ADDR           0x0000C0E4
+#define G3X_MR_STOP_REASON_ADDR        0x0000C0C0
+#endif
+
+#define G3X_MR_SEGMENT_INDEX_ADDR      0x0000C078
+#define G3X_MR_FS_CLUSTER_SIZE_ADDR    0x0000C0D4
+#define G3X_MR_FS_RESERVE_SIZE_ADDR    0x0000C0D8
+#define G3X_MR_AVAIL_SPACE_ADDR        0x0000C290
+#define G3X_MR_STREAM_BYTES_ADDR       0x0000C298
+#define G3X_MR_PROJECTED_SIZE_ADDR     0x0000C2A0
+#define G3X_MR_PROJECTED_BASE_OFF_ADDR 0x0000C2A8
+
+/* Stop reason encodings at 0x0000C0C0 (PORT57-ROM-CHECK-LIMITS-WINDOW) */
+#define G3X_MR_STOP_REASON_USER        0U
+#define G3X_MR_STOP_REASON_OVERFLOW    1U
+#define G3X_MR_STOP_REASON_SPACE_FULL  2U
+#define G3X_MR_STOP_REASON_SIZE_LIMIT  3U
+#define G3X_MR_STOP_REASON_FRAME_LIMIT 4U
+
+/* KEY_VIDEO physical switch bit in word 0 (physw_status[0] / kbd_new_state[0] / kbd_mod_state[0]) */
+#define G3X_KEY_VIDEO_BIT              0x00000008U
+
+/* Timing bounds (1 poll = 10 ms at physw_sleep_delay @ 0x000082C4) */
+#define G3X_AUTOCONT_POLL_MS           10U
+#define G3X_AUTOCONT_MAX_STOP_POLLS    500U /* 5.0 s max wait for RECORDING -> STOPPING -> IDLE (0) */
+#define G3X_AUTOCONT_SETTLE_POLLS      50U  /* 500 ms post-IDLE settle delay before synthetic KEY_VIDEO press */
+#define G3X_AUTOCONT_PRESS_POLLS       6U   /* 60 ms simulated KEY_VIDEO hold (CAM_KEY_PRESS_DELAY = 60) */
+#define G3X_AUTOCONT_RELEASE_POLLS     6U   /* 60 ms simulated KEY_VIDEO release cooldown (CAM_KEY_RELEASE_DELAY = 60) */
+#define G3X_AUTOCONT_CONFIRM_POLLS     200U /* 2.0 s max wait for mr_rec_state == 1 confirmation after pulse */
+#define G3X_AUTOCONT_START_HOLD_POLLS  50U  /* 500 ms max carry-over of initial start button press from IDLE */
+
+/* Explicit nonblocking session state machine states */
+typedef enum {
+    G3X_AUTOCONT_DISARMED     = 0,
+    G3X_AUTOCONT_RECORDING    = 1,
+    G3X_AUTOCONT_WAIT_IDLE    = 2,
+    G3X_AUTOCONT_SETTLE       = 3,
+    G3X_AUTOCONT_PRESSING     = 4,
+    G3X_AUTOCONT_RELEASING    = 5,
+    G3X_AUTOCONT_WAIT_CONFIRM = 6
+} g3x_movie_autocont_state_t;
+
+/* Read-only accessors for MovieRecorder limit and stop attribution fields */
+unsigned int g3x_get_movie_max_frames(void);
+unsigned int g3x_get_movie_cur_frames(void);
+unsigned int g3x_get_movie_stop_reason(void);
+unsigned int g3x_get_movie_segment_index(void);
+unsigned int g3x_get_movie_fs_reserve_size(void);
+unsigned long long g3x_get_movie_avail_space(void);
+unsigned long long g3x_get_movie_stream_bytes(void);
+unsigned long long g3x_get_movie_projected_size(void);
+unsigned long long g3x_get_movie_projected_base_offset(void);
+
+/* Session state machine entry points & observability accessors */
+void g3x_movie_autocont_poll(void);
+void g3x_movie_autocont_reset(void);
+int g3x_movie_autocont_get_state(void);
+unsigned int g3x_movie_autocont_get_timer_polls(void);
+int g3x_movie_autocont_is_synth_owned(void);
+int g3x_movie_autocont_is_cancel_latched(void);
+unsigned int g3x_movie_autocont_get_last_stop_reason(void);
+unsigned int g3x_movie_autocont_get_restart_count(void);
+
+static inline const char *g3x_movie_autocont_status_str(void)
+{
+    int st = g3x_movie_autocont_get_state();
+    switch (st)
+    {
+        case G3X_AUTOCONT_DISARMED:     return "OFF";
+        case G3X_AUTOCONT_RECORDING:    return "ARM";
+        case G3X_AUTOCONT_WAIT_IDLE:    return "WAIT";
+        case G3X_AUTOCONT_SETTLE:       return "SETL";
+        case G3X_AUTOCONT_PRESSING:     return "PRS";
+        case G3X_AUTOCONT_RELEASING:    return "REL";
+        case G3X_AUTOCONT_WAIT_CONFIRM: return "CONF";
+        default:                        return "?";
+    }
+}
+
+#endif /* G3X_MOVIE_AUTOCONT == 1 */
+
+#endif /* G3X_MOVIE_STATUS == 1 || G3X_MOVIE_AUTOCONT == 1 */
 
 #endif /* G3X_MOVIE_STATUS_H */

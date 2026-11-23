@@ -28,6 +28,24 @@
         "UNKNOWN"
       ],
       "description": "PORT-34 GM1.10C task_PhySw, kbd_p1_f and sub_fc087e88 verification scope"
+    },
+    {
+      "scope_id": "SCOPE-PORT57-MOVIE-AUTOCONT",
+      "firmware_revision": "GM1.10C",
+      "approved_ranges": [
+        {
+          "start_address": "0xFC098B00",
+          "end_address": "0xFC098DFF",
+          "label": "PORT57-ROM-CHECK-LIMITS-WINDOW MovieRecorder frame/size limit checks, stop-reason stores, and literal pool in primary ROM"
+        }
+      ],
+      "max_bytes_total": 768,
+      "allowed_classifications": [
+        "STATIC_VERIFIED",
+        "INFERRED",
+        "UNKNOWN"
+      ],
+      "description": "PORT-57 GM1.10C authorized ROM window (start 0xFC098B00, length 0x300 = 768 B) covering stop-reason 3/4 stores and limit predicates"
     }
   ],
   "evidence_entries": [
@@ -75,6 +93,21 @@
       "authorization_scope_id": "SCOPE-PORT34-KBD-TASK",
       "classification": "STATIC_VERIFIED",
       "notes": "kbd_p1_f (0xFC12868C) and literal pool at 0xFC128704 (physw_run 0x82BC, task_PhySw 0xFC1283AD, PhySw string 0xFC12870C, physw_status 0x40DAC)"
+    },
+    {
+      "evidence_id": "PORT57-ROM-CHECK-LIMITS-WINDOW",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC098B00",
+      "end_address": "0xFC098DFF",
+      "expected_byte_count": 768,
+      "sha256": "32bec616fbcefa305b66102cab9e09c380bb14f7870b878d9fdd0e386c584d4f",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT57-MOVIE-AUTOCONT",
+      "classification": "STATIC_VERIFIED",
+      "notes": "PORT-57 authorized ROM window (start 0xFC098B00, length 0x300 = 768 B, end 0xFC098DFF): MovieRecorder_CheckFrameCountLimit comparison and 32-bit stop-reason 4 store (0xFC098B28: str.w r1, [r8, #72]), MovieRecorder_CheckSizeAndSpaceLimits (0xFC098BAA..0xFC098CAE) 64-bit space/4GiB comparisons and 32-bit stop-reason 2/3 store (0xFC098C5C: str r0, [r7, #72]), literal pool 0xFC098D84..0xFC098D8C (0x0000C078, 0x0000C278, 0x0000C178), and mr_rec_state (0x0000C0C8) load/check at 0xFC098D76..0xFC098DA0"
     }
   ]
 }

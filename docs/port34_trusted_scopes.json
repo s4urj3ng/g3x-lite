@@ -29,6 +29,24 @@
         "UNKNOWN"
       ],
       "description": "PORT-34 GM1.10C task_PhySw, kbd_p1_f and sub_fc087e88 verification scope"
+    },
+    {
+      "scope_id": "SCOPE-PORT57-MOVIE-AUTOCONT",
+      "firmware_revision": "GM1.10C",
+      "approved_ranges": [
+        {
+          "start_address": "0xFC098B00",
+          "end_address": "0xFC098DFF",
+          "label": "PORT57-ROM-CHECK-LIMITS-WINDOW MovieRecorder frame/size limit checks, stop-reason stores, and literal pool in primary ROM"
+        }
+      ],
+      "max_bytes_total": 768,
+      "allowed_classifications": [
+        "STATIC_VERIFIED",
+        "INFERRED",
+        "UNKNOWN"
+      ],
+      "description": "PORT-57 GM1.10C authorized ROM window (start 0xFC098B00, length 0x300 = 768 B) covering stop-reason 3/4 stores and limit predicates"
     }
   ]
 }
