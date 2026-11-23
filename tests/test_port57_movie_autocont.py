@@ -52,13 +52,16 @@ BASE_DEFAULT_SHA256 = "24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e5
 BASE_DEFAULT_SIZE = 124097
 BASE_DEFAULT_END = "003686b0"
 
-MOVIE_AUTOCONT_ALONE_SHA256 = "91ac6fd07ec4b9a460370521f3373343305261599b465ff05af79a9f3e636379"
-MOVIE_AUTOCONT_ALONE_SIZE = 125505
-MOVIE_AUTOCONT_ALONE_END = "00368c90"
+MOVIE_AUTOCONT_ALONE_SHA256 = "5162fb5ad30e9985a3904c5028fc59d4419c87a783921d86a9e46f28026c5cce"
+MOVIE_AUTOCONT_ALONE_SIZE = 126425
+MOVIE_AUTOCONT_ALONE_END = "00369030"
 
-PORT57_COMBINED_SHA256 = "eaf2745d24d05bab177913a3cf266e2e3ba310a08b957fb04dc672a52414e311"
-PORT57_COMBINED_SIZE = 133713
-PORT57_COMBINED_END = "0036b080"
+PORT57_COMBINED_SHA256 = "2da299cdc9b336fe74e726ca33f081a0cd5f88cebad227a317cff2c5d764eec7"
+PORT57_COMBINED_SIZE = 134617
+PORT57_COMBINED_END = "0036b410"
+
+DOC_PORT57_ALONE_SHA256 = "91ac6fd07ec4b9a460370521f3373343305261599b465ff05af79a9f3e636379"
+DOC_PORT57_COMBINED_SHA256 = "eaf2745d24d05bab177913a3cf266e2e3ba310a08b957fb04dc672a52414e311"
 
 KEY_VIDEO = 13
 G3X_KEY_VIDEO_BIT = 0x00000008
@@ -308,6 +311,10 @@ class _HostStateMachineHarness:
         self.lib.g3x_movie_autocont_get_last_stop_reason.restype = ctypes.c_uint
         self.lib.g3x_movie_autocont_get_restart_count.argtypes = []
         self.lib.g3x_movie_autocont_get_restart_count.restype = ctypes.c_uint
+        self.lib.g3x_movie_autocont_set_enabled.argtypes = [ctypes.c_int]
+        self.lib.g3x_movie_autocont_set_enabled.restype = ctypes.c_int
+        self.lib.g3x_movie_autocont_is_enabled.argtypes = []
+        self.lib.g3x_movie_autocont_is_enabled.restype = ctypes.c_int
         self.lib.host_set_mode_play.argtypes = [ctypes.c_int]
         self.lib.host_set_mode_play.restype = None
         self.lib.host_sim_kbd_tick_before_poll.argtypes = [ctypes.c_int]
@@ -611,11 +618,17 @@ class TestPort57StateMachineBehavior(unittest.TestCase):
         self.sm.reset()
 
     def _start_deliberate_recording(self, hold_polls_into_rec: int = 0) -> None:
-        """Observe boot IDLE (0) and transition to RECORDING (1)."""
+        """Observe boot IDLE (0), enable continuation at confirmed idle, and perform deliberate physical 0 -> 1 start."""
         self.sm.movie_state.value = 0
-        if hold_polls_into_rec > 0:
-            self.sm.set_physical_video_button(True)
+        self.sm.set_physical_video_button(False)
         self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.lib.g3x_movie_autocont_set_enabled(1), 1)
+
+        # Deliberate physical movie-button press at confirmed IDLE
+        self.sm.set_physical_video_button(True)
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        if hold_polls_into_rec == 0:
+            self.sm.set_physical_video_button(False)
 
         self.sm.movie_state.value = 1
         self.sm.cur_frames.value = 10
@@ -877,10 +890,14 @@ class TestPort57StateMachineBehavior(unittest.TestCase):
         self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
         self.assertEqual(self.sm.cancel_latched, 1)
 
-        # Once physical button is released in IDLE, a subsequent deliberate 0 -> 1 start arms cleanly
+        # Once physical button is released in IDLE, re-enabling and a subsequent deliberate 0 -> 1 start arms cleanly
         self.sm.set_physical_video_button(False)
         self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
         self.assertEqual(self.sm.cancel_latched, 0)
+        self.assertEqual(self.sm.lib.g3x_movie_autocont_set_enabled(1), 1)
+        self.sm.set_physical_video_button(True)
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.sm.set_physical_video_button(False)
         self.sm.movie_state.value = 1
         self.sm.cur_frames.value = 5
         self.assertEqual(self.sm.step(), G3X_AUTOCONT_RECORDING)
@@ -946,6 +963,9 @@ class TestPort57StateMachineBehavior(unittest.TestCase):
     def test_deliberate_arming_start_hold_carryover_and_unseen_idle_press_rejection(self) -> None:
         # 1. Start press seen in IDLE and held for the full 50-poll allowance in RECORDING before release stays armed
         self.sm.movie_state.value = 0
+        self.sm.set_physical_video_button(False)
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.lib.g3x_movie_autocont_set_enabled(1), 1)
         self.sm.set_physical_video_button(True)
         self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
 
@@ -961,6 +981,9 @@ class TestPort57StateMachineBehavior(unittest.TestCase):
         # 2. Holding start button past 50 polls (51st poll in RECORDING) expires carry-over and disarms with cancel_latched=1
         self.sm.reset()
         self.sm.movie_state.value = 0
+        self.sm.set_physical_video_button(False)
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.lib.g3x_movie_autocont_set_enabled(1), 1)
         self.sm.set_physical_video_button(True)
         self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
         self.sm.movie_state.value = 1
@@ -976,6 +999,7 @@ class TestPort57StateMachineBehavior(unittest.TestCase):
         self.sm.reset()
         self.sm.movie_state.value = 0
         self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.lib.g3x_movie_autocont_set_enabled(1), 1)
         self.sm.set_physical_video_button(True)
         self.sm.movie_state.value = 1
         self.sm.cur_frames.value = 10
@@ -994,7 +1018,7 @@ class TestPort57StateMachineBehavior(unittest.TestCase):
         for _ in range(10):
             self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
 
-        # Automatic limit stop (Reason 3) on that boot- time clip must not trigger continuation
+        # Automatic limit stop (Reason 3) on that boot-time clip must not trigger continuation
         self.sm.projected_size.value = 0x100000100
         self.sm.stop_reason.value = 3
         self.sm.movie_state.value = 2
@@ -1004,7 +1028,11 @@ class TestPort57StateMachineBehavior(unittest.TestCase):
             self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
             self.assertEqual(self.sm.press_calls.value, 0)
 
-        # Now that IDLE (0) has been observed, a subsequent deliberate 0 -> 1 start arms cleanly
+        # Now that IDLE (0) has been observed, enabling and a subsequent deliberate 0 -> 1 start arms cleanly
+        self.assertEqual(self.sm.lib.g3x_movie_autocont_set_enabled(1), 1)
+        self.sm.set_physical_video_button(True)
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.sm.set_physical_video_button(False)
         self.sm.movie_state.value = 1
         self.sm.cur_frames.value = 10
         self.sm.stream_bytes.value = 1024 * 1024
@@ -1368,8 +1396,8 @@ class TestPort57EvidenceAndProvenance(unittest.TestCase):
             "G3X_AUTOCONT_WAIT_CONFIRM",
             ORIGIN_MAIN_COMMIT,
             BASE_DEFAULT_SHA256,
-            MOVIE_AUTOCONT_ALONE_SHA256,
-            PORT57_COMBINED_SHA256,
+            DOC_PORT57_ALONE_SHA256,
+            DOC_PORT57_COMBINED_SHA256,
             "Host-Validated Behavior vs. Unverified Camera Assumptions",
             "Owner Trial and Recovery Plan",
             "MOV:IDLE",
