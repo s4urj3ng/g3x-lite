@@ -256,6 +256,15 @@ class _HostPort58Harness:
             encoding="utf-8",
         )
 
+        gui_menu_text = GUI_MENU_C.read_text(encoding="utf-8")
+        menu_start = gui_menu_text.index("#if defined(G3X_GUI_FIX) && (G3X_GUI_FIX == 1)")
+        menu_end = gui_menu_text.index("#if defined(G3X_PLAYBACK_MENU)", menu_start)
+        gui_menu_redraw_slice = (
+            "static int gui_menu_curr_item = 0;\n"
+            "static int gui_menu_redraw = 0;\n"
+            + gui_menu_text[menu_start:menu_end]
+        )
+
         harness_c = tmp / "harness_stubs.c"
         harness_c.write_text(
             "#include <stdio.h>\n"
@@ -267,6 +276,7 @@ class _HostPort58Harness:
             "#define G3X_GUI_DIAG_IMPLEMENTATION 1\n"
             "#define MEMINFO_H 1\n"
             "#define CAM_SCREEN_VERSION 1\n"
+            "#define GUI_MODE_MENU 2\n"
             "#define FONT_WIDTH 16\n"
             "#define FONT_HEIGHT 32\n"
             "#define COLOR_BLACK 0\n"
@@ -303,6 +313,8 @@ class _HostPort58Harness:
             "void GetMemInfo(cam_meminfo *m) { if (m) m->free_block_max_size = 512 * 1024; }\n"
             "long get_tick_count(void) { return 0; }\n"
             '#include "gui_diag.h"\n'
+            + gui_menu_redraw_slice
+            + "\n"
             "cam_info_t camera_info = { { 0, 0, 1, 0, 0 } };\n"
             "long kbd_new_state[3] = { 0xFFFFFFFFL, 0xFFFFFFFFL, 0xFFFFFFFFL };\n"
             "long kbd_mod_state[3] = { 0xFFFFFFFFL, 0xFFFFFFFFL, 0xFFFFFFFFL };\n"
@@ -325,6 +337,15 @@ class _HostPort58Harness:
             "    }\n"
             "}\n"
             "void host_set_mode_play(int play) { camera_info.state.mode_play = play; }\n"
+            "void host_set_gui_mode(int mode) { camera_info.state.gui_mode = mode; }\n"
+            "void host_set_gui_mode_alt(int alt) {\n"
+            "    camera_info.state.gui_mode_alt = alt;\n"
+            "    camera_info.state.gui_mode_none = alt ? 0 : 1;\n"
+            "}\n"
+            "const char *host_get_movie_status_str(void) { return g3x_movie_status_str(); }\n"
+            "const char *host_get_autocont_status_str(void) { return g3x_movie_autocont_status_str(); }\n"
+            "const char *host_get_last_drawn_line2(void) { return host_last_drawn_line2; }\n"
+            "const char *host_get_last_drawn_line3(void) { return host_last_drawn_line3; }\n"
             "void host_sim_kbd_tick_before_poll(int in_alt_mode) {\n"
             "    if (!in_alt_mode) {\n"
             "        physw_status[0] = kbd_new_state[0];\n"
@@ -351,6 +372,7 @@ class _HostPort58Harness:
                 "-Wextra",
                 "-Werror",
                 "-Wno-unused-function",
+                "-DG3X_GUI_FIX=1",
                 "-DG3X_GUI_DBUF=1",
                 "-DG3X_GUI_NOOVERDRAW=1",
                 "-DG3X_KBD_CHECK=1",
@@ -421,9 +443,29 @@ class _HostPort58Harness:
         self.lib.g3x_diag_format_line2.restype = None
         self.lib.g3x_playback_menu_diag_format.argtypes = [ctypes.c_char_p, ctypes.c_uint]
         self.lib.g3x_playback_menu_diag_format.restype = None
+        self.lib.gui_diag_draw.argtypes = []
+        self.lib.gui_diag_draw.restype = None
+        self.lib.g3x_conf_record_save_skipped.argtypes = []
+        self.lib.g3x_conf_record_save_skipped.restype = None
+        self.lib.gui_menu_needs_redraw.argtypes = []
+        self.lib.gui_menu_needs_redraw.restype = ctypes.c_int
+        self.lib.gui_menu_clear_redraw.argtypes = []
+        self.lib.gui_menu_clear_redraw.restype = None
 
         self.lib.host_set_mode_play.argtypes = [ctypes.c_int]
         self.lib.host_set_mode_play.restype = None
+        self.lib.host_set_gui_mode.argtypes = [ctypes.c_int]
+        self.lib.host_set_gui_mode.restype = None
+        self.lib.host_set_gui_mode_alt.argtypes = [ctypes.c_int]
+        self.lib.host_set_gui_mode_alt.restype = None
+        self.lib.host_get_movie_status_str.argtypes = []
+        self.lib.host_get_movie_status_str.restype = ctypes.c_char_p
+        self.lib.host_get_autocont_status_str.argtypes = []
+        self.lib.host_get_autocont_status_str.restype = ctypes.c_char_p
+        self.lib.host_get_last_drawn_line2.argtypes = []
+        self.lib.host_get_last_drawn_line2.restype = ctypes.c_char_p
+        self.lib.host_get_last_drawn_line3.argtypes = []
+        self.lib.host_get_last_drawn_line3.restype = ctypes.c_char_p
         self.lib.host_sim_kbd_tick_before_poll.argtypes = [ctypes.c_int]
         self.lib.host_sim_kbd_tick_before_poll.restype = None
 
@@ -476,7 +518,11 @@ class _HostPort58Harness:
         self.release_calls.value = 0
         self.last_key_arg.value = 0
         self.lib.host_set_mode_play(0)
+        self.lib.host_set_gui_mode(0)
+        self.lib.host_set_gui_mode_alt(0)
+        self.lib.g3x_conf_record_save_skipped()
         self.lib.g3x_movie_autocont_reset()
+        self.lib.gui_menu_clear_redraw()
 
     def set_physical_video_button(self, pressed: bool) -> None:
         if pressed:
@@ -740,6 +786,29 @@ class TestPort58VolatileControlAndReasonSemantics(unittest.TestCase):
         self.assertEqual(self.sm.enabled, 0)
         self.assertEqual(self.sm.lib.g3x_movie_autocont_get_menu_bool_ptr().contents.value, 0)
 
+        # 2b. Booting while already recording (1) or stopping (2..4) rejects enable and never arms or restarts
+        for boot_rec_state in (1, 2, 3, 4):
+            self.sm.reset()
+            self.sm.movie_state.value = boot_rec_state
+            self.sm.cur_frames.value = 100
+            self.sm.stream_bytes.value = 10 * 1024 * 1024
+            self.sm.projected_size.value = 10 * 1024 * 1024
+            for _ in range(10):
+                self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+                self.assertEqual(self.sm.can_enable, 0)
+                self.assertEqual(self.sm.lib.g3x_movie_autocont_set_enabled(1), 0)
+                self.assertEqual(self.sm.menu_change(1), "Off")
+                self.assertEqual(self.sm.enabled, 0)
+                self.assertEqual(self.sm.ui_status_str, "OFF")
+            # Even if that boot-time clip stops at max_frames with Reason 4, it was never armed and stays OFF
+            self.sm.cur_frames.value = 54000
+            self.sm.stop_reason.value = 4
+            self.sm.movie_state.value = 2
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+            self.assertEqual(self.sm.can_enable, 0)
+            self.assertEqual(self.sm.press_calls.value, 0)
+        self.sm.reset()
+
         # 3. Confirm boot idle, then test refusal under each invalid enable condition
         self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
         self.assertEqual(self.sm.can_enable, 1)
@@ -776,17 +845,23 @@ class TestPort58VolatileControlAndReasonSemantics(unittest.TestCase):
         self.assertEqual(self.sm.can_enable, 0)
         self.assertEqual(self.sm.lib.g3x_movie_autocont_set_enabled(1), 0)
 
-        # Next poll confirms IDLE (0): enabling now succeeds and never starts recording
+        # Next poll confirms IDLE (0): enabling now succeeds and never starts recording across 300+ idle polls
         self.sm.step()
         self.assertEqual(self.sm.can_enable, 1)
         self.assertEqual(self.sm.menu_change(1), "Ready")
         self.assertEqual(self.sm.enabled, 1)
         self.assertEqual(self.sm.state, G3X_AUTOCONT_DISARMED)
         self.assertEqual(self.sm.ui_status_str, "RDY")
-        self.assertEqual(self.sm.press_calls.value, 0)
-        self.assertEqual(self.sm.release_calls.value, 0)
-        self.assertEqual(self.sm.synth_owned, 0)
-        self.assertFalse(self.sm.physw_video_pressed)
+        for _ in range(300):
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+            self.assertEqual(self.sm.enabled, 1)
+            self.assertEqual(self.sm.ui_status_str, "RDY")
+            self.assertEqual(self.sm.menu_str, "Ready")
+            self.assertEqual(self.sm.press_calls.value, 0)
+            self.assertEqual(self.sm.release_calls.value, 0)
+            self.assertEqual(self.sm.synth_owned, 0)
+            self.assertFalse(self.sm.physw_video_pressed)
+            self.assertFalse(self.sm.mod_video_pressed)
 
         # 4. Simulate reboot (reset): volatile toggle returns to disabled (OFF)
         self.sm.reset()
@@ -860,6 +935,7 @@ class TestPort58VolatileControlAndReasonSemantics(unittest.TestCase):
         self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
 
         # 5. Now perform a deliberate physical start from IDLE -> arms cleanly!
+        # Also verify the 50-poll start-hold carry-over allowance vs 51st-poll physical-stop expiry:
         self.sm.set_physical_video_button(True)
         self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
         self.sm.movie_state.value = 1
@@ -867,6 +943,206 @@ class TestPort58VolatileControlAndReasonSemantics(unittest.TestCase):
         self.assertEqual(self.sm.step(), G3X_AUTOCONT_RECORDING)
         self.assertEqual(self.sm.ui_status_str, "ARM")
         self.assertEqual(self.sm.menu_str, "Armed")
+        for _ in range(G3X_AUTOCONT_START_HOLD_POLLS):
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_RECORDING)
+            self.assertEqual(self.sm.ui_status_str, "ARM")
+        # Holding past the 50-poll carry-over window (51st poll in RECORDING) treats held key as physical stop
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.cancel_latched, 1)
+        self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_PHYS_STOP)
+        self.assertEqual(self.sm.ui_status_str, "RDY")
+
+    def test_automatic_size_and_duration_stop_continuation_and_ineligible_stop_rejection(self) -> None:
+        # Hold an unrelated key (KEY_MENU = 0x00000010) low to verify synthetic KEY_VIDEO never disturbs it
+        self.sm.kbd_new_state[0] &= ~0x00000010
+        self.sm.kbd_mod_state[0] &= ~0x00000010
+
+        # 1. Eligible Reason 3 (4 GiB byte-size limit) automatic continuation into Clip 2
+        self.sm.segment_index.value = 1
+        self.sm.fs_reserve_size.value = 0x00100000  # 1 MiB reserve (<< 1 = 2 MiB)
+        self.sm.projected_base_offset.value = 0x00400000  # 4 MiB base offset
+        self._start_deliberate_physical_recording(hold_polls_into_rec=2)
+
+        # In-bounds active recording near 4 GiB (proj_total = projected_size + base_off - 2*reserve <= 0xFFFFFFFF)
+        self.sm.cur_frames.value = 28500
+        self.sm.stream_bytes.value = 0xFF000000
+        self.sm.projected_size.value = 0xFFE00000 - 0x00400000 + 0x00200000
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_RECORDING)
+        self.assertEqual(self.sm.ui_status_str, "ARM")
+
+        # Cross 4 GiB size cap (proj_total = 0x100000200 > 0xFFFFFFFF) with sufficient card space -> Reason 3
+        self.sm.projected_size.value = 0x100000200 - 0x00400000 + 0x00200000
+        self.sm.stop_reason.value = 3
+        self.sm.movie_state.value = 2  # STOPPING
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_WAIT_IDLE)
+        self.assertEqual(self.sm.last_stop_reason, 3)
+        self.assertEqual(self.sm.ui_status_str, "WAIT")
+        self.assertEqual(self.sm.menu_str, "Wait")
+
+        # Progress through intermediate stopping states 2 -> 3 -> 4 -> 0 (IDLE)
+        self.sm.movie_state.value = 3
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_WAIT_IDLE)
+        self.sm.movie_state.value = 4
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_WAIT_IDLE)
+        self.sm.movie_state.value = 0
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_SETTLE)
+        self.assertEqual(self.sm.ui_status_str, "SETL")
+        self.assertEqual(self.sm.menu_str, "Settle")
+        for _ in range(G3X_AUTOCONT_SETTLE_POLLS - 1):
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_SETTLE)
+            self.assertEqual(self.sm.press_calls.value, 0)
+
+        # 6-poll synthetic press window (including recovery from kbd_key_release_all clobber in ALT mode)
+        for poll_idx in range(G3X_AUTOCONT_PRESS_POLLS):
+            if poll_idx == 1:
+                # Simulate kbd_key_release_all() clobbering KEY_VIDEO in kbd_mod_state[0] before ALT poll
+                self.sm.kbd_mod_state[0] |= G3X_KEY_VIDEO_BIT
+            self.assertEqual(self.sm.step(in_alt_mode=(poll_idx % 2 == 1)), G3X_AUTOCONT_PRESSING)
+            self.assertEqual(self.sm.ui_status_str, "PRS")
+            self.assertEqual(self.sm.menu_str, "Restart")
+            self.assertEqual(self.sm.synth_owned, 1)
+            self.assertTrue(self.sm.mod_video_pressed)
+            self.assertTrue(self.sm.physw_video_pressed)
+            self.assertEqual(self.sm.kbd_mod_state[0] & 0x00000010, 0)
+            self.assertEqual(self.sm.physw_status[0] & 0x00000010, 0)
+
+        # 6-poll release cooldown
+        for _ in range(G3X_AUTOCONT_RELEASE_POLLS):
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_RELEASING)
+            self.assertEqual(self.sm.ui_status_str, "REL")
+            self.assertEqual(self.sm.menu_str, "Restart")
+            self.assertEqual(self.sm.synth_owned, 0)
+            self.assertFalse(self.sm.mod_video_pressed)
+            self.assertFalse(self.sm.physw_video_pressed)
+
+        # Enter WAIT_CONFIRM, then confirm Clip 2 start (while stop_reason in RAM is still stale 3)
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_WAIT_CONFIRM)
+        self.assertEqual(self.sm.ui_status_str, "CONF")
+        self.assertEqual(self.sm.menu_str, "Confirm")
+        self.sm.movie_state.value = 1
+        self.sm.cur_frames.value = 1
+        self.sm.stream_bytes.value = 65536
+        self.sm.projected_size.value = 65536
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_RECORDING)
+        self.assertEqual(self.sm.ui_status_str, "ARM")
+        self.assertEqual(self.sm.menu_str, "Armed")
+        self.assertEqual(self.sm.restart_count, 1)
+        self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_NONE)
+
+        # 2. Eligible Reason 4 (29:59 frame/duration limit) automatic continuation into Clip 3
+        self.sm.cur_frames.value = 12000
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_RECORDING)
+        self.sm.cur_frames.value = 54000
+        self.sm.stop_reason.value = 4
+        self.sm.movie_state.value = 0  # Direct 1 -> 0 transition on poll boundary
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_SETTLE)
+        self.assertEqual(self.sm.last_stop_reason, 4)
+        for _ in range(G3X_AUTOCONT_SETTLE_POLLS - 1):
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_SETTLE)
+        for idx in range(G3X_AUTOCONT_PRESS_POLLS):
+            if idx == 4:
+                # Early recording confirmation during PRESSING
+                self.sm.movie_state.value = 1
+                self.sm.cur_frames.value = 2
+                self.sm.stream_bytes.value = 131072
+                self.sm.projected_size.value = 131072
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_PRESSING)
+        for _ in range(G3X_AUTOCONT_RELEASE_POLLS):
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_RELEASING)
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_RECORDING)
+        self.assertEqual(self.sm.ui_status_str, "ARM")
+        self.assertEqual(self.sm.restart_count, 2)
+
+        # 3. Ambiguous, stale, unreset-counter, and ineligible stops are rejected with STOP_FAULT (FLT)
+        # 3a. Clip 3 stops early at cur_frames=400 (< 54000) while 0x0000C0C0 retains stale Reason 4
+        self.sm.cur_frames.value = 400
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_RECORDING)
+        press_before = self.sm.press_calls.value
+        self.sm.movie_state.value = 2
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.enabled, 0)
+        self.assertEqual(self.sm.faulted, 1)
+        self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_STOP_FAULT)
+        self.assertEqual(self.sm.reason_str, "LIMIT")
+        self.assertEqual(self.sm.ui_status_str, "FLT")
+        self.assertEqual(self.sm.menu_str, "Fault")
+        self.sm.movie_state.value = 0
+        for _ in range(100):
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+            self.assertEqual(self.sm.press_calls.value, press_before)
+
+        # 3b. Unsupported stop reasons (0 user, 1 buffer overflow, 2 card space full, 5 unknown)
+        for bad_reason in (0, 1, 2, 5):
+            self.sm.reset()
+            self._start_deliberate_physical_recording()
+            self.sm.cur_frames.value = 54000
+            self.sm.stop_reason.value = bad_reason
+            self.sm.movie_state.value = 2
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+            self.assertEqual(self.sm.enabled, 0)
+            self.assertEqual(self.sm.faulted, 1)
+            self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_STOP_FAULT)
+            self.assertEqual(self.sm.ui_status_str, "FLT")
+            self.assertEqual(self.sm.press_calls.value, 0)
+
+        # 3c. Stale Reason 3 when proj_total <= size_cap, avail_space < proj_total, or segment_index == 0
+        for proj_sz, avail_sz, seg_idx in (
+            (50 * 1024 * 1024, 32 * 1024 * 1024 * 1024, 1),  # Early stop well below 4 GiB
+            (0x100000100, 0x100000000, 1),  # Card space full (avail_space < proj_total)
+            (0x100000100, 32 * 1024 * 1024 * 1024, 0),  # Invalid segment_index == 0
+        ):
+            self.sm.reset()
+            self.sm.segment_index.value = seg_idx
+            self.sm.stop_reason.value = 3
+            self._start_deliberate_physical_recording()
+            self.sm.projected_size.value = proj_sz
+            self.sm.avail_space.value = avail_sz
+            self.sm.movie_state.value = 0
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+            self.assertEqual(self.sm.enabled, 0)
+            self.assertEqual(self.sm.faulted, 1)
+            self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_STOP_FAULT)
+            self.assertEqual(self.sm.ui_status_str, "FLT")
+            self.assertEqual(self.sm.press_calls.value, 0)
+
+        # 3d. Reason 4 rejected when max_frames is 0 or 0xFFFFFFFF (G3X_MOVIE_NOLIMIT value)
+        for bad_max in (0, 0xFFFFFFFF):
+            self.sm.reset()
+            self._start_deliberate_physical_recording()
+            self.sm.max_frames.value = bad_max
+            self.sm.cur_frames.value = 54000
+            self.sm.stop_reason.value = 4
+            self.sm.movie_state.value = 0
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+            self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_STOP_FAULT)
+            self.assertEqual(self.sm.ui_status_str, "FLT")
+            self.assertEqual(self.sm.press_calls.value, 0)
+
+        # 3e. Unreset counters immediately after restart before SetupModeAndLimits resets cur_frames/stream_bytes
+        self.sm.reset()
+        self._start_deliberate_physical_recording()
+        self.sm.cur_frames.value = 29000
+        self.sm.stream_bytes.value = 0xFF000000
+        self.sm.projected_size.value = 0xFF000000
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_RECORDING)
+        self.sm.projected_size.value = 0x100000100
+        self.sm.stop_reason.value = 3
+        self.sm.movie_state.value = 0
+        for _ in range(G3X_AUTOCONT_SETTLE_POLLS):
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_SETTLE)
+        for _ in range(G3X_AUTOCONT_PRESS_POLLS):
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_PRESSING)
+        for _ in range(G3X_AUTOCONT_RELEASE_POLLS):
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_RELEASING)
+        # Session 2 confirms recording (movie_state = 1), but counters have not moved from Session 1 stop values
+        self.sm.movie_state.value = 1
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_RECORDING)
+        self.assertEqual(self.sm.restart_count, 1)
+        # Immediate stop before counters ever moved/reset must disarm with STOP_FAULT (FLT)!
+        self.sm.movie_state.value = 0
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_STOP_FAULT)
+        self.assertEqual(self.sm.ui_status_str, "FLT")
 
     def test_disable_cancels_continuation_without_stopping_clip_and_releases_only_owned_keys_including_in_releasing(self) -> None:
         # 1. Disable while Armed (RECORDING): does not stop active clip, emits zero key press/release calls
@@ -973,6 +1249,76 @@ class TestPort58VolatileControlAndReasonSemantics(unittest.TestCase):
         self.assertTrue(self.sm.mod_video_pressed)
         self.assertEqual(self.sm.state, G3X_AUTOCONT_DISARMED)
         self.assertEqual(self.sm.ui_status_str, "OFF")
+        # Even if firmware subsequently enters RECORDING (1) and later stops at Reason 4, no restart occurs
+        self.sm.kbd_mod_state[0] |= G3X_KEY_VIDEO_BIT
+        self.sm.movie_state.value = 1
+        self.sm.cur_frames.value = 54000
+        self.sm.stop_reason.value = 4
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.sm.movie_state.value = 0
+        for _ in range(100):
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+            self.assertEqual(self.sm.ui_status_str, "OFF")
+
+        # 5. Disable during WAIT_CONFIRM (CONF, synth_owned == 0) and during RDY (with pending idle start press):
+        #    verifies every single continuation phase is covered for disable!
+        self.sm.reset()
+        self._start_deliberate_physical_recording()
+        self.sm.cur_frames.value = 54000
+        self.sm.stop_reason.value = 4
+        self.sm.movie_state.value = 0
+        for _ in range(G3X_AUTOCONT_SETTLE_POLLS):
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_SETTLE)
+        for _ in range(G3X_AUTOCONT_PRESS_POLLS):
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_PRESSING)
+        for _ in range(G3X_AUTOCONT_RELEASE_POLLS):
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_RELEASING)
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_WAIT_CONFIRM)
+        self.assertEqual(self.sm.ui_status_str, "CONF")
+        self.assertEqual(self.sm.synth_owned, 0)
+        press_before_conf_disable = self.sm.press_calls.value
+        rel_before_conf_disable = self.sm.release_calls.value
+        # Pre-set unowned modifier bit in kbd_mod_state[0] to prove disable in WAIT_CONFIRM never releases unowned keys
+        self.sm.kbd_mod_state[0] &= ~G3X_KEY_VIDEO_BIT
+        self.assertEqual(self.sm.menu_change(1), "Off")
+        self.assertEqual(self.sm.enabled, 0)
+        self.assertEqual(self.sm.state, G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_USER_OFF)
+        self.assertEqual(self.sm.ui_status_str, "OFF")
+        self.assertEqual(self.sm.press_calls.value, press_before_conf_disable)
+        self.assertEqual(self.sm.release_calls.value, rel_before_conf_disable)
+        self.assertTrue(self.sm.mod_video_pressed)
+        self.sm.kbd_mod_state[0] |= G3X_KEY_VIDEO_BIT
+        # Even if firmware subsequently transitions 0 -> 1 and later hits Reason 4, no active-clip stop or restart occurs
+        self.sm.movie_state.value = 1
+        self.sm.cur_frames.value = 10
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.restart_count, 0)
+        self.sm.cur_frames.value = 54000
+        self.sm.stop_reason.value = 4
+        self.sm.movie_state.value = 0
+        for _ in range(100):
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+            self.assertEqual(self.sm.press_calls.value, press_before_conf_disable)
+            self.assertEqual(self.sm.ui_status_str, "OFF")
+
+        # 6. Disable during RDY after physical start press was observed in IDLE (before 0 -> 1):
+        #    clears pending start press without releasing unowned keys and prevents arming on 0 -> 1
+        self.sm.reset()
+        self._confirm_idle_and_enable()
+        self.sm.set_physical_video_button(True)
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.sm.set_physical_video_button(False)
+        self.sm.kbd_mod_state[0] &= ~G3X_KEY_VIDEO_BIT
+        rel_before_rdy_disable = self.sm.release_calls.value
+        self.assertEqual(self.sm.lib.g3x_movie_autocont_set_enabled(0), 0)
+        self.assertEqual(self.sm.release_calls.value, rel_before_rdy_disable)
+        self.assertTrue(self.sm.mod_video_pressed)
+        self.sm.kbd_mod_state[0] |= G3X_KEY_VIDEO_BIT
+        self.sm.movie_state.value = 1
+        self.sm.cur_frames.value = 10
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.ui_status_str, "OFF")
 
     def test_physical_movie_button_stop_remains_terminal_until_new_deliberate_physical_start(self) -> None:
         self._start_deliberate_physical_recording()
@@ -1018,6 +1364,108 @@ class TestPort58VolatileControlAndReasonSemantics(unittest.TestCase):
         self.assertEqual(self.sm.step(), G3X_AUTOCONT_RECORDING)
         self.assertEqual(self.sm.ui_status_str, "ARM")
         self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_NONE)
+
+        # Now verify physical movie-button stop during EVERY waiting/restarting phase:
+        # WAIT_IDLE (WAIT), SETTLE (SETL), PRESSING (PRS), RELEASING (REL), and WAIT_CONFIRM (CONF),
+        # plus same-poll race between physical stop and automatic Reason 3/4 stop!
+        for phase in ("RACE_AUTO_STOP", "WAIT_IDLE", "SETTLE", "PRESSING", "RELEASING", "WAIT_CONFIRM"):
+            with self.subTest(phase=phase):
+                self.sm.reset()
+                self._start_deliberate_physical_recording()
+                self.sm.cur_frames.value = 54000
+                self.sm.stop_reason.value = 4
+
+                if phase == "RACE_AUTO_STOP":
+                    self.sm.movie_state.value = 2
+                    self.sm.set_physical_video_button(True)
+                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+                elif phase == "WAIT_IDLE":
+                    self.sm.movie_state.value = 2
+                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_WAIT_IDLE)
+                    self.assertEqual(self.sm.ui_status_str, "WAIT")
+                    self.sm.set_physical_video_button(True)
+                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+                elif phase == "SETTLE":
+                    self.sm.movie_state.value = 0
+                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_SETTLE)
+                    self.assertEqual(self.sm.ui_status_str, "SETL")
+                    for _ in range(G3X_AUTOCONT_SETTLE_POLLS - 1):
+                        self.assertEqual(self.sm.step(), G3X_AUTOCONT_SETTLE)
+                    # Final settle poll right before PRESSING
+                    self.sm.set_physical_video_button(True)
+                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+                    self.assertEqual(self.sm.press_calls.value, 0)
+                elif phase == "PRESSING":
+                    self.sm.movie_state.value = 0
+                    for _ in range(G3X_AUTOCONT_SETTLE_POLLS):
+                        self.assertEqual(self.sm.step(), G3X_AUTOCONT_SETTLE)
+                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_PRESSING)
+                    self.assertEqual(self.sm.ui_status_str, "PRS")
+                    self.assertEqual(self.sm.synth_owned, 1)
+                    self.sm.set_physical_video_button(True)
+                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+                    self.assertEqual(self.sm.synth_owned, 0)
+                    self.assertFalse(self.sm.mod_video_pressed)
+                elif phase == "RELEASING":
+                    self.sm.movie_state.value = 0
+                    for _ in range(G3X_AUTOCONT_SETTLE_POLLS):
+                        self.assertEqual(self.sm.step(), G3X_AUTOCONT_SETTLE)
+                    for _ in range(G3X_AUTOCONT_PRESS_POLLS):
+                        self.assertEqual(self.sm.step(), G3X_AUTOCONT_PRESSING)
+                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_RELEASING)
+                    self.assertEqual(self.sm.ui_status_str, "REL")
+                    self.sm.movie_state.value = 1  # Even if movie_state becomes 1 on the same poll
+                    self.sm.set_physical_video_button(True)
+                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+                elif phase == "WAIT_CONFIRM":
+                    self.sm.movie_state.value = 0
+                    for _ in range(G3X_AUTOCONT_SETTLE_POLLS):
+                        self.assertEqual(self.sm.step(), G3X_AUTOCONT_SETTLE)
+                    for _ in range(G3X_AUTOCONT_PRESS_POLLS):
+                        self.assertEqual(self.sm.step(), G3X_AUTOCONT_PRESSING)
+                    for _ in range(G3X_AUTOCONT_RELEASE_POLLS):
+                        self.assertEqual(self.sm.step(), G3X_AUTOCONT_RELEASING)
+                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_WAIT_CONFIRM)
+                    self.assertEqual(self.sm.ui_status_str, "CONF")
+                    self.sm.movie_state.value = 1  # Even if movie_state becomes 1 on the same poll
+                    self.sm.set_physical_video_button(True)
+                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+
+                # In every phase, physical stop latches cancel, keeps toggle enabled (RDY), and prevents continuation
+                self.assertEqual(self.sm.cancel_latched, 1)
+                self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_PHYS_STOP)
+                self.assertEqual(self.sm.reason_str, "STOP")
+                self.assertEqual(self.sm.enabled, 1)
+                self.assertEqual(self.sm.ui_status_str, "RDY")
+                self.assertEqual(self.sm.restart_count, 0)
+                press_after_cancel = self.sm.press_calls.value
+
+                # Cannot rearm while button is still held or before confirmed IDLE (0) + key release
+                self.sm.movie_state.value = 1
+                self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+                self.sm.movie_state.value = 0
+                self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+                self.assertEqual(self.sm.cancel_latched, 1)
+                self.sm.set_physical_video_button(False)
+                self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+                self.assertEqual(self.sm.cancel_latched, 0)
+
+                # A 0 -> 1 transition alone still cannot rearm
+                self.sm.movie_state.value = 1
+                self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+                self.sm.movie_state.value = 0
+                for _ in range(50):
+                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+                    self.assertEqual(self.sm.press_calls.value, press_after_cancel)
+
+                # Only a new deliberate physical start from confirmed IDLE rearms continuation
+                self.sm.set_physical_video_button(True)
+                self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+                self.sm.set_physical_video_button(False)
+                self.sm.movie_state.value = 1
+                self.sm.cur_frames.value = 10
+                self.assertEqual(self.sm.step(), G3X_AUTOCONT_RECORDING)
+                self.assertEqual(self.sm.ui_status_str, "ARM")
 
     def test_all_five_status_projections_and_explicit_reason_semantics_without_polling_overwrite(self) -> None:
         # Category 1: Disabled ("OFF" / "Off")
@@ -1179,6 +1627,129 @@ class TestPort58VolatileControlAndReasonSemantics(unittest.TestCase):
             self.sm.step()
             self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_STOP_FAULT)
             self.assertEqual(self.sm.ui_status_str, "FLT")
+
+        # Category 5e: WAIT_IDLE timeout (500 polls stuck in STOPPING == 2) -> TIMEOUT ("TMO", "FLT")
+        self.sm.reset()
+        self._start_deliberate_physical_recording()
+        self.sm.cur_frames.value = 54000
+        self.sm.stop_reason.value = 4
+        self.sm.movie_state.value = 2
+        for _ in range(G3X_AUTOCONT_MAX_STOP_POLLS):
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_WAIT_IDLE)
+            self.assertEqual(self.sm.ui_status_str, "WAIT")
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.enabled, 0)
+        self.assertEqual(self.sm.faulted, 1)
+        self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_TIMEOUT)
+        self.assertEqual(self.sm.reason_str, "TMO")
+        self.assertEqual(self.sm.ui_status_str, "FLT")
+        # Reaching IDLE (0) after WAIT_IDLE timeout never restarts and preserves TIMEOUT reason
+        self.sm.movie_state.value = 0
+        for _ in range(50):
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+            self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_TIMEOUT)
+            self.assertEqual(self.sm.ui_status_str, "FLT")
+            self.assertEqual(self.sm.press_calls.value, 0)
+
+        # Category 5f: Ambiguous / non-idle state bounces during WAIT_IDLE, SETTLE, PRESSING, RELEASING, WAIT_CONFIRM
+        # each disarm with G3X_AUTOCONT_REASON_INVALID_STATE ("STATE", "FLT") and release any owned synthetic key
+        for bounce_phase, bad_state in (
+            ("WAIT_IDLE", 1),       # Bounced back to RECORDING while waiting for IDLE
+            ("SETTLE", 2),          # Left IDLE back to STOPPING during 500 ms settle
+            ("PRESSING", 2),        # Entered STOPPING during synthetic pulse
+            ("RELEASING", 3),       # Entered STOPPING_PREREC during release cooldown
+            ("WAIT_CONFIRM", 2),    # Entered STOPPING during confirmation wait
+        ):
+            with self.subTest(bounce_phase=bounce_phase):
+                self.sm.reset()
+                self._start_deliberate_physical_recording()
+                self.sm.cur_frames.value = 54000
+                self.sm.stop_reason.value = 4
+                if bounce_phase == "WAIT_IDLE":
+                    self.sm.movie_state.value = 2
+                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_WAIT_IDLE)
+                else:
+                    self.sm.movie_state.value = 0
+                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_SETTLE)
+                    if bounce_phase in ("PRESSING", "RELEASING", "WAIT_CONFIRM"):
+                        for _ in range(G3X_AUTOCONT_SETTLE_POLLS - 1):
+                            self.assertEqual(self.sm.step(), G3X_AUTOCONT_SETTLE)
+                        self.assertEqual(self.sm.step(), G3X_AUTOCONT_PRESSING)
+                    if bounce_phase in ("RELEASING", "WAIT_CONFIRM"):
+                        for _ in range(G3X_AUTOCONT_PRESS_POLLS - 1):
+                            self.assertEqual(self.sm.step(), G3X_AUTOCONT_PRESSING)
+                        self.assertEqual(self.sm.step(), G3X_AUTOCONT_RELEASING)
+                    if bounce_phase == "WAIT_CONFIRM":
+                        for _ in range(G3X_AUTOCONT_RELEASE_POLLS - 1):
+                            self.assertEqual(self.sm.step(), G3X_AUTOCONT_RELEASING)
+                        self.assertEqual(self.sm.step(), G3X_AUTOCONT_WAIT_CONFIRM)
+
+                self.sm.movie_state.value = bad_state
+                self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+                self.assertEqual(self.sm.synth_owned, 0)
+                self.assertFalse(self.sm.mod_video_pressed)
+                self.assertEqual(self.sm.enabled, 0)
+                self.assertEqual(self.sm.faulted, 1)
+                self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_INVALID_STATE)
+                self.assertEqual(self.sm.reason_str, "STATE")
+                self.assertEqual(self.sm.ui_status_str, "FLT")
+                self.assertEqual(self.sm.menu_str, "Fault")
+
+        # Category 5g: Physical stop on the exact same poll as playback entry or invalid state in an active state
+        # preserves G3X_AUTOCONT_REASON_PHYS_STOP ("STOP") precedence and latches cancel_latched = 1
+        self.sm.reset()
+        self._start_deliberate_physical_recording()
+        self.sm.set_physical_video_button(True)
+        self.sm.lib.host_set_mode_play(1)
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_PHYS_STOP)
+        self.assertEqual(self.sm.reason_str, "STOP")
+        self.assertEqual(self.sm.cancel_latched, 1)
+
+    def test_live_menu_redraw_signaling_and_gui_diag_draw_integration(self) -> None:
+        # Outside GUI_MODE_MENU (gui_mode == 0), gui_menu_needs_redraw() returns 0
+        self.sm.lib.host_set_gui_mode(0)
+        self.assertEqual(self.sm.lib.gui_menu_needs_redraw(), 0)
+
+        # Enter GUI_MODE_MENU (2): initial signature change sets gui_menu_needs_redraw() == 1
+        self.sm.lib.host_set_gui_mode(2)
+        self.assertEqual(self.sm.lib.gui_menu_needs_redraw(), 1)
+        self.sm.lib.gui_menu_clear_redraw()
+        self.assertEqual(self.sm.lib.gui_menu_needs_redraw(), 0)
+
+        # Enable at confirmed idle (OFF -> RDY): triggers menu redraw
+        self._confirm_idle_and_enable()
+        self.assertEqual(self.sm.lib.gui_menu_needs_redraw(), 1)
+        self.sm.lib.gui_menu_clear_redraw()
+        self.assertEqual(self.sm.lib.gui_menu_needs_redraw(), 0)
+
+        # Deliberate physical start (RDY -> ARM): triggers menu redraw
+        self._start_deliberate_physical_recording()
+        self.assertEqual(self.sm.lib.gui_menu_needs_redraw(), 1)
+        self.sm.lib.gui_menu_clear_redraw()
+
+        # Invalid state disarm (ARM -> FLT): triggers menu redraw
+        self.sm.movie_state.value = 6
+        self.sm.step()
+        self.assertEqual(self.sm.ui_status_str, "FLT")
+        self.assertEqual(self.sm.lib.gui_menu_needs_redraw(), 1)
+        self.sm.lib.gui_menu_clear_redraw()
+
+        # User disable from FLT -> OFF: changes disarm_reason (INVALID_STATE -> USER_OFF), triggers menu redraw
+        self.assertEqual(self.sm.menu_change(-1), "Off")
+        self.assertEqual(self.sm.lib.gui_menu_needs_redraw(), 1)
+        self.sm.lib.gui_menu_clear_redraw()
+
+        # Also exercise gui_diag_draw() in <ALT> mode and verify drawn Line 2 & Line 3 strings
+        self.sm.lib.host_set_gui_mode_alt(1)
+        self.sm.movie_state.value = 0
+        self.sm.lib.gui_diag_draw()
+        drawn2 = self.sm.lib.host_get_last_drawn_line2().decode("utf-8")
+        drawn3 = self.sm.lib.host_get_last_drawn_line3().decode("utf-8")
+        self.assertIn("SAVE:OFF MOV:IDLE AC:OFF", drawn2)
+        self.assertIn("SAVE:OFF MOV:IDLE AC:OFF", drawn3)
+        self.assertLessEqual(len(drawn2), 55)
+        self.assertLessEqual(len(drawn3), 55)
 
     def test_diag_line2_and_line3_formatting_within_55_char_limit(self) -> None:
         self.sm.menu_open_count.value = 9999
@@ -1423,6 +1994,18 @@ class TestPort58BuildArtifactsDisassemblyAndDoc(unittest.TestCase):
             "G3X_AUTOCONT_REASON_TIMEOUT",
             BASE_DEFAULT_SHA256,
             sha256_file(self.cand_bin),
+            "Host Validation Results vs. Unverified Camera Assumptions & Limitations",
+            "Opt-In Owner Trial & Battery-Pull Recovery Plan",
+            "Battery-Pull Recovery",
+            "AC:OFF",
+            "AC:RDY",
+            "AC:ARM",
+            "AC:WAIT",
+            "AC:SETL",
+            "AC:PRS",
+            "AC:REL",
+            "AC:CONF",
+            "AC:FLT",
         ):
             self.assertIn(required_name, doc_text, f"Missing '{required_name}' in docs/PORT58_MOVIE_CONTROL.md")
 
@@ -1442,6 +2025,152 @@ class TestPort58BuildArtifactsDisassemblyAndDoc(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(res.returncode, 0, f"Unresolvable commit hash in docs/PORT58_MOVIE_CONTROL.md: {commit_hash}")
+
+
+class TestPort58ExcludedFeaturesAndPort54To57Regressions(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        ensure_build_default()
+        ensure_build_candidate()
+        cls.cand_elf = ROOT / "out/port58-movie-control/stage_chdk/platform/g3x/sub/110c/main.elf"
+        cls.cand_bin_raw = ROOT / "out/port58-movie-control/stage_chdk/platform/g3x/sub/110c/main.bin"
+        cls.cand_stage = ROOT / "out/port58-movie-control/stage_chdk"
+        cls.sm = _HostPort58Harness()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.sm.close()
+
+    def test_tracked_platform_and_full_build_movie_sources_synchronized(self) -> None:
+        self.assertEqual(
+            MOVIE_STATUS_H.read_text(encoding="utf-8"),
+            FULL_MOVIE_STATUS_H.read_text(encoding="utf-8"),
+        )
+        anchor = "#if defined(G3X_MOVIE_STATUS) && (G3X_MOVIE_STATUS == 1)"
+        plat_rec = MOVIE_REC_C.read_text(encoding="utf-8")
+        full_rec = FULL_MOVIE_REC_C.read_text(encoding="utf-8")
+        self.assertIn(anchor, plat_rec)
+        self.assertIn(anchor, full_rec)
+        self.assertEqual(plat_rec[plat_rec.index(anchor):], full_rec[full_rec.index(anchor):])
+
+    def test_port54_conf_save_and_port56_movie_nolimit_remain_inactive_in_candidate(self) -> None:
+        # 1. Staged makefiles and conf.c keep G3X_CONF_SAVE and G3X_MOVIE_NOLIMIT inactive
+        for rel in ("platform/g3x/Makefile", "platform/g3x/sub/110c/Makefile"):
+            mf_text = (self.cand_stage / rel).read_text(encoding="utf-8")
+            self.assertIn("-DG3X_MOVIE_AUTOCONT_UI=1", mf_text)
+            self.assertIn("-DG3X_DISABLE_CARD_WRITES=1", mf_text)
+            self.assertIn("-DOPT_DISABLE_FILE_WRITES=1", mf_text)
+            self.assertNotIn("-DG3X_CONF_SAVE=1", mf_text)
+            self.assertNotIn("-DG3X_MOVIE_NOLIMIT=1", mf_text)
+            self.assertNotIn("-DFULL_HOOKS=1", mf_text)
+
+        self.assertFalse((self.cand_stage / "platform/g3x/conf_save.h").exists())
+
+        # 2. Candidate main.elf symbol table and disassembly confirm excluded features are absent
+        nm_out = subprocess.check_output([str(NM), str(self.cand_elf)], text=True)
+        for excluded_sym in (
+            "g3x_conf_save_active",
+            "g3x_is_safe_chdk_write_path",
+            "g3x_is_conf_file_path",
+            "g3x_movie_nolimit_poll",
+            "g3x_movie_nolimit_status_str",
+            "g3x_movie_nolimit_diag_str",
+        ):
+            self.assertNotIn(excluded_sym, nm_out, f"Excluded symbol {excluded_sym} must not be in PORT-58 candidate")
+
+        for active_blocker in (
+            "__wrap_open",
+            "__wrap_fopen",
+            "__wrap_creat",
+            "__wrap_write",
+            "__wrap_fwrite",
+            "__wrap_mkdir",
+            "__wrap_remove",
+            "__wrap_rename",
+            "__wrap_MakeDirectory_Fut",
+            "__wrap__MakeDirectory_Fut",
+            "__wrap_DeleteFile_Fut",
+            "__wrap__DeleteFile_Fut",
+            "__wrap_RenameFile_Fut",
+            "__wrap__RenameFile_Fut",
+        ):
+            self.assertIn(active_blocker, nm_out, f"Write-blocking wrapper {active_blocker} must be active in PORT-58 candidate")
+
+        # 3. Verify my_kbd_read_keys calls g3x_movie_autocont_poll and never calls g3x_movie_nolimit_poll
+        disasm = subprocess.check_output([str(OBJDUMP), "-d", str(self.cand_elf)], text=True)
+        kbd_instrs = parse_function_instructions(disasm, "my_kbd_read_keys")
+        self.assertGreater(len(kbd_instrs), 0)
+        self.assertTrue(any("g3x_movie_autocont_poll" in i["line"] for i in kbd_instrs))
+        self.assertFalse(any("g3x_movie_nolimit_poll" in i["line"] for i in kbd_instrs))
+
+        # 4. Verify LIM: strings from PORT-56 are absent from compiled candidate binary
+        strings_out = subprocess.check_output(["strings", str(self.cand_bin_raw)], text=True)
+        self.assertIn("Auto-Continue Movie", strings_out)
+        self.assertIn("AC:%s", strings_out)
+        self.assertNotIn("LIM:%s", strings_out)
+        self.assertNotIn("LIM:OFF", strings_out)
+        self.assertNotIn("LIM:ON", strings_out)
+
+    def test_port55_movie_status_and_port57_evidence_regressions_in_candidate(self) -> None:
+        # 1. Host-compiled g3x_movie_status_str() and g3x_movie_autocont_status_str() regressions
+        self.sm.reset()
+        for raw_st, expected_mov in ((0, "IDLE"), (1, "REC"), (2, "?"), (3, "?"), (4, "?"), (-1, "?"), (99, "?")):
+            self.sm.movie_state.value = raw_st
+            self.assertEqual(self.sm.lib.host_get_movie_status_str().decode("utf-8"), expected_mov)
+            line2 = self.sm.format_line2()
+            line3 = self.sm.format_line3()
+            self.assertIn("SAVE:OFF", line2)
+            self.assertIn("SAVE:OFF", line3)
+            self.assertIn(f"MOV:{expected_mov}", line2)
+            self.assertIn(f"MOV:{expected_mov}", line3)
+            self.assertNotIn("LIM:", line2)
+            self.assertNotIn("LIM:", line3)
+        self.assertEqual(self.sm.lib.host_get_autocont_status_str().decode("utf-8"), self.sm.ui_status_str)
+
+        # 2. Candidate main.elf core movie status functions remain strictly read-only
+        disasm = subprocess.check_output([str(OBJDUMP), "-d", str(self.cand_elf)], text=True)
+        for fn_name in ("g3x_get_movie_status", "get_movie_status", "is_video_recording"):
+            instrs = parse_function_instructions(disasm, fn_name)
+            self.assertGreater(len(instrs), 0, f"Missing {fn_name} in PORT-58 main.elf")
+            for instr in instrs:
+                mnem = instr["mnemonic"]
+                self.assertFalse(
+                    mnem.startswith("str") or mnem.startswith("stm"),
+                    f"Forbidden store '{mnem}' in {fn_name}: {instr['line']}",
+                )
+
+        # 3. Recorded ROM evidence manifests validate cleanly with zero new ROM reads
+        validator = ROOT / "tools/port11c_evidence_validator.py"
+        res = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(validator),
+                "--manifest",
+                str(EVIDENCE_MANIFEST),
+                "--trusted-scopes",
+                str(TRUSTED_SCOPES),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertIn("Result: VALID (0 errors, 0 warnings)", res.stdout)
+
+        p55_manifest = json.loads((ROOT / "manifests/evidence/port55_evidence_manifest.json").read_text(encoding="utf-8"))
+        p56_manifest = json.loads((ROOT / "manifests/evidence/port56_evidence_manifest.json").read_text(encoding="utf-8"))
+        self.assertTrue(
+            any(
+                e.get("id") == "PORT55-ROM-GET-ELAPSED-SECONDS-STATE-CHECK"
+                for e in p55_manifest.get("rom_reads", {}).get("ranges_read", [])
+            )
+        )
+        self.assertTrue(
+            any(
+                e.get("id") == "PORT56-ROM-CHECK-FRAMELIMIT-BASE-LOAD"
+                for e in p56_manifest.get("rom_reads", {}).get("ranges_read", [])
+            )
+        )
 
 
 if __name__ == "__main__":
