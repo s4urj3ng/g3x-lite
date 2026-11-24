@@ -2449,6 +2449,98 @@ def apply_movie_autocont_ui_staging_patches(stage_dir: Path) -> None:
         mpath.write_text(text, encoding="utf-8")
 
 
+def apply_movie_restart_budget_staging_patches(stage_dir: Path) -> None:
+    """PORT-60: Apply G3X_MOVIE_RESTART_BUDGET=1 prerequisite checks, volatile budget menu item, and compile flags."""
+    apply_movie_autocont_ui_staging_patches(stage_dir)
+
+    # 1. Insert volatile "Auto-Continue Budget" item into video_submenu_items[] in staged core/gui.c
+    gui_c = stage_dir / "core/gui.c"
+    gui_text = gui_c.read_text(encoding="utf-8")
+    if "g3x_movie_autocont_budget_menu_change" not in gui_text:
+        ext_anchor = "extern const char *g3x_movie_autocont_menu_change(int change, int arg);\n"
+        item_anchor = '    MENU_ITEM   (0x5c, (int)"Auto-Continue Movie",          MENUITEM_ENUM,          g3x_movie_autocont_menu_change,     0 ),\n'
+        if gui_text.count(ext_anchor) != 1 or gui_text.count(item_anchor) != 1:
+            raise RuntimeError("PORT-60 video_submenu_items anchor not found in staged core/gui.c")
+        gui_text = gui_text.replace(
+            ext_anchor,
+            ext_anchor
+            + "#if defined(G3X_MOVIE_RESTART_BUDGET) && (G3X_MOVIE_RESTART_BUDGET == 1)\n"
+            + "extern const char *g3x_movie_autocont_budget_menu_change(int change, int arg);\n"
+            + "#endif\n",
+            1,
+        )
+        gui_text = gui_text.replace(
+            item_anchor,
+            item_anchor
+            + "#if defined(G3X_MOVIE_RESTART_BUDGET) && (G3X_MOVIE_RESTART_BUDGET == 1)\n"
+            + '    MENU_ITEM   (0x5c, (int)"Auto-Continue Budget",         MENUITEM_ENUM,          g3x_movie_autocont_budget_menu_change, 0 ),\n'
+            + "#endif\n",
+            1,
+        )
+        gui_c.write_text(gui_text, encoding="utf-8")
+
+    # 2. Update staged makefiles with prerequisite/incompatibility checks and -DG3X_MOVIE_RESTART_BUDGET=1
+    prereq = (
+        "ifeq ($(G3X_MOVIE_RESTART_BUDGET),1)\n"
+        "ifneq ($(G3X_MOVIE_AUTOCONT_UI),1)\n"
+        "$(error G3X_MOVIE_RESTART_BUDGET=1 requires G3X_MOVIE_AUTOCONT_UI=1 G3X_MOVIE_AUTOCONT=1 G3X_MOVIE_STATUS=1 G3X_GUI_MENU=1 G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+        "endif\n"
+        "ifneq ($(G3X_MOVIE_AUTOCONT),1)\n"
+        "$(error G3X_MOVIE_RESTART_BUDGET=1 requires G3X_MOVIE_AUTOCONT_UI=1 G3X_MOVIE_AUTOCONT=1 G3X_MOVIE_STATUS=1 G3X_GUI_MENU=1 G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+        "endif\n"
+        "ifneq ($(G3X_MOVIE_STATUS),1)\n"
+        "$(error G3X_MOVIE_RESTART_BUDGET=1 requires G3X_MOVIE_AUTOCONT_UI=1 G3X_MOVIE_AUTOCONT=1 G3X_MOVIE_STATUS=1 G3X_GUI_MENU=1 G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+        "endif\n"
+        "ifneq ($(G3X_GUI_MENU),1)\n"
+        "$(error G3X_MOVIE_RESTART_BUDGET=1 requires G3X_MOVIE_AUTOCONT_UI=1 G3X_MOVIE_AUTOCONT=1 G3X_MOVIE_STATUS=1 G3X_GUI_MENU=1 G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+        "endif\n"
+        "ifneq ($(G3X_GUI_SYNC),1)\n"
+        "$(error G3X_MOVIE_RESTART_BUDGET=1 requires G3X_MOVIE_AUTOCONT_UI=1 G3X_MOVIE_AUTOCONT=1 G3X_MOVIE_STATUS=1 G3X_GUI_MENU=1 G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+        "endif\n"
+        "ifneq ($(G3X_GUI_DBUF),1)\n"
+        "$(error G3X_MOVIE_RESTART_BUDGET=1 requires G3X_MOVIE_AUTOCONT_UI=1 G3X_MOVIE_AUTOCONT=1 G3X_MOVIE_STATUS=1 G3X_GUI_MENU=1 G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+        "endif\n"
+        "ifneq ($(G3X_GUI_NOOVERDRAW),1)\n"
+        "$(error G3X_MOVIE_RESTART_BUDGET=1 requires G3X_MOVIE_AUTOCONT_UI=1 G3X_MOVIE_AUTOCONT=1 G3X_MOVIE_STATUS=1 G3X_GUI_MENU=1 G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+        "endif\n"
+        "ifneq ($(G3X_KBD_CHECK),1)\n"
+        "$(error G3X_MOVIE_RESTART_BUDGET=1 requires G3X_MOVIE_AUTOCONT_UI=1 G3X_MOVIE_AUTOCONT=1 G3X_MOVIE_STATUS=1 G3X_GUI_MENU=1 G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+        "endif\n"
+        "ifneq ($(G3X_GUI_DIAG),1)\n"
+        "$(error G3X_MOVIE_RESTART_BUDGET=1 requires G3X_MOVIE_AUTOCONT_UI=1 G3X_MOVIE_AUTOCONT=1 G3X_MOVIE_STATUS=1 G3X_GUI_MENU=1 G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+        "endif\n"
+        "ifneq ($(G3X_GUI_SHADOW2),1)\n"
+        "$(error G3X_MOVIE_RESTART_BUDGET=1 requires G3X_MOVIE_AUTOCONT_UI=1 G3X_MOVIE_AUTOCONT=1 G3X_MOVIE_STATUS=1 G3X_GUI_MENU=1 G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1)\n"
+        "endif\n"
+        "ifeq ($(G3X_CONF_SAVE),1)\n"
+        "$(error G3X_MOVIE_RESTART_BUDGET=1 is incompatible with G3X_CONF_SAVE=1)\n"
+        "endif\n"
+        "ifeq ($(FULL_HOOKS),1)\n"
+        "$(error G3X_MOVIE_RESTART_BUDGET=1 is incompatible with FULL_HOOKS=1)\n"
+        "endif\n"
+        "endif\n\n"
+    )
+    for rel in ["platform/g3x/Makefile", "platform/g3x/sub/110c/Makefile"]:
+        mpath = stage_dir / rel
+        text = mpath.read_text(encoding="utf-8")
+        if "ifeq ($(G3X_MOVIE_RESTART_BUDGET),1)" not in text:
+            text = prereq + text
+        if "-DG3X_MOVIE_RESTART_BUDGET=1" not in text:
+            if "-DG3X_MOVIE_AUTOCONT_UI=1" in text:
+                text = text.replace(
+                    "-DG3X_MOVIE_AUTOCONT_UI=1",
+                    "-DG3X_MOVIE_AUTOCONT_UI=1 -DG3X_MOVIE_RESTART_BUDGET=1",
+                    1,
+                )
+            elif "CFLAGS +=" in text:
+                text = text.replace("CFLAGS +=", "CFLAGS += -DG3X_MOVIE_RESTART_BUDGET=1", 1)
+            elif "CFLAGS =" in text:
+                text = text.replace("CFLAGS =", "CFLAGS = -DG3X_MOVIE_RESTART_BUDGET=1", 1)
+            else:
+                text += "\nCFLAGS += -DG3X_MOVIE_RESTART_BUDGET=1\n"
+        mpath.write_text(text, encoding="utf-8")
+
+
 def build_port43_dbuf(
     clean_stage: bool = True,
     keep_stage: bool = True,
@@ -2473,7 +2565,12 @@ def build_port43_dbuf(
     movie_autocont_alone: bool = False,
     movie_autocont_ui: bool = False,
     movie_combined: bool = False,
+    movie_restart_budget: bool = False,
+    movie_budget_profile: bool = False,
 ) -> int:
+    if movie_budget_profile:
+        movie_restart_budget = True
+        movie_combined = True
     if movie_combined:
         movie_nolimit = True
         movie_autocont_ui = True
@@ -2487,6 +2584,35 @@ def build_port43_dbuf(
         gui_diag = True
         kbd_check = True
         no_overdraw = True
+    if movie_restart_budget:
+        if conf_save or conf_save_alone:
+            print("ERROR: G3X_MOVIE_RESTART_BUDGET=1 is incompatible with G3X_CONF_SAVE=1", file=sys.stderr)
+            return 1
+        if full_hooks:
+            print("ERROR: G3X_MOVIE_RESTART_BUDGET=1 is incompatible with FULL_HOOKS=1", file=sys.stderr)
+            return 1
+        if movie_nolimit_alone or movie_autocont_alone or movie_status_alone or playback_menu_alone:
+            print(
+                "ERROR: G3X_MOVIE_RESTART_BUDGET=1 requires G3X_MOVIE_AUTOCONT_UI=1 G3X_MOVIE_AUTOCONT=1 G3X_MOVIE_STATUS=1 G3X_GUI_MENU=1 G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1",
+                file=sys.stderr,
+            )
+            return 1
+        if not (
+            movie_autocont_ui
+            and movie_autocont
+            and movie_status
+            and gui_menu
+            and gui_sync
+            and shadow2
+            and gui_diag
+            and kbd_check
+            and no_overdraw
+        ):
+            print(
+                "ERROR: G3X_MOVIE_RESTART_BUDGET=1 requires G3X_MOVIE_AUTOCONT_UI=1 G3X_MOVIE_AUTOCONT=1 G3X_MOVIE_STATUS=1 G3X_GUI_MENU=1 G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1",
+                file=sys.stderr,
+            )
+            return 1
     if movie_autocont_ui:
         if conf_save or conf_save_alone:
             print("ERROR: G3X_MOVIE_AUTOCONT_UI=1 is incompatible with G3X_CONF_SAVE=1", file=sys.stderr)
@@ -2640,6 +2766,8 @@ def build_port43_dbuf(
 
     if out_dir is not None:
         effective_out_dir = Path(out_dir).resolve()
+    elif movie_restart_budget:
+        effective_out_dir = REPO_ROOT / "out" / "port60-movie-restart-budget"
     elif movie_autocont_ui and movie_nolimit:
         effective_out_dir = REPO_ROOT / "out" / "port59-movie-combined"
     elif movie_autocont_ui:
@@ -2788,7 +2916,10 @@ def build_port43_dbuf(
         print("G3X_MOVIE_STATUS=1: Applying read-only movie status accessor and MOV: diag marker...")
         apply_movie_status_staging_patches(effective_stage_dir, alone=movie_status_alone)
 
-    if movie_autocont_ui:
+    if movie_restart_budget:
+        print("G3X_MOVIE_RESTART_BUDGET=1: Applying volatile finite session restart budget (1/2/3, default 1)...")
+        apply_movie_restart_budget_staging_patches(effective_stage_dir)
+    elif movie_autocont_ui:
         print("G3X_MOVIE_AUTOCONT_UI=1: Applying volatile movie continuation menu control and status readout...")
         apply_movie_autocont_ui_staging_patches(effective_stage_dir)
     elif movie_autocont:
@@ -2817,6 +2948,8 @@ def build_port43_dbuf(
                 clean_cmd.append("G3X_MOVIE_AUTOCONT=1")
             if movie_autocont_ui:
                 clean_cmd.append("G3X_MOVIE_AUTOCONT_UI=1")
+            if movie_restart_budget:
+                clean_cmd.append("G3X_MOVIE_RESTART_BUDGET=1")
             if not playback_menu_alone and not movie_status_alone and not movie_nolimit_alone and not movie_autocont_alone:
                 clean_cmd.extend(["G3X_GUI_FIX=1", "G3X_GUI_DBUF=1"])
                 if no_overdraw:
@@ -2864,6 +2997,8 @@ def build_port43_dbuf(
         cmd.append("G3X_MOVIE_AUTOCONT=1")
     if movie_autocont_ui:
         cmd.append("G3X_MOVIE_AUTOCONT_UI=1")
+    if movie_restart_budget:
+        cmd.append("G3X_MOVIE_RESTART_BUDGET=1")
     cmd.extend([
         f"CROSS_COMPILE={CROSS_COMPILE}",
         "OPT_CAPSTONE_TOOLS=0",
@@ -2908,6 +3043,8 @@ def build_port43_dbuf(
         env["G3X_MOVIE_AUTOCONT"] = "1"
     if movie_autocont_ui:
         env["G3X_MOVIE_AUTOCONT_UI"] = "1"
+    if movie_restart_budget:
+        env["G3X_MOVIE_RESTART_BUDGET"] = "1"
     if not playback_menu_alone and not movie_status_alone and not movie_nolimit_alone and not movie_autocont_alone:
         env["G3X_GUI_FIX"] = "1"
         env["G3X_GUI_DBUF"] = "1"
@@ -3042,6 +3179,8 @@ def build_port43_dbuf(
             build_flags.append("G3X_MOVIE_AUTOCONT=1")
         if movie_autocont_ui:
             build_flags.append("G3X_MOVIE_AUTOCONT_UI=1")
+        if movie_restart_budget:
+            build_flags.append("G3X_MOVIE_RESTART_BUDGET=1")
         if full_hooks:
             build_flags.insert(1, "FULL_HOOKS=1")
 
@@ -3062,7 +3201,9 @@ def build_port43_dbuf(
         manifest_name = "port53_playback_menu_alone_manifest.json"
     elif playback_menu:
         manifest_name = "port53_playback_menu_manifest.json"
-    if movie_autocont_ui and movie_nolimit:
+    if movie_restart_budget:
+        manifest_name = "port60_movie_restart_budget_manifest.json"
+    elif movie_autocont_ui and movie_nolimit:
         manifest_name = "port59_movie_combined_manifest.json"
     elif movie_autocont_ui:
         manifest_name = "port58_movie_control_manifest.json"
@@ -3143,7 +3284,61 @@ def build_port43_dbuf(
                 "save_int_value_file",
             ]
 
-    if movie_autocont_ui and movie_nolimit:
+    if movie_restart_budget:
+        manifest_data["manifest_id"] = "port60_movie_restart_budget_manifest"
+        manifest_data["milestone"] = "PORT-60"
+        manifest_data["origin_main_baseline"] = "0579e70d39f0bd4156b1266e5187f97275a9b0a8"
+        manifest_data["candidate_source_base"] = "0579e70d39f0bd4156b1266e5187f97275a9b0a8"
+        manifest_data["integration_parent"] = "5ed0b6a345d5e8d9e4866146451c1c360848553d"
+        manifest_data["reused_commits"] = {
+            "origin_main_port59": "0579e70d39f0bd4156b1266e5187f97275a9b0a8",
+            "port59_build": "32d6e0aa60766fdb4223d86403c37fca2c82c920",
+            "port58_movie_control": "6696c8390780043e0c5fc67c306143dacf0bcd7c",
+            "port57_movie_autocont": "ed374e7d332bce36a9c76682074aa9516e15e3be",
+            "port56_movie_nolimit": "ded3832e4a6cc1cc8401f67cb454d5d420191844",
+            "port55_movie_status": "dc915e6257981f48223fa2f38839bc28e31c73cf",
+            "port60_budget_interfaces": "85ee3571b3624d2e26c81d77136ca7d1b0627f2e",
+        }
+        manifest_data["excluded_commits"] = {
+            "port54_conf_save": "af2578089a39e9a2143f83003e92ea5236d542bc",
+        }
+        manifest_data["restart_budget_policy"] = {
+            "allowances": [1, 2, 3],
+            "default_allowance": 1,
+            "boot_enabled": False,
+            "volatile_only": True,
+            "confirmed_idle_required_for_edits": True,
+            "deliberate_physical_start_initializes_session": True,
+            "atomic_pre_input_reservation": True,
+            "no_refund_on_failed_or_interrupted_attempts": True,
+        }
+        manifest_data["command"] = (
+            "python3 -B scripts/build_port43_dbuf.py --no-overdraw --kbd-check --gui-diag --shadow2 --gui-sync --gui-menu --gui-restore2 --playback-menu --movie-status --movie-nolimit --movie-autocont --movie-autocont-ui --movie-restart-budget --out-dir out/port60-movie-restart-budget"
+        )
+        manifest_data["configurations"] = {
+            "default": {
+                "path": "out/build-default/DISKBOOT.BIN",
+                "size": 124097,
+                "sha256": "24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9",
+                "_end": "0x003686b0",
+                "card_writes": "disabled",
+            },
+            "port59_movie_combined": {
+                "path": "out/port59-movie-combined/DISKBOOT.BIN",
+                "size": 134801,
+                "sha256": "a29bd5d3aae297cbbdb34eae0cb6d96b5f804e4e3b4fea03304b0a34cc4d8fbf",
+                "_end": "0x0036b4d0",
+                "card_writes": "disabled",
+            },
+            "full_candidate": {
+                "path": "out/port60-movie-restart-budget/DISKBOOT.BIN",
+                "size": out_diskboot.stat().st_size,
+                "sha256": sha256_file(out_diskboot),
+                "_end": manifest_data.get("_end"),
+                "card_writes": "disabled",
+            },
+        }
+    elif movie_autocont_ui and movie_nolimit:
         manifest_data["manifest_id"] = "port59_movie_combined_manifest"
         manifest_data["milestone"] = "PORT-59"
         manifest_data["origin_main_baseline"] = "88ab9331363bff5c62cc7ac7ee3e75ee4d9768a5"
@@ -3348,6 +3543,8 @@ def main() -> int:
     parser.add_argument("--movie-autocont-alone", action="store_true", help="Build G3X_MOVIE_AUTOCONT=1 alone without DBUF/menu stack")
     parser.add_argument("--movie-autocont-ui", action="store_true", default=os.environ.get("G3X_MOVIE_AUTOCONT_UI") == "1", help="Enable G3X_MOVIE_AUTOCONT_UI=1 volatile movie continuation menu toggle and status readout")
     parser.add_argument("--movie-combined", action="store_true", default=os.environ.get("G3X_MOVIE_COMBINED") == "1", help="Enable PORT-59 combined movie profile (G3X_MOVIE_NOLIMIT=1 + G3X_MOVIE_AUTOCONT_UI=1 with all prerequisites)")
+    parser.add_argument("--movie-restart-budget", "--movie-budget", dest="movie_restart_budget", action="store_true", default=os.environ.get("G3X_MOVIE_RESTART_BUDGET") == "1", help="Enable G3X_MOVIE_RESTART_BUDGET=1 volatile finite session restart budget (allowances 1/2/3, default 1)")
+    parser.add_argument("--movie-budget-profile", action="store_true", default=os.environ.get("G3X_MOVIE_BUDGET_PROFILE") == "1", help="Enable PORT-60 movie restart budget profile (PORT-59 combined profile + G3X_MOVIE_RESTART_BUDGET=1)")
     parser.add_argument("--no-clean", action="store_true", help="Do not clean staging before building")
     parser.add_argument("--discard-stage", action="store_true", help="Remove stage directory after build")
     parser.add_argument("--out-dir", type=str, default=None, help="Custom output directory")
@@ -3377,6 +3574,8 @@ def main() -> int:
         movie_autocont_alone=args.movie_autocont_alone,
         movie_autocont_ui=args.movie_autocont_ui,
         movie_combined=args.movie_combined,
+        movie_restart_budget=args.movie_restart_budget,
+        movie_budget_profile=args.movie_budget_profile,
     )
 
 
