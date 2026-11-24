@@ -22,6 +22,27 @@
 #ifndef G3X_GUI_DIAG_H
 #define G3X_GUI_DIAG_H
 
+#if defined(G3X_MOVIE_RESTART_BUDGET) && (G3X_MOVIE_RESTART_BUDGET == 1)
+#if !defined(G3X_MOVIE_AUTOCONT_UI) || (G3X_MOVIE_AUTOCONT_UI != 1) || \
+    !defined(G3X_MOVIE_AUTOCONT) || (G3X_MOVIE_AUTOCONT != 1) || \
+    !defined(G3X_MOVIE_STATUS) || (G3X_MOVIE_STATUS != 1) || \
+    !defined(G3X_GUI_MENU) || (G3X_GUI_MENU != 1) || \
+    !defined(G3X_GUI_SYNC) || (G3X_GUI_SYNC != 1) || \
+    !defined(G3X_GUI_DBUF) || (G3X_GUI_DBUF != 1) || \
+    !defined(G3X_GUI_NOOVERDRAW) || (G3X_GUI_NOOVERDRAW != 1) || \
+    !defined(G3X_KBD_CHECK) || (G3X_KBD_CHECK != 1) || \
+    !defined(G3X_GUI_DIAG) || (G3X_GUI_DIAG != 1) || \
+    !defined(G3X_GUI_SHADOW2) || (G3X_GUI_SHADOW2 != 1)
+#error G3X_MOVIE_RESTART_BUDGET=1 requires G3X_MOVIE_AUTOCONT_UI=1 G3X_MOVIE_AUTOCONT=1 G3X_MOVIE_STATUS=1 G3X_GUI_MENU=1 G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1
+#endif
+#if defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1)
+#error G3X_MOVIE_RESTART_BUDGET=1 is incompatible with G3X_CONF_SAVE=1
+#endif
+#if defined(FULL_HOOKS) && (FULL_HOOKS == 1)
+#error G3X_MOVIE_RESTART_BUDGET=1 is incompatible with FULL_HOOKS=1
+#endif
+#endif
+
 #if defined(G3X_MOVIE_AUTOCONT_UI) && (G3X_MOVIE_AUTOCONT_UI == 1)
 #if !defined(G3X_MOVIE_AUTOCONT) || (G3X_MOVIE_AUTOCONT != 1) || \
     !defined(G3X_MOVIE_STATUS) || (G3X_MOVIE_STATUS != 1) || \

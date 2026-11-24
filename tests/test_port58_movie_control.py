@@ -2041,13 +2041,28 @@ class TestPort58ExcludedFeaturesAndPort54To57Regressions(unittest.TestCase):
         cls.sm.close()
 
     def test_tracked_platform_and_full_build_movie_sources_synchronized(self) -> None:
+        def _strip_port60_budget_blocks(src: str) -> str:
+            src = re.sub(
+                r"#if defined\(G3X_MOVIE_RESTART_BUDGET\) && \(G3X_MOVIE_RESTART_BUDGET == 1\)\n.*?\n#endif\n",
+                "",
+                src,
+                flags=re.S,
+            )
+            src = re.sub(
+                r"#if !defined\(G3X_MOVIE_RESTART_BUDGET\) \|\| \(G3X_MOVIE_RESTART_BUDGET != 1\)\n(.*?)\n#endif\n",
+                r"\1\n",
+                src,
+                flags=re.S,
+            )
+            return src
+
         anchor = "#if defined(G3X_MOVIE_STATUS) && (G3X_MOVIE_STATUS == 1)"
-        plat_hdr = MOVIE_STATUS_H.read_text(encoding="utf-8")
+        plat_hdr = _strip_port60_budget_blocks(MOVIE_STATUS_H.read_text(encoding="utf-8"))
         full_hdr = FULL_MOVIE_STATUS_H.read_text(encoding="utf-8")
         self.assertIn(anchor, plat_hdr)
         self.assertIn(anchor, full_hdr)
         self.assertEqual(plat_hdr[plat_hdr.index(anchor):], full_hdr[full_hdr.index(anchor):])
-        plat_rec = MOVIE_REC_C.read_text(encoding="utf-8")
+        plat_rec = _strip_port60_budget_blocks(MOVIE_REC_C.read_text(encoding="utf-8"))
         full_rec = FULL_MOVIE_REC_C.read_text(encoding="utf-8")
         self.assertIn(anchor, plat_rec)
         self.assertIn(anchor, full_rec)

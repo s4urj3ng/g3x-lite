@@ -1,12 +1,16 @@
-# PORT-60: Movie Restart Budget & Session Admission Interfaces (`PORT60-BUDGET-INTERFACES`)
+# PORT-60: Movie Restart Budget & Session Admission (`PORT60-BUDGET-INTERFACES`, `PORT60-BUDGET-BUILD`)
 
 - **Target hardware / firmware**: Canon PowerShot G3 X, `GM1.10C` (`1.1.0.0`, DIGIC 6 / DryOS R57)
-- **Milestone / Task**: `PORT-60` / `PORT60-BUDGET-INTERFACES` (Identify existing session and restart admission interfaces)
-- **Integrated `PORT-59` merge commit on `origin/main` (current `HEAD`)**: `0579e70d39f0bd4156b1266e5187f97275a9b0a8` (`Merge pull request #219 from s4urj3ng/agentbridge/g3x-lite/port-59-movie-combined/integration`)
+- **Milestone / Tasks**: `PORT-60` / `PORT60-BUDGET-INTERFACES` & `PORT60-BUDGET-BUILD`
+- **Pinned toolchain identity**: `toolchains/gcc-arm-none-eabi-5_4-2016q3` via `scripts/gcc_deterministic_wrapper.sh`
+- **Integrated `PORT-59` merge commit on `origin/main` (candidate source base)**: `0579e70d39f0bd4156b1266e5187f97275a9b0a8` (`Merge pull request #219 from s4urj3ng/agentbridge/g3x-lite/port-59-movie-combined/integration`)
+- **`PORT-60` integration branch parent (`agentbridge/g3x-lite/port-60-movie-restart-budget/integration`)**: `5ed0b6a345d5e8d9e4866146451c1c360848553d` (integrates `PORT60-BUDGET-INTERFACES` commit `85ee3571b3624d2e26c81d77136ca7d1b0627f2e` on top of `origin/main` `0579e70d39f0bd4156b1266e5187f97275a9b0a8`)
 - **`PORT-59` integration branch tip (`origin/agentbridge/g3x-lite/port-59-movie-combined/integration`)**: `007b219041eea31291a3c0285def1f9a567e2548`
   - `PORT59-VALIDATE`: `95127d619e0bd48f149e6e3a4772723d23e79976` (integrated at `007b219041eea31291a3c0285def1f9a567e2548`)
   - `PORT59-BUILD`: `32d6e0aa60766fdb4223d86403c37fca2c82c920` (attempt 2, following `9cd04f9c4eb7e3766d61ea2740e0a8c27e57fb32`; integrated at `dc0dd1f6dc45c72d2e4e6135c6f59e7082b3c685`)
   - `PORT59-COMPAT`: `c38d6c66dba62ee7b048a0cf56f52cbd1f567adc` (integrated at `732fe9a7190e4445d707dd68aae5b65badffc271`)
+- **Primary `PORT-60` finite restart-budget candidate (`out/port60-movie-restart-budget/DISKBOOT.BIN`)**: `135,313` bytes (`135313`), SHA-256 `5bb1b93b0a3246ab5e37c689daa223dd2c6a9e3e84a53956678992b97be00a90`, `main.elf` `_end = 0x0036b6e0`, manifest `out/port60-movie-restart-budget/port60_movie_restart_budget_manifest.json`
+- **Hardware deployment & verification status**: **STRICT NO-GO / CAMERA BEHAVIOR UNVERIFIED** (Phase 0 read-only policy; all build, disassembly, and C state-machine results are **host-established offline**; physical camera behavior remains **`UNKNOWN` / `UNVERIFIED`**)
 - **Reused underlying milestone commits integrated in `0579e70d39f0bd4156b1266e5187f97275a9b0a8`**:
   - `PORT-58` (`G3X_MOVIE_AUTOCONT_UI=1`): merge `377242f52447f2dac9bc5a22f37cf91251ebcb07` (PR #215) / integration `c8a7572f95598f3c91a7432cbf51b939424c3a6c` / UI build `6696c8390780043e0c5fc67c306143dacf0bcd7c` / interfaces `06c11a43443348a1aa2fc95d693d7d17e9068da7`
   - `PORT-57` (`G3X_MOVIE_AUTOCONT=1`): merge `3295064ae3c95370a2edbb59ffc7c3c45b8a3e5e` (PR #211) / integration `8f9afd3a7ce66a973e359555e11bfb87b190f57c` / build `ed374e7d332bce36a9c76682074aa9516e15e3be` / evidence `a086f6e97c3c72be251977679f52e2cbceb37c4a`
@@ -114,3 +118,62 @@ In the existing `PORT-59` controller, `g3x_autocont_restart_count` (`chdk-port/p
 | `chdk-port/platform/g3x/gui_menu.c` | `lines 50-73` (`gui_menu_needs_redraw()`) | Include budget / remaining-allowance state in `cur_ac_sig` (`lines 60-63`) so `GUI_MODE_MENU` redraws live on budget/allowance changes. |
 | `chdk-port/platform/g3x/gui_diag.h` | `lines 252,1060-1113,1446-1489,1576-1624` | Reuse `AC:%s` token formatting on Line 2 (`51 <= 55` chars) and Line 3 (`51 <= 55` chars), which already has `4` characters of headroom within `G3X_DIAG_LINE_MAX_CHARS = 55` for compact budget/remaining-allowance status tokens if needed. |
 | `scripts/build_port43_dbuf.py`<br>`tests/test_port59_movie_combined.py` | `scripts/build_port43_dbuf.py:2373-2450,2475-2540`<br>`tests/test_port59_movie_combined.py:323-705` | Reuse `apply_movie_autocont_ui_staging_patches()` (`video_submenu_items[]` `MENUITEM_ENUM` staging) and `_HostPort59Harness` (compiling actual production `movie_rec.c`, `gui_diag.h`, and `gui_menu.c` into a host `.so` with `0` ROM reads). |
+
+---
+
+## 4. `PORT60-BUDGET-BUILD`: Opt-In Finite Restart Budget Implementation & Host-Build Verification
+
+> **Host-Established vs. Physical Camera Boundary (`CAMERA BEHAVIOR UNVERIFIED`)**:
+> All build, disassembly, and compiled C state-machine verification results below are **`VERIFIED` offline on the host**. Physical camera behavior on Canon PowerShot G3 X (`GM1.10C`) hardware remains **`UNVERIFIED` (`UNKNOWN` / `INFERRED`)** under Phase 0 **STRICT NO-GO** awaiting opt-in owner trial. Zero new ROM reads were performed.
+
+### 4.1 Opt-In Feature Flag, Volatile Budget State & Session Admission Contract
+
+1. **Separately Selected Compile-Time Feature Gate (`G3X_MOVIE_RESTART_BUDGET=1` / `--movie-restart-budget`)**:
+   - Enforced across `chdk-port/platform/g3x/movie_status.h`, `chdk-port/platform/g3x/gui_diag.h`, `chdk-port/platform/g3x/Makefile`, `chdk-port/platform/g3x/sub/110c/makefile.inc`, and `scripts/build_port43_dbuf.py`:
+     - Requires `G3X_MOVIE_AUTOCONT_UI=1`, `G3X_MOVIE_AUTOCONT=1`, `G3X_MOVIE_STATUS=1`, `G3X_GUI_MENU=1`, `G3X_GUI_SYNC=1`, `G3X_GUI_DBUF=1`, `G3X_GUI_NOOVERDRAW=1`, `G3X_KBD_CHECK=1`, `G3X_GUI_DIAG=1`, and `G3X_GUI_SHADOW2=1`.
+     - Rejects `G3X_CONF_SAVE=1` (`SAVE:OFF`), `FULL_HOOKS=1`, and `*-alone` profiles (`#error` / `$(error ...)` / CLI exit code `1`).
+   - When `G3X_MOVIE_RESTART_BUDGET` is not defined, all `PORT-60` preprocessor blocks compile out so `out/build-default/DISKBOOT.BIN` and all existing individual and combined profiles (`PORT-55`, `PORT-56`, `PORT-57`, `PORT-58`, `PORT-59`) remain 100% byte-identical.
+2. **Volatile Allowances (`1`, `2`, or `3`, Default `1`) & Boot-Disabled Invariant**:
+   - Constants in `chdk-port/platform/g3x/movie_status.h`: `G3X_AUTOCONT_BUDGET_MIN = 1U`, `G3X_AUTOCONT_BUDGET_MAX = 3U`, `G3X_AUTOCONT_BUDGET_DEFAULT = 1U`.
+   - Volatile state in `chdk-port/platform/g3x/sub/110c/movie_rec.c`:
+     - `g3x_autocont_enabled = 0` (continuation boots disabled on every boot and resets to `0` in `g3x_movie_autocont_reset()`).
+     - `g3x_autocont_restart_budget = G3X_AUTOCONT_BUDGET_DEFAULT` (`1U`, selectable among `1U`, `2U`, `3U` via `"Auto-Continue Budget"` `MENUITEM_ENUM` in `video_submenu_items[]` / `g3x_movie_autocont_budget_menu_change()` or `g3x_movie_autocont_set_restart_budget()`).
+     - `g3x_autocont_restarts_remaining = 0U` (active session allowance remaining; `0U` at boot, reset, enable, or allowance edit).
+     - `g3x_autocont_session_restarts_used = 0U` (restart allowances consumed in the current session).
+     - `g3x_autocont_attempt_admitted = 0` (per-attempt admission token).
+   - Never stored in `struct Conf` or `conf_info[]`; `PORT-54` configuration saving remains excluded (`SAVE:OFF`).
+3. **Confirmed-Idle Gating for Enable & Allowance Edits**:
+   - Both `g3x_movie_autocont_set_enabled(1)` (`g3x_movie_autocont_menu_change()`) and `g3x_movie_autocont_set_restart_budget()` (`g3x_movie_autocont_budget_menu_change()`) require `g3x_movie_autocont_can_enable() == 1` (`mode_play == 0`, `saw_boot_idle == 1`, `cur_state == 0`, `prev_rec_state == 0`, physical `KEY_VIDEO` released, `synth_owned == 0`, and `state == G3X_AUTOCONT_DISARMED`).
+   - Edits attempted outside confirmed idle (or with budget outside `1..3`) return `0` without altering `g3x_autocont_restart_budget` or active session state, and confirmed-idle edits clear `g3x_autocont_idle_start_press_seen = 0` and never issue synthetic input or start recording.
+4. **Deliberate Physical Start Initialization vs. Synthetic Start Invariance**:
+   - Only a subsequent deliberate physical recording start (`G3X_AUTOCONT_DISARMED -> G3X_AUTOCONT_RECORDING` on `prev_state == 0 && cur_state == 1` after a post-enable/post-edit physical `KEY_VIDEO` press observed at confirmed `IDLE`) initializes `g3x_autocont_restarts_remaining = g3x_autocont_restart_budget`, `g3x_autocont_session_restarts_used = 0U`, and `g3x_autocont_attempt_admitted = 0`.
+   - Synthetic continuation starts (`G3X_AUTOCONT_RELEASING / G3X_AUTOCONT_WAIT_CONFIRM -> G3X_AUTOCONT_RECORDING` via `g3x_autocont_enter_confirmed_recording()`) clear `g3x_autocont_attempt_admitted = 0` without resetting or replenishing `g3x_autocont_restarts_remaining` or `g3x_autocont_session_restarts_used`.
+5. **Atomic Pre-Input Allowance Reservation, No-Refund Rule & Exhaustion Cleanup**:
+   - At stop-onset restart admission in `G3X_AUTOCONT_RECORDING` (when `cur_state != 1`, no physical cancel, and `g3x_autocont_check_eligible_stop(&attributed_reason) == 1`):
+     - If `g3x_autocont_restarts_remaining == 0U || g3x_autocont_session_restarts_used >= g3x_autocont_restart_budget || g3x_autocont_attempt_admitted != 0`, continuation is cancelled immediately (`g3x_autocont_disarm_with_reason(0, G3X_AUTOCONT_REASON_NONE, 0)`), releasing only continuation-owned synthetic keys and returning to `G3X_AUTOCONT_DISARMED` (`AC:RDY`) without entering `WAIT_IDLE`, `SETTLE`, or `PRESSING`.
+     - Otherwise, one allowance is reserved atomically before entering `WAIT_IDLE` / `SETTLE` (and before any synthetic `KEY_VIDEO` input is issued in `PRESSING`): `g3x_autocont_restarts_remaining--`, `g3x_autocont_session_restarts_used++`, `g3x_autocont_attempt_admitted = 1`.
+   - Every pending state (`WAIT_IDLE`, `SETTLE`, `PRESSING`, `RELEASING`, `WAIT_CONFIRM`) verifies `g3x_autocont_attempt_admitted == 1` and `0 < g3x_autocont_session_restarts_used <= g3x_autocont_restart_budget`; if not satisfied, pending continuation is cancelled and only continuation-owned synthetic keys are released while leaving any active clip running.
+   - Failed, interrupted, or duplicate attempts clear `g3x_autocont_attempt_admitted = 0` on disarm and never refund `g3x_autocont_restarts_remaining` or decrement `g3x_autocont_session_restarts_used`.
+   - When the final (`B`-th) admitted restart confirms the `(B + 1)`-th clip (`g3x_autocont_restarts_remaining == 0U`), the active clip continues running uninterrupted (with `g3x_movie_nolimit_poll()` re-patching `0x0000C274` to `0xFFFFFFFFU`), and no further automatic start can occur when that clip ends.
+
+### 4.2 Host-Build Command, Exact Flags, Source Commits & Artifact SHA-256 Matrix
+
+- **Source commit base (`origin/main`)**: `0579e70d39f0bd4156b1266e5187f97275a9b0a8`
+- **Integration parent (`PORT-60` integration branch)**: `5ed0b6a345d5e8d9e4866146451c1c360848553d` (`PORT60-BUDGET-INTERFACES`: `85ee3571b3624d2e26c81d77136ca7d1b0627f2e`)
+- **Explicit `PORT-60` host-build command**:
+  ```sh
+  python3 -B scripts/build_port43_dbuf.py --no-overdraw --kbd-check --gui-diag --shadow2 --gui-sync --gui-menu --gui-restore2 --playback-menu --movie-status --movie-nolimit --movie-autocont --movie-autocont-ui --movie-restart-budget --out-dir out/port60-movie-restart-budget
+  ```
+  *(Also selectable via `--movie-budget-profile`.)*
+- **Exact effective build flags**:
+  `G3X_FULL_BUILD=1`, `G3X_DISABLE_CARD_WRITES=1`, `CAM_SUPPORT_BITMAP_RES_CHANGE=1`, `OPT_DISABLE_FILE_WRITES=1`, `G3X_GUI5=1`, `G3X_GUI_FIX=1`, `G3X_GUI_DBUF=1`, `G3X_GUI_NOOVERDRAW=1`, `G3X_KBD_CHECK=1`, `G3X_GUI_DIAG=1`, `G3X_GUI_SHADOW2=1`, `G3X_GUI_SYNC=1`, `G3X_GUI_MENU=1`, `G3X_GUI_RESTORE2=1`, `G3X_PLAYBACK_MENU=1`, `G3X_MOVIE_STATUS=1`, `G3X_MOVIE_NOLIMIT=1`, `G3X_MOVIE_AUTOCONT=1`, `G3X_MOVIE_AUTOCONT_UI=1`, `G3X_MOVIE_RESTART_BUDGET=1` (`G3X_CONF_SAVE` OFF, `FULL_HOOKS` OFF).
+
+| Configuration Profile | Output Artifact Location & Manifest | `DISKBOOT.BIN` Size (Bytes) | `DISKBOOT.BIN` SHA-256 | Core `_end` Symbol | Preserved Invariants & Write Scope |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Default Build (`origin/main` baseline)** | `out/build-default/DISKBOOT.BIN` | `124,097` (`124097`) | `24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9` | `0x003686b0` | Byte-identical to `origin/main` (`88ab9331363bff5c62cc7ac7ee3e75ee4d9768a5` / `0579e70d39f0bd4156b1266e5187f97275a9b0a8`); movie features absent (`0` stores). |
+| **`PORT-55` Movie Status Only** (`--movie-status-alone` / `--movie-status`) | `out/build-movie-alone/DISKBOOT.BIN`<br>`out/port55-movie-status/DISKBOOT.BIN` | `124,081` (`124081`)<br>`132,297` (`132297`) | `be2a0839e4f74a78d4770c12d28ea3775229b88ad02801746908aa1a32787f9f`<br>`1f3d46569f95efa06a2acb0dabe0b11639bbcea6b147fd10e3ec31718944184f` | `0x003686a0`<br>`0x0036aa90` | Byte-identical; `0x0000C0C8` strictly read-only (`0` stores). |
+| **`PORT-56` Movie Time-Limit Only** (`--movie-nolimit-alone` / `--movie-nolimit`) | `out/build-nolimit-alone/DISKBOOT.BIN`<br>`out/port56-movie-nolimit/DISKBOOT.BIN` | `124,145` (`124145`)<br>`132,385` (`132385`) | `12c0635ffd11d2c6a1d158aaac436885a4a3b9b7830841a8c65410c193439b33`<br>`c8709189c4508fd96f89aebed58641fbbc1e60b258699be642686e6387c58352` | `0x003686e0`<br>`0x0036aaf0` | Byte-identical; writes `0xFFFFFFFFU` to `0x0000C274` only while `mr_rec_state == 1`. |
+| **`PORT-57` Movie Auto-Cont Only** (`--movie-autocont-alone` / `--movie-autocont`) | `out/build-autocont-alone/DISKBOOT.BIN`<br>`out/port57-movie-autocont/DISKBOOT.BIN` | `126,425` (`126425`)<br>`134,617` (`134617`) | `5162fb5ad30e9985a3904c5028fc59d4419c87a783921d86a9e46f28026c5cce`<br>`2da299cdc9b336fe74e726ca33f081a0cd5f88cebad227a317cff2c5d764eec7` | `0x00369030`<br>`0x0036b410` | Byte-identical; `MovieRecorder` RAM 100% read-only (`0` stores). |
+| **`PORT-58` Movie Control UI Only** (`--movie-autocont-ui`) | `out/port58-movie-control/DISKBOOT.BIN`<br>`out/port58-movie-control/port58_movie_control_manifest.json` | `134,713` (`134713`) | `c06094d05e03c18b9531ef2ed14e1fb07ff53add36fbb0679d0f4357dad0060c` | `0x0036b470` | Byte-identical; `MovieRecorder` RAM 100% read-only (`0` stores). |
+| **`PORT-59` Combined Movie Profile** (`--movie-combined`) | `out/port59-movie-combined/DISKBOOT.BIN`<br>`out/port59-movie-combined/port59_movie_combined_manifest.json` | `134,801` (`134801`) | `a29bd5d3aae297cbbdb34eae0cb6d96b5f804e4e3b4fea03304b0a34cc4d8fbf` | `0x0036b4d0` | Byte-identical; unbounded session continuation (`G3X_MOVIE_RESTART_BUDGET` OFF). |
+| **`PORT-60` Finite Restart Budget Profile** (`--movie-restart-budget`) | `out/port60-movie-restart-budget/DISKBOOT.BIN`<br>`out/port60-movie-restart-budget/port60_movie_restart_budget_manifest.json` | `135,313` (`135313`) | `5bb1b93b0a3246ab5e37c689daa223dd2c6a9e3e84a53956678992b97be00a90` | `0x0036b6e0` | Card writes disabled (`SAVE:OFF`, 14 `--wrap` blockers active); volatile allowances `1`/`2`/`3` (default `1`); `g3x_movie_nolimit_poll` writes `0xFFFFFFFFU` to `0x0000C274` only while `mr_rec_state == 1`; all 10 `MovieRecorder` accessors and `g3x_movie_autocont_poll` emit `0` stores to `0x0000C078..0x0000C2AF`; camera behavior **UNVERIFIED**. |
