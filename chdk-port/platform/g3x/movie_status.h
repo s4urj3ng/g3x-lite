@@ -335,7 +335,6 @@ int g3x_movie_autocont_cancel_session(void);
 int g3x_movie_autocont_is_session_cancelled(void);
 const char *g3x_movie_autocont_cancel_menu_str(void);
 const char *g3x_movie_autocont_cancel_menu_change(int change, int arg);
-void g3x_movie_autocont_cancel_menu_cb(void);
 #endif
 
 static inline const char *g3x_movie_autocont_status_str(void)

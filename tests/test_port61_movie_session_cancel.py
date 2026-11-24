@@ -97,9 +97,9 @@ PORT60_INTEGRATION_TIP = "4c3110a63c5246e29e894eecf2ede6581fd67a7b"
 PORT61_INTERFACE_COMMIT = "da5114a63c85bd9e7cedddc940a0f602829afdc2"
 PORT61_INTEGRATION_PARENT = "2d114077a43f787c9d21056d3b8b0ac9426ac4c9"
 
-PORT61_CANCEL_SHA256 = "bb06855d38d33bcc92d59f1f72e8a8dfe2e041c810a86c4c1b93ade02e835f0f"
-PORT61_CANCEL_SIZE = 135865
-PORT61_CANCEL_END = "0036b900"
+PORT61_CANCEL_SHA256 = "2612eea17c83dc64f9f6579b59771aa7313e931bb0b7ea47118ad8c6512e1f68"
+PORT61_CANCEL_SIZE = 135969
+PORT61_CANCEL_END = "0036b970"
 
 KEY_VIDEO = 13
 G3X_KEY_VIDEO_BIT = 0x00000008
@@ -442,6 +442,10 @@ class _HostPort61CancelHarness:
             "    g3x_autocont_synth_owned = synth_owned_val;\n"
             "    g3x_autocont_session_cancelled = cancelled_val;\n"
             "}\n"
+            "void host_set_timer_polls_for_test(unsigned int polls)\n"
+            "{\n"
+            "    g3x_autocont_timer_polls = polls;\n"
+            "}\n"
             "void host_call_enter_confirmed_recording_for_test(void)\n"
             "{\n"
             "    g3x_autocont_enter_confirmed_recording();\n"
@@ -548,8 +552,6 @@ class _HostPort61CancelHarness:
         self.lib.g3x_movie_autocont_cancel_menu_str.restype = ctypes.c_char_p
         self.lib.g3x_movie_autocont_cancel_menu_change.argtypes = [ctypes.c_int, ctypes.c_int]
         self.lib.g3x_movie_autocont_cancel_menu_change.restype = ctypes.c_char_p
-        self.lib.g3x_movie_autocont_cancel_menu_cb.argtypes = []
-        self.lib.g3x_movie_autocont_cancel_menu_cb.restype = None
 
         self.lib.g3x_movie_autocont_menu_cb.argtypes = []
         self.lib.g3x_movie_autocont_menu_cb.restype = None
@@ -567,6 +569,8 @@ class _HostPort61CancelHarness:
             ctypes.c_int,
         ]
         self.lib.host_force_cancel_state_for_invariant_test.restype = None
+        self.lib.host_set_timer_polls_for_test.argtypes = [ctypes.c_uint]
+        self.lib.host_set_timer_polls_for_test.restype = None
         self.lib.host_call_enter_confirmed_recording_for_test.argtypes = []
         self.lib.host_call_enter_confirmed_recording_for_test.restype = None
 
@@ -1004,7 +1008,6 @@ class TestPort61SessionCancellationRuntime(unittest.TestCase):
         self.assertEqual(self.sm.lib.g3x_movie_autocont_cancel_session(), 0)
         self.assertEqual(self.sm.cancel_menu_change(1), "Idle")
         self.assertEqual(self.sm.cancel_menu_change(-1), "Idle")
-        self.sm.lib.g3x_movie_autocont_cancel_menu_cb()
         self.assertEqual(self.sm.session_cancelled, 0)
         self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_NONE)
         self.assertEqual(self.sm.ui_status_str, "OFF")
@@ -1016,7 +1019,6 @@ class TestPort61SessionCancellationRuntime(unittest.TestCase):
         self.assertEqual(self.sm.lib.g3x_movie_autocont_cancel_session(), 0)
         self.assertEqual(self.sm.cancel_menu_change(1), "Idle")
         self.assertEqual(self.sm.cancel_menu_change(-1), "Idle")
-        self.sm.lib.g3x_movie_autocont_cancel_menu_cb()
         self.assertEqual(self.sm.session_cancelled, 0)
         self.assertEqual(self.sm.enabled, 1)
         self.assertEqual(self.sm.ui_status_str, "RDY")
@@ -1149,7 +1151,6 @@ class TestPort61SessionCancellationRuntime(unittest.TestCase):
                     self.assertEqual(self.sm.lib.g3x_movie_autocont_cancel_session(), 0)
                     self.assertEqual(self.sm.cancel_menu_change(1), "Cancel")
                     self.assertEqual(self.sm.cancel_menu_change(-1), "Cancel")
-                    self.sm.lib.g3x_movie_autocont_cancel_menu_cb()
                     self.assertEqual(self.sm.session_cancelled, 1)
                     self.assertEqual(self.sm.restart_budget, budget)
                     self.assertEqual(self.sm.restarts_remaining, expected_rem)
@@ -1362,8 +1363,10 @@ class TestPort61SessionCancellationRuntime(unittest.TestCase):
                 self.assertEqual(self.sm.synth_owned, 0)
 
         # 2. Physical stop on a LATER poll while a session-cancelled clip is still recording (cur_state == 1)
-        #    or stopping (cur_state == 2): physical-stop precedence takes over
-        for stop_state in (1, 2):
+        #    or stopping (cur_state in 2..4): physical-stop precedence sets PHYS_STOP and cancel_latched=1
+        #    while PRESERVING the session-cancelled latch (session_cancelled == 1) and keeping cancellation
+        #    visible through the status display until a new deliberate physical start after confirmed idle!
+        for stop_state in (1, 2, 3, 4):
             with self.subTest(post_cancel_phys_stop_state=stop_state):
                 self.sm.reset()
                 self._start_deliberate_physical_recording(budget=2)
@@ -1377,8 +1380,296 @@ class TestPort61SessionCancellationRuntime(unittest.TestCase):
                 self.sm.set_physical_video_button(True)
                 self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
                 self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_PHYS_STOP)
+                self.assertEqual(self.sm.reason_str, "STOP")
                 self.assertEqual(self.sm.cancel_latched, 1)
-                self.assertEqual(self.sm.session_cancelled, 0)
+                self.assertEqual(self.sm.session_cancelled, 1)
+                self.assertEqual(self.sm.enabled, 1)
+                self.assertEqual(self.sm.ui_status_str, "CANC")
+                self.assertEqual(self.sm.menu_str, "Cancel")
+                self.assertEqual(self.sm.cancel_menu_str, "Cancel")
+                self.assertIn("AC:CANC", self.sm.format_line2())
+                self.assertIn("AC:CANC", self.sm.format_line3())
+
+    def _assert_cancelled_post_disarm_invariants_and_qualifying_physical_start_clear(
+        self,
+        expected_reason: int,
+        expected_budget: int = 3,
+        expected_remaining: int = 2,
+        expected_used: int = 1,
+    ) -> None:
+        # 1. Session-cancelled latch and budget counters remain preserved; cancellation stays visible in UI
+        self.assertEqual(self.sm.state, G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.session_cancelled, 1)
+        self.assertEqual(self.sm.enabled, 1)
+        self.assertEqual(self.sm.disarm_reason, expected_reason)
+        if expected_reason == G3X_AUTOCONT_REASON_PHYS_STOP:
+            self.assertEqual(self.sm.cancel_latched, 1)
+            self.assertEqual(self.sm.reason_str, "STOP")
+        elif expected_reason == G3X_AUTOCONT_REASON_PLAYBACK:
+            self.assertEqual(self.sm.reason_str, "PLAY")
+        elif expected_reason == G3X_AUTOCONT_REASON_INVALID_STATE:
+            self.assertEqual(self.sm.reason_str, "STATE")
+        elif expected_reason == G3X_AUTOCONT_REASON_TIMEOUT:
+            self.assertEqual(self.sm.reason_str, "TMO")
+        self.assertEqual(self.sm.ui_status_str, "CANC")
+        self.assertEqual(self.sm.menu_str, "Cancel")
+        self.assertEqual(self.sm.cancel_menu_str, "Cancel")
+        line2 = self.sm.format_line2()
+        line3 = self.sm.format_line3()
+        self.assertIn("AC:CANC", line2)
+        self.assertIn("AC:CANC", line3)
+        self.assertLessEqual(len(line2), 55)
+        self.assertLessEqual(len(line3), 55)
+        self.assertEqual(self.sm.restart_budget, expected_budget)
+        self.assertEqual(self.sm.restarts_remaining, expected_remaining)
+        self.assertEqual(self.sm.session_restarts_used, expected_used)
+        self.assertEqual(self.sm.attempt_admitted, 0)
+        self.assertEqual(self.sm.synth_owned, 0)
+
+        # 2. Repeated cancellation and GUI edits immediately after the disarm path cannot clear cancellation
+        for edit_fn in (
+            lambda: self.sm.lib.g3x_movie_autocont_cancel_session(),
+            lambda: self.sm.cancel_menu_change(1),
+            lambda: self.sm.cancel_menu_change(-1),
+            lambda: self.sm.menu_change(1),
+            lambda: self.sm.menu_change(-1),
+            lambda: self.sm.lib.g3x_movie_autocont_set_enabled(1),
+            lambda: self.sm.lib.g3x_movie_autocont_set_enabled(0),
+            lambda: self.sm.lib.host_simulate_bool_menu_toggle(),
+            lambda: self.sm.budget_menu_change(1),
+            lambda: self.sm.budget_menu_change(-1),
+            lambda: self.sm.lib.g3x_movie_autocont_set_restart_budget(1),
+        ):
+            edit_fn()
+            self.assertEqual(self.sm.session_cancelled, 1)
+            self.assertEqual(self.sm.enabled, 1)
+            self.assertEqual(self.sm.disarm_reason, expected_reason)
+            self.assertEqual(self.sm.ui_status_str, "CANC")
+            self.assertEqual(self.sm.menu_str, "Cancel")
+            self.assertEqual(self.sm.cancel_menu_str, "Cancel")
+            self.assertEqual(self.sm.restart_budget, expected_budget)
+            self.assertEqual(self.sm.restarts_remaining, expected_remaining)
+            self.assertEqual(self.sm.session_restarts_used, expected_used)
+
+        # 3. Recover to shooting mode and test that an unconfirmed-idle physical press (on the first IDLE poll)
+        #    cannot latch a start press or clear cancellation
+        self.sm.lib.host_set_mode_play(0)
+        self.sm.set_physical_video_button(False)
+        self.sm.movie_state.value = 0
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)  # First IDLE poll (clears cancel_latched if set)
+        self.assertEqual(self.sm.cancel_latched, 0)
+        self.assertEqual(self.sm.session_cancelled, 1)
+        self.assertEqual(self.sm.ui_status_str, "CANC")
+
+        # 4. At confirmed idle (second consecutive IDLE poll), repeated cancellation, GUI edits, and synthetic
+        #    starts still cannot clear cancellation or alter budget counters
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)  # Confirmed idle
+        self.assertEqual(self.sm.can_enable, 0)
+        self.assertEqual(self.sm.can_cancel_session, 0)
+        for edit_fn in (
+            lambda: self.sm.lib.g3x_movie_autocont_cancel_session(),
+            lambda: self.sm.cancel_menu_change(1),
+            lambda: self.sm.cancel_menu_change(-1),
+            lambda: self.sm.menu_change(1),
+            lambda: self.sm.menu_change(-1),
+            lambda: self.sm.lib.g3x_movie_autocont_set_enabled(1),
+            lambda: self.sm.lib.g3x_movie_autocont_set_enabled(0),
+            lambda: self.sm.lib.host_simulate_bool_menu_toggle(),
+            lambda: self.sm.budget_menu_change(1),
+            lambda: self.sm.budget_menu_change(-1),
+            lambda: self.sm.lib.g3x_movie_autocont_set_restart_budget(1),
+        ):
+            edit_fn()
+            self.assertEqual(self.sm.session_cancelled, 1)
+            self.assertEqual(self.sm.enabled, 1)
+            self.assertEqual(self.sm.ui_status_str, "CANC")
+            self.assertEqual(self.sm.menu_str, "Cancel")
+            self.assertEqual(self.sm.cancel_menu_str, "Cancel")
+            self.assertEqual(self.sm.restart_budget, expected_budget)
+            self.assertEqual(self.sm.restarts_remaining, expected_remaining)
+            self.assertEqual(self.sm.session_restarts_used, expected_used)
+
+        # Synthetic / unattributed 0 -> 1 start and direct enter_confirmed_recording cannot clear cancellation
+        self.sm.movie_state.value = 1
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.session_cancelled, 1)
+        self.assertEqual(self.sm.ui_status_str, "CANC")
+        self.sm.lib.host_call_enter_confirmed_recording_for_test()
+        self.assertEqual(self.sm.state, G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.session_cancelled, 1)
+        self.assertEqual(self.sm.ui_status_str, "CANC")
+        self.assertEqual(self.sm.restarts_remaining, expected_remaining)
+        self.assertEqual(self.sm.session_restarts_used, expected_used)
+
+        # Unconfirmed-idle physical press on Poll 1 after 1 -> 0 cannot clear cancellation
+        self.sm.movie_state.value = 0
+        self.sm.set_physical_video_button(True)
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.sm.set_physical_video_button(False)
+        self.sm.movie_state.value = 1
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.session_cancelled, 1)
+        self.assertEqual(self.sm.ui_status_str, "CANC")
+
+        # 5. Return to confirmed IDLE and perform a qualifying new deliberate physical start:
+        #    clears session_cancelled to 0 and begins a fresh session with full budget
+        self.sm.movie_state.value = 0
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)  # Confirmed idle
+        self.sm.set_physical_video_button(True)
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.session_cancelled, 1)  # Still latched at IDLE until 0 -> 1
+        self.sm.set_physical_video_button(False)
+        self.sm.movie_state.value = 1
+        self.sm.max_frames.value = 54000
+        self.sm.cur_frames.value = 10
+        self.sm.stream_bytes.value = 1024 * 1024
+        self.sm.projected_size.value = 2 * 1024 * 1024
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_RECORDING)
+        self.assertEqual(self.sm.session_cancelled, 0)
+        self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_NONE)
+        self.assertEqual(self.sm.ui_status_str, "ARM")
+        self.assertEqual(self.sm.menu_str, "Armed")
+        self.assertEqual(self.sm.cancel_menu_str, "Active")
+        self.assertEqual(self.sm.restart_budget, expected_budget)
+        self.assertEqual(self.sm.restarts_remaining, expected_budget)
+        self.assertEqual(self.sm.session_restarts_used, 0)
+        self.assertEqual(self.sm.attempt_admitted, 0)
+
+    def test_session_cancelled_latch_preserved_across_phys_stop_playback_invalid_state_and_timeout_disarm_paths(self) -> None:
+        # Part 1: Normal post-cancel runtime disarm paths from G3X_AUTOCONT_DISARMED after cancel_menu_change(1)
+        post_cancel_scenarios = (
+            ("POST_CANCEL_PHYS_STOP_REC", G3X_AUTOCONT_REASON_PHYS_STOP),
+            ("POST_CANCEL_PHYS_STOP_STOPPING", G3X_AUTOCONT_REASON_PHYS_STOP),
+            ("POST_CANCEL_PHYS_STOP_RACE_PLAYBACK", G3X_AUTOCONT_REASON_PHYS_STOP),
+            ("POST_CANCEL_PHYS_STOP_RACE_INVALID_STATE", G3X_AUTOCONT_REASON_PHYS_STOP),
+            ("POST_CANCEL_PLAYBACK_REC", G3X_AUTOCONT_REASON_PLAYBACK),
+            ("POST_CANCEL_PLAYBACK_IDLE", G3X_AUTOCONT_REASON_PLAYBACK),
+            ("POST_CANCEL_INVALID_STATE_HIGH", G3X_AUTOCONT_REASON_INVALID_STATE),
+            ("POST_CANCEL_INVALID_STATE_NEG", G3X_AUTOCONT_REASON_INVALID_STATE),
+        )
+        for name, exp_reason in post_cancel_scenarios:
+            with self.subTest(post_cancel_disarm=name):
+                self.sm.reset()
+                self._start_deliberate_physical_recording(budget=3)
+                self._prime_in_bounds_reason3_metrics(1)
+                self._run_admitted_reason3_restart_to_confirmed_recording(
+                    expected_remaining_after_admission=2,
+                    expected_used_after_admission=1,
+                )
+                self._prime_in_bounds_reason3_metrics(2)
+                self.assertEqual(self.sm.cancel_menu_change(1), "Cancel")
+                self.assertEqual(self.sm.session_cancelled, 1)
+
+                if name == "POST_CANCEL_PHYS_STOP_REC":
+                    self.sm.movie_state.value = 1
+                    self.sm.set_physical_video_button(True)
+                elif name == "POST_CANCEL_PHYS_STOP_STOPPING":
+                    self.sm.movie_state.value = 2
+                    self.sm.set_physical_video_button(True)
+                elif name == "POST_CANCEL_PHYS_STOP_RACE_PLAYBACK":
+                    self.sm.movie_state.value = 1
+                    self.sm.lib.host_set_mode_play(1)
+                    self.sm.set_physical_video_button(True)
+                elif name == "POST_CANCEL_PHYS_STOP_RACE_INVALID_STATE":
+                    self.sm.movie_state.value = 99
+                    self.sm.set_physical_video_button(True)
+                elif name == "POST_CANCEL_PLAYBACK_REC":
+                    self.sm.movie_state.value = 1
+                    self.sm.lib.host_set_mode_play(1)
+                elif name == "POST_CANCEL_PLAYBACK_IDLE":
+                    self.sm.movie_state.value = 0
+                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+                    self.sm.lib.host_set_mode_play(1)
+                elif name == "POST_CANCEL_INVALID_STATE_HIGH":
+                    self.sm.movie_state.value = 99
+                elif name == "POST_CANCEL_INVALID_STATE_NEG":
+                    self.sm.movie_state.value = -1
+
+                self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+                # Verify repeated poll in the disarm condition does not clobber disarm_reason or clear latch
+                if name == "POST_CANCEL_PHYS_STOP_RACE_PLAYBACK":
+                    self.sm.set_physical_video_button(False)
+                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+                    self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_PHYS_STOP)
+                self._assert_cancelled_post_disarm_invariants_and_qualifying_physical_start_clear(
+                    expected_reason=exp_reason,
+                    expected_budget=3,
+                    expected_remaining=2,
+                    expected_used=1,
+                )
+
+        # Part 2: Compiled-controller active/pending state disarm paths across PHYS_STOP, PLAYBACK,
+        #         INVALID_STATE, and TIMEOUT while session_cancelled == 1, testing both synth_owned in {0, 1}
+        in_state_disarm_cases = (
+            # (label, state, movie_state, timer_polls, mode_play, phys_pressed, expected_reason)
+            ("RECORDING_PHYS_STOP", G3X_AUTOCONT_RECORDING, 1, 0, 0, True, G3X_AUTOCONT_REASON_PHYS_STOP),
+            ("WAIT_IDLE_PHYS_STOP", G3X_AUTOCONT_WAIT_IDLE, 2, 10, 0, True, G3X_AUTOCONT_REASON_PHYS_STOP),
+            ("SETTLE_PHYS_STOP", G3X_AUTOCONT_SETTLE, 0, 10, 0, True, G3X_AUTOCONT_REASON_PHYS_STOP),
+            ("PRESSING_PHYS_STOP", G3X_AUTOCONT_PRESSING, 0, 4, 0, True, G3X_AUTOCONT_REASON_PHYS_STOP),
+            ("RELEASING_PHYS_STOP", G3X_AUTOCONT_RELEASING, 0, 4, 0, True, G3X_AUTOCONT_REASON_PHYS_STOP),
+            ("WAIT_CONFIRM_PHYS_STOP", G3X_AUTOCONT_WAIT_CONFIRM, 0, 10, 0, True, G3X_AUTOCONT_REASON_PHYS_STOP),
+            ("RACE_PLAYBACK_PHYS_STOP", G3X_AUTOCONT_PRESSING, 0, 4, 1, True, G3X_AUTOCONT_REASON_PHYS_STOP),
+            ("RACE_INVALID_PHYS_STOP", G3X_AUTOCONT_PRESSING, 99, 4, 0, True, G3X_AUTOCONT_REASON_PHYS_STOP),
+            ("RECORDING_PLAYBACK", G3X_AUTOCONT_RECORDING, 1, 0, 1, False, G3X_AUTOCONT_REASON_PLAYBACK),
+            ("WAIT_IDLE_PLAYBACK", G3X_AUTOCONT_WAIT_IDLE, 2, 10, 1, False, G3X_AUTOCONT_REASON_PLAYBACK),
+            ("SETTLE_PLAYBACK", G3X_AUTOCONT_SETTLE, 0, 10, 1, False, G3X_AUTOCONT_REASON_PLAYBACK),
+            ("PRESSING_PLAYBACK", G3X_AUTOCONT_PRESSING, 0, 4, 1, False, G3X_AUTOCONT_REASON_PLAYBACK),
+            ("RELEASING_PLAYBACK", G3X_AUTOCONT_RELEASING, 0, 4, 1, False, G3X_AUTOCONT_REASON_PLAYBACK),
+            ("WAIT_CONFIRM_PLAYBACK", G3X_AUTOCONT_WAIT_CONFIRM, 0, 10, 1, False, G3X_AUTOCONT_REASON_PLAYBACK),
+            ("WAIT_IDLE_INVALID_STATE", G3X_AUTOCONT_WAIT_IDLE, 1, 10, 0, False, G3X_AUTOCONT_REASON_INVALID_STATE),
+            ("SETTLE_INVALID_STATE", G3X_AUTOCONT_SETTLE, 2, 10, 0, False, G3X_AUTOCONT_REASON_INVALID_STATE),
+            ("PRESSING_INVALID_STATE", G3X_AUTOCONT_PRESSING, 2, 4, 0, False, G3X_AUTOCONT_REASON_INVALID_STATE),
+            ("RELEASING_INVALID_STATE", G3X_AUTOCONT_RELEASING, 2, 4, 0, False, G3X_AUTOCONT_REASON_INVALID_STATE),
+            ("WAIT_CONFIRM_INVALID_STATE", G3X_AUTOCONT_WAIT_CONFIRM, 2, 10, 0, False, G3X_AUTOCONT_REASON_INVALID_STATE),
+            ("DEFAULT_ENUM_INVALID_STATE", 99, 0, 0, 0, False, G3X_AUTOCONT_REASON_INVALID_STATE),
+            ("OUT_OF_RANGE_REC_INVALID_STATE", G3X_AUTOCONT_RECORDING, 99, 0, 0, False, G3X_AUTOCONT_REASON_INVALID_STATE),
+            ("WAIT_IDLE_TIMEOUT", G3X_AUTOCONT_WAIT_IDLE, 2, 1, 0, False, G3X_AUTOCONT_REASON_TIMEOUT),
+            ("WAIT_CONFIRM_TIMEOUT", G3X_AUTOCONT_WAIT_CONFIRM, 0, 1, 0, False, G3X_AUTOCONT_REASON_TIMEOUT),
+        )
+        for label, fstate, mstate, tpolls, mplay, phys_btn, exp_reason in in_state_disarm_cases:
+            for owned in (0, 1):
+                with self.subTest(in_state_disarm=label, synth_owned=owned):
+                    self.sm.reset()
+                    self._start_deliberate_physical_recording(budget=3)
+                    # Hold unrelated key bit 4 (0x10) low to verify it is never touched
+                    self.sm.kbd_new_state[0] &= ~0x00000010
+                    self.sm.kbd_mod_state[0] &= ~0x00000010
+                    # Set KEY_VIDEO low in kbd_mod_state[0] and physw_status[0] to test ownership release rule
+                    self.sm.kbd_mod_state[0] &= ~G3X_KEY_VIDEO_BIT
+                    self.sm.physw_status[0] &= ~G3X_KEY_VIDEO_BIT
+                    rel_before = self.sm.release_calls.value
+                    press_before = self.sm.press_calls.value
+
+                    self.sm.movie_state.value = mstate
+                    self.sm.lib.host_set_mode_play(mplay)
+                    self.sm.set_physical_video_button(phys_btn)
+                    self.sm.lib.host_force_cancel_state_for_invariant_test(
+                        fstate, 3, 2, 1, 1, owned, 1
+                    )
+                    self.sm.lib.host_set_timer_polls_for_test(tpolls)
+
+                    self.assertEqual(self.sm.step(in_alt_mode=True), G3X_AUTOCONT_DISARMED)
+                    self.assertEqual(self.sm.press_calls.value, press_before)
+                    self.assertEqual(self.sm.kbd_mod_state[0] & 0x00000010, 0)
+                    if owned == 1:
+                        self.assertEqual(self.sm.release_calls.value, rel_before + 1)
+                        self.assertFalse(self.sm.mod_video_pressed)
+                        if not phys_btn:
+                            self.assertFalse(self.sm.physw_video_pressed)
+                    else:
+                        self.assertEqual(self.sm.release_calls.value, rel_before)
+                        self.assertTrue(self.sm.mod_video_pressed)
+                        self.sm.kbd_mod_state[0] |= G3X_KEY_VIDEO_BIT
+                    self.sm.kbd_new_state[0] |= 0x00000010
+                    self.sm.kbd_mod_state[0] |= 0x00000010
+
+                    self._assert_cancelled_post_disarm_invariants_and_qualifying_physical_start_clear(
+                        expected_reason=exp_reason,
+                        expected_budget=3,
+                        expected_remaining=2,
+                        expected_used=1,
+                    )
 
     def test_only_deliberate_physical_start_after_confirmed_idle_clears_cancellation_and_starts_fresh_session(self) -> None:
         # Start session with budget 3, consume 1 restart (remaining=2, used=1), then cancel during Clip 2
@@ -1528,19 +1819,19 @@ class TestPort61SessionCancellationRuntime(unittest.TestCase):
 
         # Defensive state-machine guards: if state is forced to 1..6 while session_cancelled == 1,
         # poll() immediately disarms to SESSION_CANCEL, preserves active clip, and releases only owned keys
-        for fstate in (
-            G3X_AUTOCONT_RECORDING,
-            G3X_AUTOCONT_WAIT_IDLE,
-            G3X_AUTOCONT_SETTLE,
-            G3X_AUTOCONT_PRESSING,
-            G3X_AUTOCONT_RELEASING,
-            G3X_AUTOCONT_WAIT_CONFIRM,
+        for fstate, valid_mstate in (
+            (G3X_AUTOCONT_RECORDING, 1),
+            (G3X_AUTOCONT_WAIT_IDLE, 2),
+            (G3X_AUTOCONT_SETTLE, 0),
+            (G3X_AUTOCONT_PRESSING, 0),
+            (G3X_AUTOCONT_RELEASING, 0),
+            (G3X_AUTOCONT_WAIT_CONFIRM, 0),
         ):
             for owned in (0, 1):
                 with self.subTest(forced_state=fstate, owned=owned):
                     self.sm.reset()
                     self._start_deliberate_physical_recording(budget=2)
-                    self.sm.movie_state.value = 1
+                    self.sm.movie_state.value = valid_mstate
                     self.sm.kbd_mod_state[0] &= ~G3X_KEY_VIDEO_BIT
                     self.sm.physw_status[0] &= ~G3X_KEY_VIDEO_BIT
                     rel_before = self.sm.release_calls.value
@@ -1548,6 +1839,7 @@ class TestPort61SessionCancellationRuntime(unittest.TestCase):
                     self.sm.lib.host_force_cancel_state_for_invariant_test(
                         fstate, 2, 1, 1, 1, owned, 1
                     )
+                    self.sm.lib.host_set_timer_polls_for_test(10)
                     self.assertEqual(self.sm.step(in_alt_mode=True), G3X_AUTOCONT_DISARMED)
                     self.assertEqual(self.sm.session_cancelled, 1)
                     self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_SESSION_CANCEL)
@@ -1687,7 +1979,6 @@ class TestPort61BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
             "g3x_movie_autocont_is_session_cancelled",
             "g3x_movie_autocont_cancel_menu_str",
             "g3x_movie_autocont_cancel_menu_change",
-            "g3x_movie_autocont_cancel_menu_cb",
             "__wrap_open",
             "__wrap_fopen",
             "__wrap_creat",
