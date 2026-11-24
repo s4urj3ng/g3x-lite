@@ -2042,31 +2042,51 @@ class TestPort58ExcludedFeaturesAndPort54To57Regressions(unittest.TestCase):
 
     def test_tracked_platform_and_full_build_movie_sources_synchronized(self) -> None:
         def _strip_port60_budget_blocks(src: str) -> str:
-            src = re.sub(
-                r"#if defined\(G3X_MOVIE_SESSION_CANCEL\) && \(G3X_MOVIE_SESSION_CANCEL == 1\)\n.*?\n#endif\n",
-                "",
-                src,
-                flags=re.S,
-            )
-            src = re.sub(
-                r"#if !defined\(G3X_MOVIE_SESSION_CANCEL\) \|\| \(G3X_MOVIE_SESSION_CANCEL != 1\)\n(.*?)\n#endif\n",
-                r"\1\n",
-                src,
-                flags=re.S,
-            )
-            src = re.sub(
-                r"#if defined\(G3X_MOVIE_RESTART_BUDGET\) && \(G3X_MOVIE_RESTART_BUDGET == 1\)\n.*?\n#endif\n",
-                "",
-                src,
-                flags=re.S,
-            )
-            src = re.sub(
-                r"#if !defined\(G3X_MOVIE_RESTART_BUDGET\) \|\| \(G3X_MOVIE_RESTART_BUDGET != 1\)\n(.*?)\n#endif\n",
-                r"\1\n",
-                src,
-                flags=re.S,
-            )
-            return src
+            target_flags = ("G3X_MOVIE_STANDALONE", "G3X_MOVIE_SESSION_CANCEL", "G3X_MOVIE_RESTART_BUDGET")
+            out_lines: list[str] = []
+            # Stack of (is_target_block, keep_current_branch)
+            stack: list[tuple[bool, bool]] = []
+
+            def _is_active() -> bool:
+                return all(keep for _, keep in stack)
+
+            for line in src.splitlines(keepends=True):
+                stripped = line.strip()
+                if stripped.startswith("#if"):
+                    matched_flag = next((f for f in target_flags if f in stripped), None)
+                    if matched_flag is not None:
+                        keep = stripped.startswith("#if !defined(")
+                        stack.append((True, _is_active() and keep))
+                        continue
+                    stack.append((False, _is_active()))
+                    if _is_active():
+                        out_lines.append(line)
+                elif stripped.startswith("#elif"):
+                    if stack and stack[-1][0]:
+                        # All target flags are 0 in the PORT-58 baseline comparison
+                        stack[-1] = (True, False)
+                        continue
+                    if _is_active():
+                        out_lines.append(line)
+                elif stripped.startswith("#else"):
+                    if stack and stack[-1][0]:
+                        parent_active = all(keep for _, keep in stack[:-1])
+                        stack[-1] = (True, parent_active)
+                        continue
+                    if _is_active():
+                        out_lines.append(line)
+                elif stripped.startswith("#endif"):
+                    is_target, _ = stack.pop()
+                    if is_target:
+                        continue
+                    if _is_active():
+                        out_lines.append(line)
+                else:
+                    if _is_active():
+                        if "G3X_AUTOCONT_BOOT_ENABLED_DEFAULT" in stripped and stripped.startswith("#define"):
+                            continue
+                        out_lines.append(line.replace("G3X_AUTOCONT_BOOT_ENABLED_DEFAULT", "0"))
+            return "".join(out_lines)
 
         anchor = "#if defined(G3X_MOVIE_STATUS) && (G3X_MOVIE_STATUS == 1)"
         plat_hdr = _strip_port60_budget_blocks(MOVIE_STATUS_H.read_text(encoding="utf-8"))
