@@ -60,6 +60,9 @@ int gui_menu_needs_redraw(void)
         extern unsigned int g3x_movie_autocont_get_restart_budget(void);
         extern unsigned int g3x_movie_autocont_get_restarts_remaining(void);
 #endif
+#if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
+        extern int g3x_movie_autocont_is_session_cancelled(void);
+#endif
         static unsigned int last_ac_sig = 0xFFFFFFFFU;
         unsigned int cur_ac_sig =
             ((unsigned int)(g3x_movie_autocont_is_enabled() & 0xFF) << 16) |
@@ -69,6 +72,10 @@ int gui_menu_needs_redraw(void)
         cur_ac_sig |=
             ((g3x_movie_autocont_get_restart_budget() & 0x0FU) << 28) |
             ((g3x_movie_autocont_get_restarts_remaining() & 0x0FU) << 24);
+#endif
+#if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
+        cur_ac_sig |=
+            ((unsigned int)(g3x_movie_autocont_is_session_cancelled() & 0x01) << 23);
 #endif
         if (cur_ac_sig != last_ac_sig)
         {
