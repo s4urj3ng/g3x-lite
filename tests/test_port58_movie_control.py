@@ -2043,6 +2043,18 @@ class TestPort58ExcludedFeaturesAndPort54To57Regressions(unittest.TestCase):
     def test_tracked_platform_and_full_build_movie_sources_synchronized(self) -> None:
         def _strip_port60_budget_blocks(src: str) -> str:
             src = re.sub(
+                r"#if defined\(G3X_MOVIE_SESSION_CANCEL\) && \(G3X_MOVIE_SESSION_CANCEL == 1\)\n.*?\n#endif\n",
+                "",
+                src,
+                flags=re.S,
+            )
+            src = re.sub(
+                r"#if !defined\(G3X_MOVIE_SESSION_CANCEL\) \|\| \(G3X_MOVIE_SESSION_CANCEL != 1\)\n(.*?)\n#endif\n",
+                r"\1\n",
+                src,
+                flags=re.S,
+            )
+            src = re.sub(
                 r"#if defined\(G3X_MOVIE_RESTART_BUDGET\) && \(G3X_MOVIE_RESTART_BUDGET == 1\)\n.*?\n#endif\n",
                 "",
                 src,

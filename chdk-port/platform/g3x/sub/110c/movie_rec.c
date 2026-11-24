@@ -263,6 +263,9 @@ static volatile unsigned int g3x_autocont_restarts_remaining = 0U;
 static volatile unsigned int g3x_autocont_session_restarts_used = 0U;
 static volatile int g3x_autocont_attempt_admitted = 0;
 #endif
+#if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
+static volatile int g3x_autocont_session_cancelled = 0;
+#endif
 
 /* Previous stop counter snapshots to reject unreset counters before SetupModeAndLimits completes */
 static volatile unsigned int g3x_autocont_last_stop_cur_frames = 0U;
@@ -326,6 +329,12 @@ static void g3x_autocont_disarm_with_reason(int latch_cancel, int reason, int di
     g3x_autocont_timer_polls = 0U;
 #if defined(G3X_MOVIE_RESTART_BUDGET) && (G3X_MOVIE_RESTART_BUDGET == 1)
     g3x_autocont_attempt_admitted = 0;
+#endif
+#if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
+    if (reason != G3X_AUTOCONT_REASON_SESSION_CANCEL)
+    {
+        g3x_autocont_session_cancelled = 0;
+    }
 #endif
     g3x_autocont_state = G3X_AUTOCONT_DISARMED;
     g3x_autocont_disarm_reason = reason;
@@ -440,6 +449,14 @@ static void g3x_autocont_enter_confirmed_recording(void)
 #if defined(G3X_MOVIE_RESTART_BUDGET) && (G3X_MOVIE_RESTART_BUDGET == 1)
     g3x_autocont_attempt_admitted = 0;
 #endif
+#if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
+    if (g3x_autocont_session_cancelled)
+    {
+        g3x_autocont_state = G3X_AUTOCONT_DISARMED;
+        g3x_autocont_disarm_reason = G3X_AUTOCONT_REASON_SESSION_CANCEL;
+        return;
+    }
+#endif
     g3x_autocont_state = G3X_AUTOCONT_RECORDING;
     g3x_autocont_disarm_reason = G3X_AUTOCONT_REASON_NONE;
     g3x_autocont_restart_count++;
@@ -467,6 +484,9 @@ void __attribute__((used)) g3x_movie_autocont_reset(void)
     g3x_autocont_restarts_remaining = 0U;
     g3x_autocont_session_restarts_used = 0U;
     g3x_autocont_attempt_admitted = 0;
+#endif
+#if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
+    g3x_autocont_session_cancelled = 0;
 #endif
     g3x_autocont_last_stop_cur_frames = 0U;
     g3x_autocont_last_stop_stream_bytes = 0ULL;
@@ -502,11 +522,24 @@ int __attribute__((used)) g3x_movie_autocont_can_enable(void)
     {
         return 0;
     }
+#if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
+    if (g3x_autocont_session_cancelled)
+    {
+        return 0;
+    }
+#endif
     return 1;
 }
 
 int __attribute__((used)) g3x_movie_autocont_set_enabled(int enable)
 {
+#if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
+    if (g3x_autocont_session_cancelled)
+    {
+        g3x_autocont_menu_bool_val = g3x_autocont_enabled ? 1 : 0;
+        return 0;
+    }
+#endif
     if (!enable)
     {
         /* Immediate user disable: never stops an active clip, cancels pending restarts,
@@ -596,6 +629,9 @@ const char * __attribute__((used)) g3x_movie_autocont_reason_str(void)
         case G3X_AUTOCONT_REASON_INVALID_STATE: return "STATE";
         case G3X_AUTOCONT_REASON_STOP_FAULT:    return "LIMIT";
         case G3X_AUTOCONT_REASON_TIMEOUT:       return "TMO";
+#if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
+        case G3X_AUTOCONT_REASON_SESSION_CANCEL: return "CANC";
+#endif
         default:                                return "?";
     }
 }
@@ -617,6 +653,12 @@ const char * __attribute__((used)) g3x_movie_autocont_ui_status_str(void)
             {
                 return "FLT";
             }
+#if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
+            if (g3x_autocont_session_cancelled)
+            {
+                return "CANC";
+            }
+#endif
             if (g3x_autocont_enabled)
             {
                 return "RDY";
@@ -645,6 +687,12 @@ const char * __attribute__((used)) g3x_movie_autocont_menu_str(void)
             {
                 return "Fault";
             }
+#if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
+            if (g3x_autocont_session_cancelled)
+            {
+                return "Cancel";
+            }
+#endif
             if (g3x_autocont_enabled)
             {
                 return "Ready";
@@ -766,6 +814,111 @@ const char * __attribute__((used)) g3x_movie_autocont_budget_menu_change(int cha
     return g3x_movie_autocont_budget_menu_str();
 }
 #endif
+#if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
+int __attribute__((used)) g3x_movie_autocont_is_session_cancelled(void)
+{
+    return g3x_autocont_session_cancelled;
+}
+
+int __attribute__((used)) g3x_movie_autocont_can_cancel_session(void)
+{
+    int cur_state = g3x_get_movie_status();
+    int phys_video_pressed = (((unsigned int)kbd_new_state[0] & G3X_KEY_VIDEO_BIT) == 0U) ? 1 : 0;
+    if (camera_info.state.mode_play != 0)
+    {
+        return 0;
+    }
+    if (cur_state < G3X_MOVIE_STATE_IDLE || cur_state > G3X_MOVIE_STATE_SEGMENT_SPLIT)
+    {
+        return 0;
+    }
+    if (!g3x_autocont_enabled || g3x_autocont_session_cancelled)
+    {
+        return 0;
+    }
+    if (g3x_autocont_state < G3X_AUTOCONT_RECORDING ||
+        g3x_autocont_state > G3X_AUTOCONT_WAIT_CONFIRM)
+    {
+        return 0;
+    }
+    if (phys_video_pressed)
+    {
+        if (g3x_autocont_state != G3X_AUTOCONT_RECORDING ||
+            !g3x_autocont_held_from_idle ||
+            cur_state != G3X_MOVIE_STATE_RECORDING ||
+            g3x_autocont_start_hold_polls == 0U)
+        {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int __attribute__((used)) g3x_movie_autocont_cancel_session(void)
+{
+    int cur_state;
+    int pre_state;
+    int keep_held = 0;
+    unsigned int keep_hold_polls = 0U;
+    if (!g3x_movie_autocont_can_cancel_session())
+    {
+        return 0;
+    }
+    cur_state = g3x_get_movie_status();
+    pre_state = g3x_autocont_state;
+    if (pre_state == G3X_AUTOCONT_RECORDING &&
+        cur_state == G3X_MOVIE_STATE_RECORDING &&
+        g3x_autocont_held_from_idle &&
+        g3x_autocont_start_hold_polls > 0U)
+    {
+        keep_held = 1;
+        keep_hold_polls = g3x_autocont_start_hold_polls;
+    }
+    if (cur_state != G3X_MOVIE_STATE_RECORDING)
+    {
+        g3x_autocont_snapshot_stop_counters();
+    }
+    g3x_autocont_disarm_with_reason(0, G3X_AUTOCONT_REASON_SESSION_CANCEL, 0);
+    g3x_autocont_held_from_idle = keep_held;
+    g3x_autocont_start_hold_polls = keep_hold_polls;
+    if (pre_state != G3X_AUTOCONT_RECORDING)
+    {
+        g3x_autocont_prev_rec_state = -1;
+    }
+    g3x_autocont_session_cancelled = 1;
+    return 1;
+}
+
+const char * __attribute__((used)) g3x_movie_autocont_cancel_menu_str(void)
+{
+    if (g3x_autocont_session_cancelled)
+    {
+        return "Cancel";
+    }
+    if (g3x_autocont_enabled &&
+        g3x_autocont_state >= G3X_AUTOCONT_RECORDING &&
+        g3x_autocont_state <= G3X_AUTOCONT_WAIT_CONFIRM)
+    {
+        return "Active";
+    }
+    return "Idle";
+}
+
+const char * __attribute__((used)) g3x_movie_autocont_cancel_menu_change(int change, int arg)
+{
+    (void)arg;
+    if (change != 0)
+    {
+        (void)g3x_movie_autocont_cancel_session();
+    }
+    return g3x_movie_autocont_cancel_menu_str();
+}
+
+void __attribute__((used)) g3x_movie_autocont_cancel_menu_cb(void)
+{
+    (void)g3x_movie_autocont_cancel_session();
+}
+#endif
 
 int __attribute__((used)) g3x_movie_autocont_get_state(void)
 {
@@ -882,14 +1035,28 @@ void __attribute__((used)) g3x_movie_autocont_poll(void)
             g3x_autocont_release_synth_input();
             if (cur_state == G3X_MOVIE_STATE_IDLE)
             {
+#if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
+                g3x_autocont_held_from_idle = 0;
+                g3x_autocont_start_hold_polls = 0U;
+#endif
                 g3x_autocont_saw_boot_idle = 1;
                 if (phys_video_pressed)
                 {
+#if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
+                    if (!g3x_autocont_cancel_latched &&
+                        (!g3x_autocont_session_cancelled || prev_state == G3X_MOVIE_STATE_IDLE))
+                    {
+                        g3x_autocont_idle_start_press_seen = 1;
+                        g3x_autocont_idle_press_age = G3X_AUTOCONT_CONFIRM_POLLS;
+                    }
+#endif
+#if !defined(G3X_MOVIE_SESSION_CANCEL) || (G3X_MOVIE_SESSION_CANCEL != 1)
                     if (!g3x_autocont_cancel_latched)
                     {
                         g3x_autocont_idle_start_press_seen = 1;
                         g3x_autocont_idle_press_age = G3X_AUTOCONT_CONFIRM_POLLS;
                     }
+#endif
                 }
                 else
                 {
@@ -932,6 +1099,9 @@ void __attribute__((used)) g3x_movie_autocont_poll(void)
                     g3x_autocont_session_restarts_used = 0U;
                     g3x_autocont_attempt_admitted = 0;
 #endif
+#if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
+                    g3x_autocont_session_cancelled = 0;
+#endif
                     g3x_autocont_state = G3X_AUTOCONT_RECORDING;
                     g3x_autocont_disarm_reason = G3X_AUTOCONT_REASON_NONE;
                     g3x_autocont_held_from_idle = phys_video_pressed ? 1 : 0;
@@ -944,19 +1114,45 @@ void __attribute__((used)) g3x_movie_autocont_poll(void)
                 {
                     g3x_autocont_idle_start_press_seen = 0;
                     g3x_autocont_idle_press_age = 0U;
+#if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
+                    if (!phys_video_pressed)
+                    {
+                        g3x_autocont_held_from_idle = 0;
+                        g3x_autocont_start_hold_polls = 0U;
+                    }
+                    else if (g3x_autocont_held_from_idle && g3x_autocont_start_hold_polls > 0U)
+                    {
+                        g3x_autocont_start_hold_polls--;
+                    }
+                    else
+                    {
+                        g3x_autocont_session_cancelled = 0;
+                        g3x_autocont_cancel_latched = 1;
+                        g3x_autocont_disarm_reason = G3X_AUTOCONT_REASON_PHYS_STOP;
+                    }
+#endif
+#if !defined(G3X_MOVIE_SESSION_CANCEL) || (G3X_MOVIE_SESSION_CANCEL != 1)
                     if (phys_video_pressed)
                     {
                         g3x_autocont_cancel_latched = 1;
                         g3x_autocont_disarm_reason = G3X_AUTOCONT_REASON_PHYS_STOP;
                     }
+#endif
                 }
             }
             else
             {
                 g3x_autocont_idle_start_press_seen = 0;
                 g3x_autocont_idle_press_age = 0U;
+#if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
+                g3x_autocont_held_from_idle = 0;
+                g3x_autocont_start_hold_polls = 0U;
+#endif
                 if (phys_video_pressed)
                 {
+#if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
+                    g3x_autocont_session_cancelled = 0;
+#endif
                     g3x_autocont_cancel_latched = 1;
                     g3x_autocont_disarm_reason = G3X_AUTOCONT_REASON_PHYS_STOP;
                 }
@@ -987,6 +1183,17 @@ void __attribute__((used)) g3x_movie_autocont_poll(void)
                 }
                 g3x_autocont_start_hold_polls--;
             }
+#if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
+            if (g3x_autocont_session_cancelled)
+            {
+                if (cur_state != G3X_MOVIE_STATE_RECORDING)
+                {
+                    g3x_autocont_snapshot_stop_counters();
+                }
+                g3x_autocont_disarm_with_reason(0, G3X_AUTOCONT_REASON_SESSION_CANCEL, 0);
+                break;
+            }
+#endif
 
             if (cur_state == G3X_MOVIE_STATE_RECORDING)
             {
@@ -1036,6 +1243,13 @@ void __attribute__((used)) g3x_movie_autocont_poll(void)
                 g3x_autocont_disarm_with_reason(1, G3X_AUTOCONT_REASON_PHYS_STOP, 0);
                 break;
             }
+#if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
+            if (g3x_autocont_session_cancelled)
+            {
+                g3x_autocont_disarm_with_reason(0, G3X_AUTOCONT_REASON_SESSION_CANCEL, 0);
+                break;
+            }
+#endif
 #if defined(G3X_MOVIE_RESTART_BUDGET) && (G3X_MOVIE_RESTART_BUDGET == 1)
             if (!g3x_autocont_attempt_admitted ||
                 g3x_autocont_session_restarts_used == 0U ||
@@ -1075,6 +1289,13 @@ void __attribute__((used)) g3x_movie_autocont_poll(void)
                 g3x_autocont_disarm_with_reason(1, G3X_AUTOCONT_REASON_PHYS_STOP, 0);
                 break;
             }
+#if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
+            if (g3x_autocont_session_cancelled)
+            {
+                g3x_autocont_disarm_with_reason(0, G3X_AUTOCONT_REASON_SESSION_CANCEL, 0);
+                break;
+            }
+#endif
 #if defined(G3X_MOVIE_RESTART_BUDGET) && (G3X_MOVIE_RESTART_BUDGET == 1)
             if (!g3x_autocont_attempt_admitted ||
                 g3x_autocont_session_restarts_used == 0U ||
@@ -1111,6 +1332,13 @@ void __attribute__((used)) g3x_movie_autocont_poll(void)
                 g3x_autocont_disarm_with_reason(1, G3X_AUTOCONT_REASON_PHYS_STOP, 0);
                 break;
             }
+#if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
+            if (g3x_autocont_session_cancelled)
+            {
+                g3x_autocont_disarm_with_reason(0, G3X_AUTOCONT_REASON_SESSION_CANCEL, 0);
+                break;
+            }
+#endif
 #if defined(G3X_MOVIE_RESTART_BUDGET) && (G3X_MOVIE_RESTART_BUDGET == 1)
             if (!g3x_autocont_attempt_admitted ||
                 g3x_autocont_session_restarts_used == 0U ||
@@ -1148,6 +1376,13 @@ void __attribute__((used)) g3x_movie_autocont_poll(void)
                 g3x_autocont_disarm_with_reason(1, G3X_AUTOCONT_REASON_PHYS_STOP, 0);
                 break;
             }
+#if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
+            if (g3x_autocont_session_cancelled)
+            {
+                g3x_autocont_disarm_with_reason(0, G3X_AUTOCONT_REASON_SESSION_CANCEL, 0);
+                break;
+            }
+#endif
 #if defined(G3X_MOVIE_RESTART_BUDGET) && (G3X_MOVIE_RESTART_BUDGET == 1)
             if (!g3x_autocont_attempt_admitted ||
                 g3x_autocont_session_restarts_used == 0U ||
@@ -1190,6 +1425,13 @@ void __attribute__((used)) g3x_movie_autocont_poll(void)
                 g3x_autocont_disarm_with_reason(1, G3X_AUTOCONT_REASON_PHYS_STOP, 0);
                 break;
             }
+#if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
+            if (g3x_autocont_session_cancelled)
+            {
+                g3x_autocont_disarm_with_reason(0, G3X_AUTOCONT_REASON_SESSION_CANCEL, 0);
+                break;
+            }
+#endif
 #if defined(G3X_MOVIE_RESTART_BUDGET) && (G3X_MOVIE_RESTART_BUDGET == 1)
             if (!g3x_autocont_attempt_admitted ||
                 g3x_autocont_session_restarts_used == 0U ||
