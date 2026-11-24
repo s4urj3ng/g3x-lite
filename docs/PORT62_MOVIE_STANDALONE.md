@@ -1,14 +1,19 @@
-# PORT-62: Minimal Standalone Movie Profile Reuse Map (`PORT62-REUSE-MAP` / `G3X_MOVIE_STANDALONE=1`)
+# PORT-62: Minimal Standalone Movie Candidate (`PORT62-REUSE-MAP` & `PORT62-STANDALONE-BUILD` / `G3X_MOVIE_STANDALONE=1`)
 
 - **Target hardware / firmware**: Canon PowerShot G3 X, `GM1.10C` (`1.1.0.0`, DIGIC 6 / DryOS R57)
-- **Milestone / Task**: `PORT-62` / `PORT62-REUSE-MAP` (`G3X_MOVIE_STANDALONE=1`)
+- **Milestone / Tasks**: `PORT-62` / `PORT62-REUSE-MAP` (`3d161e110f88a26efdeecdfd030f08dbc254e612`, integrated at `832806b1f0e1d73f75e540cf3b64f6448948f567`) & `PORT62-STANDALONE-BUILD` (`G3X_MOVIE_STANDALONE=1`)
 - **Pinned toolchain identity**: `toolchains/gcc-arm-none-eabi-5_4-2016q3` via `scripts/gcc_deterministic_wrapper.sh`
-- **Integrated baseline commit (`HEAD` / `origin/main`)**: `7e0f548f990bdd03d4eb0ec52bf2e11d7282f4e7` (`Merge pull request #230 from s4urj3ng/agentbridge/g3x-lite/port-61-movie-session-cancel/integration`)
+- **Integrated baseline commit (`origin/main`)**: `7e0f548f990bdd03d4eb0ec52bf2e11d7282f4e7` (`Merge pull request #230 from s4urj3ng/agentbridge/g3x-lite/port-61-movie-session-cancel/integration`)
+- **Direct parent on `PORT-62` integration branch**: `832806b1f0e1d73f75e540cf3b64f6448948f567` (integrating `PORT62-REUSE-MAP` commit `3d161e110f88a26efdeecdfd030f08dbc254e612` on top of `7e0f548f990bdd03d4eb0ec52bf2e11d7282f4e7`)
+- **Standalone candidate artifact (`G3X_MOVIE_STANDALONE=1`)**:
+  - **Dedicated builder**: `python3 -B scripts/build_port62_movie_standalone.py --out-dir build/port62-movie-standalone` (wrapping `scripts/build_port43_dbuf.py --movie-standalone`)
+  - **Binary**: `build/port62-movie-standalone/DISKBOOT.BIN` (`126,345` / `126345` bytes, SHA-256 `dab7f816d4eadfc6004b54e2b670f5da8d88d78eed5f4978521ef38f02c3802b`, core `_end = 0x00368f90`)
+  - **Manifest**: `build/port62-movie-standalone/port62_movie_standalone_manifest.json` (`modules_count: 0`, `chdk_files_count: 0`, zero `CHDK/` directory dependency)
 - **Confirmation of `PORT-61` inclusion in baseline `7e0f548f990bdd03d4eb0ec52bf2e11d7282f4e7`**:
   - Merges completed `PORT-61` integration branch `origin/agentbridge/g3x-lite/port-61-movie-session-cancel/integration` at tip `e6a56328ee25d093ebb5c772356d42d31568c03b` onto `PORT-60` merge commit `355204f778da2defbc8dd8e2a538be36031958b7` (PR #226):
     - `PORT61-CANCEL-INTERFACE`: `da5114a63c85bd9e7cedddc940a0f602829afdc2` (integrated at `2d114077a43f787c9d21056d3b8b0ac9426ac4c9`)
-    - `PORT61-CANCEL-BUILD`: `81e912f90ba150deea498e6caf505125f5c4515e` (attempt 2 after `46b033fb1a72a7a147120e4d0346897049257b28`; integrated at `d6298f2c12627b8359ade3448b3bcf447589b07a`)
-    - `PORT61-CANCEL-VALIDATE`: `1a9df57653e25f37e3c9c905975dfbf290f6f85a` (integrated at `e6a56328ee25d093ebb5c772356d42d31568c03b`)
+    - `PORT61-CANCEL-BUILD`: `81e912f90ba150deea498e6caf505125f5c4515e` (attempt 2 after `46b033f7c587010058ea0f13228735525ca78841`; integrated at `d6298f2c12627b8359ade3448b3bcf447589b07a`)
+    - `PORT61-CANCEL-VALIDATE`: `1a9df57d167416ae8119b39d84ac50eab9bee1bd` (integrated at `e6a56328ee25d093ebb5c772356d42d31568c03b`)
   - Tracked `PORT-61` deliverables verified present in `HEAD` `7e0f548f990bdd03d4eb0ec52bf2e11d7282f4e7`: `chdk-port/platform/g3x/movie_status.h:4-24,273-276,331-338`, `chdk-port/platform/g3x/sub/110c/movie_rec.c:266-268,341-347,455-462,491-493,528-545,635-637,655-660,689-694,820-919,969-1026,1096-1110,1160-1190,1240-1250,1300-1310,1350-1356,1393-1400,1438-1445,1488-1496`, `chdk-port/platform/g3x/Makefile:1-42`, `chdk-port/platform/g3x/sub/110c/makefile.inc:17-60`, `chdk-port/platform/g3x/gui_diag.h:25-45`, `chdk-port/platform/g3x/gui_menu.c:59,75`, `scripts/build_port43_dbuf.py:2544-2637,2665-2717,3433-3502`, `docs/PORT61_MOVIE_SESSION_CANCEL.md:1-351`, and `tests/test_port61_movie_session_cancel.py:1-2495`.
 - **External integration-branch dependency**: **None** (`PORT-61` integration succeeded and is merged into `origin/main` at `7e0f548f990bdd03d4eb0ec52bf2e11d7282f4e7`; completed branch `origin/agentbridge/g3x-lite/port-61-movie-session-cancel/integration` at `e6a56328ee25d093ebb5c772356d42d31568c03b` is an ancestor of `HEAD`).
 - **Underlying milestone commits integrated in `7e0f548f990bdd03d4eb0ec52bf2e11d7282f4e7`**:
@@ -99,11 +104,13 @@ Every address, register, and firmware symbol required by `G3X_MOVIE_STANDALONE=1
 - **Pinned toolchain & wrapper**:
   - Cross-compiler: `toolchains/gcc-arm-none-eabi-5_4-2016q3/bin/arm-none-eabi-gcc` (`CROSS_COMPILE=.../arm-none-eabi-`)
   - Deterministic compiler wrapper: `scripts/gcc_deterministic_wrapper.sh`
-- **Isolated `PORT-62` build command & target directory**:
+- **Isolated `PORT-62` build commands & target directory**:
   ```sh
+  python3 -B scripts/build_port62_movie_standalone.py --out-dir build/port62-movie-standalone
+  # or directly:
   python3 -B scripts/build_port43_dbuf.py --movie-standalone --out-dir build/port62-movie-standalone
   ```
-  - **Isolated output directory**: `build/port62-movie-standalone/` (`build/port62-movie-standalone/DISKBOOT.BIN`, `build/port62-movie-standalone/port62_movie_standalone_manifest.json`, and `build/port62-movie-standalone/stage_chdk/platform/g3x/sub/110c/{main.elf,movie_rec.o}`).
+  - **Isolated output directory**: `build/port62-movie-standalone/` (`build/port62-movie-standalone/DISKBOOT.BIN` `126,345` B, SHA-256 `dab7f816d4eadfc6004b54e2b670f5da8d88d78eed5f4978521ef38f02c3802b`, `_end = 0x00368f90`; `build/port62-movie-standalone/port62_movie_standalone_manifest.json`; and `build/port62-movie-standalone/stage_chdk/platform/g3x/sub/110c/{main.elf,movie_rec.o}`).
   - **Effective compile flags for `G3X_MOVIE_STANDALONE=1`**:
     `G3X_FULL_BUILD=1`, `G3X_DISABLE_CARD_WRITES=1`, `OPT_DISABLE_FILE_WRITES=1`, `G3X_MOVIE_STANDALONE=1`, `G3X_MOVIE_STATUS=1`, `G3X_MOVIE_NOLIMIT=1`, `G3X_MOVIE_AUTOCONT=1`, `G3X_MOVIE_RESTART_BUDGET=1`, `G3X_MOVIE_SESSION_CANCEL=1`.
   - **Excluded flags (forced OFF / rejected)**:
@@ -125,6 +132,7 @@ Every address, register, and firmware symbol required by `G3X_MOVIE_STANDALONE=1
 | **`PORT-59` Combined Movie Profile** | `out/port59-movie-combined/DISKBOOT.BIN` | `134,801` (`134801`) | `a29bd5d3aae297cbbdb34eae0cb6d96b5f804e4e3b4fea03304b0a34cc4d8fbf` | `0x0036b4d0` |
 | **`PORT-60` Finite Restart Budget Profile** | `out/port60-movie-restart-budget/DISKBOOT.BIN` | `135,313` (`135313`) | `5bb1b93b0a3246ab5e37c689daa223dd2c6a9e3e84a53956678992b97be00a90` | `0x0036b6e0` |
 | **`PORT-61` Movie Session Cancel Profile** | `out/port61-movie-session-cancel/DISKBOOT.BIN` | `135,969` (`135969`) | `2612eea17c83dc64f9f6579b59771aa7313e931bb0b7ea47118ad8c6512e1f68` | `0x0036b970` |
+| **`PORT-62` Standalone Movie Profile (`G3X_MOVIE_STANDALONE=1`)** | `build/port62-movie-standalone/DISKBOOT.BIN` | `126,345` (`126345`) | `dab7f816d4eadfc6004b54e2b670f5da8d88d78eed5f4978521ef38f02c3802b` | `0x00368f90` |
 
 ---
 
@@ -227,3 +235,48 @@ Under `G3X_MOVIE_STANDALONE=1`, the runtime initialization and steady-state exec
      - Under `G3X_MOVIE_STANDALONE=1`, runtime disarm paths (`g3x_autocont_disarm_with_reason()` in `movie_rec.c:323-353`, including `PHYS_STOP`, budget exhaustion `NONE`, `SESSION_CANCEL`, `PLAYBACK`, `INVALID_STATE`, `STOP_FAULT`, and `TIMEOUT`) terminate the current session immediately to `G3X_AUTOCONT_DISARMED (0)` while preserving `g3x_autocont_enabled = 1` (and setting `g3x_autocont_prev_rec_state = -1` on playback/invalid-state/non-recording disarms so two consecutive polls at `cur_state == G3X_MOVIE_STATE_IDLE (0)` in record mode are required to confirm idle, while `in_playback || invalid_rec_state` at `movie_rec.c:992-1000` avoids overwriting `g3x_autocont_disarm_reason` on repeated polls).
      - Explicit programmatic disable `g3x_movie_autocont_set_enabled(0)` (`movie_rec.c:546-565`) still sets `g3x_autocont_enabled = 0` (`G3X_AUTOCONT_REASON_USER_OFF`) until re-enabled at confirmed idle (`g3x_movie_autocont_set_enabled(1)` or `g3x_movie_autocont_reset()`).
      - Once the camera is in record mode (`camera_info.state.mode_play == 0`) at confirmed `IDLE (0)` (`cur_state == 0 && prev_state == 0 && !g3x_autocont_cancel_latched`), a new deliberate physical `KEY_VIDEO` press observed in `IDLE (0)` followed by `0 -> 1` within `200` polls (`movie_rec.c:1101-1170`) clears any prior disarm reason / `g3x_autocont_session_cancelled` latch, enters `G3X_AUTOCONT_RECORDING (1)`, and initializes a fresh finite budget (`g3x_autocont_restarts_remaining = g3x_autocont_restart_budget = 1U`, `g3x_autocont_session_restarts_used = 0U`).
+
+
+---
+
+## 7. Host Build, Disassembly Verification & Focused Regression Coverage
+
+1. **Deterministic Host Build & Binary Metrics (`build/port62-movie-standalone/`)**:
+   - Built with `python3 -B scripts/build_port62_movie_standalone.py --out-dir build/port62-movie-standalone` using `toolchains/gcc-arm-none-eabi-5_4-2016q3` and `scripts/gcc_deterministic_wrapper.sh`:
+     - `build/port62-movie-standalone/DISKBOOT.BIN`: `126,345` (`126345`) bytes, SHA-256 `dab7f816d4eadfc6004b54e2b670f5da8d88d78eed5f4978521ef38f02c3802b`.
+     - `build/port62-movie-standalone/stage_chdk/platform/g3x/sub/110c/main.elf`: `_end = 0x00368f90` (`9,696` bytes smaller than `PORT-61`'s `135,969`-byte GUI-enabled binary with `_end = 0x0036b970`).
+     - `build/port62-movie-standalone/port62_movie_standalone_manifest.json`: `modules_count = 0`, `modules = {}`, `chdk_files_count = 0`, `chdk_files = {}`, and no `build/port62-movie-standalone/CHDK/` directory.
+   - **Byte-for-byte preservation of default build and existing candidates**:
+     - `out/build-default/DISKBOOT.BIN` (`124,097` B, SHA-256 `24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9`, `_end = 0x003686b0`) and all `PORT-55..61` candidate binaries (`out/build-movie-alone`, `out/port55-movie-status`, `out/build-nolimit-alone`, `out/port56-movie-nolimit`, `out/build-autocont-alone`, `out/port57-movie-autocont`, `out/port58-movie-control`, `out/port59-movie-combined`, `out/port60-movie-restart-budget`, `out/port61-movie-session-cancel`) rebuild with 100% identical byte counts, SHA-256 digests, and `_end` symbols.
+2. **Disassembly Verification (`movie_rec.o` & `main.elf`)**:
+   - `arm-none-eabi-objdump -d` on `build/port62-movie-standalone/stage_chdk/platform/g3x/sub/110c/{movie_rec.o,main.elf}` confirms:
+     - All 10 MovieRecorder accessors (`g3x_get_movie_status`, `g3x_get_movie_max_frames`, `g3x_get_movie_cur_frames`, `g3x_get_movie_stop_reason`, `g3x_get_movie_segment_index`, `g3x_get_movie_fs_reserve_size`, `g3x_get_movie_avail_space`, `g3x_get_movie_stream_bytes`, `g3x_get_movie_projected_size`, `g3x_get_movie_projected_base_offset`) contain zero `str*`/`stm*` instructions.
+     - `g3x_movie_nolimit_poll()` writes only `0xFFFFFFFF` (`mvn.w r3, #0`) to `0x0000C274` (`mr_max_frames`) after checking `g3x_get_movie_status() == 1`, and zero store instructions reference `0x0000C078`, `0x0000C0C0`, `0x0000C0C8`, `0x0000C0D4`, `0x0000C0D8`, `0x0000C0E4`, `0x0000C278`, `0x0000C290`, `0x0000C298`, `0x0000C2A0`, or `0x0000C2A8`.
+     - `core_spytask()` calls only `camera_info_init`, `msleep`, and `rec_mode_active`, with zero references to `conf_restore`, `gui_init`, `gui_redraw`, `gui_activate_alt_mode`, `mkdir_if_not_exist`, `script_autostart`, `shooting_init`, `mode_get`, `set_palette`, `raw_process`, or `module_tick_unloader`.
+     - `kbd_process()` clears `kbd_blocked` and `gui_mode` and returns `0` immediately, with zero calls to `enter_alt`, `exit_alt`, `kbd_key_release_all`, `gui_kbd_process`, `action_stack_process_all`, `script_check_terminate`, `start_ptp_script`, `usb_remote_key`, `handle_usb_remote`, or `shooting_update_state`.
+     - `my_kbd_read_keys()` calls `kbd_update_key_state` $\to$ `kbd_update_physw_bits` $\to$ `g3x_movie_nolimit_poll` $\to$ `g3x_movie_autocont_poll` followed by the `PORT-41/52` `0x00009BD0` (`200`-poll) short-press hold.
+     - All 17 `--wrap` card-write and config-save blockers (`__wrap_open`, `__wrap_fopen`, `__wrap_creat`, `__wrap_write`, `__wrap_fwrite`, `__wrap_mkdir`, `__wrap_remove`, `__wrap_rename`, `__wrap_MakeDirectory_Fut`, `__wrap__MakeDirectory_Fut`, `__wrap_DeleteFile_Fut`, `__wrap__DeleteFile_Fut`, `__wrap_DeleteDirectory_Fut`, `__wrap__DeleteDirectory_Fut`, `__wrap_RenameFile_Fut`, `__wrap__RenameFile_Fut`, `__wrap_conf_save`) are linked in `main.elf`, while `g3x_conf_save_active` (`PORT-54`) is absent.
+3. **Focused Host Regression Coverage (`tests/test_port62_movie_standalone.py`)**:
+   - Validates baseline commit ancestry (`7e0f548f990bdd03d4eb0ec52bf2e11d7282f4e7`, `PORT-61`, `PORT62-REUSE-MAP` `3d161e110f88a26efdeecdfd030f08dbc254e612`), compile-time/Makefile/CLI gates, minimal `core_spytask()` and `kbd_process()` paths, `PORT-41/52` short-press power/playback hold, `PORT-56` duration patching across initial and restarted clips, boot-enabled fail-closed arming, Reason 3 (4 GiB size policy cap) and Reason 4 (frame/duration cap) natural-stop admission, fail-closed vetoes (user stop `0`, overflow `1`, card full `2` or insufficient free space, low battery / overheating / card error / unknown codes $\ge 5$, stale/ambiguous counters), physical `KEY_VIDEO` precedence across active/pending/outstanding states, continuation-owned synthetic key release, physical-stop session cancellation latch and deliberate physical rearming after safe-state checks, synthetic-event exclusion from physical starts and budget replenishment, finite restart budget exhaustion without stopping active recording, and bounded start failures (`WAIT_IDLE` / `WAIT_CONFIRM` timeouts and invalid states).
+
+---
+
+## 8. Short Opt-In Owner Trial & Recovery Plan (`CAMERA BEHAVIOR UNVERIFIED`)
+
+> **Important policy note**: All `PORT-62` work in this repository is strictly host-side (`0` new ROM reads, no firmware flashing, no camera connection, no SD card writing, no hardware trial performed by agents). Physical camera runtime behavior of `build/port62-movie-standalone/DISKBOOT.BIN` remains **`UNKNOWN` / `CAMERA BEHAVIOR UNVERIFIED`**.
+
+If the repository owner later chooses to perform an opt-in physical SD card trial on a Canon PowerShot G3 X running firmware `GM1.10C` (`1.1.0.0`):
+
+1. **Pre-Trial SD Card Preparation (Opt-In Owner Action Only)**:
+   - Use a dedicated, freshly FAT32/exFAT-formatted SD card configured for Canon `BOOTDISK` booting with plenty of free space ($\ge 16$ GiB recommended for multi-segment 4 GiB trials) and a fully charged battery.
+   - Copy **only** `build/port62-movie-standalone/DISKBOOT.BIN` (`126,345` bytes, SHA-256 `dab7f816d4eadfc6004b54e2b670f5da8d88d78eed5f4978521ef38f02c3802b`) to the root of the SD card (`A/DISKBOOT.BIN`).
+   - **No `CHDK/` directory is required or used**: do not copy `CHDK/MODULES/*.flt`, `CHDK/FONTS/*.rbf`, `CHDK/LANG/*.lng`, `CHDK/SCRIPTS/*`, `CHDK/DATA/logo.dat`, or `CCHDK4.CFG`.
+   - Slide the SD card physical write-protect switch to the **LOCK** position so Canon's ROM loader boots `DISKBOOT.BIN` while `kbd_update_physw_bits()` clears `SD_READONLY_FLAG` (`0x20000000`) in `physw_status[1]` for Canon `.MP4` recording and CHDK's 17 `--wrap` blockers prevent any CHDK filesystem writes.
+2. **Expected Opt-In Trial Observations**:
+   - **Boot & idle**: Short or normal press of **Power** (or **Playback**) boots the camera into normal Canon UI with **zero CHDK OSD, splash screen, `<ALT>` mode, or menu overlay**. Continuation is enabled at boot in `DISARMED` (`restart_budget = 1`) and performs no automatic recording start at boot.
+   - **Deliberate physical start & `PORT-56` duration patch**: In movie record mode at confirmed idle, pressing the physical **Movie (`KEY_VIDEO`)** button starts Clip 1, arms the session with `1` restart allowance (`restarts_remaining = 1`), and patches `mr_max_frames` (`0x0000C274`) to `0xFFFFFFFFU` while `mr_rec_state == 1` so recording continues past the stock 29:59 (`1799` s) frame limit until the 4 GiB (`0xFFFFFFFF`-byte) MP4 file-size cap (Reason 3).
+   - **Single automatic restart on natural Reason 3 / Reason 4 limit**: When Clip 1 stops naturally at the 4 GiB size limit (`reason == 3`) with sufficient card space (or at a frame limit `reason == 4`), the controller reserves its 1 restart allowance (`restarts_remaining = 0`, `session_restarts_used = 1`), waits for `mr_rec_state == 0` (`WAIT_IDLE` $\le 5.0$ s) plus `500 ms` continuous `IDLE` (`SETTLE`), emits one `60 ms` synthetic `KEY_VIDEO` press (`PRESSING`) and `60 ms` release (`RELEASING`), confirms Clip 2 within `2.0 s` (`WAIT_CONFIRM`), and re-applies `mr_max_frames = 0xFFFFFFFFU` during Clip 2. When Clip 2 later reaches its natural limit, `restarts_remaining == 0` disarms cleanly at stop onset without starting a third clip.
+   - **Physical-stop cancellation & rearming**: Pressing physical **Movie (`KEY_VIDEO`)** during Clip 1, during the inter-clip gap (`WAIT_IDLE`, `SETTLE`), or during an outstanding synthetic restart (`PRESSING`, `RELEASING`, `WAIT_CONFIRM`) immediately cancels continuation (`PHYS_STOP`, releasing any continuation-owned synthetic key) and latches session cancellation. Starting a new session requires releasing the button at confirmed idle in record mode and pressing physical **Movie (`KEY_VIDEO`)** again.
+3. **Immediate Recovery & Rollback Procedure**:
+   - **During recording or gap**: Press the physical **Movie (`KEY_VIDEO`)** button once to cancel continuation and stop recording, or switch to Playback / power off the camera.
+   - **To return immediately to 100% stock Canon firmware**: Power off the camera, remove the SD card, and slide the SD card write-protect switch from **LOCK** to **UNLOCK** (or delete/rename `DISKBOOT.BIN`). Because `DISKBOOT.BIN` runs entirely from volatile RAM and never modifies ROM or flash, unlocking or removing the SD card restores stock Canon firmware on the very next power-on. If the camera ever becomes unresponsive during an owner trial, open the battery door / remove the battery and unlock the SD card before reinserting the battery.
