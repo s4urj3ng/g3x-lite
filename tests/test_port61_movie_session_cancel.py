@@ -96,6 +96,8 @@ PORT60_VALIDATE_COMMIT = "018cfa4e95d5eac39dc16b46cbead3c5bf2b43d0"
 PORT60_INTEGRATION_TIP = "4c3110a63c5246e29e894eecf2ede6581fd67a7b"
 PORT61_INTERFACE_COMMIT = "da5114a63c85bd9e7cedddc940a0f602829afdc2"
 PORT61_INTEGRATION_PARENT = "2d114077a43f787c9d21056d3b8b0ac9426ac4c9"
+PORT61_BUILD_COMMIT = "81e912f90ba150deea498e6caf505125f5c4515e"
+PORT61_BUILD_INTEGRATION_COMMIT = "d6298f2c12627b8359ade3448b3bcf447589b07a"
 
 PORT61_CANCEL_SHA256 = "2612eea17c83dc64f9f6579b59771aa7313e931bb0b7ea47118ad8c6512e1f68"
 PORT61_CANCEL_SIZE = 135969
@@ -1852,6 +1854,384 @@ class TestPort61SessionCancellationRuntime(unittest.TestCase):
                         self.assertEqual(self.sm.release_calls.value, rel_before)
                         self.sm.kbd_mod_state[0] |= G3X_KEY_VIDEO_BIT
 
+    def _prime_in_bounds_reason4_metrics(self, max_f: int = 1800, cur_f: int = 900) -> None:
+        self.sm.max_frames.value = max_f
+        self.sm.cur_frames.value = cur_f
+        self.assertEqual(self.sm.step(run_nolimit=False), G3X_AUTOCONT_RECORDING)
+
+    def test_cancellation_and_admission_orderings_across_reason3_and_reason4_stops(self) -> None:
+        # Exercise both cancellation/admission orderings across Reason 3 (4 GiB size cap) and
+        # Reason 4 (frame cap) stops, for both 1 -> 2 (WAIT_IDLE) and 1 -> 0 (SETTLE) transitions:
+        #   - Ordering A1: Cancellation during live RECORDING (cur_state == 1) before stop transition
+        #   - Ordering A2: Same-tick cancellation right as cur_state becomes 2 or 0 BEFORE g3x_movie_autocont_poll()
+        #                  runs (matches my_kbd_read_keys() hardware order: gui_menu_kbd_process -> autocont_poll)
+        #   - Ordering A3: In-poll RECORDING cancellation guard evaluated BEFORE stop-onset admission when cur_state != 1
+        #   - Ordering B1: Stop-onset admission in g3x_movie_autocont_poll() BEFORE cancellation in pending continuation
+        #                  (WAIT_IDLE / SETTLE)
+        #   - Ordering B2: Stop-onset admission in g3x_movie_autocont_poll() BEFORE cancellation during an outstanding
+        #                  restart attempt (PRESSING / RELEASING / WAIT_CONFIRM)
+        for reason in (3, 4):
+            for stop_target_state, expected_pending_state in (
+                (2, G3X_AUTOCONT_WAIT_IDLE),
+                (0, G3X_AUTOCONT_SETTLE),
+            ):
+                run_nolimit = reason == 3
+                with self.subTest(ordering="A1_PRE_STOP_CANCEL", reason=reason, stop_state=stop_target_state):
+                    self.sm.reset()
+                    self._start_deliberate_physical_recording(budget=2)
+                    if reason == 3:
+                        self._prime_in_bounds_reason3_metrics(1)
+                    else:
+                        self._prime_in_bounds_reason4_metrics(1800, 900)
+                    press_before = self.sm.press_calls.value
+                    rel_before = self.sm.release_calls.value
+
+                    # Cancel before stop-onset admission
+                    self.assertEqual(self.sm.lib.g3x_movie_autocont_cancel_session(), 1)
+                    self.assertEqual(self.sm.movie_state.value, 1)
+                    self.assertEqual(self.sm.state, G3X_AUTOCONT_DISARMED)
+                    self.assertEqual(self.sm.session_cancelled, 1)
+                    self.assertEqual(self.sm.restarts_remaining, 2)
+                    self.assertEqual(self.sm.session_restarts_used, 0)
+                    self.assertEqual(self.sm.attempt_admitted, 0)
+
+                    # Trigger eligible stop transition -> admission is prevented, zero allowance consumed
+                    if reason == 3:
+                        self.sm.projected_size.value = 0x100000400
+                        self.sm.stop_reason.value = 3
+                    else:
+                        self.sm.max_frames.value = 1800
+                        self.sm.cur_frames.value = 1800
+                        self.sm.stop_reason.value = 4
+                    self.sm.movie_state.value = stop_target_state
+                    self.assertEqual(self.sm.step(run_nolimit=run_nolimit), G3X_AUTOCONT_DISARMED)
+                    self.assertEqual(self.sm.session_cancelled, 1)
+                    self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_SESSION_CANCEL)
+                    self.assertEqual(self.sm.ui_status_str, "CANC")
+                    self.assertEqual(self.sm.restart_budget, 2)
+                    self.assertEqual(self.sm.restarts_remaining, 2)
+                    self.assertEqual(self.sm.session_restarts_used, 0)
+                    self.assertEqual(self.sm.attempt_admitted, 0)
+                    self.assertEqual(self.sm.press_calls.value, press_before)
+                    self.assertEqual(self.sm.release_calls.value, rel_before)
+
+                with self.subTest(ordering="A2_SAME_TICK_CANCEL_BEFORE_POLL", reason=reason, stop_state=stop_target_state):
+                    self.sm.reset()
+                    self._start_deliberate_physical_recording(budget=2)
+                    if reason == 3:
+                        self._prime_in_bounds_reason3_metrics(1)
+                        self.sm.projected_size.value = 0x100000400
+                        self.sm.stop_reason.value = 3
+                    else:
+                        self._prime_in_bounds_reason4_metrics(1800, 900)
+                        self.sm.max_frames.value = 1800
+                        self.sm.cur_frames.value = 1800
+                        self.sm.stop_reason.value = 4
+                    # On the same 10 ms tick, mr_rec_state changes to 2 or 0 and gui_menu_kbd_process()
+                    # dispatches cancel_menu_change(±1) BEFORE g3x_movie_autocont_poll() runs
+                    self.sm.movie_state.value = stop_target_state
+                    self.assertEqual(self.sm.can_cancel_session, 1)
+                    self.assertEqual(self.sm.cancel_menu_change(1), "Cancel")
+                    self.assertEqual(self.sm.state, G3X_AUTOCONT_DISARMED)
+                    self.assertEqual(self.sm.session_cancelled, 1)
+                    self.assertEqual(self.sm.attempt_admitted, 0)
+                    self.assertEqual(self.sm.restarts_remaining, 2)
+                    self.assertEqual(self.sm.session_restarts_used, 0)
+
+                    # Now g3x_movie_autocont_poll() runs on that same tick: admission does NOT run
+                    self.assertEqual(self.sm.step(run_nolimit=run_nolimit), G3X_AUTOCONT_DISARMED)
+                    self.assertEqual(self.sm.session_cancelled, 1)
+                    self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_SESSION_CANCEL)
+                    self.assertEqual(self.sm.restarts_remaining, 2)
+                    self.assertEqual(self.sm.session_restarts_used, 0)
+                    self.assertEqual(self.sm.attempt_admitted, 0)
+                    self.assertEqual(self.sm.press_calls.value, 0)
+
+                with self.subTest(ordering="A3_IN_POLL_CANCEL_BEFORE_ADMISSION", reason=reason, stop_state=stop_target_state):
+                    self.sm.reset()
+                    self._start_deliberate_physical_recording(budget=2)
+                    if reason == 3:
+                        self._prime_in_bounds_reason3_metrics(1)
+                        self.sm.projected_size.value = 0x100000400
+                        self.sm.stop_reason.value = 3
+                    else:
+                        self._prime_in_bounds_reason4_metrics(1800, 900)
+                        self.sm.max_frames.value = 1800
+                        self.sm.cur_frames.value = 1800
+                        self.sm.stop_reason.value = 4
+                    self.sm.movie_state.value = stop_target_state
+                    self.sm.lib.host_force_cancel_state_for_invariant_test(
+                        G3X_AUTOCONT_RECORDING, 2, 2, 0, 0, 0, 1
+                    )
+                    self.assertEqual(self.sm.step(run_nolimit=run_nolimit), G3X_AUTOCONT_DISARMED)
+                    self.assertEqual(self.sm.session_cancelled, 1)
+                    self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_SESSION_CANCEL)
+                    self.assertEqual(self.sm.restarts_remaining, 2)
+                    self.assertEqual(self.sm.session_restarts_used, 0)
+                    self.assertEqual(self.sm.attempt_admitted, 0)
+                    self.assertEqual(self.sm.press_calls.value, 0)
+
+                with self.subTest(ordering="B1_ADMISSION_BEFORE_PENDING_CANCEL", reason=reason, stop_state=stop_target_state):
+                    self.sm.reset()
+                    self._start_deliberate_physical_recording(budget=2)
+                    if reason == 3:
+                        self._prime_in_bounds_reason3_metrics(1)
+                        self.sm.projected_size.value = 0x100000400
+                        self.sm.stop_reason.value = 3
+                    else:
+                        self._prime_in_bounds_reason4_metrics(1800, 900)
+                        self.sm.max_frames.value = 1800
+                        self.sm.cur_frames.value = 1800
+                        self.sm.stop_reason.value = 4
+                    self.sm.movie_state.value = stop_target_state
+
+                    # Admission runs FIRST in g3x_movie_autocont_poll(): consumes 1 unit of budget
+                    self.assertEqual(self.sm.step(run_nolimit=run_nolimit), expected_pending_state)
+                    self.assertEqual(self.sm.attempt_admitted, 1)
+                    self.assertEqual(self.sm.restarts_remaining, 1)
+                    self.assertEqual(self.sm.session_restarts_used, 1)
+                    self.assertEqual(self.sm.last_stop_reason, reason)
+
+                    # Cancellation runs AFTER admission during pending continuation (WAIT_IDLE / SETTLE):
+                    # cancels continuation, clears attempt_admitted, and preserves remaining=1, used=1 without refund
+                    self.assertEqual(self.sm.cancel_menu_change(-1), "Cancel")
+                    self.assertEqual(self.sm.state, G3X_AUTOCONT_DISARMED)
+                    self.assertEqual(self.sm.session_cancelled, 1)
+                    self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_SESSION_CANCEL)
+                    self.assertEqual(self.sm.attempt_admitted, 0)
+                    self.assertEqual(self.sm.restart_budget, 2)
+                    self.assertEqual(self.sm.restarts_remaining, 1)
+                    self.assertEqual(self.sm.session_restarts_used, 1)
+                    self.assertEqual(self.sm.press_calls.value, 0)
+
+                for outstanding_state in ("PRESSING", "RELEASING", "WAIT_CONFIRM"):
+                    with self.subTest(
+                        ordering="B2_ADMISSION_BEFORE_OUTSTANDING_ATTEMPT_CANCEL",
+                        reason=reason,
+                        stop_state=stop_target_state,
+                        outstanding_state=outstanding_state,
+                    ):
+                        self.sm.reset()
+                        self._start_deliberate_physical_recording(budget=2)
+                        if reason == 3:
+                            self._prime_in_bounds_reason3_metrics(1)
+                            self.sm.projected_size.value = 0x100000400
+                            self.sm.stop_reason.value = 3
+                        else:
+                            self._prime_in_bounds_reason4_metrics(1800, 900)
+                            self.sm.max_frames.value = 1800
+                            self.sm.cur_frames.value = 1800
+                            self.sm.stop_reason.value = 4
+                        self.sm.movie_state.value = stop_target_state
+                        self.assertEqual(self.sm.step(run_nolimit=run_nolimit), expected_pending_state)
+                        if stop_target_state != 0:
+                            self.sm.movie_state.value = 0
+                            self.assertEqual(self.sm.step(run_nolimit=run_nolimit), G3X_AUTOCONT_SETTLE)
+                        for _ in range(G3X_AUTOCONT_SETTLE_POLLS - 1):
+                            self.assertEqual(self.sm.step(run_nolimit=run_nolimit), G3X_AUTOCONT_SETTLE)
+                        self.assertEqual(self.sm.step(run_nolimit=run_nolimit), G3X_AUTOCONT_PRESSING)
+
+                        if outstanding_state in ("RELEASING", "WAIT_CONFIRM"):
+                            for _ in range(G3X_AUTOCONT_PRESS_POLLS - 1):
+                                self.assertEqual(self.sm.step(run_nolimit=run_nolimit), G3X_AUTOCONT_PRESSING)
+                            self.assertEqual(self.sm.step(run_nolimit=run_nolimit), G3X_AUTOCONT_RELEASING)
+                        if outstanding_state == "WAIT_CONFIRM":
+                            for _ in range(G3X_AUTOCONT_RELEASE_POLLS - 1):
+                                self.assertEqual(self.sm.step(run_nolimit=run_nolimit), G3X_AUTOCONT_RELEASING)
+                            self.assertEqual(self.sm.step(run_nolimit=run_nolimit), G3X_AUTOCONT_WAIT_CONFIRM)
+
+                        rel_before = self.sm.release_calls.value
+                        self.assertEqual(self.sm.attempt_admitted, 1)
+                        self.assertEqual(self.sm.lib.g3x_movie_autocont_cancel_session(), 1)
+                        self.assertEqual(self.sm.state, G3X_AUTOCONT_DISARMED)
+                        self.assertEqual(self.sm.session_cancelled, 1)
+                        self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_SESSION_CANCEL)
+                        self.assertEqual(self.sm.attempt_admitted, 0)
+                        self.assertEqual(self.sm.synth_owned, 0)
+                        self.assertEqual(self.sm.restart_budget, 2)
+                        self.assertEqual(self.sm.restarts_remaining, 1)
+                        self.assertEqual(self.sm.session_restarts_used, 1)
+                        if outstanding_state == "PRESSING":
+                            self.assertEqual(self.sm.release_calls.value, rel_before + 1)
+                        else:
+                            self.assertEqual(self.sm.release_calls.value, rel_before)
+
+    def test_budget_and_synthetic_key_ownership_invariants_across_all_states_and_allowances(self) -> None:
+        # 1. Exhaustive (budget, used) matrix across RECORDING (including used == budget on the final (B+1)-th clip
+        #    where restarts_remaining == 0) and across every poll of PRESSING (1..6), RELEASING (1..6), and WAIT_CONFIRM:
+        #    proves configured allowance, remaining budget, and consumed attempts are preserved and only
+        #    continuation-owned KEY_VIDEO is ever released while unrelated synthetic keys across words 0..2 stay intact.
+        unrelated_w0_mask = 0x00010110  # KEY_MENU (0x10) | KEY_SET (0x100) | KEY_PLAYBACK (0x10000)
+        unrelated_w1_val = 0xCAFEBABE
+        unrelated_w2_val = 0x12345678
+
+        for budget in (1, 2, 3):
+            for used in range(0, budget + 1):
+                with self.subTest(live_recording_budget=budget, used=used):
+                    self.sm.reset()
+                    self._start_deliberate_physical_recording(budget=budget)
+                    for idx in range(1, used + 1):
+                        self._prime_in_bounds_reason3_metrics(idx)
+                        self._run_admitted_reason3_restart_to_confirmed_recording(
+                            expected_remaining_after_admission=budget - idx,
+                            expected_used_after_admission=idx,
+                        )
+                    self.assertEqual(self.sm.state, G3X_AUTOCONT_RECORDING)
+                    self.assertEqual(self.sm.restarts_remaining, budget - used)
+                    self.assertEqual(self.sm.session_restarts_used, used)
+
+                    # Set unrelated synthetic keys in words 0..2 and unowned KEY_VIDEO bit in kbd_mod_state[0]
+                    self.sm.kbd_mod_state[0] &= ~(unrelated_w0_mask | G3X_KEY_VIDEO_BIT)
+                    self.sm.kbd_mod_state[1] = unrelated_w1_val
+                    self.sm.kbd_mod_state[2] = unrelated_w2_val
+                    press_before = self.sm.press_calls.value
+                    rel_before = self.sm.release_calls.value
+
+                    self.assertEqual(self.sm.lib.g3x_movie_autocont_cancel_session(), 1)
+                    self.assertEqual(self.sm.movie_state.value, 1)  # Active clip never stopped
+                    self.assertEqual(self.sm.state, G3X_AUTOCONT_DISARMED)
+                    self.assertEqual(self.sm.session_cancelled, 1)
+                    self.assertEqual(self.sm.restart_budget, budget)
+                    self.assertEqual(self.sm.restarts_remaining, budget - used)
+                    self.assertEqual(self.sm.session_restarts_used, used)
+                    self.assertEqual(self.sm.attempt_admitted, 0)
+                    self.assertEqual(self.sm.press_calls.value, press_before)
+                    self.assertEqual(self.sm.release_calls.value, rel_before)
+                    self.assertEqual(self.sm.kbd_mod_state[0] & (unrelated_w0_mask | G3X_KEY_VIDEO_BIT), 0)
+                    self.assertEqual(self.sm.kbd_mod_state[1] & 0xFFFFFFFF, unrelated_w1_val)
+                    self.assertEqual(self.sm.kbd_mod_state[2] & 0xFFFFFFFF, unrelated_w2_val)
+
+        # 2. Every synthetic press poll (1..6) in PRESSING (synth_owned == 1) in both <ALT> and non-<ALT> modes
+        for alt_mode in (False, True):
+            for press_poll in range(1, G3X_AUTOCONT_PRESS_POLLS + 1):
+                with self.subTest(pressing_poll=press_poll, in_alt_mode=alt_mode):
+                    self.sm.reset()
+                    self._start_deliberate_physical_recording(budget=3)
+                    self._prime_in_bounds_reason3_metrics(1)
+                    self.sm.projected_size.value = 0x100000400
+                    self.sm.stop_reason.value = 3
+                    self.sm.movie_state.value = 0
+                    for _ in range(G3X_AUTOCONT_SETTLE_POLLS):
+                        self.assertEqual(self.sm.step(in_alt_mode=alt_mode), G3X_AUTOCONT_SETTLE)
+                    for _ in range(press_poll):
+                        self.assertEqual(self.sm.step(in_alt_mode=alt_mode), G3X_AUTOCONT_PRESSING)
+                    self.assertEqual(self.sm.synth_owned, 1)
+                    self.assertTrue(self.sm.mod_video_pressed)
+                    self.assertTrue(self.sm.physw_video_pressed)
+
+                    # Assert unrelated synthetic keys in words 0..2
+                    self.sm.kbd_mod_state[0] &= ~unrelated_w0_mask
+                    self.sm.physw_status[0] &= ~unrelated_w0_mask
+                    self.sm.kbd_mod_state[1] = unrelated_w1_val
+                    self.sm.kbd_mod_state[2] = unrelated_w2_val
+                    rel_before = self.sm.release_calls.value
+
+                    self.assertEqual(self.sm.cancel_menu_change(1), "Cancel")
+                    self.assertEqual(self.sm.synth_owned, 0)
+                    self.assertEqual(self.sm.release_calls.value, rel_before + 1)
+                    self.assertEqual(self.sm.last_key_arg.value, KEY_VIDEO)
+                    self.assertFalse(self.sm.mod_video_pressed)
+                    self.assertFalse(self.sm.physw_video_pressed)
+                    # Unrelated synthetic key bits in words 0..2 remain untouched
+                    self.assertEqual(self.sm.kbd_mod_state[0] & unrelated_w0_mask, 0)
+                    self.assertEqual(self.sm.physw_status[0] & unrelated_w0_mask, 0)
+                    self.assertEqual(self.sm.kbd_mod_state[1] & 0xFFFFFFFF, unrelated_w1_val)
+                    self.assertEqual(self.sm.kbd_mod_state[2] & 0xFFFFFFFF, unrelated_w2_val)
+                    self.assertEqual(self.sm.restart_budget, 3)
+                    self.assertEqual(self.sm.restarts_remaining, 2)
+                    self.assertEqual(self.sm.session_restarts_used, 1)
+                    self.assertEqual(self.sm.attempt_admitted, 0)
+
+    def test_session_reset_provenance_expired_idle_press_and_restart_eligibility_regressions(self) -> None:
+        # 1. Start session with budget=2, cancel during Clip 1 (remaining=2, used=0), then let Clip 1 stop to confirmed IDLE.
+        #    Test that an EXPIRED physical KEY_VIDEO press at confirmed IDLE (> 200 polls before 0 -> 1)
+        #    cannot clear session_cancelled or start a new session!
+        self.sm.reset()
+        self._start_deliberate_physical_recording(budget=2)
+        self._prime_in_bounds_reason3_metrics(1)
+        self.assertEqual(self.sm.cancel_menu_change(1), "Cancel")
+        self.assertEqual(self.sm.session_cancelled, 1)
+        self.assertEqual(self.sm.restarts_remaining, 2)
+        self.assertEqual(self.sm.session_restarts_used, 0)
+
+        self.sm.movie_state.value = 0
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)  # Confirmed idle
+
+        # Physical KEY_VIDEO press observed at confirmed IDLE, then released, then allowed to expire (200 polls)
+        self.sm.set_physical_video_button(True)
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.sm.set_physical_video_button(False)
+        for _ in range(G3X_AUTOCONT_CONFIRM_POLLS):
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+            self.assertEqual(self.sm.session_cancelled, 1)
+
+        # Now 0 -> 1 occurs after the 200-poll idle press age expired: must NOT clear cancellation or arm!
+        self.sm.movie_state.value = 1
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.session_cancelled, 1)
+        self.assertEqual(self.sm.ui_status_str, "CANC")
+        self.assertEqual(self.sm.menu_str, "Cancel")
+        self.assertEqual(self.sm.cancel_menu_str, "Cancel")
+
+        # 2. Physical KEY_VIDEO held continuously from physical stop across IDLE (cancel_latched == 1)
+        #    followed by 0 -> 1 cannot clear session_cancelled
+        self.sm.set_physical_video_button(True)
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.cancel_latched, 1)
+        self.assertEqual(self.sm.session_cancelled, 1)
+        self.sm.movie_state.value = 0
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)  # Still held, so cancel_latched stays 1
+        self.assertEqual(self.sm.cancel_latched, 1)
+        self.sm.movie_state.value = 1
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.session_cancelled, 1)
+        self.assertEqual(self.sm.ui_status_str, "CANC")
+
+        # 3. Release physical KEY_VIDEO at IDLE across 2 polls (confirmed idle, cancel_latched == 0),
+        #    then perform a qualifying deliberate physical start with button held across 0 -> 1 (start-hold carry-over):
+        #    clears session_cancelled to 0 and starts a fresh session that can itself be cancelled again!
+        self.sm.set_physical_video_button(False)
+        self.sm.movie_state.value = 0
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.cancel_latched, 0)
+        self.assertEqual(self.sm.session_cancelled, 1)
+
+        self.sm.set_physical_video_button(True)
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.sm.movie_state.value = 1
+        self.sm.max_frames.value = 54000
+        self.sm.cur_frames.value = 10
+        self.sm.stream_bytes.value = 1024 * 1024
+        self.sm.projected_size.value = 2 * 1024 * 1024
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_RECORDING)
+        self.assertEqual(self.sm.session_cancelled, 0)
+        self.assertEqual(self.sm.ui_status_str, "ARM")
+        self.assertEqual(self.sm.restarts_remaining, 2)
+        self.assertEqual(self.sm.session_restarts_used, 0)
+        self.sm.set_physical_video_button(False)
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_RECORDING)
+
+        # 4. Restart eligibility regressions under G3X_MOVIE_SESSION_CANCEL=1:
+        #    ineligible stop causes (0, 1, 2, 5, 99), stale Reason 3, and stale Reason 4 disarm to STOP_FAULT (FLT)
+        #    without consuming budget or latching session_cancelled
+        for bad_reason in (0, 1, 2, 5, 99):
+            self.sm.reset()
+            self._start_deliberate_physical_recording(budget=2)
+            self._prime_in_bounds_reason3_metrics(1)
+            self.sm.projected_size.value = 0x100000400
+            self.sm.stop_reason.value = bad_reason
+            self.sm.movie_state.value = 2
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+            self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_STOP_FAULT)
+            self.assertEqual(self.sm.session_cancelled, 0)
+            self.assertEqual(self.sm.ui_status_str, "FLT")
+            self.assertEqual(self.sm.restarts_remaining, 2)
+            self.assertEqual(self.sm.session_restarts_used, 0)
+            self.assertEqual(self.sm.press_calls.value, 0)
+
 
 class TestPort61BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase):
     @classmethod
@@ -2077,6 +2457,8 @@ class TestPort61BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
             PORT59_BUILD_COMMIT,
             PORT61_INTERFACE_COMMIT,
             PORT61_INTEGRATION_PARENT,
+            PORT61_BUILD_COMMIT,
+            PORT61_BUILD_INTEGRATION_COMMIT,
             BASE_DEFAULT_SHA256,
             PORT59_COMBINED_SHA256,
             PORT60_BUDGET_SHA256,
@@ -2087,6 +2469,8 @@ class TestPort61BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
             "Cancel further restarts",
             "port61_movie_session_cancel_manifest.json",
             "out/port61-movie-session-cancel/DISKBOOT.BIN",
+            "PORT61-CANCEL-VALIDATE",
+            "Battery-Pull Recovery",
             "CAMERA BEHAVIOR UNVERIFIED",
         ):
             self.assertIn(token, doc_text, f"Missing '{token}' in docs/PORT61_MOVIE_SESSION_CANCEL.md")
