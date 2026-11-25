@@ -352,10 +352,18 @@ const char *g3x_movie_autocont_menu_change(int change, int arg);
 void g3x_movie_autocont_menu_cb(void);
 int *g3x_movie_autocont_get_menu_bool_ptr(void);
 #if defined(G3X_MOVIE_RESTART_BUDGET) && (G3X_MOVIE_RESTART_BUDGET == 1)
+#define G3X_AUTOCONT_BUDGET_STANDALONE 50U
+#if defined(G3X_MOVIE_STANDALONE) && (G3X_MOVIE_STANDALONE == 1)
+/* PORT-63: Standalone fixed compile-time session restart budget of 50 automatic restart attempts */
+#define G3X_AUTOCONT_BUDGET_MIN     G3X_AUTOCONT_BUDGET_STANDALONE
+#define G3X_AUTOCONT_BUDGET_MAX     G3X_AUTOCONT_BUDGET_STANDALONE
+#define G3X_AUTOCONT_BUDGET_DEFAULT G3X_AUTOCONT_BUDGET_STANDALONE
+#else
 /* PORT-60: Opt-in volatile finite session restart budget (allowances 1, 2, or 3; default 1) */
 #define G3X_AUTOCONT_BUDGET_MIN     1U
 #define G3X_AUTOCONT_BUDGET_MAX     3U
 #define G3X_AUTOCONT_BUDGET_DEFAULT 1U
+#endif
 
 unsigned int g3x_movie_autocont_get_restart_budget(void);
 int g3x_movie_autocont_set_restart_budget(unsigned int budget);

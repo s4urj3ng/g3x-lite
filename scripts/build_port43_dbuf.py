@@ -62,6 +62,48 @@ def _clean_platform_and_core_artifacts(stage_dir: Path) -> None:
                     pass
 
 
+def _clean_standalone_staging_artifacts(stage_dir: Path) -> None:
+    """Hermetically remove all prebuilt or stale objects, archives, host tools, and generated exports from a standalone staging tree."""
+    clean_staging_artifacts(stage_dir)
+    for sub in ["tools", "lib", "core", "modules", "platform", "loader", "bin"]:
+        target = stage_dir / sub
+        if not target.is_dir():
+            continue
+        for odir_pattern in ("**/.o", "**/.o2", "**/.o3", "**/.dep"):
+            for odir in target.glob(odir_pattern):
+                if odir.is_dir():
+                    shutil.rmtree(odir, ignore_errors=True)
+        for ext in ("*.o", "*.a", "*.d", "*.flt", "*.dump", "*.elf", "*.bin", "*.syms"):
+            for f in target.glob(f"**/{ext}"):
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+    for tool_rel in (
+        "tools/dancingbits",
+        "tools/makeexport",
+        "tools/font_8x16_pack",
+        "tools/pakwif",
+        "tools/code_gen",
+        "tools/finsig_dryos",
+        "tools/gensig_dryos",
+        "tools/finsig_vxworks",
+        "tools/gensig_vxworks",
+        "tools/finsig_thumb2",
+        "tools/ptp_op_names",
+        "tools/elf2flt/elf2flt",
+        "modules/module_hashlist.c",
+        "modules/module_exportlist.h",
+        "modules/exportlist.inc",
+    ):
+        p = stage_dir / tool_rel
+        if p.is_file():
+            try:
+                p.unlink()
+            except OSError:
+                pass
+
+
 def _remove_prototype_files(stage_dir: Path) -> None:
     """Remove boot_prototype.c and stubs_prototype.S from a staged CHDK tree."""
     for proto_name in ["boot_prototype.c", "stubs_prototype.S"]:
@@ -2701,12 +2743,34 @@ def apply_movie_standalone_staging_patches(stage_dir: Path) -> None:
             "#else\n"
             "    int cnt = 1;\n"
         )
-        if autostart_anchor not in cm_text or spytask_anchor not in cm_text:
+        spytask_end_anchor = (
+            "        // Process async module unload requests\n"
+            "        module_tick_unloader();\n"
+            "\n"
+            "        msleep(20);\n"
+            "        chdk_started_flag=1;\n"
+            "    }\n"
+            "}\n"
+            "\n"
+            "long ftell(FILE *file) {"
+        )
+        spytask_end_repl = (
+            "        // Process async module unload requests\n"
+            "        module_tick_unloader();\n"
+            "\n"
+            "        msleep(20);\n"
+            "        chdk_started_flag=1;\n"
+            "    }\n"
+            "#endif\n"
+            "}\n"
+            "\n"
+            "long ftell(FILE *file) {"
+        )
+        if autostart_anchor not in cm_text or spytask_anchor not in cm_text or spytask_end_anchor not in cm_text:
             raise RuntimeError("PORT-62 core/main.c anchors not found in staged core/main.c")
         cm_text = cm_text.replace(autostart_anchor, autostart_repl, 1)
         cm_text = cm_text.replace(spytask_anchor, spytask_repl, 1)
-        last_brace = cm_text.rfind("}")
-        cm_text = cm_text[:last_brace] + "#endif\n}" + cm_text[last_brace + 1:]
+        cm_text = cm_text.replace(spytask_end_anchor, spytask_end_repl, 1)
         core_main_c.write_text(cm_text, encoding="utf-8")
 
     kbd_proc_c = stage_dir / "core/kbd_process.c"
@@ -2761,13 +2825,57 @@ def apply_movie_standalone_staging_patches(stage_dir: Path) -> None:
             "#else\n"
             "    static int key_pressed;\n"
         )
-        if enter_alt_anchor not in kp_text or kbd_proc_anchor not in kp_text:
+        kbd_proc_end_anchor = (
+            "    extern void start_ptp_script();\n"
+            "    start_ptp_script();\n"
+            "\n"
+            "    return kbd_blocked;\n"
+            "}"
+        )
+        kbd_proc_end_repl = (
+            "    extern void start_ptp_script();\n"
+            "    start_ptp_script();\n"
+            "\n"
+            "    return kbd_blocked;\n"
+            "#endif\n"
+            "}"
+        )
+        if enter_alt_anchor not in kp_text or kbd_proc_anchor not in kp_text or kbd_proc_end_anchor not in kp_text:
             raise RuntimeError("PORT-62 core/kbd_process.c anchors not found in staged core/kbd_process.c")
         kp_text = kp_text.replace(enter_alt_anchor, enter_alt_repl, 1)
         kp_text = kp_text.replace(kbd_proc_anchor, kbd_proc_repl, 1)
-        last_brace = kp_text.rfind("}")
-        kp_text = kp_text[:last_brace] + "#endif\n}" + kp_text[last_brace + 1:]
+        kp_text = kp_text.replace(kbd_proc_end_anchor, kbd_proc_end_repl, 1)
         kbd_proc_c.write_text(kp_text, encoding="utf-8")
+
+    top_makefile = stage_dir / "Makefile"
+    if top_makefile.is_file():
+        tm_text = top_makefile.read_text(encoding="utf-8")
+        if "ifeq ($(G3X_MOVIE_STANDALONE),1)" not in tm_text:
+            subdirs_anchor = "# Build camera, camera firmware & loader code (loader must be last)\nSUBDIRS+=$(cam) $(camfw) $(loader)"
+            subdirs_repl = (
+                "ifeq ($(G3X_MOVIE_STANDALONE),1)\n"
+                "SUBDIRS+=$(larmutil) $(lmath) $(llang) $(lfont) $(lcore)\n"
+                "endif\n\n"
+                "# Build camera, camera firmware & loader code (loader must be last)\n"
+                "SUBDIRS+=$(cam) $(camfw) $(loader)"
+            )
+            copy_mod_anchor = (
+                '\t@echo "copy modules"\n'
+                "\trm -f $(chdk)/MODULES/*\n"
+                "\tcp $(modules)/$O*.flt $(chdk)/MODULES"
+            )
+            copy_mod_repl = (
+                "ifneq ($(G3X_MOVIE_STANDALONE),1)\n"
+                '\t@echo "copy modules"\n'
+                "\trm -f $(chdk)/MODULES/*\n"
+                "\tcp $(modules)/$O*.flt $(chdk)/MODULES\n"
+                "endif"
+            )
+            if subdirs_anchor not in tm_text or copy_mod_anchor not in tm_text:
+                raise RuntimeError("PORT-62 top-level Makefile anchors not found in staged Makefile")
+            tm_text = tm_text.replace(subdirs_anchor, subdirs_repl, 1)
+            tm_text = tm_text.replace(copy_mod_anchor, copy_mod_repl, 1)
+            top_makefile.write_text(tm_text, encoding="utf-8")
 
     prereq = (
         "ifeq ($(G3X_MOVIE_STANDALONE),1)\n"
@@ -3217,15 +3325,37 @@ def build_port43_dbuf(
     effective_stage_dir = effective_out_dir / "stage_chdk"
 
     effective_out_dir.mkdir(parents=True, exist_ok=True)
-    if clean_stage and effective_stage_dir.exists():
-        shutil.rmtree(effective_stage_dir)
+    if movie_standalone:
+        # Clean stale outputs in effective_out_dir before building
+        for stale_name in ("DISKBOOT.BIN", "port62_movie_standalone_manifest.json", "manifest.json"):
+            stale_path = effective_out_dir / stale_name
+            if stale_path.is_file():
+                stale_path.unlink()
+        stale_chdk = effective_out_dir / "CHDK"
+        if stale_chdk.exists():
+            shutil.rmtree(stale_chdk)
+        for stale_manifest in effective_out_dir.glob("*_manifest.json"):
+            if stale_manifest.is_file():
+                stale_manifest.unlink()
 
-    if not effective_stage_dir.exists():
-        seed_dir = _ensure_dbuf_seed_stage()
-        print(f"Staging CHDK tree to {effective_stage_dir}...")
-        shutil.copytree(seed_dir, effective_stage_dir, symlinks=True)
+        # PORT-63: Hermetic PORT-41-style dedicated staging copy directly from CHDK_PORT
+        # Never reuse SEED_STAGE_DIR or prebuilt objects/archives from other profiles
+        if effective_stage_dir.exists():
+            subprocess.run(["chmod", "-R", "u+w", str(effective_stage_dir)], check=False)
+            shutil.rmtree(effective_stage_dir)
+        print(f"Staging hermetic CHDK tree to {effective_stage_dir}...")
+        shutil.copytree(CHDK_PORT, effective_stage_dir, symlinks=True)
+        _clean_standalone_staging_artifacts(effective_stage_dir)
+    else:
+        if clean_stage and effective_stage_dir.exists():
+            shutil.rmtree(effective_stage_dir)
 
-    _clean_platform_and_core_artifacts(effective_stage_dir)
+        if not effective_stage_dir.exists():
+            seed_dir = _ensure_dbuf_seed_stage()
+            print(f"Staging CHDK tree to {effective_stage_dir}...")
+            shutil.copytree(seed_dir, effective_stage_dir, symlinks=True)
+
+        _clean_platform_and_core_artifacts(effective_stage_dir)
 
     # 1. Overlay full_build/g3x onto stage_chdk/platform/g3x/ (excluding loader)
     platform_target = effective_stage_dir / "platform" / "g3x"
@@ -3331,8 +3461,33 @@ def build_port43_dbuf(
             print("G3X_MOVIE_AUTOCONT=1: Applying gated movie automatic continuation state machine...")
             apply_movie_autocont_staging_patches(effective_stage_dir, alone=movie_autocont_alone)
 
-    # Clean platform objects in staging copy
-    for subpath in ["platform/g3x", "platform/g3x/sub/110c", "loader/g3x"]:
+    # Clean platform (and for standalone, lib) objects in staging copy
+    clean_subpaths = ["platform/g3x", "platform/g3x/sub/110c", "loader/g3x"]
+    if movie_standalone:
+        _clean_standalone_staging_artifacts(effective_stage_dir)
+        tools_build_cmd = [
+            "make",
+            "-C",
+            str(effective_stage_dir / "tools"),
+            "dancingbits",
+            "makeexport",
+            "font_8x16_pack",
+        ]
+        tools_res = subprocess.run(tools_build_cmd, cwd=str(effective_stage_dir))
+        if tools_res.returncode != 0:
+            print(f"ERROR: Host tools build failed with exit code {tools_res.returncode}", file=sys.stderr)
+            return tools_res.returncode
+        clean_subpaths = [
+            "lib/armutil",
+            "lib/math",
+            "lib/lang",
+            "lib/font",
+            "lib/core",
+            "platform/g3x",
+            "platform/g3x/sub/110c",
+            "loader/g3x",
+        ]
+    for subpath in clean_subpaths:
         p = effective_stage_dir / subpath
         if p.is_dir():
             clean_cmd = [
@@ -3746,6 +3901,7 @@ def build_port43_dbuf(
         manifest_data["origin_main_baseline"] = "7e0f548f990bdd03d4eb0ec52bf2e11d7282f4e7"
         manifest_data["candidate_source_base"] = "7e0f548f990bdd03d4eb0ec52bf2e11d7282f4e7"
         manifest_data["integration_parent"] = "832806b1f0e1d73f75e540cf3b64f6448948f567"
+        manifest_data["port62_integration_baseline"] = "b718a92014b4a08f979d95347152642e596a10b4"
         manifest_data["reused_commits"] = {
             "origin_main_port61": "7e0f548f990bdd03d4eb0ec52bf2e11d7282f4e7",
             "port61_integration_tip": "e6a56328ee25d093ebb5c772356d42d31568c03b",
@@ -3761,6 +3917,7 @@ def build_port43_dbuf(
             "port56_movie_nolimit": "ded3832e4a6cc1cc8401f67cb454d5d420191844",
             "port55_movie_status": "dc915e6257981f48223fa2f38839bc28e31c73cf",
             "port62_reuse_map": "3d161e110f88a26efdeecdfd030f08dbc254e612",
+            "port62_integration_baseline": "b718a92014b4a08f979d95347152642e596a10b4",
         }
         manifest_data["excluded_commits"] = {
             "port54_conf_save": "af2578089a39e9a2143f83003e92ea5236d542bc",
@@ -3771,14 +3928,17 @@ def build_port43_dbuf(
             "alt_mode_dependencies": False,
             "chdk_dir_dependency": False,
             "modules_required": 0,
-            "default_restart_budget": 1,
+            "default_restart_budget": 50,
+            "fixed_compile_time_restart_budget": 50,
             "eligible_stop_reasons": [3, 4],
             "physical_stop_latches_session_cancellation": True,
             "rearm_requires_deliberate_physical_start_after_confirmed_idle": True,
             "synthetic_events_excluded_from_deliberate_start_and_budget_reset": True,
+            "failed_attempts_consume_budget_without_refund": True,
             "releases_only_continuation_owned_synthetic_keys": True,
             "shortpress_poweron_fix_preserved": True,
             "port56_duration_patch_preserved": True,
+            "hermetic_staging": True,
         }
         manifest_data["command"] = (
             "python3 -B scripts/build_port62_movie_standalone.py --out-dir build/port62-movie-standalone"
@@ -4113,10 +4273,11 @@ def build_port43_dbuf(
         shutil.copy2(manifest_path, repo_manifest)
         print(f"[OK] Candidate manifest copied to {repo_manifest}")
 
-    # Convenience aliases
-    with open(effective_out_dir / "manifest.json", "w", encoding="utf-8") as f:
-        json.dump(manifest_data, f, indent=2)
-        f.write("\n")
+    # Convenience aliases (omitted for movie_standalone to keep build/port62-movie-standalone/ clean)
+    if not movie_standalone:
+        with open(effective_out_dir / "manifest.json", "w", encoding="utf-8") as f:
+            json.dump(manifest_data, f, indent=2)
+            f.write("\n")
 
     if not keep_stage and effective_stage_dir.exists():
         shutil.rmtree(effective_stage_dir)

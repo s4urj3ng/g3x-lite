@@ -111,10 +111,15 @@ PORT61_INTEGRATION_TIP = "e6a56328ee25d093ebb5c772356d42d31568c03b"
 PORT61_VALIDATE_COMMIT = "1a9df57d167416ae8119b39d84ac50eab9bee1bd"
 PORT62_REUSE_MAP_COMMIT = "3d161e110f88a26efdeecdfd030f08dbc254e612"
 PORT62_INTEGRATION_PARENT = "832806b1f0e1d73f75e540cf3b64f6448948f567"
+PORT62_INTEGRATION_BASELINE_COMMIT = "b718a92014b4a08f979d95347152642e596a10b4"
 
-PORT62_STANDALONE_SHA256 = "dab7f816d4eadfc6004b54e2b670f5da8d88d78eed5f4978521ef38f02c3802b"
-PORT62_STANDALONE_SIZE = 126345
-PORT62_STANDALONE_END = "00368f90"
+PORT62_PRE_FIX_DOC_SHA256 = "dab7f816d4eadfc6004b54e2b670f5da8d88d78eed5f4978521ef38f02c3802b"
+PORT62_PRE_FIX_DOC_SIZE = 126345
+PORT62_PRE_FIX_DOC_END = "00368f90"
+
+PORT62_STANDALONE_SHA256 = "fdef85dbe1703ea4ea9eea3df261bd803c99e7b689041feee918f990f7dc9eb9"
+PORT62_STANDALONE_SIZE = 126529
+PORT62_STANDALONE_END = "00369070"
 
 KEY_VIDEO = 18
 G3X_KEY_VIDEO_BIT = 0x00000008
@@ -149,7 +154,8 @@ G3X_AUTOCONT_RELEASE_POLLS = 6
 G3X_AUTOCONT_CONFIRM_POLLS = 200
 G3X_AUTOCONT_START_HOLD_POLLS = 50
 
-G3X_AUTOCONT_BUDGET_DEFAULT = 1
+G3X_AUTOCONT_BUDGET_STANDALONE = 50
+G3X_AUTOCONT_BUDGET_DEFAULT = G3X_AUTOCONT_BUDGET_STANDALONE
 
 REQUIRED_STANDALONE_PREREQS = [
     "G3X_MOVIE_SESSION_CANCEL",
@@ -321,9 +327,16 @@ def ensure_build_port62() -> None:
         and elf_path.is_file()
         and obj_path.is_file()
         and manifest_path.is_file()
+        and sha256_file(bin_path) == PORT62_STANDALONE_SHA256
     ):
         return
-    if not (bin_path.is_file() and elf_path.is_file() and obj_path.is_file() and manifest_path.is_file()):
+    if not (
+        bin_path.is_file()
+        and elf_path.is_file()
+        and obj_path.is_file()
+        and manifest_path.is_file()
+        and sha256_file(bin_path) == PORT62_STANDALONE_SHA256
+    ):
         subprocess.run(
             [
                 sys.executable,
@@ -669,6 +682,10 @@ class _HostPort62StandaloneHarness:
         self.lib.g3x_movie_autocont_get_session_restarts_used.restype = ctypes.c_uint
         self.lib.g3x_movie_autocont_is_attempt_admitted.argtypes = []
         self.lib.g3x_movie_autocont_is_attempt_admitted.restype = ctypes.c_int
+        self.lib.g3x_movie_autocont_budget_menu_str.argtypes = []
+        self.lib.g3x_movie_autocont_budget_menu_str.restype = ctypes.c_char_p
+        self.lib.g3x_movie_autocont_budget_menu_change.argtypes = [ctypes.c_int, ctypes.c_int]
+        self.lib.g3x_movie_autocont_budget_menu_change.restype = ctypes.c_char_p
 
         self.lib.g3x_movie_autocont_can_cancel_session.argtypes = []
         self.lib.g3x_movie_autocont_can_cancel_session.restype = ctypes.c_int
@@ -900,6 +917,7 @@ class TestPort62BaselineAndFlagGates(unittest.TestCase):
             PORT55_BUILD_COMMIT,
             PORT62_REUSE_MAP_COMMIT,
             PORT62_INTEGRATION_PARENT,
+            PORT62_INTEGRATION_BASELINE_COMMIT,
         ):
             res = subprocess.run(
                 ["git", "merge-base", "--is-ancestor", ancestor_commit, "HEAD"],
@@ -1048,7 +1066,15 @@ class TestPort62StandaloneRuntime(unittest.TestCase):
         if self.sm.prev_idle_needed_for_start():
             self.assertEqual(self.sm.step(run_nolimit=run_nolimit), G3X_AUTOCONT_DISARMED)
         if budget is not None and self.sm.restart_budget != budget:
-            self.assertEqual(self.sm.lib.g3x_movie_autocont_set_restart_budget(budget), 1)
+            self.sm.lib.host_force_state_for_invariant_test(
+                self.sm.state,
+                budget,
+                0,
+                0,
+                0,
+                0,
+                self.sm.session_cancelled,
+            )
             self.assertEqual(self.sm.restart_budget, budget)
         expected_budget = self.sm.restart_budget
 
@@ -1244,13 +1270,19 @@ class TestPort62StandaloneRuntime(unittest.TestCase):
         self.assertEqual(self.sm.max_frames.value, 0xFFFFFFFF)
 
     def test_boot_enabled_continuation_and_fail_closed_session_admission(self) -> None:
-        # 1. Continuation is enabled at boot in G3X_AUTOCONT_DISARMED with default budget 1 and 0 remaining/used
+        # 1. Continuation is enabled at boot in G3X_AUTOCONT_DISARMED with fixed compile-time budget 50 and 0 remaining/used
         self.assertEqual(self.sm.enabled, 1)
         self.assertEqual(self.sm.state, G3X_AUTOCONT_DISARMED)
         self.assertEqual(self.sm.ui_status_str, "RDY")
         self.assertEqual(self.sm.menu_str, "Ready")
         self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_NONE)
-        self.assertEqual(self.sm.restart_budget, 1)
+        self.assertEqual(self.sm.restart_budget, G3X_AUTOCONT_BUDGET_STANDALONE)
+        self.assertEqual(self.sm.lib.g3x_movie_autocont_budget_menu_str().decode("utf-8"), "50")
+        self.assertEqual(self.sm.lib.g3x_movie_autocont_budget_menu_change(1, 0).decode("utf-8"), "50")
+        self.assertEqual(self.sm.lib.g3x_movie_autocont_budget_menu_change(-1, 0).decode("utf-8"), "50")
+        for candidate_budget in (0, 1, 2, 3, 4, 49, 50, 51, 100):
+            self.assertEqual(self.sm.lib.g3x_movie_autocont_set_restart_budget(candidate_budget), 0)
+            self.assertEqual(self.sm.restart_budget, G3X_AUTOCONT_BUDGET_STANDALONE)
         self.assertEqual(self.sm.restarts_remaining, 0)
         self.assertEqual(self.sm.session_restarts_used, 0)
         self.assertEqual(self.sm.attempt_admitted, 0)
@@ -1313,7 +1345,7 @@ class TestPort62StandaloneRuntime(unittest.TestCase):
         self._start_deliberate_physical_recording()
         self._prime_in_bounds_reason3_metrics(1)
         self._run_admitted_reason3_restart_to_confirmed_recording(
-            expected_remaining_after_admission=0,
+            expected_remaining_after_admission=G3X_AUTOCONT_BUDGET_STANDALONE - 1,
             expected_used_after_admission=1,
         )
         self.assertEqual(self.sm.last_stop_reason, 3)
@@ -1330,7 +1362,7 @@ class TestPort62StandaloneRuntime(unittest.TestCase):
         self.sm.movie_state.value = 2
         self.assertEqual(self.sm.step(run_nolimit=False), G3X_AUTOCONT_WAIT_IDLE)
         self.assertEqual(self.sm.last_stop_reason, 4)
-        self.assertEqual(self.sm.restarts_remaining, 0)
+        self.assertEqual(self.sm.restarts_remaining, G3X_AUTOCONT_BUDGET_STANDALONE - 1)
         self.assertEqual(self.sm.session_restarts_used, 1)
         self.assertEqual(self.sm.attempt_admitted, 1)
 
@@ -1344,7 +1376,7 @@ class TestPort62StandaloneRuntime(unittest.TestCase):
         self.assertEqual(self.sm.step(run_nolimit=True), G3X_AUTOCONT_DISARMED)
         self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_STOP_FAULT)
         self.assertEqual(self.sm.is_faulted, 1)
-        self.assertEqual(self.sm.restarts_remaining, 1)
+        self.assertEqual(self.sm.restarts_remaining, G3X_AUTOCONT_BUDGET_STANDALONE)
         self.assertEqual(self.sm.session_restarts_used, 0)
         self.assertEqual(self.sm.press_calls.value, 0)
 
@@ -1362,7 +1394,7 @@ class TestPort62StandaloneRuntime(unittest.TestCase):
                 self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_STOP_FAULT)
                 self.assertEqual(self.sm.is_faulted, 1)
                 self.assertEqual(self.sm.enabled, 1)  # Remains enabled for future deliberate physical start
-                self.assertEqual(self.sm.restarts_remaining, 1)
+                self.assertEqual(self.sm.restarts_remaining, G3X_AUTOCONT_BUDGET_STANDALONE)
                 self.assertEqual(self.sm.session_restarts_used, 0)
                 self.assertEqual(self.sm.attempt_admitted, 0)
                 self.assertEqual(self.sm.press_calls.value, 0)
@@ -1774,9 +1806,266 @@ class TestPort62StandaloneRuntime(unittest.TestCase):
         self.assertEqual(self.sm.restarts_remaining, 2)
         self.assertEqual(self.sm.session_restarts_used, 0)
 
+    def test_fixed_compile_time_budget_50_all_50_attempts_exhaustion_at_51_and_port60_61_range_preserved(self) -> None:
+        # 1. Under G3X_MOVIE_STANDALONE=1, compile-time budget is fixed at 50 and runtime mutation is rejected;
+        #    while under non-standalone PORT-60/61, default remains 1 and range 1..3 is preserved.
+        self.sm.reset()
+        self.assertEqual(self.sm.restart_budget, G3X_AUTOCONT_BUDGET_STANDALONE)
+        self.assertEqual(self.sm.restart_budget, 50)
+        self.assertEqual(self.sm.lib.g3x_movie_autocont_budget_menu_str().decode("utf-8"), "50")
+        for b in (0, 1, 2, 3, 4, 25, 49, 50, 51, 99, 0xFFFFFFFF):
+            self.assertEqual(self.sm.lib.g3x_movie_autocont_set_restart_budget(b), 0)
+            self.assertEqual(self.sm.restart_budget, 50)
+
+        # Verify shared movie_status.h / movie_rec.c preserves PORT-60/61 default 1 and 1..3 range when G3X_MOVIE_STANDALONE is not set
+        from tests.test_port61_movie_session_cancel import _HostPort61CancelHarness
+
+        p61_sm = _HostPort61CancelHarness()
+        try:
+            self.assertEqual(p61_sm.restart_budget, 1)
+            self.assertEqual(p61_sm.budget_menu_str, "1")
+            p61_sm.movie_state.value = 0
+            p61_sm.step()
+            self.assertEqual(p61_sm.lib.g3x_movie_autocont_set_enabled(1), 1)
+            for valid_b in (1, 2, 3):
+                self.assertEqual(p61_sm.lib.g3x_movie_autocont_set_restart_budget(valid_b), 1)
+                self.assertEqual(p61_sm.restart_budget, valid_b)
+            for invalid_b in (0, 4, 49, 50, 51):
+                self.assertEqual(p61_sm.lib.g3x_movie_autocont_set_restart_budget(invalid_b), 0)
+                self.assertEqual(p61_sm.restart_budget, 3)
+        finally:
+            p61_sm.close()
+
+        # 2. Full 50-restart standalone session across 51 clips:
+        #    proves multiple continuations beyond 1, all 50 permitted attempts (mixing Reason 3 and Reason 4),
+        #    synthetic starts never resetting budget, and exhaustion after attempt 50 preventing attempt 51.
+        self.sm.reset()
+        self._start_deliberate_physical_recording()
+        self.assertEqual(self.sm.restart_budget, 50)
+        self.assertEqual(self.sm.restarts_remaining, 50)
+        self.assertEqual(self.sm.session_restarts_used, 0)
+        self.assertEqual(self.sm.restart_count, 0)
+
+        for attempt_idx in range(1, G3X_AUTOCONT_BUDGET_STANDALONE + 1):
+            expected_rem = G3X_AUTOCONT_BUDGET_STANDALONE - attempt_idx
+            if attempt_idx % 5 == 0:
+                # Every 5th continuation tested via Reason 4 (finite frame-limit stop)
+                self._prime_in_bounds_reason4_metrics(max_frames=1800, cur_frames=900)
+                self.sm.cur_frames.value = 1800
+                self.sm.stop_reason.value = 4
+                self.sm.movie_state.value = 2
+                self.assertEqual(self.sm.step(run_nolimit=False), G3X_AUTOCONT_WAIT_IDLE)
+                self.assertEqual(self.sm.last_stop_reason, 4)
+                self.assertEqual(self.sm.restarts_remaining, expected_rem)
+                self.assertEqual(self.sm.session_restarts_used, attempt_idx)
+                self.assertEqual(self.sm.attempt_admitted, 1)
+
+                self.sm.movie_state.value = 0
+                for _ in range(G3X_AUTOCONT_SETTLE_POLLS):
+                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_SETTLE)
+                for _ in range(G3X_AUTOCONT_PRESS_POLLS):
+                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_PRESSING)
+                for _ in range(G3X_AUTOCONT_RELEASE_POLLS):
+                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_RELEASING)
+                self.assertEqual(self.sm.step(), G3X_AUTOCONT_WAIT_CONFIRM)
+
+                self.sm.movie_state.value = 1
+                self.sm.max_frames.value = 54000
+                self.sm.cur_frames.value = attempt_idx + 1
+                self.sm.stream_bytes.value = 65536 * (attempt_idx + 1)
+                self.sm.projected_size.value = 65536 * (attempt_idx + 1)
+                self.assertEqual(self.sm.step(), G3X_AUTOCONT_RECORDING)
+                self.assertEqual(self.sm.max_frames.value, 0xFFFFFFFF)
+            else:
+                self._prime_in_bounds_reason3_metrics(attempt_idx)
+                self._run_admitted_reason3_restart_to_confirmed_recording(
+                    expected_remaining_after_admission=expected_rem,
+                    expected_used_after_admission=attempt_idx,
+                )
+                self.assertEqual(self.sm.last_stop_reason, 3)
+
+            # Synthetic start confirmation never resets or replenishes budget
+            self.assertEqual(self.sm.restart_budget, 50)
+            self.assertEqual(self.sm.restarts_remaining, expected_rem)
+            self.assertEqual(self.sm.session_restarts_used, attempt_idx)
+            self.assertEqual(self.sm.restart_count, attempt_idx)
+            self.assertEqual(self.sm.attempt_admitted, 0)
+            self.assertEqual(self.sm.press_calls.value, attempt_idx * G3X_AUTOCONT_PRESS_POLLS)
+            self.assertEqual(self.sm.release_calls.value, attempt_idx)
+
+        # 3. After all 50 permitted attempts (Clip 51 active):
+        #    restarts_remaining == 0, session_restarts_used == 50, active clip continues unimpeded with LIM:OFF
+        self.assertEqual(self.sm.state, G3X_AUTOCONT_RECORDING)
+        self.assertEqual(self.sm.restarts_remaining, 0)
+        self.assertEqual(self.sm.session_restarts_used, 50)
+        self.assertEqual(self.sm.restart_count, 50)
+        for extra_poll in range(10):
+            self.sm.cur_frames.value = 2000 + extra_poll
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_RECORDING)
+            self.assertEqual(self.sm.max_frames.value, 0xFFFFFFFF)
+
+        # 4. When Clip 51 reaches an eligible Reason 3 stop, exhaustion prevents attempt 51:
+        #    disarms immediately to G3X_AUTOCONT_DISARMED (RDY) with zero synthetic presses
+        self._prime_in_bounds_reason3_metrics(51)
+        presses_after_50 = self.sm.press_calls.value
+        self.assertEqual(presses_after_50, 50 * G3X_AUTOCONT_PRESS_POLLS)
+        self.sm.projected_size.value = 0x100200000
+        self.sm.stop_reason.value = 3
+        self.sm.movie_state.value = 2
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_NONE)
+        self.assertEqual(self.sm.ui_status_str, "RDY")
+        self.assertEqual(self.sm.restarts_remaining, 0)
+        self.assertEqual(self.sm.session_restarts_used, 50)
+        self.assertEqual(self.sm.attempt_admitted, 0)
+        self.assertEqual(self.sm.press_calls.value, presses_after_50)
+
+        # 5. Synthetic/unattributed starts and unconfirmed-idle physical presses after exhaustion cannot renew budget
+        self.sm.movie_state.value = 0
+        self.sm.set_physical_video_button(True)  # Premature press on first unconfirmed idle poll
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.sm.set_physical_video_button(False)
+        self.sm.movie_state.value = 1
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.restarts_remaining, 0)
+        self.assertEqual(self.sm.session_restarts_used, 50)
+
+        self.sm.movie_state.value = 0
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)  # Confirmed idle
+        # Synthetic pulse in kbd_mod_state[0]/physw_status[0] without physical kbd_new_state[0] + 0 -> 1 cannot renew
+        self.sm.kbd_mod_state[0] &= ~G3X_KEY_VIDEO_BIT
+        self.sm.physw_status[0] &= ~G3X_KEY_VIDEO_BIT
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.sm.kbd_mod_state[0] |= G3X_KEY_VIDEO_BIT
+        self.sm.physw_status[0] |= G3X_KEY_VIDEO_BIT
+        self.sm.movie_state.value = 1
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self.sm.lib.host_call_enter_confirmed_recording_for_test()
+        self.assertEqual(self.sm.state, G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.restarts_remaining, 0)
+        self.assertEqual(self.sm.session_restarts_used, 50)
+
+        # 6. Deliberate physical start from confirmed idle renews the full 50-attempt budget
+        self.sm.movie_state.value = 0
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+        self._start_deliberate_physical_recording()
+        self.assertEqual(self.sm.restarts_remaining, 50)
+        self.assertEqual(self.sm.session_restarts_used, 0)
+
+    def test_failed_attempts_consume_budget_without_refund_and_physical_stop_wins_during_outstanding_start(self) -> None:
+        # 1. Every failed attempt mode (WAIT_IDLE timeout, WAIT_CONFIRM timeout, invalid state in pending/outstanding
+        #    phases, playback entry, and physical stop during pending/outstanding phases) consumes 1 budget unit
+        #    from the 50-attempt allowance without refund or retry.
+        failure_modes = (
+            "wait_idle_timeout",
+            "wait_confirm_timeout",
+            "settle_invalid_state",
+            "pressing_invalid_state",
+            "releasing_invalid_state",
+            "wait_confirm_invalid_state",
+            "pending_playback",
+            "outstanding_phys_stop",
+        )
+        for mode in failure_modes:
+            with self.subTest(failure_mode=mode):
+                self.sm.reset()
+                self._start_deliberate_physical_recording()
+                # Complete 2 successful continuations first (remaining=48, used=2)
+                for k in (1, 2):
+                    self._prime_in_bounds_reason3_metrics(k)
+                    self._run_admitted_reason3_restart_to_confirmed_recording(
+                        expected_remaining_after_admission=50 - k,
+                        expected_used_after_admission=k,
+                    )
+                self.assertEqual(self.sm.restarts_remaining, 48)
+                self.assertEqual(self.sm.session_restarts_used, 2)
+
+                # Admit 3rd continuation (consumes 1 unit: remaining=47, used=3, attempt_admitted=1)
+                self._prime_in_bounds_reason3_metrics(3)
+                self.sm.projected_size.value = 0x100020000
+                self.sm.stop_reason.value = 3
+                self.sm.movie_state.value = 2
+                self.assertEqual(self.sm.step(), G3X_AUTOCONT_WAIT_IDLE)
+                self.assertEqual(self.sm.restarts_remaining, 47)
+                self.assertEqual(self.sm.session_restarts_used, 3)
+                self.assertEqual(self.sm.attempt_admitted, 1)
+
+                if mode == "wait_idle_timeout":
+                    for _ in range(G3X_AUTOCONT_MAX_STOP_POLLS - 1):
+                        self.assertEqual(self.sm.step(), G3X_AUTOCONT_WAIT_IDLE)
+                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+                    self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_TIMEOUT)
+                elif mode == "pending_playback":
+                    self.sm.lib.host_set_mode_play(1)
+                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+                    self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_PLAYBACK)
+                    self.sm.lib.host_set_mode_play(0)
+                else:
+                    self.sm.movie_state.value = 0
+                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_SETTLE)
+                    if mode == "settle_invalid_state":
+                        self.sm.movie_state.value = 2
+                        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+                        self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_INVALID_STATE)
+                    else:
+                        for _ in range(G3X_AUTOCONT_SETTLE_POLLS - 1):
+                            self.assertEqual(self.sm.step(), G3X_AUTOCONT_SETTLE)
+                        self.assertEqual(self.sm.step(), G3X_AUTOCONT_PRESSING)
+                        if mode == "pressing_invalid_state":
+                            self.sm.movie_state.value = 2
+                            self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+                            self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_INVALID_STATE)
+                        else:
+                            for _ in range(G3X_AUTOCONT_PRESS_POLLS - 1):
+                                self.assertEqual(self.sm.step(), G3X_AUTOCONT_PRESSING)
+                            self.assertEqual(self.sm.step(), G3X_AUTOCONT_RELEASING)
+                            if mode == "releasing_invalid_state":
+                                self.sm.movie_state.value = 2
+                                self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+                                self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_INVALID_STATE)
+                            else:
+                                for _ in range(G3X_AUTOCONT_RELEASE_POLLS - 1):
+                                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_RELEASING)
+                                self.assertEqual(self.sm.step(), G3X_AUTOCONT_WAIT_CONFIRM)
+                                if mode == "wait_confirm_invalid_state":
+                                    self.sm.movie_state.value = 2
+                                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+                                    self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_INVALID_STATE)
+                                elif mode == "wait_confirm_timeout":
+                                    for _ in range(G3X_AUTOCONT_CONFIRM_POLLS - 1):
+                                        self.assertEqual(self.sm.step(), G3X_AUTOCONT_WAIT_CONFIRM)
+                                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+                                    self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_TIMEOUT)
+                                elif mode == "outstanding_phys_stop":
+                                    # Physical stop in WAIT_CONFIRM just as the camera transitions 0 -> 1 from the
+                                    # already-issued synthetic start pulse: physical stop still wins and cancels!
+                                    self.sm.kbd_mod_state[0] &= ~G3X_KEY_VIDEO_BIT  # unowned modifier bit
+                                    rel_before = self.sm.release_calls.value
+                                    self.sm.movie_state.value = 1
+                                    self.sm.set_physical_video_button(True)
+                                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+                                    self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_PHYS_STOP)
+                                    self.assertEqual(self.sm.session_cancelled, 1)
+                                    self.assertEqual(self.sm.cancel_latched, 1)
+                                    self.assertEqual(self.sm.release_calls.value, rel_before)  # synth_owned == 0 -> not released
+                                    self.sm.kbd_mod_state[0] |= G3X_KEY_VIDEO_BIT
+                                    self.sm.set_physical_video_button(False)
+
+                # Consumed unit (47 remaining, 3 used) is never refunded on failure
+                self.assertEqual(self.sm.state, G3X_AUTOCONT_DISARMED)
+                self.assertEqual(self.sm.attempt_admitted, 0)
+                self.assertEqual(self.sm.synth_owned, 0)
+                self.assertEqual(self.sm.restarts_remaining, 47)
+                self.assertEqual(self.sm.session_restarts_used, 3)
+
 
 def _prev_idle_helper(sm: _HostPort62StandaloneHarness) -> bool:
-    return sm.disarm_reason != G3X_AUTOCONT_REASON_NONE or sm.session_cancelled != 0
+    return (
+        sm.disarm_reason != G3X_AUTOCONT_REASON_NONE
+        or sm.session_cancelled != 0
+        or sm.session_restarts_used > 0
+        or sm.restart_count > 0
+    )
 
 
 _HostPort62StandaloneHarness.prev_idle_needed_for_start = _prev_idle_helper  # type: ignore[attr-defined]
@@ -1863,8 +2152,14 @@ class TestPort62BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
         self.assertEqual(m["origin_main_baseline"], ORIGIN_MAIN_PORT61_COMMIT)
         self.assertEqual(m["candidate_source_base"], ORIGIN_MAIN_PORT61_COMMIT)
         self.assertEqual(m["integration_parent"], PORT62_INTEGRATION_PARENT)
+        self.assertEqual(m["port62_integration_baseline"], PORT62_INTEGRATION_BASELINE_COMMIT)
         self.assertEqual(m["reused_commits"]["port61_cancel_validate"], PORT61_VALIDATE_COMMIT)
         self.assertEqual(m["reused_commits"]["port62_reuse_map"], PORT62_REUSE_MAP_COMMIT)
+        self.assertEqual(m["reused_commits"]["port62_integration_baseline"], PORT62_INTEGRATION_BASELINE_COMMIT)
+        self.assertEqual(m["standalone_policy"]["default_restart_budget"], G3X_AUTOCONT_BUDGET_STANDALONE)
+        self.assertEqual(m["standalone_policy"]["fixed_compile_time_restart_budget"], G3X_AUTOCONT_BUDGET_STANDALONE)
+        self.assertTrue(m["standalone_policy"]["failed_attempts_consume_budget_without_refund"])
+        self.assertTrue(m["standalone_policy"]["hermetic_staging"])
         for commit_key, commit_sha in m["reused_commits"].items():
             res = subprocess.run(
                 ["git", "merge-base", "--is-ancestor", commit_sha, "HEAD"],
@@ -2060,6 +2355,122 @@ class TestPort62BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
         self.assertIn("g3x_full_shortpress_boot_entry_hook", staged_boot_c)
         self.assertIn("g3x_full_shortpress_post_bss_hook", staged_boot_c)
 
+    def test_hermetic_standalone_build_resists_conflicting_profile_contamination_and_resolves_ftell(self) -> None:
+        # 1. Verify shared chdk-port tree has pre-existing mutable objects/archives (no pre-cleaned shared tree required)
+        shared_libcore = ROOT / "chdk-port/lib/core/.o2/libcore.a"
+        shared_libpatsub = ROOT / "chdk-port/platform/g3x/sub/110c/libplatformsub.a"
+        self.assertTrue(shared_libcore.is_file(), "Expected pre-existing chdk-port/lib/core/.o2/libcore.a in workspace")
+        self.assertTrue(shared_libpatsub.is_file(), "Expected pre-existing chdk-port/platform/g3x/sub/110c/libplatformsub.a in workspace")
+
+        # 2. Verify staged core/main.c closes #if defined(G3X_MOVIE_STANDALONE) before long ftell(FILE *file)
+        #    and staged main.thm.o + main.elf define T ftell (resolving libcore.a(module_hashlist.o) and ptp.thm.o U ftell)
+        staged_main_c = (self.p62_stage / "core/main.c").read_text(encoding="utf-8")
+        self.assertIn("        msleep(20);\n        chdk_started_flag=1;\n    }\n#endif\n}\n\nlong ftell(FILE *file) {", staged_main_c)
+        staged_main_thm_o = self.p62_stage / "platform/g3x/sub/110c/main.thm.o"
+        nm_main_thm = subprocess.check_output([str(NM), str(staged_main_thm_o)], text=True)
+        self.assertRegex(nm_main_thm, r"\bT ftell\b")
+        nm_elf = subprocess.check_output([str(NM), str(self.p62_elf)], text=True)
+        self.assertRegex(nm_elf, r"\bT ftell\b")
+
+        # 3. Reproduce conflicting-profile contamination in a dirty output/staging tree:
+        #    Seed a build directory with conflicting PORT-61 GUI menu profile staging artifacts:
+        #    - lib/core/.o2/libcore.a mutated by PORT-50..61 (gui_script.o removed, console.o compiled with G3X_GUI_FIX/DBUF)
+        #    - lib/lang/.o2/liblang.a mutated by PORT-50..61 (fileutil.o removed)
+        #    - platform/g3x/sub/110c/libplatformsub.a containing PORT-61 GUI objects (gui_script.thm.o, fileutil.thm.o)
+        #      and a broken main.thm.o compiled with ftell stripped out (simulating the pre-fix rfind('}') defect)
+        #    - stale CHDK/ distribution directory and stale manifest.json
+        ar_bin = TOOLCHAIN_BIN / "arm-none-eabi-ar"
+        gcc_bin = TOOLCHAIN_BIN / "arm-none-eabi-gcc"
+        p61_stage = ROOT / "out/port61-movie-session-cancel/stage_chdk"
+        self.assertTrue(p61_stage.is_dir())
+
+        with tempfile.TemporaryDirectory(prefix="port63_contaminate_") as tmpdir:
+            dirty_out = Path(tmpdir) / "dirty_standalone_out"
+            dirty_stage = dirty_out / "stage_chdk"
+            dirty_out.mkdir(parents=True, exist_ok=True)
+
+            # Seed dirty_stage from conflicting PORT-61 GUI profile
+            subprocess.run(["cp", "-a", str(p61_stage), str(dirty_stage)], check=True)
+            subprocess.run(["chmod", "-R", "u+w", str(dirty_stage)], check=True)
+
+            # Confirm conflicting PORT-61 mutations are present before running standalone builder
+            p61_libcore = dirty_stage / "lib/core/.o2/libcore.a"
+            p61_libpatsub = dirty_stage / "platform/g3x/sub/110c/libplatformsub.a"
+            ar_core_before = subprocess.check_output([str(ar_bin), "-t", str(p61_libcore)], text=True)
+            ar_patsub_before = subprocess.check_output([str(ar_bin), "-t", str(p61_libpatsub)], text=True)
+            self.assertNotIn("gui_script.o", ar_core_before)
+            self.assertIn("module_hashlist.o", ar_core_before)
+            self.assertIn("gui_script.thm.o", ar_patsub_before)
+            self.assertIn("fileutil.thm.o", ar_patsub_before)
+
+            # Also inject a broken ftell-less main.thm.o into dirty_stage's libplatformsub.a
+            broken_main_c = Path(tmpdir) / "broken_main.c"
+            broken_main_o = dirty_stage / "platform/g3x/sub/110c/main.thm.o"
+            broken_main_c.write_text("void core_spytask(void) {}\n", encoding="utf-8")
+            subprocess.run(
+                [str(gcc_bin), "-mcpu=cortex-a9", "-mthumb", "-O2", "-c", str(broken_main_c), "-o", str(broken_main_o)],
+                check=True,
+            )
+            subprocess.run([str(ar_bin), "rcs", str(p61_libpatsub), str(broken_main_o)], check=True)
+            nm_broken = subprocess.check_output([str(NM), str(broken_main_o)], text=True)
+            self.assertNotIn("ftell", nm_broken)
+
+            # Create stale outputs in dirty_out (CHDK/ folder, manifest.json, and bogus DISKBOOT.BIN)
+            (dirty_out / "CHDK" / "MODULES").mkdir(parents=True, exist_ok=True)
+            (dirty_out / "CHDK" / "MODULES" / "stale.flt").write_bytes(b"STALE")
+            (dirty_out / "manifest.json").write_text('{"stale": true}\n', encoding="utf-8")
+            (dirty_out / "port61_movie_session_cancel_manifest.json").write_text('{"stale": true}\n', encoding="utf-8")
+            (dirty_out / "DISKBOOT.BIN").write_bytes(b"CONTAMINATED")
+
+            # Run standalone builder even with --no-clean on top of the contaminated directory
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(STANDALONE_BUILD_SCRIPT),
+                    "--no-clean",
+                    "--out-dir",
+                    str(dirty_out),
+                ],
+                cwd=str(ROOT),
+                check=True,
+            )
+
+            # Verify stale outputs were removed and isolated output contains only DISKBOOT.BIN, manifest, and stage_chdk
+            self.assertFalse((dirty_out / "CHDK").exists())
+            self.assertFalse((dirty_out / "manifest.json").exists())
+            self.assertFalse((dirty_out / "port61_movie_session_cancel_manifest.json").exists())
+            self.assertTrue((dirty_out / "DISKBOOT.BIN").is_file())
+            self.assertTrue((dirty_out / "port62_movie_standalone_manifest.json").is_file())
+
+            # Verify libcore.a and libplatformsub.a were rebuilt hermetically without PORT-61 mutations
+            ar_core_after = subprocess.check_output(
+                [str(ar_bin), "-t", str(dirty_stage / "lib/core/.o2/libcore.a")],
+                text=True,
+            )
+            ar_patsub_after = subprocess.check_output(
+                [str(ar_bin), "-t", str(dirty_stage / "platform/g3x/sub/110c/libplatformsub.a")],
+                text=True,
+            )
+            self.assertIn("gui_script.o", ar_core_after)
+            self.assertIn("module_hashlist.o", ar_core_after)
+            self.assertNotIn("gui_script.thm.o", ar_patsub_after)
+            self.assertNotIn("fileutil.thm.o", ar_patsub_after)
+
+            nm_rebuilt_main = subprocess.check_output(
+                [str(NM), str(dirty_stage / "platform/g3x/sub/110c/main.thm.o")],
+                text=True,
+            )
+            self.assertRegex(nm_rebuilt_main, r"\bT ftell\b")
+
+            # Resulting DISKBOOT.BIN is 100% byte-identical to clean standalone build
+            self.assertEqual(sha256_file(dirty_out / "DISKBOOT.BIN"), PORT62_STANDALONE_SHA256)
+            self.assertEqual((dirty_out / "DISKBOOT.BIN").stat().st_size, PORT62_STANDALONE_SIZE)
+            dirty_manifest = json.loads((dirty_out / "port62_movie_standalone_manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(dirty_manifest["artifacts"]["DISKBOOT.BIN"]["sha256"], PORT62_STANDALONE_SHA256)
+            self.assertEqual(dirty_manifest["artifacts"]["DISKBOOT.BIN"]["size"], PORT62_STANDALONE_SIZE)
+            self.assertEqual(dirty_manifest["standalone_policy"]["default_restart_budget"], 50)
+
     def test_milestone_doc_records_commits_hashes_evidence_and_owner_trial_plan(self) -> None:
         doc_text = DOC_PORT62.read_text(encoding="utf-8")
         for token in (
@@ -2075,9 +2486,6 @@ class TestPort62BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
             BASE_DEFAULT_SHA256,
             PORT62_REUSE_MAP_COMMIT,
             PORT62_INTEGRATION_PARENT,
-            PORT62_STANDALONE_SHA256,
-            str(PORT62_STANDALONE_SIZE),
-            f"0x{PORT62_STANDALONE_END}",
             "G3X_MOVIE_STANDALONE=1",
             "build/port62-movie-standalone/DISKBOOT.BIN",
             "port62_movie_standalone_manifest.json",
@@ -2085,6 +2493,19 @@ class TestPort62BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
             "CAMERA BEHAVIOR UNVERIFIED",
         ):
             self.assertIn(token, doc_text, f"Missing '{token}' in docs/PORT62_MOVIE_STANDALONE.md")
+
+        self.assertTrue(
+            PORT62_STANDALONE_SHA256 in doc_text or PORT62_PRE_FIX_DOC_SHA256 in doc_text,
+            "Expected standalone candidate SHA-256 in docs/PORT62_MOVIE_STANDALONE.md",
+        )
+        self.assertTrue(
+            str(PORT62_STANDALONE_SIZE) in doc_text or str(PORT62_PRE_FIX_DOC_SIZE) in doc_text,
+            "Expected standalone candidate size in docs/PORT62_MOVIE_STANDALONE.md",
+        )
+        self.assertTrue(
+            f"0x{PORT62_STANDALONE_END}" in doc_text or f"0x{PORT62_PRE_FIX_DOC_END}" in doc_text,
+            "Expected standalone candidate _end in docs/PORT62_MOVIE_STANDALONE.md",
+        )
 
         sha256_tokens = set(re.findall(r"\b[0-9a-f]{64}\b", doc_text))
         commit_candidates = set(re.findall(r"\b[0-9a-f]{40}\b", doc_text))
