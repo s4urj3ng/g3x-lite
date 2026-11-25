@@ -240,8 +240,13 @@ unsigned long long __attribute__((used)) g3x_get_movie_projected_base_offset(voi
 #endif
 
 /* Nonblocking session state machine & volatile user control variables */
-static volatile int g3x_autocont_enabled = 0;
-static int g3x_autocont_menu_bool_val = 0;
+#if defined(G3X_MOVIE_STANDALONE) && (G3X_MOVIE_STANDALONE == 1)
+#define G3X_AUTOCONT_BOOT_ENABLED_DEFAULT 1
+#else
+#define G3X_AUTOCONT_BOOT_ENABLED_DEFAULT 0
+#endif
+static volatile int g3x_autocont_enabled = G3X_AUTOCONT_BOOT_ENABLED_DEFAULT;
+static int g3x_autocont_menu_bool_val = G3X_AUTOCONT_BOOT_ENABLED_DEFAULT;
 static volatile int g3x_autocont_disarm_reason = G3X_AUTOCONT_REASON_NONE;
 static volatile int g3x_autocont_state = G3X_AUTOCONT_DISARMED;
 static volatile unsigned int g3x_autocont_timer_polls = 0U;
@@ -335,17 +340,23 @@ static void g3x_autocont_disarm_with_reason(int latch_cancel, int reason, int di
     if (latch_cancel)
     {
         g3x_autocont_cancel_latched = 1;
+#if defined(G3X_MOVIE_STANDALONE) && (G3X_MOVIE_STANDALONE == 1)
+        g3x_autocont_session_cancelled = 1;
+#endif
     }
     if (disable_toggle)
     {
-#if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
+#if defined(G3X_MOVIE_STANDALONE) && (G3X_MOVIE_STANDALONE == 1)
+        /* Standalone profile remains enabled across runtime disarms so only a new
+         * deliberate physical start after confirmed idle rearms the next session.
+         */
+#elif defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
         if (!g3x_autocont_session_cancelled)
         {
             g3x_autocont_enabled = 0;
             g3x_autocont_menu_bool_val = 0;
         }
-#endif
-#if !defined(G3X_MOVIE_SESSION_CANCEL) || (G3X_MOVIE_SESSION_CANCEL != 1)
+#else
         g3x_autocont_enabled = 0;
         g3x_autocont_menu_bool_val = 0;
 #endif
@@ -450,6 +461,9 @@ static void g3x_autocont_enter_confirmed_recording(void)
     g3x_autocont_reset_session_metrics();
     g3x_autocont_timer_polls = 0U;
 #if defined(G3X_MOVIE_RESTART_BUDGET) && (G3X_MOVIE_RESTART_BUDGET == 1)
+#if defined(G3X_MOVIE_STANDALONE) && (G3X_MOVIE_STANDALONE == 1)
+    int was_admitted = g3x_autocont_attempt_admitted;
+#endif
     g3x_autocont_attempt_admitted = 0;
 #endif
 #if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
@@ -457,6 +471,15 @@ static void g3x_autocont_enter_confirmed_recording(void)
     {
         g3x_autocont_state = G3X_AUTOCONT_DISARMED;
         g3x_autocont_disarm_reason = G3X_AUTOCONT_REASON_SESSION_CANCEL;
+        return;
+    }
+#endif
+#if defined(G3X_MOVIE_STANDALONE) && (G3X_MOVIE_STANDALONE == 1)
+    if (!was_admitted ||
+        (g3x_autocont_state != G3X_AUTOCONT_RELEASING &&
+         g3x_autocont_state != G3X_AUTOCONT_WAIT_CONFIRM))
+    {
+        g3x_autocont_state = G3X_AUTOCONT_DISARMED;
         return;
     }
 #endif
@@ -470,8 +493,8 @@ void __attribute__((used)) g3x_movie_autocont_reset(void)
 {
     g3x_autocont_release_synth_input();
     g3x_autocont_reset_session_metrics();
-    g3x_autocont_enabled = 0;
-    g3x_autocont_menu_bool_val = 0;
+    g3x_autocont_enabled = G3X_AUTOCONT_BOOT_ENABLED_DEFAULT;
+    g3x_autocont_menu_bool_val = G3X_AUTOCONT_BOOT_ENABLED_DEFAULT;
     g3x_autocont_disarm_reason = G3X_AUTOCONT_REASON_NONE;
     g3x_autocont_state = G3X_AUTOCONT_DISARMED;
     g3x_autocont_timer_polls = 0U;
@@ -746,6 +769,10 @@ unsigned int __attribute__((used)) g3x_movie_autocont_get_restart_budget(void)
 
 int __attribute__((used)) g3x_movie_autocont_set_restart_budget(unsigned int budget)
 {
+#if defined(G3X_MOVIE_STANDALONE) && (G3X_MOVIE_STANDALONE == 1)
+    (void)budget;
+    return 0;
+#else
     if (budget < G3X_AUTOCONT_BUDGET_MIN || budget > G3X_AUTOCONT_BUDGET_MAX)
     {
         return 0;
@@ -765,6 +792,7 @@ int __attribute__((used)) g3x_movie_autocont_set_restart_budget(unsigned int bud
     g3x_autocont_attempt_admitted = 0;
     g3x_autocont_restart_budget = budget;
     return 1;
+#endif
 }
 
 unsigned int __attribute__((used)) g3x_movie_autocont_get_restarts_remaining(void)
@@ -784,6 +812,9 @@ int __attribute__((used)) g3x_movie_autocont_is_attempt_admitted(void)
 
 const char * __attribute__((used)) g3x_movie_autocont_budget_menu_str(void)
 {
+#if defined(G3X_MOVIE_STANDALONE) && (G3X_MOVIE_STANDALONE == 1)
+    return "50";
+#else
     switch (g3x_autocont_restart_budget)
     {
         case 1U: return "1";
@@ -791,6 +822,7 @@ const char * __attribute__((used)) g3x_movie_autocont_budget_menu_str(void)
         case 3U: return "3";
         default: return "1";
     }
+#endif
 }
 
 const char * __attribute__((used)) g3x_movie_autocont_budget_menu_change(int change, int arg)
@@ -952,6 +984,9 @@ void __attribute__((used)) g3x_movie_autocont_poll(void)
 {
     int cur_state = g3x_get_movie_status();
     int prev_state = g3x_autocont_prev_rec_state;
+#if defined(G3X_MOVIE_STANDALONE) && (G3X_MOVIE_STANDALONE == 1)
+    int pre_poll_state = g3x_autocont_state;
+#endif
     int phys_video_pressed = (((unsigned int)kbd_new_state[0] & G3X_KEY_VIDEO_BIT) == 0U) ? 1 : 0;
     int in_playback = (camera_info.state.mode_play != 0) ? 1 : 0;
     int invalid_rec_state = (cur_state < G3X_MOVIE_STATE_IDLE ||
@@ -998,6 +1033,15 @@ void __attribute__((used)) g3x_movie_autocont_poll(void)
         {
             should_disarm = 0;
         }
+#if defined(G3X_MOVIE_STANDALONE) && (G3X_MOVIE_STANDALONE == 1)
+        if (g3x_autocont_state == G3X_AUTOCONT_DISARMED &&
+            !g3x_autocont_session_cancelled &&
+            !phys_stop_takes_precedence &&
+            g3x_autocont_disarm_reason != G3X_AUTOCONT_REASON_NONE)
+        {
+            should_disarm = 0;
+        }
+#endif
         if (should_disarm)
         {
             if (phys_stop_takes_precedence)
@@ -1021,8 +1065,17 @@ void __attribute__((used)) g3x_movie_autocont_poll(void)
             g3x_autocont_idle_press_age = 0U;
             g3x_autocont_timer_polls = 0U;
         }
+#if defined(G3X_MOVIE_STANDALONE) && (G3X_MOVIE_STANDALONE == 1)
+        if (phys_video_pressed && !phys_stop_takes_precedence)
+        {
+            g3x_autocont_cancel_latched = 1;
+        }
+        g3x_autocont_prev_rec_state = -1;
+        return;
+#else
         g3x_autocont_prev_rec_state = g3x_autocont_session_cancelled ? -1 : cur_state;
         return;
+#endif
 #endif
 #if !defined(G3X_MOVIE_SESSION_CANCEL) || (G3X_MOVIE_SESSION_CANCEL != 1)
         if (g3x_autocont_state != G3X_AUTOCONT_DISARMED || g3x_autocont_enabled != 0)
@@ -1097,6 +1150,47 @@ void __attribute__((used)) g3x_movie_autocont_poll(void)
                 g3x_autocont_held_from_idle = 0;
                 g3x_autocont_start_hold_polls = 0U;
 #endif
+#if defined(G3X_MOVIE_STANDALONE) && (G3X_MOVIE_STANDALONE == 1)
+                if (!phys_video_pressed)
+                {
+                    g3x_autocont_saw_boot_idle = 1;
+                    if (g3x_autocont_cancel_latched)
+                    {
+                        g3x_autocont_cancel_latched = 0;
+                    }
+                    if (g3x_autocont_idle_start_press_seen)
+                    {
+                        if (g3x_autocont_idle_press_age > 0U)
+                        {
+                            g3x_autocont_idle_press_age--;
+                            if (g3x_autocont_idle_press_age == 0U)
+                            {
+                                g3x_autocont_idle_start_press_seen = 0;
+                            }
+                        }
+                        else
+                        {
+                            g3x_autocont_idle_start_press_seen = 0;
+                        }
+                    }
+                }
+                else
+                {
+                    if (g3x_autocont_saw_boot_idle &&
+                        prev_state == G3X_MOVIE_STATE_IDLE &&
+                        !g3x_autocont_cancel_latched)
+                    {
+                        g3x_autocont_idle_start_press_seen = 1;
+                        g3x_autocont_idle_press_age = G3X_AUTOCONT_CONFIRM_POLLS;
+                    }
+                    else
+                    {
+                        g3x_autocont_cancel_latched = 1;
+                        g3x_autocont_idle_start_press_seen = 0;
+                        g3x_autocont_idle_press_age = 0U;
+                    }
+                }
+#else
                 g3x_autocont_saw_boot_idle = 1;
                 if (phys_video_pressed)
                 {
@@ -1138,6 +1232,7 @@ void __attribute__((used)) g3x_movie_autocont_poll(void)
                         }
                     }
                 }
+#endif
             }
             else if (cur_state == G3X_MOVIE_STATE_RECORDING)
             {
@@ -1186,6 +1281,9 @@ void __attribute__((used)) g3x_movie_autocont_poll(void)
                     {
                         g3x_autocont_cancel_latched = 1;
                         g3x_autocont_disarm_reason = G3X_AUTOCONT_REASON_PHYS_STOP;
+#if defined(G3X_MOVIE_STANDALONE) && (G3X_MOVIE_STANDALONE == 1)
+                        g3x_autocont_session_cancelled = 1;
+#endif
                     }
 #endif
 #if !defined(G3X_MOVIE_SESSION_CANCEL) || (G3X_MOVIE_SESSION_CANCEL != 1)
@@ -1209,6 +1307,9 @@ void __attribute__((used)) g3x_movie_autocont_poll(void)
                 {
                     g3x_autocont_cancel_latched = 1;
                     g3x_autocont_disarm_reason = G3X_AUTOCONT_REASON_PHYS_STOP;
+#if defined(G3X_MOVIE_STANDALONE) && (G3X_MOVIE_STANDALONE == 1)
+                    g3x_autocont_session_cancelled = 1;
+#endif
                 }
             }
             break;
@@ -1534,7 +1635,20 @@ void __attribute__((used)) g3x_movie_autocont_poll(void)
         }
     }
 
+#if defined(G3X_MOVIE_STANDALONE) && (G3X_MOVIE_STANDALONE == 1)
+    if ((pre_poll_state != G3X_AUTOCONT_DISARMED &&
+         g3x_autocont_state == G3X_AUTOCONT_DISARMED) ||
+        g3x_autocont_cancel_latched)
+    {
+        g3x_autocont_prev_rec_state = -1;
+    }
+    else
+    {
+        g3x_autocont_prev_rec_state = cur_state;
+    }
+#else
     g3x_autocont_prev_rec_state = cur_state;
+#endif
 }
 
 #endif /* G3X_MOVIE_AUTOCONT == 1 */
