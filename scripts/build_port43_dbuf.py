@@ -3902,6 +3902,9 @@ def build_port43_dbuf(
         manifest_data["candidate_source_base"] = "7e0f548f990bdd03d4eb0ec52bf2e11d7282f4e7"
         manifest_data["integration_parent"] = "832806b1f0e1d73f75e540cf3b64f6448948f567"
         manifest_data["port62_integration_baseline"] = "b718a92014b4a08f979d95347152642e596a10b4"
+        manifest_data["port63_fixes_commit"] = "003facdc4ab64d0bc8320276432763af119b14de"
+        manifest_data["port63_integration_tested_revision"] = "e419648a152d9244d8faa01b47ca8e55fd885372"
+        manifest_data["port63_final_integration_validation"] = "PENDING_POST_MERGE_PORT_TESTS"
         manifest_data["reused_commits"] = {
             "origin_main_port61": "7e0f548f990bdd03d4eb0ec52bf2e11d7282f4e7",
             "port61_integration_tip": "e6a56328ee25d093ebb5c772356d42d31568c03b",
@@ -3918,6 +3921,8 @@ def build_port43_dbuf(
             "port55_movie_status": "dc915e6257981f48223fa2f38839bc28e31c73cf",
             "port62_reuse_map": "3d161e110f88a26efdeecdfd030f08dbc254e612",
             "port62_integration_baseline": "b718a92014b4a08f979d95347152642e596a10b4",
+            "port63_fixes": "003facdc4ab64d0bc8320276432763af119b14de",
+            "port63_integration_tested": "e419648a152d9244d8faa01b47ca8e55fd885372",
         }
         manifest_data["excluded_commits"] = {
             "port54_conf_save": "af2578089a39e9a2143f83003e92ea5236d542bc",

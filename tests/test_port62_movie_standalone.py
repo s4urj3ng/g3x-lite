@@ -2153,9 +2153,14 @@ class TestPort62BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
         self.assertEqual(m["candidate_source_base"], ORIGIN_MAIN_PORT61_COMMIT)
         self.assertEqual(m["integration_parent"], PORT62_INTEGRATION_PARENT)
         self.assertEqual(m["port62_integration_baseline"], PORT62_INTEGRATION_BASELINE_COMMIT)
+        self.assertEqual(m["port63_fixes_commit"], "003facdc4ab64d0bc8320276432763af119b14de")
+        self.assertEqual(m["port63_integration_tested_revision"], "e419648a152d9244d8faa01b47ca8e55fd885372")
+        self.assertEqual(m["port63_final_integration_validation"], "PENDING_POST_MERGE_PORT_TESTS")
         self.assertEqual(m["reused_commits"]["port61_cancel_validate"], PORT61_VALIDATE_COMMIT)
         self.assertEqual(m["reused_commits"]["port62_reuse_map"], PORT62_REUSE_MAP_COMMIT)
         self.assertEqual(m["reused_commits"]["port62_integration_baseline"], PORT62_INTEGRATION_BASELINE_COMMIT)
+        self.assertEqual(m["reused_commits"]["port63_fixes"], "003facdc4ab64d0bc8320276432763af119b14de")
+        self.assertEqual(m["reused_commits"]["port63_integration_tested"], "e419648a152d9244d8faa01b47ca8e55fd885372")
         self.assertEqual(m["standalone_policy"]["default_restart_budget"], G3X_AUTOCONT_BUDGET_STANDALONE)
         self.assertEqual(m["standalone_policy"]["fixed_compile_time_restart_budget"], G3X_AUTOCONT_BUDGET_STANDALONE)
         self.assertTrue(m["standalone_policy"]["failed_attempts_consume_budget_without_refund"])
@@ -2356,13 +2361,7 @@ class TestPort62BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
         self.assertIn("g3x_full_shortpress_post_bss_hook", staged_boot_c)
 
     def test_hermetic_standalone_build_resists_conflicting_profile_contamination_and_resolves_ftell(self) -> None:
-        # 1. Verify shared chdk-port tree has pre-existing mutable objects/archives (no pre-cleaned shared tree required)
-        shared_libcore = ROOT / "chdk-port/lib/core/.o2/libcore.a"
-        shared_libpatsub = ROOT / "chdk-port/platform/g3x/sub/110c/libplatformsub.a"
-        self.assertTrue(shared_libcore.is_file(), "Expected pre-existing chdk-port/lib/core/.o2/libcore.a in workspace")
-        self.assertTrue(shared_libpatsub.is_file(), "Expected pre-existing chdk-port/platform/g3x/sub/110c/libplatformsub.a in workspace")
-
-        # 2. Verify staged core/main.c closes #if defined(G3X_MOVIE_STANDALONE) before long ftell(FILE *file)
+        # 1. Verify staged core/main.c closes #if defined(G3X_MOVIE_STANDALONE) before long ftell(FILE *file)
         #    and staged main.thm.o + main.elf define T ftell (resolving libcore.a(module_hashlist.o) and ptp.thm.o U ftell)
         staged_main_c = (self.p62_stage / "core/main.c").read_text(encoding="utf-8")
         self.assertIn("        msleep(20);\n        chdk_started_flag=1;\n    }\n#endif\n}\n\nlong ftell(FILE *file) {", staged_main_c)
@@ -2372,7 +2371,8 @@ class TestPort62BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
         nm_elf = subprocess.check_output([str(NM), str(self.p62_elf)], text=True)
         self.assertRegex(nm_elf, r"\bT ftell\b")
 
-        # 3. Reproduce conflicting-profile contamination in a dirty output/staging tree:
+        # 2. Reproduce conflicting-profile contamination in a self-established dirty output/staging tree
+        #    (does not depend on pre-existing ignored archives in the shared chdk-port tree):
         #    Seed a build directory with conflicting PORT-61 GUI menu profile staging artifacts:
         #    - lib/core/.o2/libcore.a mutated by PORT-50..61 (gui_script.o removed, console.o compiled with G3X_GUI_FIX/DBUF)
         #    - lib/lang/.o2/liblang.a mutated by PORT-50..61 (fileutil.o removed)
@@ -2471,6 +2471,76 @@ class TestPort62BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
             self.assertEqual(dirty_manifest["artifacts"]["DISKBOOT.BIN"]["size"], PORT62_STANDALONE_SIZE)
             self.assertEqual(dirty_manifest["standalone_policy"]["default_restart_budget"], 50)
 
+    @staticmethod
+    def validate_agentbridge_port_tests_log_evidence(
+        doc_text: str,
+        *,
+        artifacts_root: Path = Path("/var/lib/agentbridge/artifacts"),
+    ) -> None:
+        """Validate cited AgentBridge validation logs, ensuring every recorded log exists on disk,
+        is attributed strictly to its actual tested 40-char revision SHA on its citing line(s),
+        and matches the recorded outcome.
+        """
+        log_pattern = re.compile(
+            re.escape(str(artifacts_root)) + r"/[A-Za-z0-9_./-]+\.log"
+        )
+        cited_logs = log_pattern.findall(doc_text)
+        if not cited_logs:
+            raise AssertionError("Expected cited AgentBridge validation log paths in docs/PORT62_MOVIE_STANDALONE.md")
+
+        for log_str in cited_logs:
+            log_path = Path(log_str)
+            if not log_path.is_file():
+                raise AssertionError(f"Referenced AgentBridge validation log does not exist on disk: {log_str}")
+
+            if log_path.name == "validation-port_tests.log":
+                matching_lines = [line for line in doc_text.splitlines() if log_str in line]
+                if not matching_lines:
+                    raise AssertionError(f"Log path not found on any line of document: {log_str}")
+                attributed_shas: set[str] = set()
+                for line in matching_lines:
+                    for sha in re.findall(r"\b[0-9a-f]{40}\b", line):
+                        if not re.search(rf"[0-9a-f]{re.escape(sha)}|{re.escape(sha)}[0-9a-f]", line):
+                            attributed_shas.add(sha)
+                if not attributed_shas:
+                    raise AssertionError(
+                        f"AgentBridge port_tests log {log_str} lacks explicit 40-char commit SHA attribution on its citing line(s)"
+                    )
+
+                # Task-level AgentBridge port_tests logs must never be attributed to the integration merge commit e419648
+                if "/tasks/" in log_str and "e419648a152d9244d8faa01b47ca8e55fd885372" in attributed_shas:
+                    raise AssertionError(
+                        f"Task-level AgentBridge port_tests log {log_str} must be attributed only to its actual task revision, not integration revision e419648a152d9244d8faa01b47ca8e55fd885372"
+                    )
+
+                log_content = log_path.read_text(encoding="utf-8", errors="replace")
+                if "unittest discover -s tests -p" not in log_content:
+                    raise AssertionError(
+                        f"AgentBridge port_tests log {log_str} does not record unittest discovery command"
+                    )
+
+                log_commit_matches = re.findall(r"(?:commit|revision|HEAD)[:=\s]+([0-9a-f]{40})\b", log_content, re.I)
+                for log_sha in log_commit_matches:
+                    if log_sha.lower() not in attributed_shas:
+                        raise AssertionError(
+                            f"Log {log_str} internal revision {log_sha} does not match attributed SHA(s) {sorted(attributed_shas)}"
+                        )
+
+                if "milestones/50/validation-port_tests.log" in log_str:
+                    if PORT62_INTEGRATION_BASELINE_COMMIT not in attributed_shas:
+                        raise AssertionError(
+                            f"Milestone 50 baseline log {log_str} must be attributed to {PORT62_INTEGRATION_BASELINE_COMMIT}"
+                        )
+                    if "FAILED (errors=1, skipped=4)" not in log_content or "ftell" not in log_content:
+                        raise AssertionError(
+                            f"Milestone 50 baseline log {log_str} does not contain expected ftell failure outcome"
+                        )
+                else:
+                    if not re.search(r"Ran \d+ tests in [\d.]+s", log_content):
+                        raise AssertionError(f"PORT-63 port_tests log {log_str} missing 'Ran N tests' summary")
+                    if "OK (skipped=4)" not in log_content:
+                        raise AssertionError(f"PORT-63 port_tests log {log_str} did not finish with 'OK (skipped=4)'")
+
     def test_milestone_doc_records_commits_hashes_evidence_and_owner_trial_plan(self) -> None:
         doc_text = DOC_PORT62.read_text(encoding="utf-8")
         for token in (
@@ -2486,26 +2556,76 @@ class TestPort62BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
             BASE_DEFAULT_SHA256,
             PORT62_REUSE_MAP_COMMIT,
             PORT62_INTEGRATION_PARENT,
+            PORT62_INTEGRATION_BASELINE_COMMIT,
+            "003facdc4ab64d0bc8320276432763af119b14de",
+            "e419648a152d9244d8faa01b47ca8e55fd885372",
+            "4b95d5a6b7f6eb95cb518ffac0e13c457135abcf",
+            "5b4fc25b5bb291757791a1ccb581baaaa0f6e943",
+            "e55222db507d895bfe232197e8f055663ef3847f",
+            PORT62_STANDALONE_SHA256,
+            str(PORT62_STANDALONE_SIZE),
+            f"0x{PORT62_STANDALONE_END}",
             "G3X_MOVIE_STANDALONE=1",
+            "G3X_AUTOCONT_BUDGET_STANDALONE = 50U",
+            "ftell",
+            "T2_PRODUCED_CANDIDATE",
+            "test_port27_resident.py",
             "build/port62-movie-standalone/DISKBOOT.BIN",
             "port62_movie_standalone_manifest.json",
             "scripts/build_port62_movie_standalone.py",
             "CAMERA BEHAVIOR UNVERIFIED",
+            "PENDING_POST_MERGE_PORT_TESTS",
+            "Pass / Fail Criteria",
+            "Battery-Pull Recovery",
         ):
             self.assertIn(token, doc_text, f"Missing '{token}' in docs/PORT62_MOVIE_STANDALONE.md")
 
-        self.assertTrue(
-            PORT62_STANDALONE_SHA256 in doc_text or PORT62_PRE_FIX_DOC_SHA256 in doc_text,
-            "Expected standalone candidate SHA-256 in docs/PORT62_MOVIE_STANDALONE.md",
-        )
-        self.assertTrue(
-            str(PORT62_STANDALONE_SIZE) in doc_text or str(PORT62_PRE_FIX_DOC_SIZE) in doc_text,
-            "Expected standalone candidate size in docs/PORT62_MOVIE_STANDALONE.md",
-        )
-        self.assertTrue(
-            f"0x{PORT62_STANDALONE_END}" in doc_text or f"0x{PORT62_PRE_FIX_DOC_END}" in doc_text,
-            "Expected standalone candidate _end in docs/PORT62_MOVIE_STANDALONE.md",
-        )
+        # Verify documentation makes no unsupported claim that identical Git trees or task passes
+        # establish an integration-revision pass, and explicitly leaves final integration validation pending.
+        self.assertNotIn("identical git tree", doc_text.lower())
+        self.assertIn("do not establish an integration-revision pass", doc_text.lower())
+        self.assertIn("milestone completion remains gated", doc_text.lower())
+
+        if Path("/var/lib/agentbridge/artifacts").is_dir():
+            self.validate_agentbridge_port_tests_log_evidence(doc_text)
+
+        with tempfile.TemporaryDirectory(prefix="port63_log_evidence_") as tmpdir:
+            fake_artifacts = Path(tmpdir) / "artifacts"
+            m51_dir = fake_artifacts / "milestones" / "51"
+            m51_dir.mkdir(parents=True, exist_ok=True)
+            m51_log = m51_dir / "validation-port_tests.log"
+            m51_log.write_text(
+                "$ python3 -B -m unittest discover -s tests -p test_port*.py\n"
+                "--- stdout ---\n"
+                "commit: e419648a152d9244d8faa01b47ca8e55fd885372\n"
+                "----------------------------------------------------------------------\n"
+                "Ran 1629 tests in 646.000s\n\n"
+                "OK (skipped=4)\n",
+                encoding="utf-8",
+            )
+            synthetic_doc = (
+                f"| Milestone 51 integration (`e419648a152d9244d8faa01b47ca8e55fd885372`) "
+                f"| `python3 -B -m unittest discover -s tests -p test_port*.py` "
+                f"| `OK (skipped=4)` | `{m51_log}` |\n"
+            )
+            self.validate_agentbridge_port_tests_log_evidence(synthetic_doc, artifacts_root=fake_artifacts)
+
+            bad_attr_doc = (
+                f"| Milestone 51 integration (`003facdc4ab64d0bc8320276432763af119b14de`) "
+                f"| `python3 -B -m unittest discover -s tests -p test_port*.py` "
+                f"| `OK (skipped=4)` | `{m51_log}` |\n"
+            )
+            with self.assertRaises(AssertionError):
+                self.validate_agentbridge_port_tests_log_evidence(bad_attr_doc, artifacts_root=fake_artifacts)
+
+            m51_log.write_text(
+                "$ python3 -B -m unittest discover -s tests -p test_port*.py\n"
+                "Ran 1629 tests in 646.000s\n\n"
+                "FAILED (errors=1, skipped=4)\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(AssertionError):
+                self.validate_agentbridge_port_tests_log_evidence(synthetic_doc, artifacts_root=fake_artifacts)
 
         sha256_tokens = set(re.findall(r"\b[0-9a-f]{64}\b", doc_text))
         commit_candidates = set(re.findall(r"\b[0-9a-f]{40}\b", doc_text))
