@@ -112,6 +112,28 @@ PORT61_VALIDATE_COMMIT = "1a9df57d167416ae8119b39d84ac50eab9bee1bd"
 PORT62_REUSE_MAP_COMMIT = "3d161e110f88a26efdeecdfd030f08dbc254e612"
 PORT62_INTEGRATION_PARENT = "832806b1f0e1d73f75e540cf3b64f6448948f567"
 PORT62_INTEGRATION_BASELINE_COMMIT = "b718a92014b4a08f979d95347152642e596a10b4"
+PORT63_FIXES_COMMIT = "003facdc4ab64d0bc8320276432763af119b14de"
+PORT63_INTEGRATION_TESTED_COMMIT = "e419648a152d9244d8faa01b47ca8e55fd885372"
+PORT63_TASK292_ATTEMPT1_COMMIT = "d78adb9bbd68ce641ecc6797e26dc9ef0bf2c345"
+
+PORT27_HISTORICAL_SKIP_REASON = "T2 resulted in NO-GO record: resident candidate not produced"
+PORT27_HISTORICAL_SKIPPED_TESTS = (
+    "test_port27_resident.TestResidentCandidatePath.test_candidate_address_constants_match_verified_evidence",
+    "test_port27_resident.TestResidentCandidatePath.test_candidate_build_refuses_tracked_paths",
+    "test_port27_resident.TestResidentCandidatePath.test_candidate_build_succeeds_and_differs_from_baseline",
+    "test_port27_resident.TestResidentCandidatePath.test_candidate_ladder_codes_unchanged",
+)
+PORT27_UNCHANGED_NOGO_SAFETY_GATE_TESTS = (
+    "test_port27_resident.TestT2OutcomeAndNoGoRecord.test_candidate_doc_contains_exact_unknown_list",
+    "test_port27_resident.TestT2OutcomeAndNoGoRecord.test_candidate_doc_exists_and_records_nogo_verdict",
+    "test_port27_resident.TestT2OutcomeAndNoGoRecord.test_no_g3x_resident_code_path_in_sources",
+    "test_port27_resident.TestT2OutcomeAndNoGoRecord.test_no_g3x_resident_code_path_in_tools",
+    "test_port27_resident.TestT2OutcomeAndNoGoRecord.test_no_resident_candidate_build_script_exists",
+    "test_port27_resident.TestT2OutcomeAndNoGoRecord.test_no_resident_candidate_directory_or_binaries",
+    "test_port27_resident.TestT2OutcomeAndNoGoRecord.test_no_unapproved_binaries_tracked_in_git",
+    "test_port27_resident.TestT2OutcomeAndNoGoRecord.test_t2_outcome_is_detected_as_nogo",
+)
+PORT27_DISCOVERY_PROGRESS_SIGNATURE = ".....ssss.........."
 
 PORT62_PRE_FIX_DOC_SHA256 = "dab7f816d4eadfc6004b54e2b670f5da8d88d78eed5f4978521ef38f02c3802b"
 PORT62_PRE_FIX_DOC_SIZE = 126345
@@ -2472,15 +2494,191 @@ class TestPort62BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
             self.assertEqual(dirty_manifest["standalone_policy"]["default_restart_budget"], 50)
 
     @staticmethod
+    def _normalize_test_id(test_id: str) -> str:
+        return test_id[6:] if test_id.startswith("tests.") else test_id
+
+    @classmethod
+    def verify_port27_skip_exception_compliance(
+        cls,
+        doc_text: str,
+        *,
+        observed_skipped: list[tuple[str, str]] | None = None,
+        observed_safety_gates: dict[str, str] | None = None,
+        t2_produced_candidate_val: bool | None = None,
+    ) -> None:
+        """Enforce the approved scope exception for the four historical PORT-27 NO-GO skipped tests.
+
+        A summary count of 'OK (skipped=4)' alone cannot establish compliance:
+        1. The documentation must explicitly record the scope exception, all four exact
+           test_port27_resident.TestResidentCandidatePath test IDs, their exact existing skip
+           reason ('T2 resulted in NO-GO record: resident candidate not produced'), and the
+           unchanged TestT2OutcomeAndNoGoRecord safety gates.
+        2. Normal discovery across tests/test_port*.py must have zero skipped tests outside those
+           exact four historical PORT-27 TestResidentCandidatePath methods, each with that exact
+           skip reason.
+        3. T2_PRODUCED_CANDIDATE must remain False (NO-GO record intact) and all eight
+           TestT2OutcomeAndNoGoRecord safety-gate tests must remain unskipped and passing.
+        """
+        if "scope exception" not in doc_text.lower():
+            raise AssertionError("Document must explicitly record the approved PORT-27 skip scope exception")
+        if "TestCandidateBuildIfGo" in doc_text:
+            raise AssertionError("Document must not misname TestResidentCandidatePath as TestCandidateBuildIfGo")
+        for required_doc_token in (
+            "TestResidentCandidatePath",
+            "TestT2OutcomeAndNoGoRecord",
+            PORT27_HISTORICAL_SKIP_REASON,
+            "tests/test_port27_resident.py:496-518",
+            "tests/test_port27_resident.py:520-540",
+            "tests/test_port27_resident.py:542-546",
+            "tests/test_port27_resident.py:548-557",
+            "tests/test_port27_resident.py:285-482",
+            *PORT27_HISTORICAL_SKIPPED_TESTS,
+            *PORT27_UNCHANGED_NOGO_SAFETY_GATE_TESTS,
+        ):
+            if required_doc_token not in doc_text:
+                raise AssertionError(
+                    f"Documented PORT-27 skip exception missing required token: {required_doc_token}"
+                )
+
+        import tests.test_port27_resident as port27_mod
+
+        effective_t2_val = (
+            port27_mod.T2_PRODUCED_CANDIDATE
+            if t2_produced_candidate_val is None
+            else t2_produced_candidate_val
+        )
+        if effective_t2_val is not False:
+            raise AssertionError(
+                f"PORT-27 NO-GO safety gate violated: expected T2_PRODUCED_CANDIDATE == False, got {effective_t2_val!r}"
+            )
+        if (ROOT / "tools/build_candidate_port27_resident.py").exists():
+            raise AssertionError("PORT-27 NO-GO safety gate violated: tools/build_candidate_port27_resident.py exists")
+        port27_doc = (ROOT / "docs/PORT27_RESIDENT_CANDIDATE.md").read_text(encoding="utf-8")
+        if not re.search(r"Status\s*/\s*Verdict.*NO-GO\s*Record", port27_doc, re.I):
+            raise AssertionError("PORT-27 NO-GO safety gate violated: docs/PORT27_RESIDENT_CANDIDATE.md missing NO-GO Record")
+
+        if observed_skipped is None or observed_safety_gates is None:
+            suite = unittest.defaultTestLoader.discover(str(ROOT / "tests"), pattern="test_port*.py")
+
+            def _iter_tests(s: unittest.TestSuite):
+                for item in s:
+                    if isinstance(item, unittest.TestSuite):
+                        yield from _iter_tests(item)
+                    else:
+                        yield item
+
+            discovered_tests = list(_iter_tests(suite))
+            if len(discovered_tests) < 1629:
+                raise AssertionError(f"Expected at least 1629 discovered tests in test_port*.py, found {len(discovered_tests)}")
+
+            discovered_skipped: list[tuple[str, str]] = []
+            for t in discovered_tests:
+                t_cls = t.__class__
+                t_method = getattr(t_cls, t._testMethodName, None)
+                is_skip = bool(
+                    getattr(t_cls, "__unittest_skip__", False)
+                    or getattr(t_method, "__unittest_skip__", False)
+                )
+                why = (
+                    getattr(t_method, "__unittest_skip_why__", "")
+                    or getattr(t_cls, "__unittest_skip_why__", "")
+                )
+                if is_skip:
+                    discovered_skipped.append((cls._normalize_test_id(t.id()), str(why)))
+
+            # Execute TestResidentCandidatePath and TestT2OutcomeAndNoGoRecord to verify runtime skips and safety gates
+            p27_suite = unittest.TestSuite([
+                unittest.defaultTestLoader.loadTestsFromTestCase(port27_mod.TestResidentCandidatePath),
+                unittest.defaultTestLoader.loadTestsFromTestCase(port27_mod.TestT2OutcomeAndNoGoRecord),
+            ])
+            p27_result = unittest.TestResult()
+            p27_suite.run(p27_result)
+            if p27_result.failures or p27_result.errors:
+                raise AssertionError(
+                    f"PORT-27 safety gate execution had failures/errors: failures={p27_result.failures}, errors={p27_result.errors}"
+                )
+            runtime_p27_skipped = [
+                (cls._normalize_test_id(t.id()), str(reason))
+                for t, reason in p27_result.skipped
+            ]
+            if runtime_p27_skipped != discovered_skipped:
+                raise AssertionError(
+                    f"Mismatch between full discovery skips {discovered_skipped} and PORT-27 runtime skips {runtime_p27_skipped}"
+                )
+
+            if observed_skipped is None:
+                observed_skipped = discovered_skipped
+
+            if observed_safety_gates is None:
+                gate_statuses: dict[str, str] = {}
+                for gate_test in unittest.defaultTestLoader.loadTestsFromTestCase(port27_mod.TestT2OutcomeAndNoGoRecord):
+                    gid = cls._normalize_test_id(gate_test.id())
+                    g_method = getattr(gate_test.__class__, gate_test._testMethodName, None)
+                    if getattr(gate_test.__class__, "__unittest_skip__", False) or getattr(g_method, "__unittest_skip__", False):
+                        gate_statuses[gid] = "SKIPPED"
+                    else:
+                        gate_statuses[gid] = "PASS"
+                observed_safety_gates = gate_statuses
+
+        normalized_skipped = [
+            (cls._normalize_test_id(tid), reason)
+            for tid, reason in observed_skipped
+        ]
+        expected_skipped = [
+            (tid, PORT27_HISTORICAL_SKIP_REASON)
+            for tid in PORT27_HISTORICAL_SKIPPED_TESTS
+        ]
+        if len(normalized_skipped) != len(expected_skipped):
+            raise AssertionError(
+                f"Expected exactly {len(expected_skipped)} historical PORT-27 skips, found {len(normalized_skipped)}: {normalized_skipped}"
+            )
+        if [tid for tid, _ in normalized_skipped] != list(PORT27_HISTORICAL_SKIPPED_TESTS):
+            raise AssertionError(
+                f"Skip count ({len(normalized_skipped)}) alone does not establish compliance; "
+                f"skipped test IDs {[tid for tid, _ in normalized_skipped]} do not match exact historical PORT-27 tests {list(PORT27_HISTORICAL_SKIPPED_TESTS)}"
+            )
+        if [reason for _, reason in normalized_skipped] != [PORT27_HISTORICAL_SKIP_REASON] * len(expected_skipped):
+            raise AssertionError(
+                f"Skip reasons {[reason for _, reason in normalized_skipped]} do not match exact historical PORT-27 skip reason {PORT27_HISTORICAL_SKIP_REASON!r}"
+            )
+
+        normalized_gates = {
+            cls._normalize_test_id(k): v
+            for k, v in observed_safety_gates.items()
+        }
+        if sorted(normalized_gates.keys()) != sorted(PORT27_UNCHANGED_NOGO_SAFETY_GATE_TESTS):
+            raise AssertionError(
+                f"PORT-27 safety gate test set {sorted(normalized_gates.keys())} does not match required set {sorted(PORT27_UNCHANGED_NOGO_SAFETY_GATE_TESTS)}"
+            )
+        for gate_id in PORT27_UNCHANGED_NOGO_SAFETY_GATE_TESTS:
+            if normalized_gates.get(gate_id) != "PASS":
+                raise AssertionError(
+                    f"PORT-27 safety gate {gate_id} is not in unskipped PASS state: {normalized_gates.get(gate_id)!r}"
+                )
+
+    @classmethod
     def validate_agentbridge_port_tests_log_evidence(
+        cls,
         doc_text: str,
         *,
         artifacts_root: Path = Path("/var/lib/agentbridge/artifacts"),
+        observed_skipped: list[tuple[str, str]] | None = None,
+        observed_safety_gates: dict[str, str] | None = None,
+        t2_produced_candidate_val: bool | None = None,
     ) -> None:
         """Validate cited AgentBridge validation logs, ensuring every recorded log exists on disk,
         is attributed strictly to its actual tested 40-char revision SHA on its citing line(s),
-        and matches the recorded outcome.
+        matches the recorded outcome, and ties 'OK (skipped=4)' strictly to the documented
+        PORT-27 scope exception, exact four TestResidentCandidatePath tests, their skip reason,
+        and unchanged TestT2OutcomeAndNoGoRecord safety gates.
         """
+        cls.verify_port27_skip_exception_compliance(
+            doc_text,
+            observed_skipped=observed_skipped,
+            observed_safety_gates=observed_safety_gates,
+            t2_produced_candidate_val=t2_produced_candidate_val,
+        )
+
         log_pattern = re.compile(
             re.escape(str(artifacts_root)) + r"/[A-Za-z0-9_./-]+\.log"
         )
@@ -2488,7 +2686,7 @@ class TestPort62BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
         if not cited_logs:
             raise AssertionError("Expected cited AgentBridge validation log paths in docs/PORT62_MOVIE_STANDALONE.md")
 
-        for log_str in cited_logs:
+        for log_str in dict.fromkeys(cited_logs):
             log_path = Path(log_str)
             if not log_path.is_file():
                 raise AssertionError(f"Referenced AgentBridge validation log does not exist on disk: {log_str}")
@@ -2508,9 +2706,9 @@ class TestPort62BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
                     )
 
                 # Task-level AgentBridge port_tests logs must never be attributed to the integration merge commit e419648
-                if "/tasks/" in log_str and "e419648a152d9244d8faa01b47ca8e55fd885372" in attributed_shas:
+                if "/tasks/" in log_str and PORT63_INTEGRATION_TESTED_COMMIT in attributed_shas:
                     raise AssertionError(
-                        f"Task-level AgentBridge port_tests log {log_str} must be attributed only to its actual task revision, not integration revision e419648a152d9244d8faa01b47ca8e55fd885372"
+                        f"Task-level AgentBridge port_tests log {log_str} must be attributed only to its actual task revision, not integration revision {PORT63_INTEGRATION_TESTED_COMMIT}"
                     )
 
                 log_content = log_path.read_text(encoding="utf-8", errors="replace")
@@ -2525,6 +2723,17 @@ class TestPort62BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
                         raise AssertionError(
                             f"Log {log_str} internal revision {log_sha} does not match attributed SHA(s) {sorted(attributed_shas)}"
                         )
+
+                has_contiguous_port27_progress = PORT27_DISCOVERY_PROGRESS_SIGNATURE in log_content
+                has_verbose_port27_skips = (
+                    PORT27_HISTORICAL_SKIP_REASON in log_content
+                    and all(tid.split(".")[-1] in log_content for tid in PORT27_HISTORICAL_SKIPPED_TESTS)
+                )
+                if not (has_contiguous_port27_progress or has_verbose_port27_skips):
+                    raise AssertionError(
+                        f"Log {log_str} relies on summary skip count without the PORT-27 TestResidentCandidatePath "
+                        f"progress signature ({PORT27_DISCOVERY_PROGRESS_SIGNATURE!r}) or verbose skip list"
+                    )
 
                 if "milestones/50/validation-port_tests.log" in log_str:
                     if PORT62_INTEGRATION_BASELINE_COMMIT not in attributed_shas:
@@ -2557,8 +2766,9 @@ class TestPort62BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
             PORT62_REUSE_MAP_COMMIT,
             PORT62_INTEGRATION_PARENT,
             PORT62_INTEGRATION_BASELINE_COMMIT,
-            "003facdc4ab64d0bc8320276432763af119b14de",
-            "e419648a152d9244d8faa01b47ca8e55fd885372",
+            PORT63_FIXES_COMMIT,
+            PORT63_INTEGRATION_TESTED_COMMIT,
+            PORT63_TASK292_ATTEMPT1_COMMIT,
             "4b95d5a6b7f6eb95cb518ffac0e13c457135abcf",
             "5b4fc25b5bb291757791a1ccb581baaaa0f6e943",
             "e55222db507d895bfe232197e8f055663ef3847f",
@@ -2570,6 +2780,12 @@ class TestPort62BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
             "ftell",
             "T2_PRODUCED_CANDIDATE",
             "test_port27_resident.py",
+            "TestResidentCandidatePath",
+            "TestT2OutcomeAndNoGoRecord",
+            PORT27_HISTORICAL_SKIP_REASON,
+            *PORT27_HISTORICAL_SKIPPED_TESTS,
+            *PORT27_UNCHANGED_NOGO_SAFETY_GATE_TESTS,
+            "/var/lib/agentbridge/artifacts/tasks/292/attempt-1/validation-port_tests.log",
             "build/port62-movie-standalone/DISKBOOT.BIN",
             "port62_movie_standalone_manifest.json",
             "scripts/build_port62_movie_standalone.py",
@@ -2583,9 +2799,11 @@ class TestPort62BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
         # Verify documentation makes no unsupported claim that identical Git trees or task passes
         # establish an integration-revision pass, and explicitly leaves final integration validation pending.
         self.assertNotIn("identical git tree", doc_text.lower())
+        self.assertNotIn("TestCandidateBuildIfGo", doc_text)
         self.assertIn("do not establish an integration-revision pass", doc_text.lower())
         self.assertIn("milestone completion remains gated", doc_text.lower())
 
+        self.verify_port27_skip_exception_compliance(doc_text)
         if Path("/var/lib/agentbridge/artifacts").is_dir():
             self.validate_agentbridge_port_tests_log_evidence(doc_text)
 
@@ -2598,28 +2816,125 @@ class TestPort62BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
                 "$ python3 -B -m unittest discover -s tests -p test_port*.py\n"
                 "--- stdout ---\n"
                 "commit: e419648a152d9244d8faa01b47ca8e55fd885372\n"
+                "--- stderr ---\n"
+                f"..{PORT27_DISCOVERY_PROGRESS_SIGNATURE}..\n"
                 "----------------------------------------------------------------------\n"
                 "Ran 1629 tests in 646.000s\n\n"
                 "OK (skipped=4)\n",
                 encoding="utf-8",
             )
+            exception_doc_header = (
+                "Approved scope exception for historical PORT-27 TestResidentCandidatePath NO-GO tests "
+                f"with skip reason '{PORT27_HISTORICAL_SKIP_REASON}' and unchanged TestT2OutcomeAndNoGoRecord safety gates:\n"
+                "tests/test_port27_resident.py:496-518\n"
+                "tests/test_port27_resident.py:520-540\n"
+                "tests/test_port27_resident.py:542-546\n"
+                "tests/test_port27_resident.py:548-557\n"
+                "tests/test_port27_resident.py:285-482\n"
+                + "\n".join(PORT27_HISTORICAL_SKIPPED_TESTS)
+                + "\n"
+                + "\n".join(PORT27_UNCHANGED_NOGO_SAFETY_GATE_TESTS)
+                + "\n"
+            )
             synthetic_doc = (
-                f"| Milestone 51 integration (`e419648a152d9244d8faa01b47ca8e55fd885372`) "
+                exception_doc_header
+                + f"| Milestone 51 integration (`e419648a152d9244d8faa01b47ca8e55fd885372`) "
                 f"| `python3 -B -m unittest discover -s tests -p test_port*.py` "
                 f"| `OK (skipped=4)` | `{m51_log}` |\n"
             )
             self.validate_agentbridge_port_tests_log_evidence(synthetic_doc, artifacts_root=fake_artifacts)
 
+            # 1. Wrong revision attribution rejected
             bad_attr_doc = (
-                f"| Milestone 51 integration (`003facdc4ab64d0bc8320276432763af119b14de`) "
+                exception_doc_header
+                + f"| Milestone 51 integration (`003facdc4ab64d0bc8320276432763af119b14de`) "
                 f"| `python3 -B -m unittest discover -s tests -p test_port*.py` "
                 f"| `OK (skipped=4)` | `{m51_log}` |\n"
             )
             with self.assertRaises(AssertionError):
                 self.validate_agentbridge_port_tests_log_evidence(bad_attr_doc, artifacts_root=fake_artifacts)
 
+            # 2. Count 'OK (skipped=4)' alone in log without PORT-27 TestResidentCandidatePath signature rejected
             m51_log.write_text(
                 "$ python3 -B -m unittest discover -s tests -p test_port*.py\n"
+                "--- stdout ---\n"
+                "commit: e419648a152d9244d8faa01b47ca8e55fd885372\n"
+                "--- stderr ---\n"
+                "..s..s..s..s..\n"
+                "----------------------------------------------------------------------\n"
+                "Ran 1629 tests in 646.000s\n\n"
+                "OK (skipped=4)\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(AssertionError):
+                self.validate_agentbridge_port_tests_log_evidence(synthetic_doc, artifacts_root=fake_artifacts)
+
+            # Restore valid log text for negative tests on observed_skipped / safety gates / doc tokens
+            m51_log.write_text(
+                "$ python3 -B -m unittest discover -s tests -p test_port*.py\n"
+                "--- stdout ---\n"
+                "commit: e419648a152d9244d8faa01b47ca8e55fd885372\n"
+                "--- stderr ---\n"
+                f"..{PORT27_DISCOVERY_PROGRESS_SIGNATURE}..\n"
+                "----------------------------------------------------------------------\n"
+                "Ran 1629 tests in 646.000s\n\n"
+                "OK (skipped=4)\n",
+                encoding="utf-8",
+            )
+
+            # 3. Same count (4) but one non-PORT-27 skipped test ID rejected
+            wrong_test_skips = [
+                (PORT27_HISTORICAL_SKIPPED_TESTS[0], PORT27_HISTORICAL_SKIP_REASON),
+                (PORT27_HISTORICAL_SKIPPED_TESTS[1], PORT27_HISTORICAL_SKIP_REASON),
+                (PORT27_HISTORICAL_SKIPPED_TESTS[2], PORT27_HISTORICAL_SKIP_REASON),
+                ("test_port62_movie_standalone.TestPort62StandaloneRuntime.test_minimal_resident_and_keyboard_path_without_gui_or_alt", PORT27_HISTORICAL_SKIP_REASON),
+            ]
+            with self.assertRaises(AssertionError):
+                self.validate_agentbridge_port_tests_log_evidence(
+                    synthetic_doc,
+                    artifacts_root=fake_artifacts,
+                    observed_skipped=wrong_test_skips,
+                )
+
+            # 4. Same count (4) and exact 4 PORT-27 test IDs, but altered skip reason rejected
+            wrong_reason_skips = [
+                (PORT27_HISTORICAL_SKIPPED_TESTS[0], PORT27_HISTORICAL_SKIP_REASON),
+                (PORT27_HISTORICAL_SKIPPED_TESTS[1], PORT27_HISTORICAL_SKIP_REASON),
+                (PORT27_HISTORICAL_SKIPPED_TESTS[2], PORT27_HISTORICAL_SKIP_REASON),
+                (PORT27_HISTORICAL_SKIPPED_TESTS[3], "unexpected skip reason"),
+            ]
+            with self.assertRaises(AssertionError):
+                self.validate_agentbridge_port_tests_log_evidence(
+                    synthetic_doc,
+                    artifacts_root=fake_artifacts,
+                    observed_skipped=wrong_reason_skips,
+                )
+
+            # 5. Weakened PORT-27 NO-GO safety gate (T2_PRODUCED_CANDIDATE=True or skipped gate test) rejected
+            with self.assertRaises(AssertionError):
+                self.validate_agentbridge_port_tests_log_evidence(
+                    synthetic_doc,
+                    artifacts_root=fake_artifacts,
+                    t2_produced_candidate_val=True,
+                )
+            weakened_gates = {gid: "PASS" for gid in PORT27_UNCHANGED_NOGO_SAFETY_GATE_TESTS}
+            weakened_gates[PORT27_UNCHANGED_NOGO_SAFETY_GATE_TESTS[0]] = "SKIPPED"
+            with self.assertRaises(AssertionError):
+                self.validate_agentbridge_port_tests_log_evidence(
+                    synthetic_doc,
+                    artifacts_root=fake_artifacts,
+                    observed_safety_gates=weakened_gates,
+                )
+
+            # 6. Document omitting any of the four exact PORT-27 test IDs or skip reason rejected
+            incomplete_doc = synthetic_doc.replace(PORT27_HISTORICAL_SKIPPED_TESTS[-1], "omitted_test_id")
+            with self.assertRaises(AssertionError):
+                self.validate_agentbridge_port_tests_log_evidence(incomplete_doc, artifacts_root=fake_artifacts)
+
+            # 7. Failed test run rejected
+            m51_log.write_text(
+                "$ python3 -B -m unittest discover -s tests -p test_port*.py\n"
+                f"..{PORT27_DISCOVERY_PROGRESS_SIGNATURE}..\n"
                 "Ran 1629 tests in 646.000s\n\n"
                 "FAILED (errors=1, skipped=4)\n",
                 encoding="utf-8",
