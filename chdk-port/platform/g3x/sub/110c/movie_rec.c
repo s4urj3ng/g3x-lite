@@ -461,6 +461,9 @@ static void g3x_autocont_enter_confirmed_recording(void)
     g3x_autocont_reset_session_metrics();
     g3x_autocont_timer_polls = 0U;
 #if defined(G3X_MOVIE_RESTART_BUDGET) && (G3X_MOVIE_RESTART_BUDGET == 1)
+#if defined(G3X_MOVIE_STANDALONE) && (G3X_MOVIE_STANDALONE == 1)
+    int was_admitted = g3x_autocont_attempt_admitted;
+#endif
     g3x_autocont_attempt_admitted = 0;
 #endif
 #if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
@@ -468,6 +471,15 @@ static void g3x_autocont_enter_confirmed_recording(void)
     {
         g3x_autocont_state = G3X_AUTOCONT_DISARMED;
         g3x_autocont_disarm_reason = G3X_AUTOCONT_REASON_SESSION_CANCEL;
+        return;
+    }
+#endif
+#if defined(G3X_MOVIE_STANDALONE) && (G3X_MOVIE_STANDALONE == 1)
+    if (!was_admitted ||
+        (g3x_autocont_state != G3X_AUTOCONT_RELEASING &&
+         g3x_autocont_state != G3X_AUTOCONT_WAIT_CONFIRM))
+    {
+        g3x_autocont_state = G3X_AUTOCONT_DISARMED;
         return;
     }
 #endif
@@ -757,6 +769,10 @@ unsigned int __attribute__((used)) g3x_movie_autocont_get_restart_budget(void)
 
 int __attribute__((used)) g3x_movie_autocont_set_restart_budget(unsigned int budget)
 {
+#if defined(G3X_MOVIE_STANDALONE) && (G3X_MOVIE_STANDALONE == 1)
+    (void)budget;
+    return 0;
+#else
     if (budget < G3X_AUTOCONT_BUDGET_MIN || budget > G3X_AUTOCONT_BUDGET_MAX)
     {
         return 0;
@@ -776,6 +792,7 @@ int __attribute__((used)) g3x_movie_autocont_set_restart_budget(unsigned int bud
     g3x_autocont_attempt_admitted = 0;
     g3x_autocont_restart_budget = budget;
     return 1;
+#endif
 }
 
 unsigned int __attribute__((used)) g3x_movie_autocont_get_restarts_remaining(void)
@@ -795,6 +812,9 @@ int __attribute__((used)) g3x_movie_autocont_is_attempt_admitted(void)
 
 const char * __attribute__((used)) g3x_movie_autocont_budget_menu_str(void)
 {
+#if defined(G3X_MOVIE_STANDALONE) && (G3X_MOVIE_STANDALONE == 1)
+    return "50";
+#else
     switch (g3x_autocont_restart_budget)
     {
         case 1U: return "1";
@@ -802,6 +822,7 @@ const char * __attribute__((used)) g3x_movie_autocont_budget_menu_str(void)
         case 3U: return "3";
         default: return "1";
     }
+#endif
 }
 
 const char * __attribute__((used)) g3x_movie_autocont_budget_menu_change(int change, int arg)
@@ -1616,8 +1637,7 @@ void __attribute__((used)) g3x_movie_autocont_poll(void)
 
 #if defined(G3X_MOVIE_STANDALONE) && (G3X_MOVIE_STANDALONE == 1)
     if ((pre_poll_state != G3X_AUTOCONT_DISARMED &&
-         g3x_autocont_state == G3X_AUTOCONT_DISARMED &&
-         pre_poll_state != G3X_AUTOCONT_RECORDING) ||
+         g3x_autocont_state == G3X_AUTOCONT_DISARMED) ||
         g3x_autocont_cancel_latched)
     {
         g3x_autocont_prev_rec_state = -1;
