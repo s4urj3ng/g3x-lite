@@ -115,6 +115,21 @@ PORT62_INTEGRATION_BASELINE_COMMIT = "b718a92014b4a08f979d95347152642e596a10b4"
 PORT63_FIXES_COMMIT = "003facdc4ab64d0bc8320276432763af119b14de"
 PORT63_INTEGRATION_TESTED_COMMIT = "e419648a152d9244d8faa01b47ca8e55fd885372"
 PORT63_TASK292_ATTEMPT1_COMMIT = "d78adb9bbd68ce641ecc6797e26dc9ef0bf2c345"
+PORT63_TASK292_ATTEMPT2_COMMIT = "17d7fa52b1a83d185523b33743964f356bee11d8"
+
+PORT63_SCOPE_AMENDMENT_APPROVAL_ID = 158
+PORT63_SCOPE_AMENDMENT_PROPOSAL_LOG = Path(
+    "/var/lib/agentbridge/artifacts/runs/20261125-f32d56ae8ae7/last_message.txt"
+)
+PORT63_SCOPE_AMENDMENT_APPLIED_LOG = Path(
+    "/var/lib/agentbridge/artifacts/runs/20261125-5eb453d67f80/prompt.redacted.txt"
+)
+PORT63_SCOPE_AMENDMENT_REASON_SNIPPET = (
+    "Explicitly amend the PORT-63 full-suite acceptance criterion for tasks 292 and 293 "
+    "to permit only the four pre-existing PORT-27 TestResidentCandidatePath skips"
+)
+PORT27_BASELINE_TEST_BLOB_SHA1 = "8eeab751a800d0b4fff9c4176de791abd47f6475"
+PORT27_BASELINE_DOC_BLOB_SHA1 = "4c3c14951d5c0aa5ad8ad184d07d1fc2446145b3"
 
 PORT27_HISTORICAL_SKIP_REASON = "T2 resulted in NO-GO record: resident candidate not produced"
 PORT27_HISTORICAL_SKIPPED_TESTS = (
@@ -2524,6 +2539,13 @@ class TestPort62BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
         if "TestCandidateBuildIfGo" in doc_text:
             raise AssertionError("Document must not misname TestResidentCandidatePath as TestCandidateBuildIfGo")
         for required_doc_token in (
+            f"approval_id={PORT63_SCOPE_AMENDMENT_APPROVAL_ID}",
+            str(PORT63_SCOPE_AMENDMENT_PROPOSAL_LOG),
+            str(PORT63_SCOPE_AMENDMENT_APPLIED_LOG),
+            PORT63_SCOPE_AMENDMENT_REASON_SNIPPET,
+            "PORT63-FINAL-INTEGRATION",
+            PORT27_BASELINE_TEST_BLOB_SHA1,
+            PORT27_BASELINE_DOC_BLOB_SHA1,
             "TestResidentCandidatePath",
             "TestT2OutcomeAndNoGoRecord",
             PORT27_HISTORICAL_SKIP_REASON,
@@ -2539,6 +2561,60 @@ class TestPort62BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
                 raise AssertionError(
                     f"Documented PORT-27 skip exception missing required token: {required_doc_token}"
                 )
+
+        # Verify actual AgentBridge approval record on disk when present
+        if PORT63_SCOPE_AMENDMENT_PROPOSAL_LOG.is_file() and PORT63_SCOPE_AMENDMENT_APPLIED_LOG.is_file():
+            proposal_data = json.loads(PORT63_SCOPE_AMENDMENT_PROPOSAL_LOG.read_text(encoding="utf-8"))
+            approval_decs = [
+                d
+                for d in proposal_data.get("decisions", [])
+                if d.get("type") == "REQUEST_HUMAN_APPROVAL"
+                and d.get("action") == "scope_change"
+                and d.get("task_id") == 292
+            ]
+            if not approval_decs:
+                raise AssertionError(
+                    f"Proposal decision envelope {PORT63_SCOPE_AMENDMENT_PROPOSAL_LOG} missing scope_change REQUEST_HUMAN_APPROVAL for task 292"
+                )
+            proposal_reason = str(approval_decs[0].get("reason", ""))
+            if PORT63_SCOPE_AMENDMENT_REASON_SNIPPET not in proposal_reason:
+                raise AssertionError(
+                    f"Proposal reason in {PORT63_SCOPE_AMENDMENT_PROPOSAL_LOG} does not match expected scope amendment snippet"
+                )
+            for short_test_name in (tid.split(".")[-1] for tid in PORT27_HISTORICAL_SKIPPED_TESTS):
+                if short_test_name not in proposal_reason:
+                    raise AssertionError(
+                        f"Proposal reason in {PORT63_SCOPE_AMENDMENT_PROPOSAL_LOG} omits named historical skip {short_test_name}"
+                    )
+            applied_text = PORT63_SCOPE_AMENDMENT_APPLIED_LOG.read_text(encoding="utf-8")
+            for required_applied_token in (
+                "REQUEST_HUMAN_APPROVAL: applied",
+                '"type": "HUMAN_DECISION"',
+                '"action": "scope_change"',
+                f'"approval_id": {PORT63_SCOPE_AMENDMENT_APPROVAL_ID}',
+                '"approved": true',
+            ):
+                if required_applied_token not in applied_text:
+                    raise AssertionError(
+                        f"Applied HUMAN_DECISION record {PORT63_SCOPE_AMENDMENT_APPLIED_LOG} missing {required_applied_token}"
+                    )
+
+        # Verify the four historical PORT-27 skips, guard, reason, and NO-GO safeguards are unchanged
+        # from the recorded PORT-62 baseline commit b718a92014b4a08f979d95347152642e596a10b4
+        for rel_path, expected_blob in (
+            ("tests/test_port27_resident.py", PORT27_BASELINE_TEST_BLOB_SHA1),
+            ("docs/PORT27_RESIDENT_CANDIDATE.md", PORT27_BASELINE_DOC_BLOB_SHA1),
+        ):
+            for rev_spec in (PORT62_INTEGRATION_BASELINE_COMMIT, "HEAD"):
+                blob_sha = subprocess.check_output(
+                    ["git", "rev-parse", f"{rev_spec}:{rel_path}"],
+                    cwd=str(ROOT),
+                    text=True,
+                ).strip()
+                if blob_sha != expected_blob:
+                    raise AssertionError(
+                        f"{rel_path} blob at {rev_spec} ({blob_sha}) differs from PORT-62 baseline ({expected_blob})"
+                    )
 
         import tests.test_port27_resident as port27_mod
 
@@ -2769,6 +2845,7 @@ class TestPort62BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
             PORT63_FIXES_COMMIT,
             PORT63_INTEGRATION_TESTED_COMMIT,
             PORT63_TASK292_ATTEMPT1_COMMIT,
+            PORT63_TASK292_ATTEMPT2_COMMIT,
             "4b95d5a6b7f6eb95cb518ffac0e13c457135abcf",
             "5b4fc25b5bb291757791a1ccb581baaaa0f6e943",
             "e55222db507d895bfe232197e8f055663ef3847f",
@@ -2778,6 +2855,13 @@ class TestPort62BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
             "G3X_MOVIE_STANDALONE=1",
             "G3X_AUTOCONT_BUDGET_STANDALONE = 50U",
             "ftell",
+            f"approval_id={PORT63_SCOPE_AMENDMENT_APPROVAL_ID}",
+            str(PORT63_SCOPE_AMENDMENT_PROPOSAL_LOG),
+            str(PORT63_SCOPE_AMENDMENT_APPLIED_LOG),
+            PORT63_SCOPE_AMENDMENT_REASON_SNIPPET,
+            "PORT63-FINAL-INTEGRATION",
+            PORT27_BASELINE_TEST_BLOB_SHA1,
+            PORT27_BASELINE_DOC_BLOB_SHA1,
             "T2_PRODUCED_CANDIDATE",
             "test_port27_resident.py",
             "TestResidentCandidatePath",
@@ -2786,6 +2870,7 @@ class TestPort62BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
             *PORT27_HISTORICAL_SKIPPED_TESTS,
             *PORT27_UNCHANGED_NOGO_SAFETY_GATE_TESTS,
             "/var/lib/agentbridge/artifacts/tasks/292/attempt-1/validation-port_tests.log",
+            "/var/lib/agentbridge/artifacts/tasks/292/attempt-2/validation-port_tests.log",
             "build/port62-movie-standalone/DISKBOOT.BIN",
             "port62_movie_standalone_manifest.json",
             "scripts/build_port62_movie_standalone.py",
@@ -2824,7 +2909,11 @@ class TestPort62BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
                 encoding="utf-8",
             )
             exception_doc_header = (
-                "Approved scope exception for historical PORT-27 TestResidentCandidatePath NO-GO tests "
+                f"Approved scope exception (approval_id={PORT63_SCOPE_AMENDMENT_APPROVAL_ID}) "
+                f"recorded in {PORT63_SCOPE_AMENDMENT_PROPOSAL_LOG} and {PORT63_SCOPE_AMENDMENT_APPLIED_LOG} "
+                f"({PORT63_SCOPE_AMENDMENT_REASON_SNIPPET}; pending PORT63-FINAL-INTEGRATION; "
+                f"baseline blobs {PORT27_BASELINE_TEST_BLOB_SHA1} and {PORT27_BASELINE_DOC_BLOB_SHA1}) "
+                "for historical PORT-27 TestResidentCandidatePath NO-GO tests "
                 f"with skip reason '{PORT27_HISTORICAL_SKIP_REASON}' and unchanged TestT2OutcomeAndNoGoRecord safety gates:\n"
                 "tests/test_port27_resident.py:496-518\n"
                 "tests/test_port27_resident.py:520-540\n"
@@ -2926,10 +3015,16 @@ class TestPort62BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
                     observed_safety_gates=weakened_gates,
                 )
 
-            # 6. Document omitting any of the four exact PORT-27 test IDs or skip reason rejected
+            # 6. Document omitting any of the four exact PORT-27 test IDs, skip reason, or approval_id=158 record rejected
             incomplete_doc = synthetic_doc.replace(PORT27_HISTORICAL_SKIPPED_TESTS[-1], "omitted_test_id")
             with self.assertRaises(AssertionError):
                 self.validate_agentbridge_port_tests_log_evidence(incomplete_doc, artifacts_root=fake_artifacts)
+            unapproved_doc = synthetic_doc.replace(
+                f"approval_id={PORT63_SCOPE_AMENDMENT_APPROVAL_ID}",
+                "generic_prior_approval",
+            )
+            with self.assertRaises(AssertionError):
+                self.validate_agentbridge_port_tests_log_evidence(unapproved_doc, artifacts_root=fake_artifacts)
 
             # 7. Failed test run rejected
             m51_log.write_text(
@@ -2943,17 +3038,23 @@ class TestPort62BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
                 self.validate_agentbridge_port_tests_log_evidence(synthetic_doc, artifacts_root=fake_artifacts)
 
         sha256_tokens = set(re.findall(r"\b[0-9a-f]{64}\b", doc_text))
+        blob_tokens = {PORT27_BASELINE_TEST_BLOB_SHA1, PORT27_BASELINE_DOC_BLOB_SHA1}
         commit_candidates = set(re.findall(r"\b[0-9a-f]{40}\b", doc_text))
         for commit_hash in commit_candidates:
             if any(commit_hash in s for s in sha256_tokens):
                 continue
+            obj_type = "blob" if commit_hash in blob_tokens else "commit"
             res = subprocess.run(
-                ["git", "rev-parse", "--verify", f"{commit_hash}^{{commit}}"],
+                ["git", "rev-parse", "--verify", f"{commit_hash}^{{{obj_type}}}"],
                 cwd=str(ROOT),
                 capture_output=True,
                 text=True,
             )
-            self.assertEqual(res.returncode, 0, f"Unresolvable commit hash in docs/PORT62_MOVIE_STANDALONE.md: {commit_hash}")
+            self.assertEqual(
+                res.returncode,
+                0,
+                f"Unresolvable {obj_type} hash in docs/PORT62_MOVIE_STANDALONE.md: {commit_hash}",
+            )
 
 
 if __name__ == "__main__":
