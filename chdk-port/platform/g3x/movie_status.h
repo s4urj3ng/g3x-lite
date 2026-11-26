@@ -1,7 +1,40 @@
 #ifndef G3X_MOVIE_STATUS_H
 #define G3X_MOVIE_STATUS_H
 
+#if defined(G3X_MOVIE_STANDALONE) && (G3X_MOVIE_STANDALONE == 1)
+#if !defined(G3X_MOVIE_SESSION_CANCEL) || (G3X_MOVIE_SESSION_CANCEL != 1) || \
+    !defined(G3X_MOVIE_RESTART_BUDGET) || (G3X_MOVIE_RESTART_BUDGET != 1) || \
+    !defined(G3X_MOVIE_NOLIMIT) || (G3X_MOVIE_NOLIMIT != 1) || \
+    !defined(G3X_MOVIE_AUTOCONT) || (G3X_MOVIE_AUTOCONT != 1) || \
+    !defined(G3X_MOVIE_STATUS) || (G3X_MOVIE_STATUS != 1)
+#error G3X_MOVIE_STANDALONE=1 requires G3X_MOVIE_SESSION_CANCEL=1 G3X_MOVIE_RESTART_BUDGET=1 G3X_MOVIE_NOLIMIT=1 G3X_MOVIE_AUTOCONT=1 G3X_MOVIE_STATUS=1
+#endif
+#if defined(G3X_MOVIE_AUTOCONT_UI) && (G3X_MOVIE_AUTOCONT_UI == 1)
+#error G3X_MOVIE_STANDALONE=1 is incompatible with G3X_MOVIE_AUTOCONT_UI=1
+#endif
+#if (defined(G3X_GUI5) && (G3X_GUI5 == 1)) || \
+    (defined(G3X_GUI_FIX) && (G3X_GUI_FIX == 1)) || \
+    (defined(G3X_GUI_DBUF) && (G3X_GUI_DBUF == 1)) || \
+    (defined(G3X_GUI_NOOVERDRAW) && (G3X_GUI_NOOVERDRAW == 1)) || \
+    (defined(G3X_KBD_CHECK) && (G3X_KBD_CHECK == 1)) || \
+    (defined(G3X_GUI_DIAG) && (G3X_GUI_DIAG == 1)) || \
+    (defined(G3X_GUI_SHADOW2) && (G3X_GUI_SHADOW2 == 1)) || \
+    (defined(G3X_GUI_SYNC) && (G3X_GUI_SYNC == 1)) || \
+    (defined(G3X_GUI_MENU) && (G3X_GUI_MENU == 1)) || \
+    (defined(G3X_GUI_RESTORE2) && (G3X_GUI_RESTORE2 == 1)) || \
+    (defined(G3X_PLAYBACK_MENU) && (G3X_PLAYBACK_MENU == 1))
+#error G3X_MOVIE_STANDALONE=1 is incompatible with GUI/menu flags
+#endif
+#if defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1)
+#error G3X_MOVIE_STANDALONE=1 is incompatible with G3X_CONF_SAVE=1
+#endif
+#if defined(FULL_HOOKS) && (FULL_HOOKS == 1)
+#error G3X_MOVIE_STANDALONE=1 is incompatible with FULL_HOOKS=1
+#endif
+#endif
+
 #if defined(G3X_MOVIE_SESSION_CANCEL) && (G3X_MOVIE_SESSION_CANCEL == 1)
+#if !defined(G3X_MOVIE_STANDALONE) || (G3X_MOVIE_STANDALONE != 1)
 #if !defined(G3X_MOVIE_RESTART_BUDGET) || (G3X_MOVIE_RESTART_BUDGET != 1) || \
     !defined(G3X_MOVIE_AUTOCONT_UI) || (G3X_MOVIE_AUTOCONT_UI != 1) || \
     !defined(G3X_MOVIE_AUTOCONT) || (G3X_MOVIE_AUTOCONT != 1) || \
@@ -15,6 +48,7 @@
     !defined(G3X_GUI_SHADOW2) || (G3X_GUI_SHADOW2 != 1)
 #error G3X_MOVIE_SESSION_CANCEL=1 requires G3X_MOVIE_RESTART_BUDGET=1 G3X_MOVIE_AUTOCONT_UI=1 G3X_MOVIE_AUTOCONT=1 G3X_MOVIE_STATUS=1 G3X_GUI_MENU=1 G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1
 #endif
+#endif
 #if defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1)
 #error G3X_MOVIE_SESSION_CANCEL=1 is incompatible with G3X_CONF_SAVE=1
 #endif
@@ -24,6 +58,7 @@
 #endif
 
 #if defined(G3X_MOVIE_RESTART_BUDGET) && (G3X_MOVIE_RESTART_BUDGET == 1)
+#if !defined(G3X_MOVIE_STANDALONE) || (G3X_MOVIE_STANDALONE != 1)
 #if !defined(G3X_MOVIE_AUTOCONT_UI) || (G3X_MOVIE_AUTOCONT_UI != 1) || \
     !defined(G3X_MOVIE_AUTOCONT) || (G3X_MOVIE_AUTOCONT != 1) || \
     !defined(G3X_MOVIE_STATUS) || (G3X_MOVIE_STATUS != 1) || \
@@ -35,6 +70,7 @@
     !defined(G3X_GUI_DIAG) || (G3X_GUI_DIAG != 1) || \
     !defined(G3X_GUI_SHADOW2) || (G3X_GUI_SHADOW2 != 1)
 #error G3X_MOVIE_RESTART_BUDGET=1 requires G3X_MOVIE_AUTOCONT_UI=1 G3X_MOVIE_AUTOCONT=1 G3X_MOVIE_STATUS=1 G3X_GUI_MENU=1 G3X_GUI_SYNC=1 G3X_GUI_DBUF=1 G3X_GUI_NOOVERDRAW=1 G3X_KBD_CHECK=1 G3X_GUI_DIAG=1 G3X_GUI_SHADOW2=1
+#endif
 #endif
 #if defined(G3X_CONF_SAVE) && (G3X_CONF_SAVE == 1)
 #error G3X_MOVIE_RESTART_BUDGET=1 is incompatible with G3X_CONF_SAVE=1
@@ -69,7 +105,8 @@
 #error G3X_MOVIE_AUTOCONT=1 requires G3X_MOVIE_STATUS=1
 #endif
 #if defined(G3X_MOVIE_NOLIMIT) && (G3X_MOVIE_NOLIMIT == 1)
-#if !defined(G3X_MOVIE_AUTOCONT_UI) || (G3X_MOVIE_AUTOCONT_UI != 1)
+#if (!defined(G3X_MOVIE_AUTOCONT_UI) || (G3X_MOVIE_AUTOCONT_UI != 1)) && \
+    (!defined(G3X_MOVIE_STANDALONE) || (G3X_MOVIE_STANDALONE != 1))
 #error Combining G3X_MOVIE_NOLIMIT=1 and G3X_MOVIE_AUTOCONT=1 requires G3X_MOVIE_AUTOCONT_UI=1
 #endif
 #endif
@@ -315,10 +352,18 @@ const char *g3x_movie_autocont_menu_change(int change, int arg);
 void g3x_movie_autocont_menu_cb(void);
 int *g3x_movie_autocont_get_menu_bool_ptr(void);
 #if defined(G3X_MOVIE_RESTART_BUDGET) && (G3X_MOVIE_RESTART_BUDGET == 1)
+#define G3X_AUTOCONT_BUDGET_STANDALONE 50U
+#if defined(G3X_MOVIE_STANDALONE) && (G3X_MOVIE_STANDALONE == 1)
+/* PORT-63: Standalone fixed compile-time session restart budget of 50 automatic restart attempts */
+#define G3X_AUTOCONT_BUDGET_MIN     G3X_AUTOCONT_BUDGET_STANDALONE
+#define G3X_AUTOCONT_BUDGET_MAX     G3X_AUTOCONT_BUDGET_STANDALONE
+#define G3X_AUTOCONT_BUDGET_DEFAULT G3X_AUTOCONT_BUDGET_STANDALONE
+#else
 /* PORT-60: Opt-in volatile finite session restart budget (allowances 1, 2, or 3; default 1) */
 #define G3X_AUTOCONT_BUDGET_MIN     1U
 #define G3X_AUTOCONT_BUDGET_MAX     3U
 #define G3X_AUTOCONT_BUDGET_DEFAULT 1U
+#endif
 
 unsigned int g3x_movie_autocont_get_restart_budget(void);
 int g3x_movie_autocont_set_restart_budget(unsigned int budget);

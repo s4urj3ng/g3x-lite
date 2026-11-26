@@ -62,6 +62,48 @@ def _clean_platform_and_core_artifacts(stage_dir: Path) -> None:
                     pass
 
 
+def _clean_standalone_staging_artifacts(stage_dir: Path) -> None:
+    """Hermetically remove all prebuilt or stale objects, archives, host tools, and generated exports from a standalone staging tree."""
+    clean_staging_artifacts(stage_dir)
+    for sub in ["tools", "lib", "core", "modules", "platform", "loader", "bin"]:
+        target = stage_dir / sub
+        if not target.is_dir():
+            continue
+        for odir_pattern in ("**/.o", "**/.o2", "**/.o3", "**/.dep"):
+            for odir in target.glob(odir_pattern):
+                if odir.is_dir():
+                    shutil.rmtree(odir, ignore_errors=True)
+        for ext in ("*.o", "*.a", "*.d", "*.flt", "*.dump", "*.elf", "*.bin", "*.syms"):
+            for f in target.glob(f"**/{ext}"):
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+    for tool_rel in (
+        "tools/dancingbits",
+        "tools/makeexport",
+        "tools/font_8x16_pack",
+        "tools/pakwif",
+        "tools/code_gen",
+        "tools/finsig_dryos",
+        "tools/gensig_dryos",
+        "tools/finsig_vxworks",
+        "tools/gensig_vxworks",
+        "tools/finsig_thumb2",
+        "tools/ptp_op_names",
+        "tools/elf2flt/elf2flt",
+        "modules/module_hashlist.c",
+        "modules/module_exportlist.h",
+        "modules/exportlist.inc",
+    ):
+        p = stage_dir / tool_rel
+        if p.is_file():
+            try:
+                p.unlink()
+            except OSError:
+                pass
+
+
 def _remove_prototype_files(stage_dir: Path) -> None:
     """Remove boot_prototype.c and stubs_prototype.S from a staged CHDK tree."""
     for proto_name in ["boot_prototype.c", "stubs_prototype.S"]:
@@ -2636,6 +2678,289 @@ def apply_movie_session_cancel_staging_patches(stage_dir: Path) -> None:
         mpath.write_text(text, encoding="utf-8")
 
 
+def apply_movie_standalone_staging_patches(stage_dir: Path) -> None:
+    """PORT-62: Apply G3X_MOVIE_STANDALONE=1 minimal non-GUI movie continuation staging patches."""
+    apply_movie_nolimit_staging_patches(stage_dir, alone=True)
+    apply_movie_autocont_staging_patches(stage_dir, alone=True)
+
+    shutil.copy2(CHDK_PORT / "core/main.c", stage_dir / "core/main.c")
+    shutil.copy2(CHDK_PORT / "core/kbd_process.c", stage_dir / "core/kbd_process.c")
+    shutil.copy2(CHDK_PORT / "platform/g3x/movie_status.h", stage_dir / "platform/g3x/movie_status.h")
+    shutil.copy2(CHDK_PORT / "platform/g3x/sub/110c/movie_rec.c", stage_dir / "platform/g3x/sub/110c/movie_rec.c")
+    shutil.copy2(CHDK_PORT / "platform/g3x/sub/110c/stubs_min.S", stage_dir / "platform/g3x/sub/110c/stubs_min.S")
+    shutil.copy2(CHDK_PORT / "platform/g3x/sub/110c/makefile.inc", stage_dir / "platform/g3x/sub/110c/makefile.inc")
+
+    core_main_c = stage_dir / "core/main.c"
+    cm_text = core_main_c.read_text(encoding="utf-8")
+    if "G3X_MOVIE_STANDALONE" not in cm_text:
+        autostart_anchor = (
+            "void script_autostart()\n"
+            "{\n"
+            "    // Tell keyboard task we are in <ALT> mode\n"
+            "    enter_alt();\n"
+            "    // We were called from the GUI task so switch to <ALT> mode before switching to Script mode\n"
+            "    gui_activate_alt_mode();\n"
+            "    // Switch to script mode and start the script running\n"
+            "    script_start_gui( 1 );\n"
+            "}"
+        )
+        autostart_repl = (
+            "void script_autostart()\n"
+            "{\n"
+            "#if !defined(G3X_MOVIE_STANDALONE) || (G3X_MOVIE_STANDALONE != 1)\n"
+            "    // Tell keyboard task we are in <ALT> mode\n"
+            "    enter_alt();\n"
+            "    // We were called from the GUI task so switch to <ALT> mode before switching to Script mode\n"
+            "    gui_activate_alt_mode();\n"
+            "    // Switch to script mode and start the script running\n"
+            "    script_start_gui( 1 );\n"
+            "#endif\n"
+            "}"
+        )
+        spytask_anchor = "void core_spytask()\n{\n    int cnt = 1;\n"
+        spytask_repl = (
+            "void core_spytask()\n"
+            "{\n"
+            "#if defined(G3X_MOVIE_STANDALONE) && (G3X_MOVIE_STANDALONE == 1)\n"
+            "    extern int rec_mode_active(void);\n"
+            "    int i = 0;\n"
+            "    (void)osd_buf;\n"
+            "    (void)memdmptick;\n"
+            "\n"
+            "    camera_info_init();\n"
+            "\n"
+            "    spytask_can_start = 0;\n"
+            "\n"
+            "    while ((i++ < 1000) && !spytask_can_start)\n"
+            "        msleep(10);\n"
+            "\n"
+            "    while (1)\n"
+            "    {\n"
+            "        camera_info.state.mode_play = rec_mode_active() ? 0 : 1;\n"
+            "        msleep(20);\n"
+            "        chdk_started_flag = 1;\n"
+            "    }\n"
+            "#else\n"
+            "    int cnt = 1;\n"
+        )
+        spytask_end_anchor = (
+            "        // Process async module unload requests\n"
+            "        module_tick_unloader();\n"
+            "\n"
+            "        msleep(20);\n"
+            "        chdk_started_flag=1;\n"
+            "    }\n"
+            "}\n"
+            "\n"
+            "long ftell(FILE *file) {"
+        )
+        spytask_end_repl = (
+            "        // Process async module unload requests\n"
+            "        module_tick_unloader();\n"
+            "\n"
+            "        msleep(20);\n"
+            "        chdk_started_flag=1;\n"
+            "    }\n"
+            "#endif\n"
+            "}\n"
+            "\n"
+            "long ftell(FILE *file) {"
+        )
+        if autostart_anchor not in cm_text or spytask_anchor not in cm_text or spytask_end_anchor not in cm_text:
+            raise RuntimeError("PORT-62 core/main.c anchors not found in staged core/main.c")
+        cm_text = cm_text.replace(autostart_anchor, autostart_repl, 1)
+        cm_text = cm_text.replace(spytask_anchor, spytask_repl, 1)
+        cm_text = cm_text.replace(spytask_end_anchor, spytask_end_repl, 1)
+        core_main_c.write_text(cm_text, encoding="utf-8")
+
+    kbd_proc_c = stage_dir / "core/kbd_process.c"
+    kp_text = kbd_proc_c.read_text(encoding="utf-8")
+    if "G3X_MOVIE_STANDALONE" not in kp_text:
+        enter_alt_anchor = (
+            "void enter_alt()\n"
+            "{\n"
+            "    clear_usb_power();         // Prevent previous USB remote pulse from starting script.\n"
+            "    kbd_blocked = 1;\n"
+            "    gui_set_alt_mode_state(ALT_MODE_ENTER);\n"
+            "}\n"
+            "\n"
+            "void exit_alt()\n"
+            "{\n"
+            "    kbd_blocked = 0;\n"
+            "    gui_set_alt_mode_state(ALT_MODE_LEAVE);\n"
+            "}"
+        )
+        enter_alt_repl = (
+            "void enter_alt()\n"
+            "{\n"
+            "#if defined(G3X_MOVIE_STANDALONE) && (G3X_MOVIE_STANDALONE == 1)\n"
+            "    kbd_blocked = 0;\n"
+            "#else\n"
+            "    clear_usb_power();         // Prevent previous USB remote pulse from starting script.\n"
+            "    kbd_blocked = 1;\n"
+            "    gui_set_alt_mode_state(ALT_MODE_ENTER);\n"
+            "#endif\n"
+            "}\n"
+            "\n"
+            "void exit_alt()\n"
+            "{\n"
+            "#if defined(G3X_MOVIE_STANDALONE) && (G3X_MOVIE_STANDALONE == 1)\n"
+            "    kbd_blocked = 0;\n"
+            "#else\n"
+            "    kbd_blocked = 0;\n"
+            "    gui_set_alt_mode_state(ALT_MODE_LEAVE);\n"
+            "#endif\n"
+            "}"
+        )
+        kbd_proc_anchor = "long kbd_process()\n{\n    static int key_pressed;\n"
+        kbd_proc_repl = (
+            "long kbd_process()\n"
+            "{\n"
+            "#if defined(G3X_MOVIE_STANDALONE) && (G3X_MOVIE_STANDALONE == 1)\n"
+            "    kbd_blocked = 0;\n"
+            "    camera_info.state.gui_mode = 0;\n"
+            "    camera_info.state.gui_mode_none = 1;\n"
+            "    camera_info.state.gui_mode_alt = 0;\n"
+            "    return 0;\n"
+            "#else\n"
+            "    static int key_pressed;\n"
+        )
+        kbd_proc_end_anchor = (
+            "    extern void start_ptp_script();\n"
+            "    start_ptp_script();\n"
+            "\n"
+            "    return kbd_blocked;\n"
+            "}"
+        )
+        kbd_proc_end_repl = (
+            "    extern void start_ptp_script();\n"
+            "    start_ptp_script();\n"
+            "\n"
+            "    return kbd_blocked;\n"
+            "#endif\n"
+            "}"
+        )
+        if enter_alt_anchor not in kp_text or kbd_proc_anchor not in kp_text or kbd_proc_end_anchor not in kp_text:
+            raise RuntimeError("PORT-62 core/kbd_process.c anchors not found in staged core/kbd_process.c")
+        kp_text = kp_text.replace(enter_alt_anchor, enter_alt_repl, 1)
+        kp_text = kp_text.replace(kbd_proc_anchor, kbd_proc_repl, 1)
+        kp_text = kp_text.replace(kbd_proc_end_anchor, kbd_proc_end_repl, 1)
+        kbd_proc_c.write_text(kp_text, encoding="utf-8")
+
+    top_makefile = stage_dir / "Makefile"
+    if top_makefile.is_file():
+        tm_text = top_makefile.read_text(encoding="utf-8")
+        if "ifeq ($(G3X_MOVIE_STANDALONE),1)" not in tm_text:
+            subdirs_anchor = "# Build camera, camera firmware & loader code (loader must be last)\nSUBDIRS+=$(cam) $(camfw) $(loader)"
+            subdirs_repl = (
+                "ifeq ($(G3X_MOVIE_STANDALONE),1)\n"
+                "SUBDIRS+=$(larmutil) $(lmath) $(llang) $(lfont) $(lcore)\n"
+                "endif\n\n"
+                "# Build camera, camera firmware & loader code (loader must be last)\n"
+                "SUBDIRS+=$(cam) $(camfw) $(loader)"
+            )
+            copy_mod_anchor = (
+                '\t@echo "copy modules"\n'
+                "\trm -f $(chdk)/MODULES/*\n"
+                "\tcp $(modules)/$O*.flt $(chdk)/MODULES"
+            )
+            copy_mod_repl = (
+                "ifneq ($(G3X_MOVIE_STANDALONE),1)\n"
+                '\t@echo "copy modules"\n'
+                "\trm -f $(chdk)/MODULES/*\n"
+                "\tcp $(modules)/$O*.flt $(chdk)/MODULES\n"
+                "endif"
+            )
+            if subdirs_anchor not in tm_text or copy_mod_anchor not in tm_text:
+                raise RuntimeError("PORT-62 top-level Makefile anchors not found in staged Makefile")
+            tm_text = tm_text.replace(subdirs_anchor, subdirs_repl, 1)
+            tm_text = tm_text.replace(copy_mod_anchor, copy_mod_repl, 1)
+            top_makefile.write_text(tm_text, encoding="utf-8")
+
+    prereq = (
+        "ifeq ($(G3X_MOVIE_STANDALONE),1)\n"
+        "ifneq ($(G3X_MOVIE_SESSION_CANCEL),1)\n"
+        "$(error G3X_MOVIE_STANDALONE=1 requires G3X_MOVIE_SESSION_CANCEL=1 G3X_MOVIE_RESTART_BUDGET=1 G3X_MOVIE_NOLIMIT=1 G3X_MOVIE_AUTOCONT=1 G3X_MOVIE_STATUS=1)\n"
+        "endif\n"
+        "ifneq ($(G3X_MOVIE_RESTART_BUDGET),1)\n"
+        "$(error G3X_MOVIE_STANDALONE=1 requires G3X_MOVIE_SESSION_CANCEL=1 G3X_MOVIE_RESTART_BUDGET=1 G3X_MOVIE_NOLIMIT=1 G3X_MOVIE_AUTOCONT=1 G3X_MOVIE_STATUS=1)\n"
+        "endif\n"
+        "ifneq ($(G3X_MOVIE_NOLIMIT),1)\n"
+        "$(error G3X_MOVIE_STANDALONE=1 requires G3X_MOVIE_SESSION_CANCEL=1 G3X_MOVIE_RESTART_BUDGET=1 G3X_MOVIE_NOLIMIT=1 G3X_MOVIE_AUTOCONT=1 G3X_MOVIE_STATUS=1)\n"
+        "endif\n"
+        "ifneq ($(G3X_MOVIE_AUTOCONT),1)\n"
+        "$(error G3X_MOVIE_STANDALONE=1 requires G3X_MOVIE_SESSION_CANCEL=1 G3X_MOVIE_RESTART_BUDGET=1 G3X_MOVIE_NOLIMIT=1 G3X_MOVIE_AUTOCONT=1 G3X_MOVIE_STATUS=1)\n"
+        "endif\n"
+        "ifneq ($(G3X_MOVIE_STATUS),1)\n"
+        "$(error G3X_MOVIE_STANDALONE=1 requires G3X_MOVIE_SESSION_CANCEL=1 G3X_MOVIE_RESTART_BUDGET=1 G3X_MOVIE_NOLIMIT=1 G3X_MOVIE_AUTOCONT=1 G3X_MOVIE_STATUS=1)\n"
+        "endif\n"
+        "ifeq ($(G3X_MOVIE_AUTOCONT_UI),1)\n"
+        "$(error G3X_MOVIE_STANDALONE=1 is incompatible with G3X_MOVIE_AUTOCONT_UI=1)\n"
+        "endif\n"
+        "ifeq ($(G3X_GUI5),1)\n"
+        "$(error G3X_MOVIE_STANDALONE=1 is incompatible with GUI/menu flags)\n"
+        "endif\n"
+        "ifeq ($(G3X_GUI_FIX),1)\n"
+        "$(error G3X_MOVIE_STANDALONE=1 is incompatible with GUI/menu flags)\n"
+        "endif\n"
+        "ifeq ($(G3X_GUI_DBUF),1)\n"
+        "$(error G3X_MOVIE_STANDALONE=1 is incompatible with GUI/menu flags)\n"
+        "endif\n"
+        "ifeq ($(G3X_GUI_NOOVERDRAW),1)\n"
+        "$(error G3X_MOVIE_STANDALONE=1 is incompatible with GUI/menu flags)\n"
+        "endif\n"
+        "ifeq ($(G3X_KBD_CHECK),1)\n"
+        "$(error G3X_MOVIE_STANDALONE=1 is incompatible with GUI/menu flags)\n"
+        "endif\n"
+        "ifeq ($(G3X_GUI_DIAG),1)\n"
+        "$(error G3X_MOVIE_STANDALONE=1 is incompatible with GUI/menu flags)\n"
+        "endif\n"
+        "ifeq ($(G3X_GUI_SHADOW2),1)\n"
+        "$(error G3X_MOVIE_STANDALONE=1 is incompatible with GUI/menu flags)\n"
+        "endif\n"
+        "ifeq ($(G3X_GUI_SYNC),1)\n"
+        "$(error G3X_MOVIE_STANDALONE=1 is incompatible with GUI/menu flags)\n"
+        "endif\n"
+        "ifeq ($(G3X_GUI_MENU),1)\n"
+        "$(error G3X_MOVIE_STANDALONE=1 is incompatible with GUI/menu flags)\n"
+        "endif\n"
+        "ifeq ($(G3X_GUI_RESTORE2),1)\n"
+        "$(error G3X_MOVIE_STANDALONE=1 is incompatible with GUI/menu flags)\n"
+        "endif\n"
+        "ifeq ($(G3X_PLAYBACK_MENU),1)\n"
+        "$(error G3X_MOVIE_STANDALONE=1 is incompatible with GUI/menu flags)\n"
+        "endif\n"
+        "ifeq ($(G3X_CONF_SAVE),1)\n"
+        "$(error G3X_MOVIE_STANDALONE=1 is incompatible with G3X_CONF_SAVE=1)\n"
+        "endif\n"
+        "ifeq ($(FULL_HOOKS),1)\n"
+        "$(error G3X_MOVIE_STANDALONE=1 is incompatible with FULL_HOOKS=1)\n"
+        "endif\n"
+        "endif\n\n"
+    )
+    for rel in ["platform/g3x/Makefile", "platform/g3x/sub/110c/Makefile"]:
+        mpath = stage_dir / rel
+        text = mpath.read_text(encoding="utf-8")
+        text = text.replace(" -DG3X_GUI5=1", "")
+        text = text.replace(" -DCAM_SUPPORT_BITMAP_RES_CHANGE=1", "")
+        if "ifeq ($(G3X_MOVIE_STANDALONE),1)" not in text:
+            text = prereq + text
+        for flag in (
+            "-DG3X_MOVIE_STANDALONE=1",
+            "-DG3X_MOVIE_STATUS=1",
+            "-DG3X_MOVIE_NOLIMIT=1",
+            "-DG3X_MOVIE_AUTOCONT=1",
+            "-DG3X_MOVIE_RESTART_BUDGET=1",
+            "-DG3X_MOVIE_SESSION_CANCEL=1",
+        ):
+            if flag not in text:
+                if "CFLAGS +=" in text:
+                    text = text.replace("CFLAGS +=", f"CFLAGS += {flag}", 1)
+                else:
+                    text += f"\nCFLAGS += {flag}\n"
+        mpath.write_text(text, encoding="utf-8")
+
+
 def build_port43_dbuf(
     clean_stage: bool = True,
     keep_stage: bool = True,
@@ -2664,7 +2989,42 @@ def build_port43_dbuf(
     movie_budget_profile: bool = False,
     movie_session_cancel: bool = False,
     movie_cancel_profile: bool = False,
+    movie_standalone: bool = False,
 ) -> int:
+    if movie_standalone:
+        if conf_save or conf_save_alone:
+            print("ERROR: G3X_MOVIE_STANDALONE=1 is incompatible with G3X_CONF_SAVE=1", file=sys.stderr)
+            return 1
+        if full_hooks:
+            print("ERROR: G3X_MOVIE_STANDALONE=1 is incompatible with FULL_HOOKS=1", file=sys.stderr)
+            return 1
+        if movie_autocont_ui or movie_combined or movie_budget_profile or movie_cancel_profile:
+            print("ERROR: G3X_MOVIE_STANDALONE=1 is incompatible with G3X_MOVIE_AUTOCONT_UI=1", file=sys.stderr)
+            return 1
+        if (
+            gui_menu
+            or gui_restore2
+            or gui_sync
+            or shadow2
+            or gui_diag
+            or kbd_check
+            or no_overdraw
+            or playback_menu
+            or playback_menu_alone
+        ):
+            print("ERROR: G3X_MOVIE_STANDALONE=1 is incompatible with GUI/menu flags", file=sys.stderr)
+            return 1
+        if movie_status_alone or movie_nolimit_alone or movie_autocont_alone:
+            print(
+                "ERROR: G3X_MOVIE_STANDALONE=1 requires G3X_MOVIE_SESSION_CANCEL=1 G3X_MOVIE_RESTART_BUDGET=1 G3X_MOVIE_NOLIMIT=1 G3X_MOVIE_AUTOCONT=1 G3X_MOVIE_STATUS=1",
+                file=sys.stderr,
+            )
+            return 1
+        movie_status = True
+        movie_nolimit = True
+        movie_autocont = True
+        movie_restart_budget = True
+        movie_session_cancel = True
     if movie_cancel_profile:
         movie_session_cancel = True
         movie_restart_budget = True
@@ -2685,7 +3045,7 @@ def build_port43_dbuf(
         gui_diag = True
         kbd_check = True
         no_overdraw = True
-    if movie_session_cancel:
+    if movie_session_cancel and not movie_standalone:
         if conf_save or conf_save_alone:
             print("ERROR: G3X_MOVIE_SESSION_CANCEL=1 is incompatible with G3X_CONF_SAVE=1", file=sys.stderr)
             return 1
@@ -2715,7 +3075,7 @@ def build_port43_dbuf(
                 file=sys.stderr,
             )
             return 1
-    if movie_restart_budget:
+    if movie_restart_budget and not movie_standalone:
         if conf_save or conf_save_alone:
             print("ERROR: G3X_MOVIE_RESTART_BUDGET=1 is incompatible with G3X_CONF_SAVE=1", file=sys.stderr)
             return 1
@@ -2772,7 +3132,12 @@ def build_port43_dbuf(
                 file=sys.stderr,
             )
             return 1
-    if (movie_autocont or movie_autocont_alone) and (movie_nolimit or movie_nolimit_alone) and not movie_autocont_ui:
+    if (
+        (movie_autocont or movie_autocont_alone)
+        and (movie_nolimit or movie_nolimit_alone)
+        and not movie_autocont_ui
+        and not movie_standalone
+    ):
         print(
             "ERROR: Combining G3X_MOVIE_NOLIMIT=1 and G3X_MOVIE_AUTOCONT=1 requires G3X_MOVIE_AUTOCONT_UI=1",
             file=sys.stderr,
@@ -2897,6 +3262,8 @@ def build_port43_dbuf(
 
     if out_dir is not None:
         effective_out_dir = Path(out_dir).resolve()
+    elif movie_standalone:
+        effective_out_dir = REPO_ROOT / "build" / "port62-movie-standalone"
     elif movie_session_cancel:
         effective_out_dir = REPO_ROOT / "out" / "port61-movie-session-cancel"
     elif movie_restart_budget:
@@ -2958,15 +3325,37 @@ def build_port43_dbuf(
     effective_stage_dir = effective_out_dir / "stage_chdk"
 
     effective_out_dir.mkdir(parents=True, exist_ok=True)
-    if clean_stage and effective_stage_dir.exists():
-        shutil.rmtree(effective_stage_dir)
+    if movie_standalone:
+        # Clean stale outputs in effective_out_dir before building
+        for stale_name in ("DISKBOOT.BIN", "port62_movie_standalone_manifest.json", "manifest.json"):
+            stale_path = effective_out_dir / stale_name
+            if stale_path.is_file():
+                stale_path.unlink()
+        stale_chdk = effective_out_dir / "CHDK"
+        if stale_chdk.exists():
+            shutil.rmtree(stale_chdk)
+        for stale_manifest in effective_out_dir.glob("*_manifest.json"):
+            if stale_manifest.is_file():
+                stale_manifest.unlink()
 
-    if not effective_stage_dir.exists():
-        seed_dir = _ensure_dbuf_seed_stage()
-        print(f"Staging CHDK tree to {effective_stage_dir}...")
-        shutil.copytree(seed_dir, effective_stage_dir, symlinks=True)
+        # PORT-63: Hermetic PORT-41-style dedicated staging copy directly from CHDK_PORT
+        # Never reuse SEED_STAGE_DIR or prebuilt objects/archives from other profiles
+        if effective_stage_dir.exists():
+            subprocess.run(["chmod", "-R", "u+w", str(effective_stage_dir)], check=False)
+            shutil.rmtree(effective_stage_dir)
+        print(f"Staging hermetic CHDK tree to {effective_stage_dir}...")
+        shutil.copytree(CHDK_PORT, effective_stage_dir, symlinks=True)
+        _clean_standalone_staging_artifacts(effective_stage_dir)
+    else:
+        if clean_stage and effective_stage_dir.exists():
+            shutil.rmtree(effective_stage_dir)
 
-    _clean_platform_and_core_artifacts(effective_stage_dir)
+        if not effective_stage_dir.exists():
+            seed_dir = _ensure_dbuf_seed_stage()
+            print(f"Staging CHDK tree to {effective_stage_dir}...")
+            shutil.copytree(seed_dir, effective_stage_dir, symlinks=True)
+
+        _clean_platform_and_core_artifacts(effective_stage_dir)
 
     # 1. Overlay full_build/g3x onto stage_chdk/platform/g3x/ (excluding loader)
     platform_target = effective_stage_dir / "platform" / "g3x"
@@ -2993,7 +3382,13 @@ def build_port43_dbuf(
             proto_file.unlink()
 
     # Apply FULL_HOOKS patches if requested
-    if not playback_menu_alone and not movie_status_alone and not movie_nolimit_alone and not movie_autocont_alone:
+    if (
+        not playback_menu_alone
+        and not movie_status_alone
+        and not movie_nolimit_alone
+        and not movie_autocont_alone
+        and not movie_standalone
+    ):
         if full_hooks:
             print("FULL_HOOKS=1 enabled: Applying FINSIG-confirmed hook staging patches...")
             apply_full_hooks_staging_patches(effective_stage_dir)
@@ -3042,28 +3437,57 @@ def build_port43_dbuf(
         print("G3X_PLAYBACK_MENU=1: Applying playback-mode ALT menu hooks and key mapping...")
         apply_playback_menu_staging_patches(effective_stage_dir, alone=playback_menu_alone)
 
-    if movie_nolimit:
-        print("G3X_MOVIE_NOLIMIT=1: Applying movie time-limit defeat and LIM: diag marker...")
-        apply_movie_nolimit_staging_patches(effective_stage_dir, alone=movie_nolimit_alone)
-    elif movie_status and not movie_autocont:
-        print("G3X_MOVIE_STATUS=1: Applying read-only movie status accessor and MOV: diag marker...")
-        apply_movie_status_staging_patches(effective_stage_dir, alone=movie_status_alone)
+    if movie_standalone:
+        print("G3X_MOVIE_STANDALONE=1: Applying minimal standalone non-GUI movie time-limit + continuation staging patches...")
+        apply_movie_standalone_staging_patches(effective_stage_dir)
+    else:
+        if movie_nolimit:
+            print("G3X_MOVIE_NOLIMIT=1: Applying movie time-limit defeat and LIM: diag marker...")
+            apply_movie_nolimit_staging_patches(effective_stage_dir, alone=movie_nolimit_alone)
+        elif movie_status and not movie_autocont:
+            print("G3X_MOVIE_STATUS=1: Applying read-only movie status accessor and MOV: diag marker...")
+            apply_movie_status_staging_patches(effective_stage_dir, alone=movie_status_alone)
 
-    if movie_session_cancel:
-        print("G3X_MOVIE_SESSION_CANCEL=1: Applying volatile active-session cancellation ('Cancel further restarts')...")
-        apply_movie_session_cancel_staging_patches(effective_stage_dir)
-    elif movie_restart_budget:
-        print("G3X_MOVIE_RESTART_BUDGET=1: Applying volatile finite session restart budget (1/2/3, default 1)...")
-        apply_movie_restart_budget_staging_patches(effective_stage_dir)
-    elif movie_autocont_ui:
-        print("G3X_MOVIE_AUTOCONT_UI=1: Applying volatile movie continuation menu control and status readout...")
-        apply_movie_autocont_ui_staging_patches(effective_stage_dir)
-    elif movie_autocont:
-        print("G3X_MOVIE_AUTOCONT=1: Applying gated movie automatic continuation state machine...")
-        apply_movie_autocont_staging_patches(effective_stage_dir, alone=movie_autocont_alone)
+        if movie_session_cancel:
+            print("G3X_MOVIE_SESSION_CANCEL=1: Applying volatile active-session cancellation ('Cancel further restarts')...")
+            apply_movie_session_cancel_staging_patches(effective_stage_dir)
+        elif movie_restart_budget:
+            print("G3X_MOVIE_RESTART_BUDGET=1: Applying volatile finite session restart budget (1/2/3, default 1)...")
+            apply_movie_restart_budget_staging_patches(effective_stage_dir)
+        elif movie_autocont_ui:
+            print("G3X_MOVIE_AUTOCONT_UI=1: Applying volatile movie continuation menu control and status readout...")
+            apply_movie_autocont_ui_staging_patches(effective_stage_dir)
+        elif movie_autocont:
+            print("G3X_MOVIE_AUTOCONT=1: Applying gated movie automatic continuation state machine...")
+            apply_movie_autocont_staging_patches(effective_stage_dir, alone=movie_autocont_alone)
 
-    # Clean platform objects in staging copy
-    for subpath in ["platform/g3x", "platform/g3x/sub/110c", "loader/g3x"]:
+    # Clean platform (and for standalone, lib) objects in staging copy
+    clean_subpaths = ["platform/g3x", "platform/g3x/sub/110c", "loader/g3x"]
+    if movie_standalone:
+        _clean_standalone_staging_artifacts(effective_stage_dir)
+        tools_build_cmd = [
+            "make",
+            "-C",
+            str(effective_stage_dir / "tools"),
+            "dancingbits",
+            "makeexport",
+            "font_8x16_pack",
+        ]
+        tools_res = subprocess.run(tools_build_cmd, cwd=str(effective_stage_dir))
+        if tools_res.returncode != 0:
+            print(f"ERROR: Host tools build failed with exit code {tools_res.returncode}", file=sys.stderr)
+            return tools_res.returncode
+        clean_subpaths = [
+            "lib/armutil",
+            "lib/math",
+            "lib/lang",
+            "lib/font",
+            "lib/core",
+            "platform/g3x",
+            "platform/g3x/sub/110c",
+            "loader/g3x",
+        ]
+    for subpath in clean_subpaths:
         p = effective_stage_dir / subpath
         if p.is_dir():
             clean_cmd = [
@@ -3076,6 +3500,8 @@ def build_port43_dbuf(
                 "G3X_DISABLE_CARD_WRITES=1",
                 "OPT_DISABLE_FILE_WRITES=1",
             ]
+            if movie_standalone:
+                clean_cmd.append("G3X_MOVIE_STANDALONE=1")
             if movie_status:
                 clean_cmd.append("G3X_MOVIE_STATUS=1")
             if movie_nolimit:
@@ -3088,7 +3514,13 @@ def build_port43_dbuf(
                 clean_cmd.append("G3X_MOVIE_RESTART_BUDGET=1")
             if movie_session_cancel:
                 clean_cmd.append("G3X_MOVIE_SESSION_CANCEL=1")
-            if not playback_menu_alone and not movie_status_alone and not movie_nolimit_alone and not movie_autocont_alone:
+            if (
+                not playback_menu_alone
+                and not movie_status_alone
+                and not movie_nolimit_alone
+                and not movie_autocont_alone
+                and not movie_standalone
+            ):
                 clean_cmd.extend(["G3X_GUI_FIX=1", "G3X_GUI_DBUF=1"])
                 if no_overdraw:
                     clean_cmd.append("G3X_GUI_NOOVERDRAW=1")
@@ -3127,6 +3559,8 @@ def build_port43_dbuf(
         "G3X_DISABLE_CARD_WRITES=1",
         "OPT_DISABLE_FILE_WRITES=1",
     ]
+    if movie_standalone:
+        cmd.append("G3X_MOVIE_STANDALONE=1")
     if movie_status:
         cmd.append("G3X_MOVIE_STATUS=1")
     if movie_nolimit:
@@ -3143,7 +3577,13 @@ def build_port43_dbuf(
         f"CROSS_COMPILE={CROSS_COMPILE}",
         "OPT_CAPSTONE_TOOLS=0",
     ])
-    if not playback_menu_alone and not movie_status_alone and not movie_nolimit_alone and not movie_autocont_alone:
+    if (
+        not playback_menu_alone
+        and not movie_status_alone
+        and not movie_nolimit_alone
+        and not movie_autocont_alone
+        and not movie_standalone
+    ):
         cmd.extend(["G3X_GUI_FIX=1", "G3X_GUI_DBUF=1"])
         if no_overdraw:
             cmd.append("G3X_GUI_NOOVERDRAW=1")
@@ -3175,6 +3615,8 @@ def build_port43_dbuf(
         env["MAKEFLAGS"] = f"CC={wrapper_script}"
     env["G3X_DISABLE_CARD_WRITES"] = "1"
     env["OPT_DISABLE_FILE_WRITES"] = "1"
+    if movie_standalone:
+        env["G3X_MOVIE_STANDALONE"] = "1"
     if movie_status:
         env["G3X_MOVIE_STATUS"] = "1"
     if movie_nolimit:
@@ -3187,7 +3629,13 @@ def build_port43_dbuf(
         env["G3X_MOVIE_RESTART_BUDGET"] = "1"
     if movie_session_cancel:
         env["G3X_MOVIE_SESSION_CANCEL"] = "1"
-    if not playback_menu_alone and not movie_status_alone and not movie_nolimit_alone and not movie_autocont_alone:
+    if (
+        not playback_menu_alone
+        and not movie_status_alone
+        and not movie_nolimit_alone
+        and not movie_autocont_alone
+        and not movie_standalone
+    ):
         env["G3X_GUI_FIX"] = "1"
         env["G3X_GUI_DBUF"] = "1"
         if no_overdraw:
@@ -3225,39 +3673,54 @@ def build_port43_dbuf(
     shutil.copy2(stage_diskboot, out_diskboot)
     print(f"[OK] Generated {out_diskboot} ({out_diskboot.stat().st_size} bytes)")
 
-    # Verify and copy CHDK/ distribution folder
-    stage_chdk = effective_stage_dir / "CHDK"
     out_chdk = effective_out_dir / "CHDK"
     if out_chdk.exists():
         shutil.rmtree(out_chdk)
-    shutil.copytree(stage_chdk, out_chdk, symlinks=True)
 
-    modules_dir = out_chdk / "MODULES"
-    fonts_dir = out_chdk / "FONTS"
-    lang_dir = out_chdk / "LANG"
-
-    flt_files = sorted(modules_dir.glob("*.flt"))
-    if not flt_files:
-        print(f"ERROR: No .flt modules found in {modules_dir}", file=sys.stderr)
-        return 1
-
-    print(f"[OK] {len(flt_files)} modules copied to {modules_dir}")
-    print(f"[OK] Fonts directory present: {fonts_dir.is_dir()}")
-    print(f"[OK] Lang directory present: {lang_dir.is_dir()}")
-
-    # Collect all CHDK files
+    flt_files: list[Path] = []
     chdk_files_map: dict[str, dict[str, int | str]] = {}
-    for root, dirs, files in os.walk(out_chdk):
-        for f in sorted(files):
-            p = Path(root) / f
-            rel = str(p.relative_to(effective_out_dir))
-            chdk_files_map[rel] = {
-                "size": p.stat().st_size,
-                "sha256": sha256_file(p),
-            }
+    if not movie_standalone:
+        # Verify and copy CHDK/ distribution folder
+        stage_chdk = effective_stage_dir / "CHDK"
+        shutil.copytree(stage_chdk, out_chdk, symlinks=True)
+
+        modules_dir = out_chdk / "MODULES"
+        fonts_dir = out_chdk / "FONTS"
+        lang_dir = out_chdk / "LANG"
+
+        flt_files = sorted(modules_dir.glob("*.flt"))
+        if not flt_files:
+            print(f"ERROR: No .flt modules found in {modules_dir}", file=sys.stderr)
+            return 1
+
+        print(f"[OK] {len(flt_files)} modules copied to {modules_dir}")
+        print(f"[OK] Fonts directory present: {fonts_dir.is_dir()}")
+        print(f"[OK] Lang directory present: {lang_dir.is_dir()}")
+
+        # Collect all CHDK files
+        for root, dirs, files in os.walk(out_chdk):
+            for f in sorted(files):
+                p = Path(root) / f
+                rel = str(p.relative_to(effective_out_dir))
+                chdk_files_map[rel] = {
+                    "size": p.stat().st_size,
+                    "sha256": sha256_file(p),
+                }
 
     # Manifest
-    if movie_autocont_alone:
+    if movie_standalone:
+        build_flags = [
+            "G3X_FULL_BUILD=1",
+            "G3X_DISABLE_CARD_WRITES=1",
+            "OPT_DISABLE_FILE_WRITES=1",
+            "G3X_MOVIE_STANDALONE=1",
+            "G3X_MOVIE_STATUS=1",
+            "G3X_MOVIE_NOLIMIT=1",
+            "G3X_MOVIE_AUTOCONT=1",
+            "G3X_MOVIE_RESTART_BUDGET=1",
+            "G3X_MOVIE_SESSION_CANCEL=1",
+        ]
+    elif movie_autocont_alone:
         build_flags = [
             "G3X_FULL_BUILD=1",
             "G3X_DISABLE_CARD_WRITES=1",
@@ -3345,7 +3808,9 @@ def build_port43_dbuf(
         manifest_name = "port53_playback_menu_alone_manifest.json"
     elif playback_menu:
         manifest_name = "port53_playback_menu_manifest.json"
-    if movie_session_cancel:
+    if movie_standalone:
+        manifest_name = "port62_movie_standalone_manifest.json"
+    elif movie_session_cancel:
         manifest_name = "port61_movie_session_cancel_manifest.json"
     elif movie_restart_budget:
         manifest_name = "port60_movie_restart_budget_manifest.json"
@@ -3430,7 +3895,97 @@ def build_port43_dbuf(
                 "save_int_value_file",
             ]
 
-    if movie_session_cancel:
+    if movie_standalone:
+        manifest_data["manifest_id"] = "port62_movie_standalone_manifest"
+        manifest_data["milestone"] = "PORT-62"
+        manifest_data["origin_main_baseline"] = "7e0f548f990bdd03d4eb0ec52bf2e11d7282f4e7"
+        manifest_data["candidate_source_base"] = "7e0f548f990bdd03d4eb0ec52bf2e11d7282f4e7"
+        manifest_data["integration_parent"] = "832806b1f0e1d73f75e540cf3b64f6448948f567"
+        manifest_data["port62_integration_baseline"] = "b718a92014b4a08f979d95347152642e596a10b4"
+        manifest_data["port63_fixes_commit"] = "003facdc4ab64d0bc8320276432763af119b14de"
+        manifest_data["port63_integration_tested_revision"] = "e419648a152d9244d8faa01b47ca8e55fd885372"
+        manifest_data["port63_final_integration_validation"] = "PENDING_POST_MERGE_PORT_TESTS"
+        manifest_data["reused_commits"] = {
+            "origin_main_port61": "7e0f548f990bdd03d4eb0ec52bf2e11d7282f4e7",
+            "port61_integration_tip": "e6a56328ee25d093ebb5c772356d42d31568c03b",
+            "port61_cancel_validate": "1a9df57d167416ae8119b39d84ac50eab9bee1bd",
+            "port61_cancel_build": "81e912f90ba150deea498e6caf505125f5c4515e",
+            "port61_cancel_interface": "da5114a63c85bd9e7cedddc940a0f602829afdc2",
+            "origin_main_port60": "355204f778da2defbc8dd8e2a538be36031958b7",
+            "port60_budget_build": "f84c8c89a23c720acc92b3269d2ed33777d8dc79",
+            "origin_main_port59": "0579e70d39f0bd4156b1266e5187f97275a9b0a8",
+            "port59_build": "32d6e0aa60766fdb4223d86403c37fca2c82c920",
+            "port58_movie_control": "6696c8390780043e0c5fc67c306143dacf0bcd7c",
+            "port57_movie_autocont": "ed374e7d332bce36a9c76682074aa9516e15e3be",
+            "port56_movie_nolimit": "ded3832e4a6cc1cc8401f67cb454d5d420191844",
+            "port55_movie_status": "dc915e6257981f48223fa2f38839bc28e31c73cf",
+            "port62_reuse_map": "3d161e110f88a26efdeecdfd030f08dbc254e612",
+            "port62_integration_baseline": "b718a92014b4a08f979d95347152642e596a10b4",
+            "port63_fixes": "003facdc4ab64d0bc8320276432763af119b14de",
+            "port63_integration_tested": "e419648a152d9244d8faa01b47ca8e55fd885372",
+        }
+        manifest_data["excluded_commits"] = {
+            "port54_conf_save": "af2578089a39e9a2143f83003e92ea5236d542bc",
+        }
+        manifest_data["standalone_policy"] = {
+            "boot_enabled": True,
+            "gui_dependencies": False,
+            "alt_mode_dependencies": False,
+            "chdk_dir_dependency": False,
+            "modules_required": 0,
+            "default_restart_budget": 50,
+            "fixed_compile_time_restart_budget": 50,
+            "eligible_stop_reasons": [3, 4],
+            "physical_stop_latches_session_cancellation": True,
+            "rearm_requires_deliberate_physical_start_after_confirmed_idle": True,
+            "synthetic_events_excluded_from_deliberate_start_and_budget_reset": True,
+            "failed_attempts_consume_budget_without_refund": True,
+            "releases_only_continuation_owned_synthetic_keys": True,
+            "shortpress_poweron_fix_preserved": True,
+            "port56_duration_patch_preserved": True,
+            "hermetic_staging": True,
+        }
+        manifest_data["command"] = (
+            "python3 -B scripts/build_port62_movie_standalone.py --out-dir build/port62-movie-standalone"
+        )
+        manifest_data["configurations"] = {
+            "default": {
+                "path": "out/build-default/DISKBOOT.BIN",
+                "size": 124097,
+                "sha256": "24b8a024a216fe4db7d28b7aa97cf2410eaebf5cac9e7578a46f3b1e50004ae9",
+                "_end": "0x003686b0",
+                "card_writes": "disabled",
+            },
+            "port59_movie_combined": {
+                "path": "out/port59-movie-combined/DISKBOOT.BIN",
+                "size": 134801,
+                "sha256": "a29bd5d3aae297cbbdb34eae0cb6d96b5f804e4e3b4fea03304b0a34cc4d8fbf",
+                "_end": "0x0036b4d0",
+                "card_writes": "disabled",
+            },
+            "port60_movie_restart_budget": {
+                "path": "out/port60-movie-restart-budget/DISKBOOT.BIN",
+                "size": 135313,
+                "sha256": "5bb1b93b0a3246ab5e37c689daa223dd2c6a9e3e84a53956678992b97be00a90",
+                "_end": "0x0036b6e0",
+                "card_writes": "disabled",
+            },
+            "port61_movie_session_cancel": {
+                "path": "out/port61-movie-session-cancel/DISKBOOT.BIN",
+                "size": 135969,
+                "sha256": "2612eea17c83dc64f9f6579b59771aa7313e931bb0b7ea47118ad8c6512e1f68",
+                "_end": "0x0036b970",
+                "card_writes": "disabled",
+            },
+            "standalone_candidate": {
+                "path": "build/port62-movie-standalone/DISKBOOT.BIN",
+                "size": out_diskboot.stat().st_size,
+                "sha256": sha256_file(out_diskboot),
+                "_end": manifest_data.get("_end"),
+                "card_writes": "disabled",
+            },
+        }
+    elif movie_session_cancel:
         manifest_data["manifest_id"] = "port61_movie_session_cancel_manifest"
         manifest_data["milestone"] = "PORT-61"
         manifest_data["origin_main_baseline"] = "355204f778da2defbc8dd8e2a538be36031958b7"
@@ -3723,10 +4278,11 @@ def build_port43_dbuf(
         shutil.copy2(manifest_path, repo_manifest)
         print(f"[OK] Candidate manifest copied to {repo_manifest}")
 
-    # Convenience aliases
-    with open(effective_out_dir / "manifest.json", "w", encoding="utf-8") as f:
-        json.dump(manifest_data, f, indent=2)
-        f.write("\n")
+    # Convenience aliases (omitted for movie_standalone to keep build/port62-movie-standalone/ clean)
+    if not movie_standalone:
+        with open(effective_out_dir / "manifest.json", "w", encoding="utf-8") as f:
+            json.dump(manifest_data, f, indent=2)
+            f.write("\n")
 
     if not keep_stage and effective_stage_dir.exists():
         shutil.rmtree(effective_stage_dir)
@@ -3763,6 +4319,7 @@ def main() -> int:
     parser.add_argument("--movie-budget-profile", action="store_true", default=os.environ.get("G3X_MOVIE_BUDGET_PROFILE") == "1", help="Enable PORT-60 movie restart budget profile (PORT-59 combined profile + G3X_MOVIE_RESTART_BUDGET=1)")
     parser.add_argument("--movie-session-cancel", "--movie-cancel", dest="movie_session_cancel", action="store_true", default=os.environ.get("G3X_MOVIE_SESSION_CANCEL") == "1", help="Enable G3X_MOVIE_SESSION_CANCEL=1 volatile active-session cancellation ('Cancel further restarts')")
     parser.add_argument("--movie-cancel-profile", "--movie-session-cancel-profile", dest="movie_cancel_profile", action="store_true", default=os.environ.get("G3X_MOVIE_CANCEL_PROFILE") == "1", help="Enable PORT-61 movie session cancel profile (PORT-60 budget profile + G3X_MOVIE_SESSION_CANCEL=1)")
+    parser.add_argument("--movie-standalone", "--movie-standalone-profile", dest="movie_standalone", action="store_true", default=os.environ.get("G3X_MOVIE_STANDALONE") == "1", help="Enable PORT-62 standalone non-GUI movie time-limit + continuation profile (G3X_MOVIE_STANDALONE=1)")
     parser.add_argument("--no-clean", action="store_true", help="Do not clean staging before building")
     parser.add_argument("--discard-stage", action="store_true", help="Remove stage directory after build")
     parser.add_argument("--out-dir", type=str, default=None, help="Custom output directory")
@@ -3796,6 +4353,7 @@ def main() -> int:
         movie_budget_profile=args.movie_budget_profile,
         movie_session_cancel=args.movie_session_cancel,
         movie_cancel_profile=args.movie_cancel_profile,
+        movie_standalone=args.movie_standalone,
     )
 
 
