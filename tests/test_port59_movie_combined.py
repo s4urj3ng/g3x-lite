@@ -1867,6 +1867,7 @@ class TestPort59BuildArtifactsDisassemblyAndSafety(unittest.TestCase):
                 "chdk-port/core/kbd_process.c",
                 "chdk-port/core/main.c",
                 "scripts/build_port62_movie_standalone.py",
+                "scripts/build_port64_movie_screen_off.py",
             }
         )
         expected_paths = [
