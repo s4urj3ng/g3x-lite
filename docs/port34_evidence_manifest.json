@@ -46,6 +46,29 @@
         "UNKNOWN"
       ],
       "description": "PORT-57 GM1.10C authorized ROM window (start 0xFC098B00, length 0x300 = 768 B) covering stop-reason 3/4 stores and limit predicates"
+    },
+    {
+      "scope_id": "SCOPE-PORT64-BACKLIGHT",
+      "firmware_revision": "GM1.10C",
+      "approved_ranges": [
+        {
+          "start_address": "0xFC37C3E0",
+          "end_address": "0xFC37C4FF",
+          "label": "PORT64-ROM-BACKLIGHT-CORE-WINDOW TurnOnBackLight (0xFC37C3EF) and TurnOffBackLight (0xFC37C449) in primary ROM (start 0xFC37C3E0, length 0x120 = 288 B)"
+        },
+        {
+          "start_address": "0xFC37CD20",
+          "end_address": "0xFC37CE1F",
+          "label": "PORT64-ROM-DISPCON-BACKLIGHT-WINDOW DispCon_TurnOffBackLight_FW (0xFC37CD27) and DispCon backlight wrappers in primary ROM (start 0xFC37CD20, length 0x100 = 256 B)"
+        }
+      ],
+      "max_bytes_total": 544,
+      "allowed_classifications": [
+        "STATIC_VERIFIED",
+        "INFERRED",
+        "UNKNOWN"
+      ],
+      "description": "PORT-64 GM1.10C authorized exact ROM windows (0xFC37C3E0 length 0x120 = 288 B and 0xFC37CD20 length 0x100 = 256 B; total 544 B) covering TurnOnBackLight, TurnOffBackLight, and DispCon_TurnOffBackLight_FW"
     }
   ],
   "evidence_entries": [
@@ -108,6 +131,36 @@
       "authorization_scope_id": "SCOPE-PORT57-MOVIE-AUTOCONT",
       "classification": "STATIC_VERIFIED",
       "notes": "PORT-57 authorized ROM window (start 0xFC098B00, length 0x300 = 768 B, end 0xFC098DFF): MovieRecorder_CheckFrameCountLimit comparison and 32-bit stop-reason 4 store (0xFC098B28: str.w r1, [r8, #72]), MovieRecorder_CheckSizeAndSpaceLimits (0xFC098BAA..0xFC098CAE) 64-bit space/4GiB comparisons and 32-bit stop-reason 2/3 store (0xFC098C5C: str r0, [r7, #72]), literal pool 0xFC098D84..0xFC098D8C (0x0000C078, 0x0000C278, 0x0000C178), and mr_rec_state (0x0000C0C8) load/check at 0xFC098D76..0xFC098DA0"
+    },
+    {
+      "evidence_id": "PORT64-ROM-BACKLIGHT-CORE-WINDOW",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC37C3E0",
+      "end_address": "0xFC37C4FF",
+      "expected_byte_count": 288,
+      "sha256": "cb1c330f2daf5163d111813d8c03e6b134994d162f099f73ebf38e03e761e0e7",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT64-BACKLIGHT",
+      "classification": "STATIC_VERIFIED",
+      "notes": "PORT-64 authorized exact ROM window (start 0xFC37C3E0, length 0x120 = 288 B, end 0xFC37C4FF): TurnOnBackLight (0xFC37C3EF / 0xFC37C3EE..0xFC37C447) and TurnOffBackLight (0xFC37C449 / 0xFC37C448..0xFC37C48D), 0-arg void ABI, DispCon semaphore [r4, #0x4C] take/give (0xFC31BEC4 / 0xFC31BECC / 0xFC31B8E8, timeout 10000), backlight state flag [r4, #0x10], and display-active precondition [r4, #0x14] == 1"
+    },
+    {
+      "evidence_id": "PORT64-ROM-DISPCON-BACKLIGHT-WINDOW",
+      "firmware_revision": "GM1.10C",
+      "start_address": "0xFC37CD20",
+      "end_address": "0xFC37CE1F",
+      "expected_byte_count": 256,
+      "sha256": "cdd7b5b019f6aec27594524856ffaf3e5d5f3c7d79e851cbc8ea8034f68a045b",
+      "provenance_source": {
+        "type": "ROM_VERIFIED",
+        "reference": "firmware/dumps/GM1.10C/PRIMARY.BIN"
+      },
+      "authorization_scope_id": "SCOPE-PORT64-BACKLIGHT",
+      "classification": "STATIC_VERIFIED",
+      "notes": "PORT-64 authorized exact ROM window (start 0xFC37CD20, length 0x100 = 256 B, end 0xFC37CE1F): DispCon_TurnOnBackLight_FW epilogue (0xFC37CD20..0xFC37CD25), DispCon_TurnOffBackLight_FW (0xFC37CD27 / 0xFC37CD26..0xFC37CD2F: push {r4, lr}; bl 0xfc37c448; movs r0, #0; pop {r4, pc}), DispCon_SetMaxBackLightBrightness_FW (0xFC37CD31), DispCon_TurnOnBackLightForCheckVoltage_FW (0xFC37CD3D), and DispCon_TurnOffBackLightForCheckVoltage_FW (0xFC37CD6B)"
     }
   ]
 }
