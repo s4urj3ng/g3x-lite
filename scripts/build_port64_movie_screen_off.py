@@ -51,6 +51,7 @@ PORT63_INTEGRATION_READY_COMMIT = "b713294e192a2ddd587c76d2c0018ff8add8e560"
 PORT63_FINAL_INTEGRATION_COMMIT = "4f8c41dbad1d75382ab33c8c8371382a165d0491"
 PORT64_RESEARCH_SCOPE_FIX_COMMIT = "4833a00570a4e5eb63a03208cc53f8905f16c233"
 PORT64_RESEARCH_INTEGRATION_COMMIT = "4130de5ce8a513dee88cb426ed08a5d85d94b2f6"
+PORT64_IMPLEMENT_SCOPE_FIX_ATTEMPT1_COMMIT = "4dcf5b5d58b7048ac06931598bed16103c5fec7f"
 PORT54_EXCLUDED_COMMIT = "af2578089a39e9a2143f83003e92ea5236d542bc"
 
 STANDALONE_RESTART_BUDGET = 50
@@ -441,6 +442,7 @@ def build_port64_movie_screen_off(
         "port63_final_integration_commit": PORT63_FINAL_INTEGRATION_COMMIT,
         "port64_research_scope_fix_commit": PORT64_RESEARCH_SCOPE_FIX_COMMIT,
         "port64_research_integration_commit": PORT64_RESEARCH_INTEGRATION_COMMIT,
+        "port64_implement_scope_fix_attempt1_commit": PORT64_IMPLEMENT_SCOPE_FIX_ATTEMPT1_COMMIT,
         "reused_commits": {
             "origin_main_port61": ORIGIN_MAIN_PORT61_COMMIT,
             "port62_integration_baseline": PORT62_INTEGRATION_BASELINE_COMMIT,
@@ -450,6 +452,7 @@ def build_port64_movie_screen_off(
             "port63_final_integration": PORT63_FINAL_INTEGRATION_COMMIT,
             "port64_research_scope_fix": PORT64_RESEARCH_SCOPE_FIX_COMMIT,
             "port64_research_integration": PORT64_RESEARCH_INTEGRATION_COMMIT,
+            "port64_implement_scope_fix_attempt1": PORT64_IMPLEMENT_SCOPE_FIX_ATTEMPT1_COMMIT,
         },
         "excluded_commits": {
             "port54_conf_save": PORT54_EXCLUDED_COMMIT,

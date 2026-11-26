@@ -140,9 +140,10 @@ PORT64_RESEARCH_SCOPE_FIX_COMMIT = "4833a00570a4e5eb63a03208cc53f8905f16c233"
 PORT64_RESEARCH_INTEGRATION_COMMIT = "4130de5ce8a513dee88cb426ed08a5d85d94b2f6"
 PORT64_IMPLEMENT_ATTEMPT1_COMMIT = "1f7ff801db64ed82c71aa2104e25bc0113a00af6"
 PORT64_IMPLEMENT_PARTIAL_COMMIT = "01a9ddd1a29abca5e0dd3014cd26d9dbe3190742"
+PORT64_IMPLEMENT_SCOPE_FIX_ATTEMPT1_COMMIT = "4dcf5b5d58b7048ac06931598bed16103c5fec7f"
 
-PORT64_SCREEN_OFF_SHA256 = "39802ac521470a980e16101f8f5766620ac750ee1f67c073f8d9c08738b100f5"
-PORT64_SCREEN_OFF_SIZE = 127465
+PORT64_SCREEN_OFF_SHA256 = "f4928d6f6a3f76a3f1ba51b18b18a82a3e9ab94d832a5ada1f5fd9a779b09963"
+PORT64_SCREEN_OFF_SIZE = 127457
 PORT64_SCREEN_OFF_END = "00369440"
 
 PORT64_BACKLIGHT_CORE_WINDOW_SHA256 = "cb1c330f2daf5163d111813d8c03e6b134994d162f099f73ebf38e03e761e0e7"
@@ -703,6 +704,7 @@ class _HostPort64ScreenOffHarness:
         self._tmpdir.cleanup()
 
     def reset(self) -> None:
+        self.lib.g3x_movie_autocont_reset()
         self.movie_state.value = 0
         self.max_frames.value = 54000
         self.cur_frames.value = 0
@@ -1699,6 +1701,7 @@ class TestPort64DeliberateStartArmingAndScreenOffPolicy(unittest.TestCase):
             "playback_entry",
             "session_cancel_api",
             "user_disable_api",
+            "controller_reset",
         )
         for mode in exit_modes:
             with self.subTest(exit_mode=mode):
@@ -1759,6 +1762,10 @@ class TestPort64DeliberateStartArmingAndScreenOffPolicy(unittest.TestCase):
                 elif mode == "user_disable_api":
                     self.assertEqual(self.sm.lib.g3x_movie_autocont_set_enabled(0), 0)
                     self.assertEqual(self.sm.state, G3X_AUTOCONT_DISARMED)
+                elif mode == "controller_reset":
+                    self.sm.lib.g3x_movie_autocont_reset()
+                    self.assertEqual(self.sm.state, G3X_AUTOCONT_DISARMED)
+                    self.assertEqual(self.sm.disarm_reason, G3X_AUTOCONT_REASON_NONE)
                 else:
                     self._prime_in_bounds_reason3_metrics(1)
                     self.sm.projected_size.value = 0x100000400
@@ -1831,6 +1838,121 @@ class TestPort64DeliberateStartArmingAndScreenOffPolicy(unittest.TestCase):
         for _ in range(G3X_AUTOCONT_SCREEN_REFRESH_POLLS * 2):
             self.sm.lib.g3x_movie_autocont_poll()
         self.assertEqual(self.sm.backlight_off_count, 1 + G3X_AUTOCONT_SCREEN_MAX_REFRESH_CALLS)
+
+    def test_reset_while_blanked_restores_once_and_reset_while_unblanked_issues_no_restoration_call(self) -> None:
+        # 1. Reset while unblanked in DISARMED idle issues 0 TurnOnBackLight restoration calls
+        self.sm.reset()
+        self.assertEqual(self.sm.screen_off_active, 0)
+        self.assertEqual(self.sm.turn_on_backlight_calls.value, 0)
+        self.assertEqual(self.sm.backlight_on_count, 0)
+        for _ in range(3):
+            self.sm.lib.g3x_movie_autocont_reset()
+            self.assertEqual(self.sm.state, G3X_AUTOCONT_DISARMED)
+            self.assertEqual(self.sm.screen_off_active, 0)
+            self.assertEqual(self.sm.turn_on_backlight_calls.value, 0)
+            self.assertEqual(self.sm.backlight_on_count, 0)
+            self.assertEqual(self.sm.turn_off_backlight_calls.value, 0)
+            self.assertEqual(self.sm.backlight_off_count, 0)
+
+        # 2. Reset while unblanked during the 100-poll post-start settle in RECORDING issues 0 restoration calls
+        self.sm.reset()
+        self._start_deliberate_physical_recording()
+        for _ in range(25):
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_RECORDING)
+        self.assertEqual(self.sm.screen_off_active, 0)
+        self.assertGreater(self.sm.screen_off_delay_polls, 0)
+        self.assertEqual(self.sm.turn_off_backlight_calls.value, 0)
+        self.assertEqual(self.sm.turn_on_backlight_calls.value, 0)
+        self.sm.lib.g3x_movie_autocont_reset()
+        self.assertEqual(self.sm.state, G3X_AUTOCONT_DISARMED)
+        self.assertEqual(self.sm.screen_off_active, 0)
+        self.assertEqual(self.sm.screen_off_delay_polls, 0)
+        self.assertEqual(self.sm.turn_on_backlight_calls.value, 0)
+        self.assertEqual(self.sm.backlight_on_count, 0)
+        self.assertEqual(self.sm.turn_off_backlight_calls.value, 0)
+        for _ in range(20):
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+            self.assertEqual(self.sm.turn_on_backlight_calls.value, 0)
+            self.assertEqual(self.sm.backlight_on_count, 0)
+
+        # 3. Reset while blanked (screen_off_active == 1) in active recording and inter-segment continuation
+        #    issues exactly one TurnOnBackLight restoration call, with no repeats on subsequent resets or DISARMED polls
+        for blanked_scenario in ("active_recording", "inter_segment_wait_idle", "continued_clip_before_reassert"):
+            with self.subTest(blanked_scenario=blanked_scenario):
+                self.sm.reset()
+                self._start_deliberate_physical_recording()
+                for _ in range(G3X_AUTOCONT_SCREEN_OFF_DELAY_POLLS - 1):
+                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_RECORDING)
+                self.assertEqual(self.sm.screen_off_active, 1)
+                self.assertEqual(self.sm.backlight_hw_on.value, 0)
+                self.assertEqual(self.sm.turn_off_backlight_calls.value, 1)
+                self.assertEqual(self.sm.turn_on_backlight_calls.value, 0)
+                self.assertEqual(self.sm.backlight_on_count, 0)
+
+                if blanked_scenario == "inter_segment_wait_idle":
+                    self._prime_in_bounds_reason3_metrics(1)
+                    self.sm.projected_size.value = 0x100000400
+                    self.sm.stop_reason.value = 3
+                    self.sm.movie_state.value = 2
+                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_WAIT_IDLE)
+                    self.assertEqual(self.sm.screen_off_active, 1)
+                elif blanked_scenario == "continued_clip_before_reassert":
+                    self._prime_in_bounds_reason3_metrics(1)
+                    self._run_admitted_reason3_restart_to_confirmed_recording(49, 1)
+                    self.assertEqual(self.sm.screen_off_active, 1)
+
+                # First reset while blanked triggers exactly one TurnOnBackLight restoration call before clearing latch
+                self.sm.lib.g3x_movie_autocont_reset()
+                self.assertEqual(self.sm.state, G3X_AUTOCONT_DISARMED)
+                self.assertEqual(self.sm.screen_off_active, 0)
+                self.assertEqual(self.sm.screen_off_delay_polls, 0)
+                self.assertEqual(self.sm.screen_refresh_polls, 0)
+                self.assertEqual(self.sm.confirmed_idle_ready, 0)
+                self.assertEqual(self.sm.backlight_hw_on.value, 1)
+                self.assertEqual(self.sm.turn_on_backlight_calls.value, 1)
+                self.assertEqual(self.sm.backlight_on_count, 1)
+                self.assertEqual(self.sm.backlight_off_count, 0)
+
+                # Subsequent DISARMED polls (in recording or idle) issue 0 additional restoration calls
+                for rec_state in (1, 0):
+                    self.sm.movie_state.value = rec_state
+                    for _ in range(15):
+                        self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+                        self.assertEqual(self.sm.screen_off_active, 0)
+                        self.assertEqual(self.sm.turn_on_backlight_calls.value, 1)
+                        self.assertEqual(self.sm.backlight_on_count, 1)
+
+                # Subsequent resets (while now unblanked) issue 0 additional restoration calls
+                for _ in range(3):
+                    self.sm.lib.g3x_movie_autocont_reset()
+                    self.assertEqual(self.sm.state, G3X_AUTOCONT_DISARMED)
+                    self.assertEqual(self.sm.screen_off_active, 0)
+                    self.assertEqual(self.sm.turn_on_backlight_calls.value, 1)
+                    self.assertEqual(self.sm.backlight_on_count, 0)
+
+                # Subsequent DISARMED polls after repeated resets still issue 0 additional restoration calls
+                for _ in range(15):
+                    self.assertEqual(self.sm.step(), G3X_AUTOCONT_DISARMED)
+                    self.assertEqual(self.sm.turn_on_backlight_calls.value, 1)
+                    self.assertEqual(self.sm.backlight_on_count, 0)
+
+        # 4. Reset while unblanked after manual KEY_DISPLAY wake issues 0 additional restoration calls
+        self.sm.reset()
+        self._start_deliberate_physical_recording()
+        for _ in range(G3X_AUTOCONT_SCREEN_OFF_DELAY_POLLS - 1):
+            self.assertEqual(self.sm.step(), G3X_AUTOCONT_RECORDING)
+        self.assertEqual(self.sm.screen_off_active, 1)
+        self.sm.set_physical_display_button(True)
+        self.assertEqual(self.sm.step(), G3X_AUTOCONT_RECORDING)
+        self.sm.set_physical_display_button(False)
+        self.assertEqual(self.sm.screen_off_active, 0)
+        self.assertEqual(self.sm.turn_on_backlight_calls.value, 1)
+        self.assertEqual(self.sm.backlight_on_count, 1)
+        # Reset while already manually unblanked makes 0 additional TurnOnBackLight calls
+        self.sm.lib.g3x_movie_autocont_reset()
+        self.assertEqual(self.sm.screen_off_active, 0)
+        self.assertEqual(self.sm.turn_on_backlight_calls.value, 1)
+        self.assertEqual(self.sm.backlight_on_count, 0)
 
     def test_regressions_preserve_priority_cancellation_stop_attribution_and_50_restart_budget(self) -> None:
         # 1. Stop attribution: Reason 3 and Reason 4 admitted; user stop (0), overflow (1), card full (2),
@@ -2159,6 +2281,7 @@ class TestPort64BuildArtifactsDisassemblyAndPreservedProfiles(unittest.TestCase)
             PORT64_RESEARCH_INTEGRATION_COMMIT,
             PORT64_IMPLEMENT_ATTEMPT1_COMMIT,
             PORT64_IMPLEMENT_PARTIAL_COMMIT,
+            PORT64_IMPLEMENT_SCOPE_FIX_ATTEMPT1_COMMIT,
             PORT62_STANDALONE_SHA256,
             PORT64_SCREEN_OFF_SHA256,
             str(PORT64_SCREEN_OFF_SIZE),

@@ -743,16 +743,9 @@ void __attribute__((used)) g3x_movie_autocont_reset(void)
     g3x_autocont_restart_count = 0U;
 #if defined(G3X_MOVIE_STANDALONE) && (G3X_MOVIE_STANDALONE == 1) && defined(G3X_MOVIE_SCREEN_OFF) && (G3X_MOVIE_SCREEN_OFF == 1)
     g3x_autocont_confirmed_idle_ready = 0;
-    g3x_autocont_screen_off_active = 0;
-    g3x_autocont_screen_off_reassert_pending = 0;
-    g3x_autocont_screen_user_woke = 0;
-    g3x_autocont_prev_display_pressed = 0;
-    g3x_autocont_display_consumed = 0;
-    g3x_autocont_screen_off_delay_polls = 0U;
-    g3x_autocont_screen_refresh_polls = 0U;
-    g3x_autocont_screen_refresh_count = 0U;
     g3x_autocont_backlight_off_calls = 0U;
     g3x_autocont_backlight_on_calls = 0U;
+    g3x_autocont_restore_backlight(1);
 #endif
 #if defined(G3X_MOVIE_RESTART_BUDGET) && (G3X_MOVIE_RESTART_BUDGET == 1)
     g3x_autocont_restart_budget = G3X_AUTOCONT_BUDGET_DEFAULT;
