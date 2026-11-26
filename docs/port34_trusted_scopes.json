@@ -47,6 +47,29 @@
         "UNKNOWN"
       ],
       "description": "PORT-57 GM1.10C authorized ROM window (start 0xFC098B00, length 0x300 = 768 B) covering stop-reason 3/4 stores and limit predicates"
+    },
+    {
+      "scope_id": "SCOPE-PORT64-BACKLIGHT",
+      "firmware_revision": "GM1.10C",
+      "approved_ranges": [
+        {
+          "start_address": "0xFC37C3E0",
+          "end_address": "0xFC37C4FF",
+          "label": "PORT64-ROM-BACKLIGHT-CORE-WINDOW TurnOnBackLight (0xFC37C3EF) and TurnOffBackLight (0xFC37C449) in primary ROM (start 0xFC37C3E0, length 0x120 = 288 B)"
+        },
+        {
+          "start_address": "0xFC37CD20",
+          "end_address": "0xFC37CE1F",
+          "label": "PORT64-ROM-DISPCON-BACKLIGHT-WINDOW DispCon_TurnOffBackLight_FW (0xFC37CD27) and DispCon backlight wrappers in primary ROM (start 0xFC37CD20, length 0x100 = 256 B)"
+        }
+      ],
+      "max_bytes_total": 544,
+      "allowed_classifications": [
+        "STATIC_VERIFIED",
+        "INFERRED",
+        "UNKNOWN"
+      ],
+      "description": "PORT-64 GM1.10C authorized exact ROM windows (0xFC37C3E0 length 0x120 = 288 B and 0xFC37CD20 length 0x100 = 256 B; total 544 B) covering TurnOnBackLight, TurnOffBackLight, and DispCon_TurnOffBackLight_FW"
     }
   ]
 }
